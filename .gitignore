@@ -1,3 +1,6 @@
 target/
 node_modules/
 dist/
+docs/
+.worktrees/
+参考/
