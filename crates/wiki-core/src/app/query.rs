@@ -1,10 +1,11 @@
+use serde::Serialize;
 use std::fs;
 use std::io;
 use std::path::Path;
 
 use crate::storage::metadata_store::read_metadata;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct QueryReport {
     pub matched_pages: Vec<String>,
 }

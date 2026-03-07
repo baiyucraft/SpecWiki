@@ -1,3 +1,4 @@
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
@@ -5,7 +6,7 @@ use std::path::Path;
 use crate::repo::scanner::scan_repo;
 use crate::storage::metadata_store::read_metadata;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct StatusReport {
     pub state: String,
     pub dirty_sources: Vec<String>,

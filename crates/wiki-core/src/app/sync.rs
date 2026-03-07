@@ -1,3 +1,4 @@
+use serde::Serialize;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -5,7 +6,7 @@ use std::path::Path;
 use crate::repo::fingerprint::fingerprint_bytes;
 use crate::storage::metadata_store::{read_metadata, write_metadata};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SyncReport {
     pub synced_pages: Vec<String>,
 }

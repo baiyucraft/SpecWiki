@@ -3,7 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "tsx --test src/index.test.ts"
+  },
   "bin": {
     "codebuddy-wiki": "./bin/codebuddy.js"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6"
   }
 }

@@ -1,10 +1,11 @@
+use serde::Serialize;
 use std::io;
 use std::path::Path;
 
 use crate::app::init::run_init;
 use crate::app::status::run_status;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct UpdateReport {
     pub updated_pages: Vec<String>,
 }

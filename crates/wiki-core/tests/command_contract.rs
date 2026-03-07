@@ -19,8 +19,12 @@ fn serializes_error_response() {
 
 #[test]
 fn handles_json_command_and_returns_error_payload() {
-    let response = wiki_core::transport::json_rpc::handle_json(r#"{"action":"status"}"#).unwrap();
+    let response =
+        wiki_core::transport::json_rpc::handle_json(r#"{"action":"unknown-action"}"#).unwrap();
 
     assert!(!response.ok);
-    assert_eq!(response.error.as_deref(), Some("unsupported_action:status"));
+    assert_eq!(
+        response.error.as_deref(),
+        Some("unsupported_action:unknown-action")
+    );
 }
