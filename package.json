@@ -1,0 +1,8 @@
+{
+  "name": "codebuddy-wiki",
+  "private": true,
+  "packageManager": "pnpm@10.6.3",
+  "scripts": {
+    "test:workspace-layout": "node --test tests/integration/workspace-layout.test.mjs"
+  }
+}

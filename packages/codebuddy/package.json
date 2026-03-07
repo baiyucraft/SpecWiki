@@ -1,0 +1,9 @@
+{
+  "name": "@codebuddy/wiki-codebuddy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "codebuddy-wiki": "./bin/codebuddy.js"
+  }
+}
