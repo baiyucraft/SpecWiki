@@ -16,4 +16,5 @@ fn init_writes_wiki_layout() {
     assert!(repo_root.join(".wiki/项目概述.md").exists());
     assert!(repo_root.join(".wiki/wiki.metadata.json").exists());
     assert!(repo_root.join(".wiki/.cache").exists());
+    assert!(repo_root.join(".wiki/.cache/repo-scan.json").exists());
 }

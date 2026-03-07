@@ -15,7 +15,7 @@ pub fn dispatch(command: CoreCommand) -> CoreResponse {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     match command.action.as_str() {
-        "init" => encode_result(run_init(&repo_root).map(|_| serde_json::json!({ "initialized": true }))),
+        "init" => encode_result(run_init(&repo_root).and_then(as_json)),
         "status" => encode_result(run_status(&repo_root).and_then(as_json)),
         "update" => encode_result(run_update(&repo_root).and_then(as_json)),
         "query" => encode_result(run_query(&repo_root, command.term.as_deref().unwrap_or("")).and_then(as_json)),

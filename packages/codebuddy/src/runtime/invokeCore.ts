@@ -28,7 +28,9 @@ export async function invokeCore(command: CoreCommand): Promise<CoreResponse> {
       stderr += chunk.toString();
     });
 
-    child.on("error", reject);
+    child.on("error", (error) => {
+      reject(new Error(`failed to launch wiki-core at ${binary}: ${error.message}`));
+    });
     child.on("close", (code) => {
       if (code !== 0) {
         reject(new Error(stderr || `wiki-core exited with code ${code}`));

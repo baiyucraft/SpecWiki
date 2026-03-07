@@ -6,6 +6,7 @@ pub struct PlannedPage {
     pub title: String,
     pub relative_path: String,
     pub page_type: String,
+    pub parent_id: Option<String>,
 }
 
 pub fn plan_pages(report: &ScanReport) -> Vec<PlannedPage> {
@@ -14,6 +15,7 @@ pub fn plan_pages(report: &ScanReport) -> Vec<PlannedPage> {
         title: "项目概述".to_string(),
         relative_path: "项目概述.md".to_string(),
         page_type: "overview".to_string(),
+        parent_id: None,
     }];
 
     if report.detected_topics.iter().any(|topic| topic == "frontend") {
@@ -22,6 +24,7 @@ pub fn plan_pages(report: &ScanReport) -> Vec<PlannedPage> {
             title: "前端开发指南".to_string(),
             relative_path: "前端开发指南/前端开发指南.md".to_string(),
             page_type: "guide".to_string(),
+            parent_id: Some("overview".to_string()),
         });
     }
 

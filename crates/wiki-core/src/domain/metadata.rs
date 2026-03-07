@@ -15,6 +15,7 @@ pub struct DirtyState {
     pub status: String,
     pub dirty_pages: Vec<String>,
     pub dirty_sources: Vec<String>,
+    pub needs_rebuild_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -29,6 +30,35 @@ pub struct WikiMetadata {
     pub relations: Vec<WikiRelation>,
     pub source_files: Vec<SourceFileRecord>,
     pub dirty_state: DirtyState,
+}
+
+impl DirtyState {
+    pub fn fresh() -> Self {
+        Self {
+            status: "fresh".to_string(),
+            dirty_pages: Vec::new(),
+            dirty_sources: Vec::new(),
+            needs_rebuild_reason: None,
+        }
+    }
+
+    pub fn stale(dirty_sources: Vec<String>, dirty_pages: Vec<String>) -> Self {
+        Self {
+            status: "stale".to_string(),
+            dirty_pages,
+            dirty_sources,
+            needs_rebuild_reason: None,
+        }
+    }
+
+    pub fn needs_rebuild(reason: impl Into<String>, dirty_pages: Vec<String>) -> Self {
+        Self {
+            status: "needs_rebuild".to_string(),
+            dirty_pages,
+            dirty_sources: Vec::new(),
+            needs_rebuild_reason: Some(reason.into()),
+        }
+    }
 }
 
 impl WikiMetadata {
@@ -59,11 +89,7 @@ impl WikiMetadata {
                 fingerprint: "fingerprint-package-json".to_string(),
                 wiki_item_ids: vec!["overview".to_string()],
             }],
-            dirty_state: DirtyState {
-                status: "fresh".to_string(),
-                dirty_pages: Vec::new(),
-                dirty_sources: Vec::new(),
-            },
+            dirty_state: DirtyState::fresh(),
         }
     }
 }

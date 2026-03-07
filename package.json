@@ -1,8 +1,13 @@
 {
-  "name": "codebuddy-wiki",
+  "name": "spec-wiki",
   "private": true,
   "packageManager": "pnpm@10.6.3",
   "scripts": {
-    "test:workspace-layout": "node --test tests/integration/workspace-layout.test.mjs"
+    "build:core": "cargo build -p wiki-core",
+    "stage:npm": "node scripts/publish-npm.mjs",
+    "test:workspace-layout": "node --test tests/integration/workspace-layout.test.mjs",
+    "test:integration": "node --test tests/integration/workspace-layout.test.mjs tests/integration/package_staging.test.mjs",
+    "test:adapter": "pnpm --dir packages/codebuddy test",
+    "test:e2e": "cargo build -p wiki-core --target-dir target/e2e && pnpm --dir packages/codebuddy exec -- tsx --test ../../tests/e2e/init-update-query.test.mjs"
   }
 }

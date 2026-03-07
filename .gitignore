@@ -2,5 +2,9 @@ target/
 node_modules/
 dist/
 docs/
+openspec/
 .worktrees/
+
 参考/
+DESIGN*.md
+AGENTS.md

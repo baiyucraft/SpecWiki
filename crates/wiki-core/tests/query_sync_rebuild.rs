@@ -16,14 +16,19 @@ fn sync_detects_manual_markdown_changes() {
     fs::write(&overview, "# 项目概述\n\n自定义说明\n").unwrap();
 
     let result = run_sync(repo_root).unwrap();
+    assert_eq!(result.state, "fresh");
     assert!(result
         .synced_pages
         .iter()
         .any(|path| path.ends_with("项目概述.md")));
 
     let query = run_query(repo_root, "项目概述").unwrap();
+    assert_eq!(query.term, "项目概述");
     assert!(!query.matched_pages.is_empty());
+    assert!(!query.matches.is_empty());
+    assert!(query.matches[0].summary.contains("标题匹配"));
 
     let rebuild = run_rebuild(repo_root).unwrap();
+    assert_eq!(rebuild.state, "fresh");
     assert!(!rebuild.updated_pages.is_empty());
 }

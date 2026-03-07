@@ -5,5 +5,11 @@ export type CoreResponse = {
 };
 
 export function parseResult(stdout: string): CoreResponse {
-  return JSON.parse(stdout) as CoreResponse;
+  const parsed = JSON.parse(stdout) as Partial<CoreResponse>;
+
+  if (typeof parsed !== "object" || parsed === null || typeof parsed.ok !== "boolean") {
+    throw new Error("invalid wiki-core response");
+  }
+
+  return parsed as CoreResponse;
 }
