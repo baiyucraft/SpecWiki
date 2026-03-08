@@ -1,14 +1,13 @@
 use std::fs;
 
 use tempfile::tempdir;
-use wiki_core::app::{init::run_init, status::run_status, update::run_update};
+use wiki_core::workflows::{init::run_init, status::run_status, update::run_update};
 
 #[test]
 fn status_reports_missing_before_init() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
-    fs::create_dir(repo_root.join(".git")).unwrap();
     fs::write(repo_root.join("package.json"), r#"{"name":"demo"}"#).unwrap();
 
     let status = run_status(repo_root).unwrap();
@@ -20,7 +19,6 @@ fn status_reports_needs_rebuild_when_cache_is_missing() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
-    fs::create_dir(repo_root.join(".git")).unwrap();
     fs::write(repo_root.join("package.json"), r#"{"name":"demo"}"#).unwrap();
 
     run_init(repo_root).unwrap();
@@ -36,7 +34,6 @@ fn update_refreshes_stale_runtime_to_fresh() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
-    fs::create_dir(repo_root.join(".git")).unwrap();
     fs::write(repo_root.join("package.json"), r#"{"name":"demo"}"#).unwrap();
     fs::write(repo_root.join("src.ts"), "export const a = 1;").unwrap();
 

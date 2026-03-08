@@ -1,0 +1,5 @@
+{
+  "name": "@repo/shared",
+  "private": true,
+  "main": "src/utils.ts"
+}

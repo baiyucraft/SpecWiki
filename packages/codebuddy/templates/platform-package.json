@@ -1,9 +1,0 @@
-{
-  "name": "__PACKAGE_NAME__",
-  "version": "0.1.0",
-  "private": false,
-  "os": ["__OS__"],
-  "cpu": ["__CPU__"],
-  "files": ["bin/**"],
-  "description": "Platform binary package for codebuddy-wiki"
-}

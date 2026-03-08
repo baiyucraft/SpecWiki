@@ -1,0 +1,2 @@
+class GCSql:
+    pass

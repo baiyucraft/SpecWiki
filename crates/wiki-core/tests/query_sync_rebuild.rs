@@ -1,14 +1,13 @@
 use std::fs;
 
 use tempfile::tempdir;
-use wiki_core::app::{init::run_init, query::run_query, rebuild::run_rebuild, sync::run_sync};
+use wiki_core::workflows::{init::run_init, query::run_query, rebuild::run_rebuild, sync::run_sync};
 
 #[test]
 fn sync_detects_manual_markdown_changes() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
-    fs::create_dir(repo_root.join(".git")).unwrap();
     fs::write(repo_root.join("package.json"), r#"{"name":"demo"}"#).unwrap();
     run_init(repo_root).unwrap();
 
@@ -25,6 +24,8 @@ fn sync_detects_manual_markdown_changes() {
     let query = run_query(repo_root, "项目概述").unwrap();
     assert_eq!(query.term, "项目概述");
     assert!(!query.matched_pages.is_empty());
+    assert!(!query.matched_modules.is_empty());
+    assert!(!query.matched_sources.is_empty());
     assert!(!query.matches.is_empty());
     assert!(query.matches[0].summary.contains("标题匹配"));
 
