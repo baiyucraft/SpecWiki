@@ -47,16 +47,16 @@
 
 ```bash
 pnpm install
-pnpm --dir crates/wiki-core run build
-pnpm --dir agents/codebuddy run build
+cargo build -p wiki-core --target-dir target
+pnpm exec vite build --config agents/codebuddy/vite.config.mjs
 pnpm run lint
 ```
 
-这几组命令的职责不同：
+这几组命令都从 workspace 根目录执行，职责不同：
 
-- `pnpm --dir crates/wiki-core run build`
+- `cargo build -p wiki-core --target-dir target`
   - 只编译 `wiki-core`
-- `pnpm --dir agents/codebuddy run build`
+- `pnpm exec vite build --config agents/codebuddy/vite.config.mjs`
   - 只编译 `codebuddy`
 - `pnpm run lint`
   - 根级统一检查仓库文件，忽略 `dist/`、`target/` 等生成产物
@@ -64,7 +64,7 @@ pnpm run lint
 各模块单独编译后的产物位置：
 
 ```text
-crates/wiki-core/target/debug/wiki-core.exe
+target/debug/wiki-core.exe
 agents/codebuddy/dist/
 ```
 
@@ -84,7 +84,8 @@ dist/
 
 也就是说：
 
-- 子包负责“把自己编译好”
+- 子包仍然自管 `build / test` 脚本
+- 实际调用统一从 workspace 根发起
 - 根级负责“编排全部模块并整理发布产物”
 
 ## 开发调试
@@ -98,23 +99,46 @@ dist/
 常用命令：
 
 ```bash
-pnpm --dir crates/wiki-core run test
-pnpm --dir agents/codebuddy run build
-pnpm --dir agents/codebuddy run test
+cargo test -p wiki-core --target-dir target
+pnpm exec vite build --config agents/codebuddy/vite.config.mjs
+pnpm exec vitest run --root agents/codebuddy --config vite.config.mjs
 pnpm run test
 ```
 
 测试也遵循同样的分层原则：
 
-- `pnpm --dir crates/wiki-core run test`
+- `cargo test -p wiki-core --target-dir target`
   - 只跑 core 自身测试
-- `pnpm --dir agents/codebuddy run test`
+- `pnpm exec vitest run --root agents/codebuddy --config vite.config.mjs`
   - 只跑 Agent 自身测试
 - `pnpm run test`
   - 根级总入口，顺序执行 core 测试、Agent 测试和根级整体测试
 
 说明：
 
-- CodeBuddy Agent 默认会在 `crates/wiki-core/target/debug/wiki-core.exe` 查找本地 binary
+- 当前仓库使用 Cargo workspace，Rust 产物统一输出到根目录 `target/`
+- CodeBuddy Agent 默认会在 `target/debug/wiki-core.exe` 查找本地 binary
 - 如需手动指定 binary，可设置环境变量 `CODEBUDDY_WIKI_CORE_BIN`
 - `pnpm run test` 会依次执行：core 自测、codebuddy 自测、根级 Vitest 整体测试
+
+## Baseline 验收
+
+`Deterministic Structural Baseline` 这一轮的完成口径，不再只看“能不能生成 `.wiki/`”，而是看结构是否稳定：
+
+- `ModuleTree` 需要支持递归层级，而不是只有一层子模块
+- 模块页路径需要跟模块祖先链一致，例如 `核心模块/packages/domain/auth.md`
+- `wiki.metadata.json` 需要导出页面父子关系、模块层级和页面 provenance
+- `query` 需要优先返回页面、模块、源码、关系等结构化命中，Markdown 只作为回退
+
+当前用于这一轮验收的中型 fixture 在 [crates/wiki-core/tests/fixtures/baseline-hierarchy-repo](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/fixtures/baseline-hierarchy-repo)。它覆盖：
+
+- nested workspace 模块：`apps/web`、`packages/domain/auth`、`packages/domain/shared`
+- 非 workspace 模块：`spider`
+- 基础设施目录：`infra/nginx`
+
+如果你要手工验证 baseline，优先看这些测试：
+
+- [crates/wiki-core/tests/hierarchy_planning.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/hierarchy_planning.rs)
+- [crates/wiki-core/tests/repo_scan.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/repo_scan.rs)
+- [crates/wiki-core/tests/baseline_acceptance.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/baseline_acceptance.rs)
+- [crates/wiki-core/tests/query_sync_rebuild.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/query_sync_rebuild.rs)

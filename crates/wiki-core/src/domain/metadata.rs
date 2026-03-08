@@ -102,10 +102,15 @@ impl WikiMetadata {
                 path: ".wiki/项目概述.md".to_string(),
                 item_type: "overview".to_string(),
                 parent_id: None,
+                ancestor_ids: Vec::new(),
                 module_ids: vec!["module-root".to_string()],
                 source_files: vec!["package.json".to_string()],
                 content_hash: "hash-overview".to_string(),
                 summary: "仓库概览".to_string(),
+                provenance: vec![
+                    "module:module-root".to_string(),
+                    "source:package.json".to_string(),
+                ],
             }],
             relations: vec![WikiRelation {
                 source_id: "overview".to_string(),

@@ -11,8 +11,8 @@ export function getCoreBinaryName(platform = process.platform) {
 }
 
 export function getCoreTargetDir(rootDir) {
-  // The Rust build cache stays inside the crate so core-related artifacts do not leak into the repo root.
-  return path.join(rootDir, "crates", "wiki-core", "target");
+  // The Rust workspace shares a single root target directory so every build/test entry resolves the same binary.
+  return path.join(rootDir, "target");
 }
 
 export function resolveBuiltBinary(

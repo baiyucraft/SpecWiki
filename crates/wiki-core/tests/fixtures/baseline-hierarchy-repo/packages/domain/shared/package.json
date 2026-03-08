@@ -1,0 +1,4 @@
+{
+  "name": "@repo/shared",
+  "main": "src/index.ts"
+}

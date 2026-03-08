@@ -56,7 +56,7 @@ function collectBinaryCandidates(packageRoot: string): string[] {
     path.join(packageRoot, "node_modules", WIN32_PLATFORM_PACKAGE_NAME, "bin", WIN32_BINARY_NAME),
     path.join(packageRoot, "..", WIN32_PLATFORM_PACKAGE_NAME, "bin", WIN32_BINARY_NAME),
     path.join(packageRoot, "..", "..", WIN32_PLATFORM_PACKAGE_NAME, "bin", WIN32_BINARY_NAME),
-    path.join(packageRoot, "..", "..", "crates", "wiki-core", "target", "debug", WIN32_BINARY_NAME),
+    path.join(packageRoot, "..", "..", "target", "debug", WIN32_BINARY_NAME),
   ];
 }
 

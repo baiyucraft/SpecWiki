@@ -513,7 +513,7 @@ fn normalize_python_target(source_path: &str, target: &str) -> Option<String> {
         return Some(resolve_source_relative_path(source_path, target));
     }
 
-    let source_root = top_level_source_root(source_path)?;
+    let source_root = source_root_for_alias(source_path);
     Some(format!("{source_root}/{target}"))
 }
 
@@ -530,18 +530,35 @@ fn resolve_source_relative_path(source_path: &str, target: &str) -> String {
     normalize_path_like(&joined.to_string_lossy())
 }
 
-/// 提取源码文件所属的顶层模块根。
-/// `crates/*`、`agents/*` 这类工作区成员会返回两段路径，其余目录返回第一段。
-fn top_level_source_root(source_path: &str) -> Option<String> {
-    let mut segments = source_path.split('/').filter(|segment| !segment.is_empty());
-    let first = segments.next()?;
+/// 从源码路径中推导“最接近真实模块边界”的根路径。
+/// 命中 `src/app/lib/modules` 时优先截到这些目录之前，否则再退回到工作区成员或顶层目录。
+fn source_root_for_alias(source_path: &str) -> String {
+    let segments = source_path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
 
-    if matches!(first, "crates" | "agents" | "apps" | "services" | "libs" | "packages") {
-        let second = segments.next()?;
-        return Some(format!("{first}/{second}"));
+    if let Some(source_root_end) = segments
+        .iter()
+        .position(|segment| matches!(*segment, "src" | "app" | "lib" | "modules"))
+    {
+        let root_segments = &segments[..source_root_end];
+        if !root_segments.is_empty() {
+            return root_segments.join("/");
+        }
     }
 
-    Some(first.to_string())
+    let mut segments = segments.into_iter();
+    let first = segments.next().unwrap_or(".");
+
+    if matches!(first, "crates" | "agents" | "apps" | "services" | "libs" | "packages") {
+        let second = segments.next().unwrap_or(".");
+        if second != "." {
+            return format!("{first}/{second}");
+        }
+    }
+
+    first.to_string()
 }
 
 /// 从 manifest 路径推导其所属模块根目录。

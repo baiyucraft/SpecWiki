@@ -6,11 +6,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEFAULT_ROOT_DIR = path.resolve(__dirname, "..");
 const TEST_COMMANDS = [
-  ["pnpm", ["--dir", "crates/wiki-core", "run", "test"]],
-  ["pnpm", ["--dir", "agents/codebuddy", "run", "test"]],
-  ["pnpm", ["--dir", "crates/wiki-core", "run", "build"]],
-  ["pnpm", ["--dir", "agents/codebuddy", "run", "build"]],
-  ["cargo", ["build", "-p", "wiki-core", "--target-dir", "crates/wiki-core/target/e2e"]],
+  ["cargo", ["test", "-p", "wiki-core", "--target-dir", "target"]],
+  [
+    "pnpm",
+    ["exec", "vitest", "run", "--root", "agents/codebuddy", "--config", "vite.config.mjs"],
+  ],
+  ["cargo", ["build", "-p", "wiki-core", "--target-dir", "target"]],
+  ["pnpm", ["exec", "vite", "build", "--config", "agents/codebuddy/vite.config.mjs"]],
+  ["cargo", ["build", "-p", "wiki-core", "--target-dir", "target/e2e"]],
   ["pnpm", ["exec", "vitest", "run", "--config", "vitest.config.mjs"]],
 ];
 

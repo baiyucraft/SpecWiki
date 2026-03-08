@@ -10,7 +10,7 @@ import { createTools } from "../../agents/codebuddy/src/index.ts";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..", "..");
-const e2eTargetDir = path.join(rootDir, "crates", "wiki-core", "target", "e2e");
+const e2eTargetDir = path.join(rootDir, "target", "e2e");
 
 test("agent init, status, update, query, sync, and rebuild work end to end", async () => {
   const repoRoot = mkdtempSync(path.join(os.tmpdir(), "codebuddy-wiki-e2e-"));

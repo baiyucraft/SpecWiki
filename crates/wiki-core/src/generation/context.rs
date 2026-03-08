@@ -1,4 +1,5 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use crate::domain::context::{ModuleContext, PageContext, RepoContext};
 use crate::domain::module_tree::{ModuleNode, ModuleTree};
@@ -50,25 +51,24 @@ pub fn build_module_contexts(report: &ScanReport, module_tree: &ModuleTree) -> V
         .modules
         .iter()
         .map(|module| {
+            let subtree_ids = collect_module_subtree_ids(module_tree, &module.id);
             let dependencies = module_tree
                 .cross_module_edges
                 .iter()
-                .filter(|edge| edge.source == module.id)
+                .filter(|edge| subtree_ids.contains(&edge.source) && !subtree_ids.contains(&edge.target))
                 .map(|edge| edge.target.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .collect::<Vec<_>>();
             let dependents = module_tree
                 .cross_module_edges
                 .iter()
-                .filter(|edge| edge.target == module.id)
+                .filter(|edge| subtree_ids.contains(&edge.target) && !subtree_ids.contains(&edge.source))
                 .map(|edge| edge.source.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .collect::<Vec<_>>();
-            let key_sources = report
-                .files
-                .iter()
-                .filter(|file| module.source_ids.contains(&file.id))
-                .map(|file| file.path.clone())
-                .take(8)
-                .collect::<Vec<_>>();
+            let key_sources = select_key_sources(report, module);
 
             ModuleContext {
                 module_id: module.id.clone(),
@@ -80,6 +80,200 @@ pub fn build_module_contexts(report: &ScanReport, module_tree: &ModuleTree) -> V
             }
         })
         .collect()
+}
+
+fn collect_module_subtree_ids(module_tree: &ModuleTree, module_id: &str) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    collect_module_subtree_ids_recursive(module_tree, module_id, &mut ids);
+    ids
+}
+
+fn collect_module_subtree_ids_recursive(
+    module_tree: &ModuleTree,
+    module_id: &str,
+    ids: &mut BTreeSet<String>,
+) {
+    if !ids.insert(module_id.to_string()) {
+        return;
+    }
+
+    let Some(module) = module_tree.module_by_id(module_id) else {
+        return;
+    };
+
+    for child_id in &module.child_ids {
+        collect_module_subtree_ids_recursive(module_tree, child_id, ids);
+    }
+}
+
+fn select_key_sources(report: &ScanReport, module: &ModuleNode) -> Vec<String> {
+    let source_ids = module.source_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let dependency_evidence = report
+        .dependency_hints
+        .iter()
+        .flat_map(|hint| [hint.from.clone(), hint.to.clone()])
+        .collect::<BTreeSet<_>>();
+
+    let mut candidates = report
+        .files
+        .iter()
+        .filter(|file| source_ids.contains(&file.id))
+        .filter_map(|file| {
+            let score = key_source_score(file, module, &dependency_evidence);
+            (score > -1000).then(|| (score, file.path.clone()))
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.len().cmp(&right.1.len()))
+            .then_with(|| left.1.cmp(&right.1))
+    });
+
+    candidates
+        .into_iter()
+        .map(|(_, path)| path)
+        .take(8)
+        .collect()
+}
+
+fn key_source_score(
+    file: &crate::repo::scanner::ScannedFile,
+    module: &ModuleNode,
+    dependency_evidence: &BTreeSet<String>,
+) -> i32 {
+    if is_low_signal_key_source(file.path.as_str(), file.kind.as_str()) {
+        return -1000;
+    }
+
+    let mut score = 0;
+    let file_name = Path::new(&file.path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+
+    if module.entry_points.contains(&file.path) || file.tags.iter().any(|tag| tag == "entry-point") {
+        score += 100;
+    }
+
+    if dependency_evidence.contains(&file.path) {
+        score += 70;
+    }
+
+    match file.kind.as_str() {
+        "source" => score += 40,
+        "config" => score += 10,
+        "docs" => score -= 30,
+        "asset" => score -= 50,
+        _ => {}
+    }
+
+    match file.language.as_str() {
+        "typescript"
+        | "javascript"
+        | "react"
+        | "vue"
+        | "svelte"
+        | "python"
+        | "rust"
+        | "java"
+        | "csharp"
+        | "kotlin"
+        | "php"
+        | "swift" => score += 25,
+        "html" | "css" => score += 5,
+        _ => {}
+    }
+
+    if module.tags.iter().any(|tag| tag == "frontend")
+        && matches!(
+            file.language.as_str(),
+            "typescript" | "javascript" | "react" | "vue" | "svelte"
+        )
+    {
+        score += 15;
+    }
+
+    if module.tags.iter().any(|tag| tag == "backend")
+        && matches!(
+            file.language.as_str(),
+            "python" | "rust" | "java" | "csharp" | "kotlin" | "php" | "swift"
+        )
+    {
+        score += 15;
+    }
+
+    if module.tags.iter().any(|tag| tag == "infrastructure") {
+        if file.kind == "config" {
+            score += 35;
+        }
+
+        if matches!(file.language.as_str(), "html" | "css" | "markdown" | "text") {
+            score -= 35;
+        }
+
+        if file.path.contains("/html/") {
+            score -= 50;
+        }
+    }
+
+    if file.path.contains("/src/") || file.path.contains("/app/") || file.path.contains("/modules/") {
+        score += 15;
+    }
+
+    if matches!(
+        file_name,
+        "app.py"
+            | "main.py"
+            | "main.ts"
+            | "main.js"
+            | "main.rs"
+            | "nginx.conf"
+            | "package.json"
+            | "Cargo.toml"
+            | "pyproject.toml"
+            | "config.yaml"
+            | "config.yml"
+    ) {
+        score += 20;
+    }
+
+    if file.path.ends_with(".d.ts") {
+        score -= 20;
+    }
+
+    score
+}
+
+fn is_low_signal_key_source(path: &str, kind: &str) -> bool {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if file_name.contains(".log.") || file_name.ends_with(".log") {
+        return true;
+    }
+
+    if matches!(
+        file_name.as_str(),
+        "pnpm-lock.yaml" | "package-lock.json" | "yarn.lock" | "cargo.lock" | "readme" | "readme.md"
+    ) {
+        return true;
+    }
+
+    if path.contains("/openspec/") {
+        return true;
+    }
+
+    if path.contains("/docs/") {
+        return true;
+    }
+
+    kind == "docs" || kind == "asset"
 }
 
 /// 把 `PlannedPage` 进一步转换成渲染器可直接消费的 `PageContext`。
@@ -138,7 +332,13 @@ pub fn build_page_context(
                 module_tree
                     .cross_module_edges
                     .iter()
-                    .map(|edge| format!("跨模块关系：{} -> {}", edge.source, edge.target)),
+                    .map(|edge| {
+                        format!(
+                            "跨模块关系：{} -> {}",
+                            module_name(module_tree, &edge.source),
+                            module_name(module_tree, &edge.target)
+                        )
+                    }),
             );
         }
         "module" => {

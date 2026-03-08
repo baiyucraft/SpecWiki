@@ -1,0 +1,7 @@
+{
+  "name": "baseline-hierarchy-repo",
+  "workspaces": [
+    "apps/*",
+    "packages/domain/*"
+  ]
+}

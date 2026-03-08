@@ -4,6 +4,7 @@ dist/
 docs/
 openspec/
 .worktrees/
+.wiki/
 
 参考/
 DESIGN*.md
@@ -11,3 +12,6 @@ AGENTS.md
 COMMENTING.md
 
 tmp/
+.claude/
+.claude/settings.local.json
+.codex/

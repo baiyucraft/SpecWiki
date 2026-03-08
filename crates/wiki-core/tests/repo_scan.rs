@@ -125,3 +125,36 @@ fn scan_repo_parses_java_package_aliases_into_dependency_hints() {
         hint.from == "api/src/Main.java" && hint.to.starts_with("core/")
     }));
 }
+
+#[test]
+fn scan_repo_parses_nested_workspace_aliases_into_dependency_hints() {
+    let fixture = [
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/baseline-hierarchy-repo"),
+        PathBuf::from("crates/wiki-core/tests/fixtures/baseline-hierarchy-repo"),
+        PathBuf::from("tests/fixtures/baseline-hierarchy-repo"),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.exists())
+    .expect("fixture repository should exist for baseline hierarchy scan tests");
+    let report = scan_repo(&fixture).unwrap();
+
+    assert!(report
+        .workspace_roots
+        .iter()
+        .any(|root| root == "packages/domain/auth"));
+    assert!(report
+        .workspace_roots
+        .iter()
+        .any(|root| root == "packages/domain/shared"));
+    assert!(report
+        .workspace_roots
+        .iter()
+        .any(|root| root == "infra/nginx"));
+    assert!(report.dependency_hints.iter().any(|hint| {
+        hint.from == "apps/web/src/main.ts" && hint.to.starts_with("packages/domain/auth")
+    }));
+    assert!(report.dependency_hints.iter().any(|hint| {
+        hint.from == "packages/domain/auth/src/index.ts"
+            && hint.to.starts_with("packages/domain/shared")
+    }));
+}

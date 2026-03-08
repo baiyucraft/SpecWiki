@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use crate::domain::context::{ModuleContext, RepoContext};
 use crate::domain::module_tree::{ModuleNode, ModuleTree};
 use crate::domain::stable_id::stable_id;
@@ -88,7 +86,7 @@ pub fn plan_pages(
 
     // 模块页规划时会保留页面层级，这样后续如果出现嵌套模块，可以自然落成目录结构。
     for (index, module) in modules_to_render.into_iter().enumerate() {
-        let path = module_page_path(module_tree, module);
+        let path = module_page_path(module);
         let parent_id = module
             .parent_id
             .as_ref()
@@ -96,12 +94,14 @@ pub fn plan_pages(
                 if module_tree.root_modules.contains(parent_module_id) {
                     Some(overview_id.clone())
                 } else {
-                    Some(stable_id("page", &module_page_path(
-                        module_tree,
-                        module_tree
-                            .module_by_id(parent_module_id)
-                            .expect("parent module should exist"),
-                    )))
+                    Some(stable_id(
+                        "page",
+                        &module_page_path(
+                            module_tree
+                                .module_by_id(parent_module_id)
+                                .expect("parent module should exist"),
+                        ),
+                    ))
                 }
             })
             .or_else(|| Some(overview_id.clone()));
@@ -169,39 +169,21 @@ fn modules_to_render<'a>(module_tree: &'a ModuleTree) -> Vec<&'a ModuleNode> {
 ///
 /// # 返回
 /// - 返回当前模块页在 `.wiki/` 下的相对路径。
-fn module_page_path(module_tree: &ModuleTree, module: &ModuleNode) -> String {
-    let mut segments = module_ancestry(module_tree, module);
-    segments.push(slugify(&module.name));
-    format!("核心模块/{}.md", segments.join("/"))
-}
+fn module_page_path(module: &ModuleNode) -> String {
+    let relative = module
+        .root_paths
+        .first()
+        .map(|root_path| {
+            root_path
+                .split('/')
+                .filter(|segment| !segment.is_empty() && *segment != ".")
+                .map(slugify_segment)
+                .collect::<Vec<_>>()
+        })
+        .filter(|segments| !segments.is_empty())
+        .unwrap_or_else(|| vec![slugify_segment(&module.name)]);
 
-/// 收集模块的祖先名称，用来构造嵌套页面路径。
-///
-/// # 参数
-/// - `module_tree`：当前仓库的模块树。
-/// - `module`：当前模块节点。
-///
-/// # 返回
-/// - 返回当前模块所有祖先模块的 slug 列表。
-fn module_ancestry(module_tree: &ModuleTree, module: &ModuleNode) -> Vec<String> {
-    let mut segments = Vec::new();
-    let mut current_parent = module.parent_id.clone();
-
-    while let Some(parent_id) = current_parent {
-        if module_tree.root_modules.contains(&parent_id) {
-            break;
-        }
-
-        let Some(parent) = module_tree.module_by_id(&parent_id) else {
-            break;
-        };
-
-        segments.push(slugify(&parent.name));
-        current_parent = parent.parent_id.clone();
-    }
-
-    segments.reverse();
-    segments
+    format!("核心模块/{}.md", relative.join("/"))
 }
 
 /// 文件名规范化，保证模块页路径在 Windows 上也可安全落盘。
@@ -211,7 +193,7 @@ fn module_ancestry(module_tree: &ModuleTree, module: &ModuleNode) -> Vec<String>
 ///
 /// # 返回
 /// - 返回适合当作页面文件名的安全 slug。
-fn slugify(value: &str) -> String {
+fn slugify_segment(value: &str) -> String {
     let slug = value
         .chars()
         .map(|character| match character {
@@ -221,14 +203,27 @@ fn slugify(value: &str) -> String {
         })
         .collect::<String>();
 
-    let parts = slug
-        .split('-')
-        .filter(|part| !part.is_empty())
-        .collect::<BTreeSet<_>>();
+    let mut normalized = String::new();
+    let mut last_was_dash = false;
 
-    if parts.is_empty() {
+    for character in slug.chars() {
+        if character == '-' {
+            if last_was_dash {
+                continue;
+            }
+            last_was_dash = true;
+            normalized.push(character);
+            continue;
+        }
+
+        last_was_dash = false;
+        normalized.push(character);
+    }
+
+    let normalized = normalized.trim_matches('-');
+    if normalized.is_empty() {
         "module".to_string()
     } else {
-        parts.into_iter().collect::<Vec<_>>().join("-")
+        normalized.to_string()
     }
 }

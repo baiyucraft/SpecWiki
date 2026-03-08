@@ -74,7 +74,7 @@ test("resolveBinary falls back to the workspace build path on Windows", () => {
 
   try {
     expect(resolveBinary("win32")).toMatch(
-      /crates[\\/]wiki-core[\\/]target[\\/]debug[\\/]wiki-core\.exe$/,
+      /target[\\/]debug[\\/]wiki-core\.exe$/,
     );
   } finally {
     if (previous === undefined) {

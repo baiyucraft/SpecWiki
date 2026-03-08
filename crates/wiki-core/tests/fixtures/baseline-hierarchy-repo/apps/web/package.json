@@ -1,0 +1,8 @@
+{
+  "name": "@repo/web",
+  "main": "src/main.ts",
+  "dependencies": {
+    "@repo/auth": "workspace:*",
+    "@repo/shared": "workspace:*"
+  }
+}

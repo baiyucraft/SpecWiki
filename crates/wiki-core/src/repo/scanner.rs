@@ -109,6 +109,8 @@ pub fn scan_repo(root: &Path) -> io::Result<ScanReport> {
         &files,
         &import_aliases,
     ));
+    dependency_hints.extend(collect_service_api_hints(root, &files));
+    dependency_hints.extend(collect_infrastructure_dependency_hints(root, &files));
     dependency_hints = dedupe_dependency_hints(dependency_hints);
 
     Ok(ScanReport {
@@ -218,6 +220,16 @@ fn should_ignore_dir(path: &Path) -> bool {
 /// # 返回
 /// - 如果文件应被扫描阶段忽略，则返回 `true`。
 fn should_ignore_file(path: &Path) -> bool {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if file_name.contains(".log.") || file_name.ends_with(".log") {
+        return true;
+    }
+
     matches!(
         path.extension().and_then(|extension| extension.to_str()),
         Some("log" | "pid" | "pyc" | "pyo" | "exe" | "dll" | "so" | "dylib" | "class")
@@ -469,6 +481,165 @@ fn collect_dependency_hints(
     hints
 }
 
+/// 前端消费 `/api` 与后端暴露 `/api` 路由是混合仓库里最稳定的跨模块线索之一。
+/// 这里不做语义推理，只在“前端显式调用 API”与“后端显式暴露 API”同时存在时记录依赖。
+fn collect_service_api_hints(root: &Path, files: &[ScannedFile]) -> Vec<DependencyHint> {
+    let mut consumers = Vec::new();
+    let mut providers = Vec::new();
+
+    for file in files {
+        if !matches!(
+            file.language.as_str(),
+            "typescript"
+                | "javascript"
+                | "react"
+                | "vue"
+                | "svelte"
+                | "python"
+                | "java"
+                | "csharp"
+                | "kotlin"
+                | "php"
+        ) {
+            continue;
+        }
+
+        let absolute_path = root.join(&file.path);
+        let Ok(content) = fs::read_to_string(&absolute_path) else {
+            continue;
+        };
+
+        if contains_frontend_api_consumer_hint(file, &content) {
+            consumers.push(file.path.clone());
+        }
+
+        if contains_backend_api_provider_hint(file, &content) {
+            providers.push(file.path.clone());
+        }
+    }
+
+    let mut hints = Vec::new();
+
+    for consumer in &consumers {
+        for provider in &providers {
+            if consumer == provider {
+                continue;
+            }
+
+            hints.push(DependencyHint {
+                from: consumer.clone(),
+                to: provider.clone(),
+                kind: "DEPENDS_ON".to_string(),
+                confidence: "heuristic".to_string(),
+            });
+        }
+    }
+
+    hints
+}
+
+/// 基础设施配置里如果显式引用仓库内的静态产物目录，就把它折叠成模块依赖线索。
+fn collect_infrastructure_dependency_hints(root: &Path, files: &[ScannedFile]) -> Vec<DependencyHint> {
+    let mut hints = Vec::new();
+
+    for file in files {
+        if !file.path.ends_with("nginx.conf") {
+            continue;
+        }
+
+        let absolute_path = root.join(&file.path);
+        let Ok(content) = fs::read_to_string(&absolute_path) else {
+            continue;
+        };
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if let Some(target) = parse_nginx_root_target(line)
+                .and_then(|target| relative_path_from_config_target(root, &target))
+            {
+                hints.push(DependencyHint {
+                    from: file.path.clone(),
+                    to: target,
+                    kind: "SERVES_STATIC".to_string(),
+                    confidence: "parsed".to_string(),
+                });
+            }
+        }
+    }
+
+    hints
+}
+
+fn contains_frontend_api_consumer_hint(file: &ScannedFile, content: &str) -> bool {
+    if !matches!(
+        file.language.as_str(),
+        "typescript" | "javascript" | "react" | "vue" | "svelte"
+    ) {
+        return false;
+    }
+
+    let normalized = content.to_ascii_lowercase();
+
+    (file.path.contains("/api/") || normalized.contains("/api"))
+        && (normalized.contains("axios")
+            || normalized.contains("fetch(")
+            || normalized.contains("baseurl")
+            || normalized.contains("vite_api_base"))
+}
+
+fn contains_backend_api_provider_hint(file: &ScannedFile, content: &str) -> bool {
+    if !matches!(
+        file.language.as_str(),
+        "python" | "javascript" | "typescript" | "java" | "csharp" | "kotlin" | "php"
+    ) {
+        return false;
+    }
+
+    let normalized = content.to_ascii_lowercase();
+
+    normalized.contains("@app.route('/api")
+        || normalized.contains("@app.route(\"/api")
+        || normalized.contains("app.get('/api")
+        || normalized.contains("app.post('/api")
+        || normalized.contains("router.get('/api")
+        || normalized.contains("router.post('/api")
+        || normalized.contains("requestmapping(\"/api")
+        || normalized.contains("requestmapping('/api")
+        || normalized.contains("map(\"/api")
+}
+
+fn parse_nginx_root_target(line: &str) -> Option<String> {
+    let body = line.strip_prefix("root")?.trim();
+    let value = body.split(';').next()?.trim();
+
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn relative_path_from_config_target(repo_root: &Path, target: &str) -> Option<String> {
+    let normalized_target = target.trim().trim_matches(['"', '\'']).replace('\\', "/");
+    let normalized_root = repo_root.to_string_lossy().replace('\\', "/");
+
+    if let Some(relative) = normalized_target.strip_prefix(&normalized_root) {
+        let relative = relative.trim_start_matches('/').to_string();
+        return (!relative.is_empty()).then_some(relative);
+    }
+
+    if normalized_target.contains("://") {
+        return None;
+    }
+
+    let repo_relative = normalized_target.trim_start_matches("./").trim_start_matches('/');
+    let candidate = repo_root.join(repo_relative);
+    candidate
+        .exists()
+        .then(|| repo_relative.replace('\\', "/"))
+        .filter(|relative| !relative.is_empty())
+}
+
 /// 某些语言的内部别名并不写在 manifest 里，而是写在源码里。
 /// 例如 Java/Kotlin 的 `package`、C# 的 `namespace`、PHP 的 `namespace`。
 ///
@@ -506,12 +677,29 @@ fn collect_source_aliases(
 }
 
 fn source_root_for_alias(source_path: &str) -> String {
-    let mut segments = source_path.split('/').filter(|segment| !segment.is_empty());
+    let segments = source_path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+
+    if let Some(source_root_end) = segments
+        .iter()
+        .position(|segment| matches!(*segment, "src" | "app" | "lib" | "modules"))
+    {
+        let root_segments = &segments[..source_root_end];
+        if !root_segments.is_empty() {
+            return root_segments.join("/");
+        }
+    }
+
+    let mut segments = segments.into_iter();
     let first = segments.next().unwrap_or(".");
 
     if matches!(first, "crates" | "agents" | "apps" | "services" | "libs" | "packages") {
         let second = segments.next().unwrap_or(".");
-        return format!("{first}/{second}");
+        if second != "." {
+            return format!("{first}/{second}");
+        }
     }
 
     first.to_string()

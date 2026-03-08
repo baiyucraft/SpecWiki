@@ -10,9 +10,13 @@ pub struct WikiItem {
     pub item_type: String,
     pub parent_id: Option<String>,
     #[serde(default)]
+    pub ancestor_ids: Vec<String>,
+    #[serde(default)]
     pub module_ids: Vec<String>,
     pub source_files: Vec<String>,
     pub content_hash: String,
     #[serde(default)]
     pub summary: String,
+    #[serde(default)]
+    pub provenance: Vec<String>,
 }

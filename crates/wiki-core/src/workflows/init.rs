@@ -1,12 +1,11 @@
+use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 use std::time::SystemTime;
 
 use crate::domain::context::PageContext;
-use crate::domain::metadata::{DirtyState, SourceFileRecord, WikiMetadata};
-use crate::domain::module_tree::ModuleTree;
-use crate::domain::relation::WikiRelation;
-use crate::domain::wiki_item::WikiItem;
+use crate::domain::metadata_mapper::{export_metadata, ExportContext};
+use crate::domain::state::{assemble_state, PageBuildResult};
 use crate::generation::context::{build_module_contexts, build_page_context, build_repo_context};
 use crate::generation::planner::plan_pages;
 use crate::generation::renderer::render_page;
@@ -15,12 +14,13 @@ use crate::repo::hierarchy::build_module_tree;
 use crate::repo::scanner::scan_repo;
 use crate::storage::cache_store::{ensure_cache_dir, write_module_tree_cache, write_scan_cache};
 use crate::storage::metadata_store::write_metadata;
+use crate::storage::state_store::write_state;
 use crate::storage::wiki_fs::{remove_runtime, write_page};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 /// `init` 会全量生成 Repo Wiki 运行时。
-/// 它是当前最完整的一条链路：扫描 -> 模块树 -> 页面 -> metadata/cache。
+/// 它是当前最完整的一条链路：扫描 -> 模块树 -> 页面 -> WikiState -> metadata/cache。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct InitReport {
     pub initialized: bool,
@@ -49,7 +49,7 @@ pub fn run_init(repo_root: &Path) -> io::Result<InitReport> {
 
     remove_runtime(repo_root)?;
 
-    // 这里按 deterministic pipeline 的顺序串起整条生成链。
+    // 按 deterministic pipeline 的顺序串起整条生成链。
     let scan_report = scan_repo(repo_root)?;
     let module_tree = build_module_tree(&scan_report);
     let repo_context = build_repo_context(&scan_report, &module_tree);
@@ -60,14 +60,12 @@ pub fn run_init(repo_root: &Path) -> io::Result<InitReport> {
     write_scan_cache(repo_root, &scan_report)?;
     write_module_tree_cache(repo_root, &module_tree)?;
 
-    let mut wiki_items = Vec::new();
-    let mut relations = Vec::new();
+    let mut page_results = Vec::new();
     let mut generated_pages = Vec::new();
     let generated_at = current_timestamp();
+    let mut ancestor_ids_by_page = BTreeMap::new();
 
     for page in &pages {
-        // `PageContext` 是渲染层真正消费的输入；
-        // 页面写盘和 metadata 建立都围绕这一步生成的事实组织。
         let page_context = build_page_context(
             page,
             &scan_report,
@@ -78,80 +76,43 @@ pub fn run_init(repo_root: &Path) -> io::Result<InitReport> {
         let content = render_page(page, &page_context);
         write_page(repo_root, &page.relative_path, &content)?;
         let page_path = format!(".wiki/{}", page.relative_path);
-        generated_pages.push(page_path.clone());
+        generated_pages.push(page_path);
+        let ancestor_ids = ancestor_ids_for_page(page, &ancestor_ids_by_page);
+        ancestor_ids_by_page.insert(page.id.clone(), ancestor_ids.clone());
 
-        wiki_items.push(WikiItem {
-            id: page.id.clone(),
-            title: page.title.clone(),
-            path: page_path.clone(),
-            item_type: page.page_type.clone(),
-            parent_id: page.parent_id.clone(),
-            module_ids: page.module_ids.clone(),
-            source_files: source_paths_for_page(&scan_report, &page_context),
+        page_results.push(PageBuildResult {
+            page: page.clone(),
+            context: page_context.clone(),
             content_hash: crate::repo::fingerprint::fingerprint_bytes(content.as_bytes()),
-            summary: page_context.summary_inputs.join("；"),
-        });
-
-        if let Some(parent_id) = &page.parent_id {
-            relations.push(WikiRelation {
-                source_id: parent_id.clone(),
-                target_id: page.id.clone(),
-                relation_type: "PARENT_CHILD".to_string(),
-                evidence: vec![page_path.clone()],
-            });
-        }
-    }
-
-    for edge in &module_tree.cross_module_edges {
-        relations.push(WikiRelation {
-            source_id: edge.source.clone(),
-            target_id: edge.target.clone(),
-            relation_type: edge.relation_type.clone(),
-            evidence: edge.evidence.clone(),
+            source_paths: source_paths_for_page(&scan_report, &page_context),
+            ancestor_ids,
+            provenance: page_provenance(page, &page_context, &scan_report),
         });
     }
 
-    let metadata = WikiMetadata {
+    // 先装配 WikiState 并持久化，再通过 MetadataMapper 导出 WikiMetadata。
+    let state = assemble_state(&page_results, &scan_report, &module_tree, &generated_at);
+    write_state(repo_root, &state)?;
+
+    let export_context = ExportContext {
         schema_version: "1".to_string(),
         language: "zh".to_string(),
         repo_root: repo_root.to_string_lossy().to_string(),
         branch: current_branch(repo_root),
         generated_at,
         last_indexed_commit: current_commit(repo_root),
-        modules: module_tree.modules.clone(),
-        wiki_items,
-        relations,
-        source_files: scan_report
-            .files
-            .iter()
-            .map(|file| SourceFileRecord {
-                id: file.id.clone(),
-                path: file.path.clone(),
-                fingerprint: file.fingerprint.clone(),
-                wiki_item_ids: pages_for_source(file.id.as_str(), &pages),
-                module_ids: modules_for_source(file.id.as_str(), &module_tree),
-            })
-            .collect(),
-        dirty_state: DirtyState::fresh(),
     };
-
+    let metadata = export_metadata(&state, &export_context);
     write_metadata(repo_root, &metadata)?;
 
     Ok(InitReport {
         initialized: true,
-        state: metadata.dirty_state.status,
+        state: state.dirty_state.status,
         generated_pages,
     })
 }
 
 /// 根据页面上下文里的 `source_ids` 反查源码路径。
-///
-/// # 参数
-/// - `scan_report`：本次扫描得到的源码清单。
-/// - `page_context`：当前页面对应的上下文对象。
-///
-/// # 返回
-/// - 返回当前页面实际关联的源码路径列表。
 fn source_paths_for_page(scan_report: &crate::repo::scanner::ScanReport, page_context: &PageContext) -> Vec<String> {
     scan_report
         .files
@@ -161,44 +122,56 @@ fn source_paths_for_page(scan_report: &crate::repo::scanner::ScanReport, page_co
         .collect()
 }
 
-/// 建立 source -> page 的反向映射。
-///
-/// # 参数
-/// - `source_id`：需要查询的源码稳定 ID。
-/// - `pages`：本次规划出的页面集合。
-///
-/// # 返回
-/// - 返回引用该源码的页面 ID 列表。
-fn pages_for_source(source_id: &str, pages: &[crate::generation::planner::PlannedPage]) -> Vec<String> {
-    pages
-        .iter()
-        .filter(|page| page.source_ids.iter().any(|page_source_id| page_source_id == source_id))
-        .map(|page| page.id.clone())
-        .collect()
+/// 页面祖先链会直接写入状态层，方便 query 和后续 runtime 读取。
+fn ancestor_ids_for_page(
+    page: &crate::generation::planner::PlannedPage,
+    ancestor_ids_by_page: &BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    let Some(parent_id) = &page.parent_id else {
+        return Vec::new();
+    };
+
+    let mut ancestor_ids = ancestor_ids_by_page
+        .get(parent_id)
+        .cloned()
+        .unwrap_or_default();
+    ancestor_ids.push(parent_id.clone());
+    ancestor_ids
 }
 
-/// 建立 source -> module 的反向映射。
-///
-/// # 参数
-/// - `source_id`：需要查询的源码稳定 ID。
-/// - `module_tree`：当前仓库的模块树。
-///
-/// # 返回
-/// - 返回包含该源码的模块 ID 列表。
-fn modules_for_source(source_id: &str, module_tree: &ModuleTree) -> Vec<String> {
-    module_tree
-        .modules
-        .iter()
-        .filter(|module| module.source_ids.iter().any(|module_source_id| module_source_id == source_id))
-        .map(|module| module.id.clone())
-        .collect()
+/// provenance 保留最小可追溯线索，供 query 和后续 runtime 使用。
+fn page_provenance(
+    page: &crate::generation::planner::PlannedPage,
+    page_context: &PageContext,
+    scan_report: &crate::repo::scanner::ScanReport,
+) -> Vec<String> {
+    let mut provenance = BTreeMap::new();
+
+    for module_id in &page.module_ids {
+        provenance.insert(format!("module:{module_id}"), ());
+    }
+
+    for relation_id in &page.relation_ids {
+        provenance.insert(format!("relation:{relation_id}"), ());
+    }
+
+    for source_path in source_paths_for_page(scan_report, page_context) {
+        provenance.insert(format!("source:{source_path}"), ());
+    }
+
+    if page.page_type == "architecture" {
+        provenance.insert("scope:architecture".to_string(), ());
+    }
+
+    if page.page_type == "overview" {
+        provenance.insert("scope:repository".to_string(), ());
+    }
+
+    provenance.into_keys().collect()
 }
 
 /// 统一生成 RFC3339 时间戳。
 /// 如果格式化失败，再退回 Unix 时间，避免时间字段导致整个流程报错。
-///
-/// # 返回
-/// - 返回可写入 metadata 的时间字符串。
 pub(crate) fn current_timestamp() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)

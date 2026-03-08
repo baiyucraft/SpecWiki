@@ -42,7 +42,7 @@ test("workspace skeleton files exist", () => {
 test("staging script creates platform package manifest", async () => {
   const outputDir = mkdtempSync(path.join(os.tmpdir(), "codebuddy-stage-"));
   const profile = "test-integration";
-  const binaryDir = path.join(rootDir, "crates", "wiki-core", "target", profile);
+  const binaryDir = path.join(rootDir, "target", profile);
   const binaryName = process.platform === "win32" ? "wiki-core.exe" : "wiki-core";
   const binaryPath = path.join(binaryDir, binaryName);
   const adapterManifest = JSON.parse(

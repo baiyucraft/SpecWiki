@@ -35,12 +35,13 @@ pub fn module_tree_cache_path(repo_root: &Path) -> PathBuf {
     cache_dir(repo_root).join("module-tree.json")
 }
 
-/// 当前 cache layout 只认这两份关键缓存。
+/// 当前 cache layout 认三份关键缓存。
 /// 缺任意一份，都说明 runtime 还不足以支持稳定的 status/update。
 pub fn has_cache_layout(repo_root: &Path) -> bool {
     cache_dir(repo_root).exists()
         && scan_cache_path(repo_root).exists()
         && module_tree_cache_path(repo_root).exists()
+        && crate::storage::state_store::state_path(repo_root).exists()
 }
 
 /// 写入扫描缓存。

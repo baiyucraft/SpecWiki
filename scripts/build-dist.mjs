@@ -186,8 +186,12 @@ export async function buildDistribution({ rootDir = DEFAULT_ROOT_DIR, profile = 
     retryDelay: 50,
   });
 
-  await runCommand("pnpm", ["--dir", "crates/wiki-core", "run", "build"], { cwd: rootDir });
-  await runCommand("pnpm", ["--dir", "agents/codebuddy", "run", "build"], { cwd: rootDir });
+  await runCommand("cargo", ["build", "-p", "wiki-core", "--target-dir", "target"], {
+    cwd: rootDir,
+  });
+  await runCommand("pnpm", ["exec", "vite", "build", "--config", "agents/codebuddy/vite.config.mjs"], {
+    cwd: rootDir,
+  });
 
   const core = collectCoreBinary({ rootDir, profile });
   const npm = await stagePackages({ rootDir, profile });

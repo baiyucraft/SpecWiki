@@ -4,6 +4,7 @@
 pub mod change_set;
 pub mod context;
 pub mod metadata;
+pub mod metadata_mapper;
 pub mod module_tree;
 pub mod relation;
 pub mod state;
