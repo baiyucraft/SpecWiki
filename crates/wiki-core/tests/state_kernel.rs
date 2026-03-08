@@ -1,6 +1,15 @@
+//! 这组测试覆盖 WikiState、change planning 与 cache 回退边界。
+//! 它们保护状态层与正式索引之间的 roundtrip、一致性和降级语义。
+
 use std::fs;
+use std::path::Path;
 
 use tempfile::tempdir;
+use wiki_core::domain::change_set::plan_runtime_changes;
+use wiki_core::storage::cache_store::{
+    page_context_cache_path, page_generation_cache_path, read_page_context_cache,
+    read_page_generation_cache,
+};
 use wiki_core::storage::state_store::state_path;
 use wiki_core::workflows::{
     init::run_init,
@@ -137,4 +146,148 @@ fn status_works_after_full_cache_deletion() {
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "needs_rebuild");
     assert_eq!(status.needs_rebuild_reason.as_deref(), Some("cache_missing"));
+}
+
+/// 场景：init 必须一次性写出页面 input hash、section 状态和 page-level cache。
+#[test]
+fn init_persists_page_input_hash_sections_and_page_caches() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    write_file(
+        repo_root.join("package.json").as_path(),
+        r#"{"name":"cache-layout-test"}"#,
+    );
+    write_file(
+        repo_root.join("src/index.ts").as_path(),
+        "export const main = () => 'hello';",
+    );
+
+    run_init(repo_root).unwrap();
+
+    let state = wiki_core::storage::state_store::read_state(repo_root).unwrap();
+    assert!(!state.pages.is_empty());
+
+    for page in &state.pages {
+        assert!(!page.input_hash.is_empty(), "页面必须持久化 input_hash");
+        assert!(!page.sections.is_empty(), "页面必须包含稳定 section 状态");
+        assert!(page_context_cache_path(repo_root, &page.page_id).exists());
+        assert!(page_generation_cache_path(repo_root, &page.page_id).exists());
+
+        let context_cache = read_page_context_cache(repo_root, &page.page_id).unwrap();
+        let generation_cache = read_page_generation_cache(repo_root, &page.page_id).unwrap();
+        assert_eq!(context_cache.input_hash, page.input_hash);
+        assert_eq!(generation_cache.input_hash, page.input_hash);
+        assert_eq!(generation_cache.content_hash, page.content_hash);
+        assert_eq!(generation_cache.sections.len(), page.sections.len());
+    }
+}
+
+/// 场景：change planning 必须区分普通源码修改与触发 replan 的结构变化。
+#[test]
+fn change_plan_detects_modified_and_structural_sources() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    write_file(
+        repo_root.join("package.json").as_path(),
+        r#"{"name":"change-plan-test"}"#,
+    );
+    write_file(
+        repo_root.join("src/index.ts").as_path(),
+        "export const main = () => 1;",
+    );
+    write_file(
+        repo_root.join("src/util.ts").as_path(),
+        "export const util = () => 1;",
+    );
+
+    run_init(repo_root).unwrap();
+
+    write_file(
+        repo_root.join("src/util.ts").as_path(),
+        "export const util = () => 2;",
+    );
+    let modified_plan = plan_runtime_changes(repo_root).unwrap();
+    assert_eq!(modified_plan.state(), "stale");
+    assert!(modified_plan.change_set.modified_sources.iter().any(|path| path == "src/util.ts"));
+    assert!(!modified_plan.change_set.requires_replan);
+
+    run_init(repo_root).unwrap();
+    write_file(
+        repo_root.join("packages/shared/package.json").as_path(),
+        r#"{"name":"shared"}"#,
+    );
+    write_file(
+        repo_root.join("packages/shared/src/util.ts").as_path(),
+        "export const util = () => 1;",
+    );
+
+    let structural_plan = plan_runtime_changes(repo_root).unwrap();
+    assert_eq!(structural_plan.state(), "stale");
+    assert!(structural_plan.change_set.added_sources.iter().any(|path| path == "packages/shared/package.json"));
+    assert!(structural_plan.change_set.requires_replan);
+    assert!(!structural_plan.affected_set.affected_page_ids.is_empty());
+}
+
+/// 场景：源码删除不能被折叠成普通 stale，必须保留 removed source 证据。
+#[test]
+fn change_plan_detects_removed_sources() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    write_file(
+        repo_root.join("package.json").as_path(),
+        r#"{"name":"remove-source-test"}"#,
+    );
+    write_file(
+        repo_root.join("src/index.ts").as_path(),
+        "export const main = () => 1;",
+    );
+
+    run_init(repo_root).unwrap();
+    fs::remove_file(repo_root.join("src/index.ts")).unwrap();
+
+    let plan = plan_runtime_changes(repo_root).unwrap();
+    assert_eq!(plan.state(), "stale");
+    assert!(plan.change_set.removed_sources.iter().any(|path| path == "src/index.ts"));
+    assert!(plan.change_set.requires_replan);
+}
+
+/// 场景：缺失单页 generation cache 时，status 必须升级为 `needs_rebuild`。
+#[test]
+fn status_reports_needs_rebuild_when_page_level_cache_is_missing() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    write_file(
+        repo_root.join("package.json").as_path(),
+        r#"{"name":"page-cache-missing-test"}"#,
+    );
+    write_file(
+        repo_root.join("src/index.ts").as_path(),
+        "export const main = () => 1;",
+    );
+
+    run_init(repo_root).unwrap();
+    let state = wiki_core::storage::state_store::read_state(repo_root).unwrap();
+    let overview_page = state
+        .pages
+        .iter()
+        .find(|page| page.page_type == "overview")
+        .unwrap();
+
+    fs::remove_file(page_generation_cache_path(repo_root, &overview_page.page_id)).unwrap();
+
+    let status = run_status(repo_root).unwrap();
+    assert_eq!(status.state, "needs_rebuild");
+    assert_eq!(status.needs_rebuild_reason.as_deref(), Some("cache_missing"));
+}
+
+fn write_file(path: &Path, content: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+
+    fs::write(path, content).unwrap();
 }

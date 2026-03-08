@@ -1,3 +1,6 @@
+//! init workflow 负责按全量链路生成第一版 Repo Wiki runtime。
+//! 它串联扫描、模块树、页面规划、渲染、状态写盘和 metadata 导出。
+
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
@@ -5,14 +8,17 @@ use std::time::SystemTime;
 
 use crate::domain::context::PageContext;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
-use crate::domain::state::{assemble_state, PageBuildResult};
+use crate::domain::state::{assemble_state, compute_page_input_hash, PageBuildResult};
 use crate::generation::context::{build_module_contexts, build_page_context, build_repo_context};
 use crate::generation::planner::plan_pages;
-use crate::generation::renderer::render_page;
+use crate::generation::renderer::render_page_bundle;
 use crate::repo::git::{current_branch, current_commit};
 use crate::repo::hierarchy::build_module_tree;
 use crate::repo::scanner::scan_repo;
-use crate::storage::cache_store::{ensure_cache_dir, write_module_tree_cache, write_scan_cache};
+use crate::storage::cache_store::{
+    ensure_cache_dir, ensure_page_cache_dirs, write_module_tree_cache, write_page_context_cache,
+    write_page_generation_cache, write_scan_cache, PageContextCacheEntry, PageGenerationCacheEntry,
+};
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::state_store::write_state;
 use crate::storage::wiki_fs::{remove_runtime, write_page};
@@ -23,8 +29,11 @@ use time::OffsetDateTime;
 /// 它是当前最完整的一条链路：扫描 -> 模块树 -> 页面 -> WikiState -> metadata/cache。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct InitReport {
+    /// 当前命令是否真正完成了初始化流程。
     pub initialized: bool,
+    /// 初始化结束后的 runtime 状态，正常情况为 `fresh`。
     pub state: String,
+    /// 本次初始化实际写出的页面路径集合。
     pub generated_pages: Vec<String>,
 }
 
@@ -57,6 +66,7 @@ pub fn run_init(repo_root: &Path) -> io::Result<InitReport> {
     let pages = plan_pages(&scan_report, &module_tree, &repo_context, &module_contexts);
 
     ensure_cache_dir(repo_root)?;
+    ensure_page_cache_dirs(repo_root)?;
     write_scan_cache(repo_root, &scan_report)?;
     write_module_tree_cache(repo_root, &module_tree)?;
 
@@ -73,20 +83,43 @@ pub fn run_init(repo_root: &Path) -> io::Result<InitReport> {
             &repo_context,
             &module_contexts,
         );
-        let content = render_page(page, &page_context);
-        write_page(repo_root, &page.relative_path, &content)?;
+        let input_hash = compute_page_input_hash(page, &page_context, &scan_report);
+        let rendered_page = render_page_bundle(page, &page_context);
+        write_page(repo_root, &page.relative_path, &rendered_page.content)?;
         let page_path = format!(".wiki/{}", page.relative_path);
         generated_pages.push(page_path);
         let ancestor_ids = ancestor_ids_for_page(page, &ancestor_ids_by_page);
         ancestor_ids_by_page.insert(page.id.clone(), ancestor_ids.clone());
+        let content_hash =
+            crate::repo::fingerprint::fingerprint_bytes(rendered_page.content.as_bytes());
+
+        write_page_context_cache(
+            repo_root,
+            &PageContextCacheEntry {
+                page_id: page.id.clone(),
+                input_hash: input_hash.clone(),
+                context: page_context.clone(),
+            },
+        )?;
+        write_page_generation_cache(
+            repo_root,
+            &PageGenerationCacheEntry {
+                page_id: page.id.clone(),
+                input_hash: input_hash.clone(),
+                content_hash: content_hash.clone(),
+                sections: rendered_page.sections.clone(),
+            },
+        )?;
 
         page_results.push(PageBuildResult {
             page: page.clone(),
             context: page_context.clone(),
-            content_hash: crate::repo::fingerprint::fingerprint_bytes(content.as_bytes()),
+            input_hash,
+            content_hash,
             source_paths: source_paths_for_page(&scan_report, &page_context),
             ancestor_ids,
             provenance: page_provenance(page, &page_context, &scan_report),
+            sections: rendered_page.sections,
         });
     }
 
@@ -113,7 +146,10 @@ pub fn run_init(repo_root: &Path) -> io::Result<InitReport> {
 }
 
 /// 根据页面上下文里的 `source_ids` 反查源码路径。
-fn source_paths_for_page(scan_report: &crate::repo::scanner::ScanReport, page_context: &PageContext) -> Vec<String> {
+pub(crate) fn source_paths_for_page(
+    scan_report: &crate::repo::scanner::ScanReport,
+    page_context: &PageContext,
+) -> Vec<String> {
     scan_report
         .files
         .iter()
@@ -123,7 +159,7 @@ fn source_paths_for_page(scan_report: &crate::repo::scanner::ScanReport, page_co
 }
 
 /// 页面祖先链会直接写入状态层，方便 query 和后续 runtime 读取。
-fn ancestor_ids_for_page(
+pub(crate) fn ancestor_ids_for_page(
     page: &crate::generation::planner::PlannedPage,
     ancestor_ids_by_page: &BTreeMap<String, Vec<String>>,
 ) -> Vec<String> {
@@ -140,7 +176,7 @@ fn ancestor_ids_for_page(
 }
 
 /// provenance 保留最小可追溯线索，供 query 和后续 runtime 使用。
-fn page_provenance(
+pub(crate) fn page_provenance(
     page: &crate::generation::planner::PlannedPage,
     page_context: &PageContext,
     scan_report: &crate::repo::scanner::ScanReport,

@@ -1,3 +1,6 @@
+//! 页面规划层负责把模块树与上下文转换成稳定页面计划。
+//! 它服务于 `init / update` 的主链路，只决定“生成哪些页”和“每页依赖什么”。
+
 use crate::domain::context::{ModuleContext, RepoContext};
 use crate::domain::module_tree::{ModuleNode, ModuleTree};
 use crate::domain::stable_id::stable_id;
@@ -5,18 +8,29 @@ use crate::repo::scanner::ScanReport;
 
 /// `PlannedPage` 描述“要生成什么页面”。
 /// 这一层只决定页面结构和依赖范围，还不负责具体写出 Markdown 内容。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct PlannedPage {
+    /// 页面稳定 ID，会被状态层、缓存层和关系层引用。
     pub id: String,
+    /// 页面标题，最终渲染为一级标题。
     pub title: String,
+    /// 页面在 `.wiki/` 下的稳定相对路径。
     pub relative_path: String,
+    /// 页面类型，如 `overview / architecture / module`。
     pub page_type: String,
+    /// 父页面 ID，用于恢复页面树结构。
     pub parent_id: Option<String>,
+    /// 页面作用域标签，帮助后续区分 repository / architecture / module 页面。
     pub scope: String,
+    /// 页面直接依赖的源码 ID 集合。
     pub source_ids: Vec<String>,
+    /// 页面直接映射到的模块 ID 集合。
     pub module_ids: Vec<String>,
+    /// 页面直接依赖的关系 ID 集合。
     pub relation_ids: Vec<String>,
+    /// 当前页面采用的生成模式标记，主要用于调试和后续扩展。
     pub generation_mode: String,
+    /// 页面规划优先级，供后续稳定排序。
     pub priority: usize,
 }
 

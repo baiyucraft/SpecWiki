@@ -1,19 +1,27 @@
+//! 模块树层负责表达仓库的层级化模块结构与跨模块关系。
+//! 它位于扫描层之后、页面规划层之前，是 runtime 和 metadata 的共同事实来源。
+
 use serde::{Deserialize, Serialize};
 
 /// `RelationEdge` 是模块级关系，不是源码级调用图。
 /// 它只保留页面展示和 query 需要的最小结构。
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RelationEdge {
+    /// 关系稳定 ID，供状态层和 query 复用。
     pub id: String,
+    /// 关系源模块 ID。
     pub source: String,
+    /// 关系目标模块 ID。
     pub target: String,
+    /// 关系类型，如依赖、调用或父子关系。
     pub relation_type: String,
+    /// 支撑这条关系的源码或配置证据路径。
     pub evidence: Vec<String>,
 }
 
 /// `ModuleNode` 是层级化仓库理解的核心节点。
 /// 它连接了扫描事实、页面规划、query 和 metadata 四条链路。
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ModuleNode {
     /// 稳定模块 ID，后续所有页面与关系都通过它引用模块。
     pub id: String,
@@ -37,22 +45,35 @@ pub struct ModuleNode {
 
 /// `ModuleTree` 是 decomposition 阶段的正式输出。
 /// 后续 RepoContext、PagePlan 和 metadata 都依赖这棵树继续加工。
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ModuleTree {
+    /// 根级模块 ID 集合，通常包含仓库根模块或一级工作区模块。
     pub root_modules: Vec<String>,
+    /// 当前仓库识别出的全部模块节点。
     pub modules: Vec<ModuleNode>,
+    /// 模块之间的跨模块关系集合。
     pub cross_module_edges: Vec<RelationEdge>,
+    /// 面向架构页的提示信息集合。
     pub architecture_hints: Vec<String>,
 }
 
 impl ModuleTree {
     /// 通过稳定 ID 查模块，便于其他层避免重复维护索引表。
+    ///
+    /// # 参数
+    /// - `module_id`：要查找的模块稳定 ID。
+    ///
+    /// # 返回
+    /// - 返回命中的模块节点；找不到时返回 `None`。
     pub fn module_by_id(&self, module_id: &str) -> Option<&ModuleNode> {
         self.modules.iter().find(|module| module.id == module_id)
     }
 
     /// 返回所有非根模块。
     /// 页面规划阶段主要围绕这些真正的业务模块生成模块页。
+    ///
+    /// # 返回
+    /// - 返回所有带有父模块的模块节点。
     pub fn non_root_modules(&self) -> Vec<&ModuleNode> {
         self.modules
             .iter()
