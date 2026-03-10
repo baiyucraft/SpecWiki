@@ -35,8 +35,8 @@ pub fn write_metadata(repo_root: &Path, metadata: &WikiMetadata) -> io::Result<(
     let wiki_root = repo_root.join(".wiki");
     fs::create_dir_all(&wiki_root)?;
 
-    let json = serde_json::to_string_pretty(metadata)
-        .map_err(|err| io::Error::other(err.to_string()))?;
+    let json =
+        serde_json::to_string_pretty(metadata).map_err(|err| io::Error::other(err.to_string()))?;
 
     fs::write(metadata_path(repo_root), json)
 }

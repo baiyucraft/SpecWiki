@@ -2,8 +2,7 @@ use wiki_core::transport::dto::{CoreCommand, CoreResponse};
 
 #[test]
 fn parses_init_command() {
-    let cmd: CoreCommand =
-        serde_json::from_str(r#"{"action":"init","repoRoot":"."}"#).unwrap();
+    let cmd: CoreCommand = serde_json::from_str(r#"{"action":"init","repoRoot":"."}"#).unwrap();
 
     assert_eq!(cmd.action, "init");
     assert_eq!(cmd.repo_root.as_deref(), Some("."));

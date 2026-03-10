@@ -34,9 +34,8 @@ impl LanguageProcessor for PythonProcessor {
 
 fn parse_python_tree(content: &str) -> Option<tree_sitter::Tree> {
     let mut parser = Parser::new();
-    parser
-        .set_language(tree_sitter_python::language())
-        .ok()?;
+    let language = tree_sitter_python::LANGUAGE.into();
+    parser.set_language(&language).ok()?;
     parser.parse(content, None)
 }
 

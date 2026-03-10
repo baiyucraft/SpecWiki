@@ -2,7 +2,8 @@ target/
 node_modules/
 dist/
 docs/
-openspec/
+# openspec/
+openspec/changes/archive/
 .worktrees/
 .wiki/
 
@@ -13,5 +14,4 @@ COMMENTING.md
 
 tmp/
 .claude/
-.claude/settings.local.json
 .codex/

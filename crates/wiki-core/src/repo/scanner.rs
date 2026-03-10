@@ -10,9 +10,96 @@ use crate::repo::detectors::detect_tech_hints;
 use crate::repo::fingerprint::fingerprint_bytes;
 use crate::repo::parsers::{
     analyze_manifests, extract_source_aliases as parse_source_aliases,
-    extract_source_dependency_targets,
-    normalize_dependency_target,
+    extract_source_dependency_targets, normalize_dependency_target,
 };
+
+/// `FilePurpose` 是扫描阶段给每个文件打上的稳定角色标签。
+/// 它优先由 deterministic 的路径/文件名规则给出，供 hierarchy / planner / context 复用。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+pub enum FilePurpose {
+    Entry,
+    Router,
+    Controller,
+    Handler,
+    Service,
+    Model,
+    Repository,
+    Domain,
+    Agent,
+    Library,
+    Middleware,
+    Plugin,
+    #[default]
+    Utility,
+    Helper,
+    Constant,
+    Type,
+    Page,
+    Component,
+    Widget,
+    Layout,
+    Config,
+    Migration,
+    Test,
+    Docs,
+}
+
+impl FilePurpose {
+    /// 维持旧运行时分层需要的粗粒度 family。
+    pub fn family(&self) -> &'static str {
+        match self {
+            FilePurpose::Config => "config",
+            FilePurpose::Docs => "docs",
+            _ => "source",
+        }
+    }
+
+    /// 高信号角色会显著影响关键源码和模块评分。
+    pub fn signal_weight(&self) -> i32 {
+        match self {
+            FilePurpose::Entry => 120,
+            FilePurpose::Router | FilePurpose::Controller | FilePurpose::Handler => 95,
+            FilePurpose::Service | FilePurpose::Agent => 80,
+            FilePurpose::Repository | FilePurpose::Domain | FilePurpose::Model => 65,
+            FilePurpose::Page
+            | FilePurpose::Layout
+            | FilePurpose::Component
+            | FilePurpose::Widget => 55,
+            FilePurpose::Library | FilePurpose::Middleware | FilePurpose::Plugin => 45,
+            FilePurpose::Migration => 20,
+            FilePurpose::Utility => 10,
+            FilePurpose::Helper | FilePurpose::Constant | FilePurpose::Type => -10,
+            FilePurpose::Config => -20,
+            FilePurpose::Test | FilePurpose::Docs => -50,
+        }
+    }
+
+    /// 低信号角色会被 hierarchy / planner / context 统一降权。
+    pub fn is_low_signal(&self) -> bool {
+        matches!(
+            self,
+            FilePurpose::Test
+                | FilePurpose::Docs
+                | FilePurpose::Config
+                | FilePurpose::Helper
+                | FilePurpose::Constant
+                | FilePurpose::Type
+        )
+    }
+
+    /// 这些角色变化更容易触发模块边界或页面规划变化。
+    pub fn is_structural(&self) -> bool {
+        matches!(
+            self,
+            FilePurpose::Entry
+                | FilePurpose::Router
+                | FilePurpose::Layout
+                | FilePurpose::Config
+                | FilePurpose::Migration
+        )
+    }
+}
 
 /// `ScannedFile` 是扫描阶段最原子的事实记录。
 /// 后续模块拆分、页面规划和 metadata 映射都会围绕这些字段工作，
@@ -27,12 +114,53 @@ pub struct ScannedFile {
     pub language: String,
     /// kind 用于区分源码、配置、文档、资源等不同角色。
     pub kind: String,
+    /// `purpose` 表达比 `kind` 更细的稳定文件角色。
+    #[serde(default)]
+    pub purpose: FilePurpose,
     /// 指纹用于 update/status 阶段判断源码是否变化。
     pub fingerprint: String,
     /// 文件大小目前主要用于调试和后续评分，不参与业务决策。
     pub size: usize,
     /// tags 放扫描阶段就能稳定得到的标签，例如 `entry-point`。
     pub tags: Vec<String>,
+}
+
+impl ScannedFile {
+    /// 兼容旧粗分类的配置文件判断。
+    pub fn is_config_like(&self) -> bool {
+        self.kind == "config" || self.purpose == FilePurpose::Config
+    }
+
+    /// 兼容旧粗分类的文档文件判断。
+    pub fn is_docs_like(&self) -> bool {
+        self.kind == "docs" || self.purpose == FilePurpose::Docs
+    }
+
+    /// 资源文件仍然沿用旧 `kind` 判定。
+    pub fn is_asset_like(&self) -> bool {
+        self.kind == "asset"
+    }
+
+    /// 入口相关文件会同时驱动模块晋升和 key source 选择。
+    pub fn is_entry_like(&self) -> bool {
+        self.tags.iter().any(|tag| tag == "entry-point")
+            || matches!(self.purpose, FilePurpose::Entry | FilePurpose::Router)
+    }
+
+    /// 测试文件不应主导模块判断。
+    pub fn is_test_like(&self) -> bool {
+        self.tags.iter().any(|tag| tag == "test-file") || self.purpose == FilePurpose::Test
+    }
+
+    /// 下游统一消费的低信号判断。
+    pub fn is_low_signal(&self) -> bool {
+        self.is_asset_like() || self.is_docs_like() || self.purpose.is_low_signal()
+    }
+
+    /// 对模块规划有意义的“真实源码”定义。
+    pub fn is_substantive_source(&self) -> bool {
+        self.kind == "source" && !self.is_test_like() && !self.is_low_signal()
+    }
 }
 
 /// `DependencyHint` 不是完整语义依赖图，只是后续模块关系推断的启发式线索。
@@ -63,28 +191,55 @@ pub struct ScanReport {
 ///
 /// # 参数
 /// - `root`：要扫描的本地代码目录。
+/// - `extra_ignore_paths`：额外忽略路径列表（来自 steering 配置），
+///   支持 glob 风格的 `dir/**` 模式和精确目录名匹配。
 ///
 /// # 返回
 /// - 成功时返回完整的扫描报告，包含文件、技术栈线索、入口和依赖线索。
 ///
 /// # 错误
 /// - 当目录不可读、文件读取失败或遍历过程中出现 I/O 错误时返回错误。
-pub fn scan_repo(root: &Path) -> io::Result<ScanReport> {
+pub fn scan_repo(root: &Path, extra_ignore_paths: &[String]) -> io::Result<ScanReport> {
+    scan_repo_with_boundary(root, extra_ignore_paths, &[])
+}
+
+/// 带 include / ignore 边界的扫描入口。
+/// `scan.include` 会对白名单路径恢复被忽略目录或文件。
+pub fn scan_repo_with_boundary(
+    root: &Path,
+    extra_ignore_paths: &[String],
+    extra_include_paths: &[String],
+) -> io::Result<ScanReport> {
     let mut files = Vec::new();
-    visit_dir(root, root, &mut files)?;
+    // 先做一次快速扫描，收集根目录下的 manifest 文件，
+    // 用于判断仓库类型（如 Go 仓库）和 workspace 成员白名单。
+    let root_manifests = discover_root_manifests(root);
+    let is_go_repo = root_manifests.iter().any(|m| m == "go.mod");
+    visit_dir(
+        root,
+        root,
+        &mut files,
+        &root_manifests,
+        is_go_repo,
+        extra_ignore_paths,
+        extra_include_paths,
+    )?;
     let manifest_analysis = analyze_manifests(root, &files);
 
     // 这些聚合字段会被 decomposition 和 workflow 直接消费，
     // 因此在扫描阶段就顺手整理出来，避免后续每一层都重复遍历。
-    let paths = files.iter().map(|file| file.path.clone()).collect::<Vec<_>>();
+    let paths = files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
     let config_files = files
         .iter()
-        .filter(|file| file.kind == "config")
+        .filter(|file| file.is_config_like())
         .map(|file| file.path.clone())
         .collect::<Vec<_>>();
     let entry_points = files
         .iter()
-        .filter(|file| file.tags.iter().any(|tag| tag == "entry-point"))
+        .filter(|file| file.is_entry_like())
         .map(|file| file.path.clone())
         .collect::<Vec<_>>();
     let mut tech_hints = detect_tech_hints(&paths)
@@ -104,11 +259,7 @@ pub fn scan_repo(root: &Path) -> io::Result<ScanReport> {
     import_aliases.extend(collect_source_aliases(root, &files));
 
     let mut dependency_hints = manifest_analysis.dependency_hints;
-    dependency_hints.extend(collect_dependency_hints(
-        root,
-        &files,
-        &import_aliases,
-    ));
+    dependency_hints.extend(collect_dependency_hints(root, &files, &import_aliases));
     dependency_hints.extend(collect_service_api_hints(root, &files));
     dependency_hints.extend(collect_infrastructure_dependency_hints(root, &files));
     dependency_hints = dedupe_dependency_hints(dependency_hints);
@@ -137,38 +288,89 @@ pub fn scan_repo(root: &Path) -> io::Result<ScanReport> {
 ///
 /// # 错误
 /// - 当目录遍历、文件类型判断或文件读取失败时返回错误。
-fn visit_dir(root: &Path, dir: &Path, files: &mut Vec<ScannedFile>) -> io::Result<()> {
+fn visit_dir(
+    root: &Path,
+    dir: &Path,
+    files: &mut Vec<ScannedFile>,
+    root_manifests: &[String],
+    is_go_repo: bool,
+    extra_ignore_paths: &[String],
+    extra_include_paths: &[String],
+) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let file_type = entry.file_type()?;
 
         if file_type.is_dir() {
-            if should_ignore_dir(&path) {
+            let explicitly_included = should_include_path(root, &path, extra_include_paths);
+            if should_ignore_dir(&path)
+                && !explicitly_included
+                && !should_descend_for_include(root, &path, extra_include_paths)
+            {
                 continue;
             }
 
-            visit_dir(root, &path, files)?;
+            // vendor 目录在 Go 仓库中保留，其他仓库排除
+            if path.file_name().and_then(|n| n.to_str()) == Some("vendor")
+                && !is_go_repo
+                && !explicitly_included
+                && !should_descend_for_include(root, &path, extra_include_paths)
+            {
+                continue;
+            }
+
+            // 嵌套仓库检测：子目录含 .git 且不属于 workspace 成员时跳过
+            if is_nested_repo(&path, root_manifests)
+                && !explicitly_included
+                && !should_descend_for_include(root, &path, extra_include_paths)
+            {
+                continue;
+            }
+
+            // steering 配置的额外忽略路径
+            if should_ignore_by_extra_paths(root, &path, extra_ignore_paths)
+                && !explicitly_included
+                && !should_descend_for_include(root, &path, extra_include_paths)
+            {
+                continue;
+            }
+
+            visit_dir(
+                root,
+                &path,
+                files,
+                root_manifests,
+                is_go_repo,
+                extra_ignore_paths,
+                extra_include_paths,
+            )?;
             continue;
         }
 
         // 运行产物、日志和二进制不参与 Repo Wiki 分析。
         // 它们会污染模块判断，还会让“关键源码”落到无关文件上。
-        if should_ignore_file(&path) {
+        let explicitly_included = should_include_path(root, &path, extra_include_paths);
+        if should_ignore_file(&path) && !explicitly_included {
             continue;
         }
 
         let relative = make_relative(root, &path);
+        if should_ignore_relative_path(&relative, extra_ignore_paths) && !explicitly_included {
+            continue;
+        }
         let bytes = fs::read(&path)?;
         let kind = classify_file_kind(&relative);
+        let purpose = classify_file_purpose(&relative, &kind);
         let language = detect_language(&relative);
-        let tags = detect_tags(&relative, &kind);
+        let tags = detect_tags(&relative, purpose);
 
         files.push(ScannedFile {
             id: stable_id("source", &relative),
             path: relative,
             language,
             kind,
+            purpose,
             fingerprint: fingerprint_bytes(&bytes),
             size: bytes.len(),
             tags,
@@ -187,28 +389,156 @@ fn visit_dir(root: &Path, dir: &Path, files: &mut Vec<ScannedFile>) -> io::Resul
 /// # 返回
 /// - 如果目录应被扫描阶段忽略，则返回 `true`。
 fn should_ignore_dir(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|name| name.to_str()),
-        Some(
-            ".git"
-                | ".hg"
-                | ".svn"
-                | "node_modules"
-                | "target"
-                | ".wiki"
-                | "dist"
-                | "logs"
-                | "log"
-                | "temp"
-                | "tmp"
-                | "__pycache__"
-                | ".idea"
-                | ".vscode"
-                | ".cursor"
-                | ".venv"
-                | "venv"
-        )
-    )
+    let dir_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+
+    // 依赖、缓存、运行时、编辑器目录
+    if matches!(
+        dir_name,
+        ".git"
+            | ".hg"
+            | ".svn"
+            | "node_modules"
+            | "target"
+            | ".wiki"
+            | "dist"
+            | "logs"
+            | "log"
+            | "temp"
+            | "tmp"
+            | "__pycache__"
+            | ".idea"
+            | ".vscode"
+            | ".cursor"
+            | ".venv"
+            | "venv"
+            // per-language 默认忽略（安全地无条件排除）
+            | ".next"
+            | ".nuxt"
+            | ".gradle"
+    ) {
+        return true;
+    }
+
+    // Python egg-info 目录（*.egg-info）
+    if dir_name.ends_with(".egg-info") {
+        return true;
+    }
+
+    // fixture / test-data / mock 目录整体排除，
+    // 这些目录的内容不应参与模块发现和页面生成。
+    if matches!(
+        dir_name,
+        "fixtures"
+            | "__fixtures__"
+            | "test-data"
+            | "testdata"
+            | "test_data"
+            | "mock-data"
+            | "mocks"
+            | "__mocks__"
+    ) {
+        return true;
+    }
+
+    // 非代码产物目录排除
+    if matches!(
+        dir_name,
+        "openspec"
+            | ".github"
+            | ".gitlab"
+            | ".circleci"
+            | ".husky"
+            | "coverage"
+            | ".nyc_output"
+            | "examples"
+    ) {
+        return true;
+    }
+
+    false
+}
+
+/// 检查目录是否匹配 steering 配置的额外忽略路径。
+/// 支持精确目录名匹配和 `dir/**` glob 前缀匹配。
+fn should_ignore_by_extra_paths(root: &Path, dir: &Path, extra_ignore_paths: &[String]) -> bool {
+    if extra_ignore_paths.is_empty() {
+        return false;
+    }
+
+    let relative = dir
+        .strip_prefix(root)
+        .ok()
+        .and_then(|p| p.to_str())
+        .map(|s| s.replace('\\', "/"))
+        .unwrap_or_default();
+
+    if relative.is_empty() {
+        return false;
+    }
+
+    should_ignore_relative_path(&relative, extra_ignore_paths)
+}
+
+fn should_ignore_relative_path(relative: &str, patterns: &[String]) -> bool {
+    patterns
+        .iter()
+        .any(|pattern| path_matches_boundary_pattern(relative, pattern))
+}
+
+fn should_include_path(root: &Path, path: &Path, include_paths: &[String]) -> bool {
+    if include_paths.is_empty() {
+        return false;
+    }
+
+    let relative = make_relative(root, path);
+    if relative.is_empty() {
+        return false;
+    }
+
+    include_paths
+        .iter()
+        .any(|pattern| path_matches_boundary_pattern(&relative, pattern))
+}
+
+fn should_descend_for_include(root: &Path, dir: &Path, include_paths: &[String]) -> bool {
+    if include_paths.is_empty() {
+        return false;
+    }
+
+    let relative = make_relative(root, dir);
+    if relative.is_empty() {
+        return false;
+    }
+
+    include_paths.iter().any(|pattern| {
+        let normalized = normalize_boundary_pattern(pattern);
+        normalized == relative || normalized.starts_with(&format!("{relative}/"))
+    })
+}
+
+fn path_matches_boundary_pattern(relative: &str, pattern: &str) -> bool {
+    let normalized = normalize_boundary_pattern(pattern);
+    if normalized.is_empty() {
+        return false;
+    }
+
+    if let Some(prefix) = normalized.strip_suffix("/**") {
+        return relative == prefix || relative.starts_with(&format!("{prefix}/"));
+    }
+
+    relative == normalized || relative.starts_with(&format!("{normalized}/"))
+}
+
+fn normalize_boundary_pattern(pattern: &str) -> String {
+    pattern
+        .trim()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_end_matches('/')
+        .to_string()
 }
 
 /// 文件级过滤负责剔除日志、二进制和编译副产物。
@@ -299,6 +629,249 @@ fn classify_file_kind(path: &str) -> String {
     "source".to_string()
 }
 
+/// 文件角色优先由 deterministic 路径 / 文件名规则决定。
+/// 这里借鉴 deepwiki-rs 的 rule-based 顺序，但只保留当前 core 真正消费的角色集合。
+fn classify_file_purpose(path: &str, kind: &str) -> FilePurpose {
+    let lower_path = path.to_ascii_lowercase();
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let stem = Path::new(path)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let segments = lower_path.split('/').collect::<Vec<_>>();
+
+    if kind == "docs" {
+        return FilePurpose::Docs;
+    }
+
+    if kind == "config" {
+        return FilePurpose::Config;
+    }
+
+    if is_test_path(path) {
+        return FilePurpose::Test;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "migrations" | "migration"))
+        || file_name.contains("migration")
+        || file_name.starts_with("v") && file_name.contains("__")
+    {
+        return FilePurpose::Migration;
+    }
+
+    if matches!(
+        file_name.as_str(),
+        "main.rs"
+            | "main.go"
+            | "main.py"
+            | "main.ts"
+            | "main.js"
+            | "main.kt"
+            | "main.swift"
+            | "program.cs"
+            | "main.java"
+            | "__main__.py"
+            | "app.ts"
+            | "app.js"
+            | "app.py"
+            | "server.ts"
+            | "server.js"
+    ) || matches!(
+        lower_path.as_str(),
+        "src/main.rs"
+            | "src/index.ts"
+            | "src/index.js"
+            | "src/main.ts"
+            | "src/main.js"
+            | "src/main.py"
+            | "src/lib.rs"
+            | "index.ts"
+            | "index.js"
+    ) {
+        return FilePurpose::Entry;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "layouts" | "layout"))
+        || stem == "layout"
+    {
+        return FilePurpose::Layout;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "pages" | "page" | "views" | "view"))
+        || stem.ends_with(".page")
+        || stem == "page"
+    {
+        return FilePurpose::Page;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "widgets" | "widget"))
+    {
+        return FilePurpose::Widget;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "components" | "component"))
+        || file_name.ends_with(".component.tsx")
+        || file_name.ends_with(".component.jsx")
+    {
+        return FilePurpose::Component;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "routers" | "router" | "routes" | "route"))
+        || stem.contains("router")
+        || stem.contains("route")
+    {
+        return FilePurpose::Router;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "controllers" | "controller"))
+        || stem.contains("controller")
+    {
+        return FilePurpose::Controller;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "handlers" | "handler"))
+        || stem.contains("handler")
+        || stem.contains("command")
+    {
+        return FilePurpose::Handler;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "services" | "service" | "usecases" | "usecase"))
+        || stem.contains("service")
+    {
+        return FilePurpose::Service;
+    }
+
+    if segments.iter().any(|segment| {
+        matches!(
+            *segment,
+            "repositories" | "repository" | "repos" | "repo" | "daos" | "dao" | "stores" | "store"
+        )
+    }) || stem.contains("repository")
+        || stem.contains("repo")
+        || stem.contains("dao")
+    {
+        return FilePurpose::Repository;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "domain" | "domains"))
+    {
+        return FilePurpose::Domain;
+    }
+
+    if segments.iter().any(|segment| {
+        matches!(
+            *segment,
+            "models" | "model" | "entities" | "entity" | "schemas" | "schema"
+        )
+    }) || stem.contains("model")
+        || stem.contains("entity")
+    {
+        return FilePurpose::Model;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "agents" | "agent"))
+    {
+        return FilePurpose::Agent;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "middlewares" | "middleware"))
+        || stem.contains("middleware")
+    {
+        return FilePurpose::Middleware;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "plugins" | "plugin"))
+        || stem.contains("plugin")
+    {
+        return FilePurpose::Plugin;
+    }
+
+    if matches!(file_name.as_str(), "lib.rs" | "mod.rs")
+        || segments
+            .iter()
+            .any(|segment| matches!(*segment, "libs" | "lib" | "shared"))
+    {
+        return FilePurpose::Library;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "helpers" | "helper"))
+        || stem.contains("helper")
+    {
+        return FilePurpose::Helper;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "constants" | "constant" | "consts"))
+        || stem.contains("constant")
+        || stem.contains("const")
+    {
+        return FilePurpose::Constant;
+    }
+
+    if segments.iter().any(|segment| {
+        matches!(
+            *segment,
+            "types"
+                | "type"
+                | "interfaces"
+                | "interface"
+                | "contracts"
+                | "contract"
+                | "dtos"
+                | "dto"
+        )
+    }) || stem.contains("types")
+        || stem.ends_with(".d")
+    {
+        return FilePurpose::Type;
+    }
+
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "utils" | "util" | "common"))
+        || stem.contains("util")
+    {
+        return FilePurpose::Utility;
+    }
+
+    FilePurpose::Utility
+}
+
 /// 语言识别目前是轻量启发式。
 /// 它主要用在技术栈提示和依赖线索抽取上，不承担完整语法解析职责。
 ///
@@ -314,6 +887,11 @@ fn detect_language(path: &str) -> String {
         Some("tsx") | Some("jsx") => "react".to_string(),
         Some("js") | Some("mjs") | Some("cjs") => "javascript".to_string(),
         Some("py") => "python".to_string(),
+        Some("go") => "go".to_string(),
+        Some("c") | Some("h") => "c".to_string(),
+        Some("cc") | Some("cpp") | Some("cxx") | Some("hpp") | Some("hh") | Some("hxx") => {
+            "cpp".to_string()
+        }
         Some("java") => "java".to_string(),
         Some("cs") | Some("csproj") | Some("sln") | Some("sqlproj") | Some("sql") => {
             "csharp".to_string()
@@ -344,43 +922,50 @@ fn detect_language(path: &str) -> String {
 ///
 /// # 返回
 /// - 返回扫描阶段可直接得到的标签列表。
-fn detect_tags(path: &str, kind: &str) -> Vec<String> {
+fn detect_tags(path: &str, purpose: FilePurpose) -> Vec<String> {
     let mut tags = Vec::new();
     let file_name = Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
 
-    if kind == "config" {
+    if purpose == FilePurpose::Config {
         tags.push("config".to_string());
     }
 
-    if matches!(
-        path,
-        "src/main.rs"
-            | "src/lib.rs"
-            | "src/index.ts"
-            | "src/index.js"
-            | "index.ts"
-            | "index.js"
-            | "src/Main.java"
-            | "src/Program.cs"
-    ) || matches!(
-        file_name,
-        "main.ts"
-            | "main.js"
-            | "main.py"
-            | "main.kt"
-            | "main.swift"
-            | "app.ts"
-            | "app.js"
-            | "app.py"
-            | "index.php"
-            | "Program.cs"
-            | "Main.java"
-            | "__main__.py"
-            | "nginx.conf"
-    )
+    // test 路径文件降权标记，供 hierarchy 和 generation 层消费
+    if is_test_path(path) {
+        tags.push("test-file".to_string());
+    }
+
+    if purpose == FilePurpose::Entry
+        || matches!(
+            path,
+            "src/main.rs"
+                | "src/lib.rs"
+                | "src/index.ts"
+                | "src/index.js"
+                | "index.ts"
+                | "index.js"
+                | "src/Main.java"
+                | "src/Program.cs"
+        )
+        || matches!(
+            file_name,
+            "main.ts"
+                | "main.js"
+                | "main.py"
+                | "main.kt"
+                | "main.swift"
+                | "app.ts"
+                | "app.js"
+                | "app.py"
+                | "index.php"
+                | "Program.cs"
+                | "Main.java"
+                | "__main__.py"
+                | "nginx.conf"
+        )
     {
         tags.push("entry-point".to_string());
     }
@@ -410,7 +995,11 @@ fn discover_workspace_roots(config_files: &[String]) -> Vec<String> {
                 .parent()
                 .map(|path| path.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_else(|| ".".to_string());
-            roots.insert(if parent.is_empty() { ".".to_string() } else { parent });
+            roots.insert(if parent.is_empty() {
+                ".".to_string()
+            } else {
+                parent
+            });
         }
     }
 
@@ -539,7 +1128,10 @@ fn collect_service_api_hints(root: &Path, files: &[ScannedFile]) -> Vec<Dependen
 }
 
 /// 基础设施配置里如果显式引用仓库内的静态产物目录，就把它折叠成模块依赖线索。
-fn collect_infrastructure_dependency_hints(root: &Path, files: &[ScannedFile]) -> Vec<DependencyHint> {
+fn collect_infrastructure_dependency_hints(
+    root: &Path,
+    files: &[ScannedFile],
+) -> Vec<DependencyHint> {
     let mut hints = Vec::new();
 
     for file in files {
@@ -632,7 +1224,9 @@ fn relative_path_from_config_target(repo_root: &Path, target: &str) -> Option<St
         return None;
     }
 
-    let repo_relative = normalized_target.trim_start_matches("./").trim_start_matches('/');
+    let repo_relative = normalized_target
+        .trim_start_matches("./")
+        .trim_start_matches('/');
     let candidate = repo_root.join(repo_relative);
     candidate
         .exists()
@@ -656,10 +1250,7 @@ fn collect_source_aliases(
     let mut aliases = std::collections::BTreeMap::new();
 
     for file in files {
-        if !matches!(
-            file.language.as_str(),
-            "java" | "kotlin" | "csharp" | "php"
-        ) {
+        if !matches!(file.language.as_str(), "java" | "kotlin" | "csharp" | "php") {
             continue;
         }
 
@@ -669,7 +1260,9 @@ fn collect_source_aliases(
         };
 
         for alias in parse_source_aliases(&file.language, &content) {
-            aliases.entry(alias).or_insert_with(|| source_root_for_alias(&file.path));
+            aliases
+                .entry(alias)
+                .or_insert_with(|| source_root_for_alias(&file.path));
         }
     }
 
@@ -695,7 +1288,10 @@ fn source_root_for_alias(source_path: &str) -> String {
     let mut segments = segments.into_iter();
     let first = segments.next().unwrap_or(".");
 
-    if matches!(first, "crates" | "agents" | "apps" | "services" | "libs" | "packages") {
+    if matches!(
+        first,
+        "crates" | "agents" | "apps" | "services" | "libs" | "packages"
+    ) {
         let second = segments.next().unwrap_or(".");
         if second != "." {
             return format!("{first}/{second}");
@@ -724,4 +1320,48 @@ fn dedupe_dependency_hints(hints: Vec<DependencyHint>) -> Vec<DependencyHint> {
     }
 
     result
+}
+
+/// 快速扫描仓库根目录下的 manifest 文件名，
+/// 用于判断仓库类型和 workspace 成员白名单。
+fn discover_root_manifests(root: &Path) -> Vec<String> {
+    let mut manifests = Vec::new();
+    let Ok(entries) = fs::read_dir(root) else {
+        return manifests;
+    };
+
+    for entry in entries.flatten() {
+        if let Some(name) = entry.file_name().to_str() {
+            if matches!(
+                name,
+                "Cargo.toml"
+                    | "package.json"
+                    | "pyproject.toml"
+                    | "go.mod"
+                    | "pom.xml"
+                    | "build.gradle"
+                    | "build.gradle.kts"
+                    | "pnpm-workspace.yaml"
+            ) {
+                manifests.push(name.to_string());
+            }
+        }
+    }
+
+    manifests
+}
+
+/// 检测子目录是否为嵌套仓库。
+/// 含 `.git` 目录的子目录视为嵌套仓库（workspace 成员除外）。
+fn is_nested_repo(dir: &Path, _root_manifests: &[String]) -> bool {
+    dir.join(".git").is_dir()
+}
+
+/// 判断文件路径是否位于 test / spec 相关目录下。
+/// 用于在扫描阶段标记降权信号，供 hierarchy 和 generation 层消费。
+fn is_test_path(path: &str) -> bool {
+    let segments: Vec<&str> = path.split('/').collect();
+    segments
+        .iter()
+        .any(|seg| matches!(*seg, "tests" | "test" | "spec" | "__tests__" | "__test__"))
 }

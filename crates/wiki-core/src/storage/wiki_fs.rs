@@ -1,6 +1,8 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 /// 把页面内容写到 `.wiki/` 下的目标路径。
 /// 页面路径由 planner 决定，这里只负责落盘。
@@ -62,21 +64,63 @@ pub fn page_exists(repo_root: &Path, page_path: &str) -> bool {
 
 /// 在重新 init / rebuild 前清理整个 runtime。
 /// 这是当前全量重建策略的基础动作。
-///
-/// # 参数
-/// - `repo_root`：本地代码目录。
-///
-/// # 返回
-/// - 成功时删除已有的 `.wiki/` 运行时目录。
-///
-/// # 错误
-/// - 当删除已有 runtime 失败时返回错误。
 pub fn remove_runtime(repo_root: &Path) -> io::Result<()> {
     let wiki_root = wiki_root(repo_root);
 
     if wiki_root.exists() {
-        fs::remove_dir_all(wiki_root)?;
+        remove_dir_all_with_retry(&wiki_root)?;
     }
 
     Ok(())
+}
+
+/// 只删除 SQLite 缓存数据库，保留 `.wiki/*.md` 页面文件和 metadata。
+/// rebuild 在读取旧页面内容后调用此函数清理缓存。
+pub fn remove_cache_db(repo_root: &Path) -> io::Result<()> {
+    let db = crate::storage::sqlite_store::db_path(repo_root);
+    if db.exists() {
+        remove_file_with_retry(&db)?;
+    }
+    // 清理 WAL / SHM 残留
+    let wal = db.with_extension("db-wal");
+    if wal.exists() {
+        remove_file_with_retry(&wal)?;
+    }
+    let shm = db.with_extension("db-shm");
+    if shm.exists() {
+        remove_file_with_retry(&shm)?;
+    }
+    Ok(())
+}
+
+fn remove_dir_all_with_retry(path: &Path) -> io::Result<()> {
+    retry_fs_remove(|| fs::remove_dir_all(path))
+}
+
+fn remove_file_with_retry(path: &Path) -> io::Result<()> {
+    retry_fs_remove(|| fs::remove_file(path))
+}
+
+fn retry_fs_remove<F>(mut action: F) -> io::Result<()>
+where
+    F: FnMut() -> io::Result<()>,
+{
+    let mut last_error = None;
+
+    for attempt in 0..6 {
+        match action() {
+            Ok(()) => return Ok(()),
+            Err(error) if is_retryable_fs_remove_error(&error) && attempt < 5 => {
+                last_error = Some(error);
+                thread::sleep(Duration::from_millis(250));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| io::Error::other("remove retry failed")))
+}
+
+fn is_retryable_fs_remove_error(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(5 | 32))
 }

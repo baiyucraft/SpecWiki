@@ -3,7 +3,7 @@
 
 use tree_sitter::{Node, Parser};
 
-use super::{LanguageProcessor, extract_first_quoted_target};
+use super::{extract_first_quoted_target, LanguageProcessor};
 
 /// JavaScript 处理器使用 tree-sitter 先圈定依赖语法节点。
 #[derive(Debug)]
@@ -34,9 +34,8 @@ impl LanguageProcessor for JavaScriptProcessor {
 
 fn parse_javascript_tree(content: &str) -> Option<tree_sitter::Tree> {
     let mut parser = Parser::new();
-    parser
-        .set_language(tree_sitter_javascript::language())
-        .ok()?;
+    let language = tree_sitter_javascript::LANGUAGE.into();
+    parser.set_language(&language).ok()?;
     parser.parse(content, None)
 }
 

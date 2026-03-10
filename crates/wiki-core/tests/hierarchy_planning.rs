@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use wiki_core::domain::steering::SteeringConfig;
 use wiki_core::generation::context::{build_module_contexts, build_repo_context};
 use wiki_core::generation::planner::plan_pages;
 use wiki_core::repo::hierarchy::build_module_tree;
@@ -16,11 +17,17 @@ fn hierarchy_planning_generates_architecture_and_module_pages() {
     .find(|candidate| candidate.exists())
     .expect("fixture repository should exist for hierarchy planning tests");
 
-    let report = scan_repo(&fixture).unwrap();
+    let report = scan_repo(&fixture, &[]).unwrap();
     let module_tree = build_module_tree(&report);
     let repo_context = build_repo_context(&report, &module_tree);
     let module_contexts = build_module_contexts(&report, &module_tree);
-    let pages = plan_pages(&report, &module_tree, &repo_context, &module_contexts);
+    let pages = plan_pages(
+        &report,
+        &module_tree,
+        &repo_context,
+        &module_contexts,
+        &SteeringConfig::default(),
+    );
 
     assert!(module_tree.modules.len() >= 2);
     assert!(pages.iter().any(|page| page.page_type == "overview"));
@@ -39,11 +46,17 @@ fn hierarchy_planning_promotes_mixed_top_level_directories_to_modules() {
     .find(|candidate| candidate.exists())
     .expect("fixture repository should exist for mixed repo hierarchy tests");
 
-    let report = scan_repo(&fixture).unwrap();
+    let report = scan_repo(&fixture, &[]).unwrap();
     let module_tree = build_module_tree(&report);
     let repo_context = build_repo_context(&report, &module_tree);
     let module_contexts = build_module_contexts(&report, &module_tree);
-    let pages = plan_pages(&report, &module_tree, &repo_context, &module_contexts);
+    let pages = plan_pages(
+        &report,
+        &module_tree,
+        &repo_context,
+        &module_contexts,
+        &SteeringConfig::default(),
+    );
 
     let module_names = module_tree
         .non_root_modules()
@@ -77,7 +90,7 @@ fn hierarchy_planning_builds_mixed_repo_edges_from_api_and_infrastructure_hints(
     .find(|candidate| candidate.exists())
     .expect("fixture repository should exist for mixed repo relation tests");
 
-    let report = scan_repo(&fixture).unwrap();
+    let report = scan_repo(&fixture, &[]).unwrap();
     let module_tree = build_module_tree(&report);
 
     let edge_names = module_tree
@@ -97,12 +110,20 @@ fn hierarchy_planning_builds_mixed_repo_edges_from_api_and_infrastructure_hints(
         })
         .collect::<Vec<_>>();
 
-    assert!(edge_names
-        .iter()
-        .any(|(source, target, relation)| source == "web" && target == "spider" && relation == "DEPENDS_ON"), "edges: {edge_names:?}");
-    assert!(edge_names.iter().any(|(source, target, relation)| {
-        source == "conf" && target == "web" && relation == "SERVES_STATIC"
-    }), "edges: {edge_names:?}");
+    assert!(
+        edge_names
+            .iter()
+            .any(|(source, target, relation)| source == "web"
+                && target == "spider"
+                && relation == "DEPENDS_ON"),
+        "edges: {edge_names:?}"
+    );
+    assert!(
+        edge_names.iter().any(|(source, target, relation)| {
+            source == "conf" && target == "web" && relation == "SERVES_STATIC"
+        }),
+        "edges: {edge_names:?}"
+    );
 }
 
 #[test]
@@ -116,7 +137,7 @@ fn hierarchy_planning_builds_cross_module_edges_from_manifest_and_rust_parsers()
     .find(|candidate| candidate.exists())
     .expect("fixture repository should exist for rust workspace hierarchy tests");
 
-    let report = scan_repo(&fixture).unwrap();
+    let report = scan_repo(&fixture, &[]).unwrap();
     let module_tree = build_module_tree(&report);
 
     let module_names = module_tree
@@ -152,7 +173,7 @@ fn hierarchy_planning_builds_cross_module_edges_from_java_package_aliases() {
     .find(|candidate| candidate.exists())
     .expect("fixture repository should exist for java hierarchy tests");
 
-    let report = scan_repo(&fixture).unwrap();
+    let report = scan_repo(&fixture, &[]).unwrap();
     let module_tree = build_module_tree(&report);
 
     assert!(module_tree.cross_module_edges.iter().any(|edge| {
@@ -180,11 +201,17 @@ fn hierarchy_planning_builds_recursive_module_tree_and_nested_paths() {
     .find(|candidate| candidate.exists())
     .expect("fixture repository should exist for recursive hierarchy tests");
 
-    let report = scan_repo(&fixture).unwrap();
+    let report = scan_repo(&fixture, &[]).unwrap();
     let module_tree = build_module_tree(&report);
     let repo_context = build_repo_context(&report, &module_tree);
     let module_contexts = build_module_contexts(&report, &module_tree);
-    let pages = plan_pages(&report, &module_tree, &repo_context, &module_contexts);
+    let pages = plan_pages(
+        &report,
+        &module_tree,
+        &repo_context,
+        &module_contexts,
+        &SteeringConfig::default(),
+    );
 
     let packages = module_tree
         .modules
@@ -194,12 +221,22 @@ fn hierarchy_planning_builds_recursive_module_tree_and_nested_paths() {
     let domain = module_tree
         .modules
         .iter()
-        .find(|module| module.root_paths.iter().any(|root| root == "packages/domain"))
+        .find(|module| {
+            module
+                .root_paths
+                .iter()
+                .any(|root| root == "packages/domain")
+        })
         .expect("domain group should exist");
     let auth = module_tree
         .modules
         .iter()
-        .find(|module| module.root_paths.iter().any(|root| root == "packages/domain/auth"))
+        .find(|module| {
+            module
+                .root_paths
+                .iter()
+                .any(|root| root == "packages/domain/auth")
+        })
         .expect("auth module should exist");
 
     assert!(packages.child_ids.contains(&domain.id));
@@ -207,11 +244,10 @@ fn hierarchy_planning_builds_recursive_module_tree_and_nested_paths() {
     assert!(pages
         .iter()
         .any(|page| page.relative_path.ends_with("核心模块/packages/domain.md")));
-    assert!(pages
-        .iter()
-        .any(|page| page.relative_path.ends_with("核心模块/packages/domain/auth.md")));
+    assert!(pages.iter().any(|page| page
+        .relative_path
+        .ends_with("核心模块/packages/domain/auth.md")));
     assert!(pages.iter().any(|page| {
-        page.relative_path.ends_with("核心模块/infra/nginx.md")
-            && page.parent_id.is_some()
+        page.relative_path.ends_with("核心模块/infra/nginx.md") && page.parent_id.is_some()
     }));
 }

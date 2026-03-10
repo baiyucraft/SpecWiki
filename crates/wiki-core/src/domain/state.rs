@@ -15,16 +15,27 @@ use crate::repo::fingerprint::fingerprint_bytes;
 use crate::repo::scanner::ScanReport;
 
 /// `WikiSectionState` 记录页面内部每个章节的稳定状态。
+/// 迭代 5 扩展：同时记录 generated hash 与 observed hash，支持 managed drift 检测和 user section 锚点。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WikiSectionState {
     /// 页面内稳定 section 身份，供增量 update 和缓存命中使用。
     pub section_id: String,
     /// section 的展示标题，会参与 Markdown 组装。
     pub title: String,
-    /// 当前 section 是否受 runtime 托管；迭代 3 统一为托管区段。
+    /// 当前 section 是否受 runtime 托管。`false` 表示用户手写区段。
     pub managed: bool,
-    /// section 内容的稳定摘要，用于判断区段是否需要重渲染。
+    /// 当前磁盘上这个区段的实际内容 hash。
     pub content_hash: String,
+    /// 仅对 managed section 存在，表示最近一次生成器输出的内容 hash。
+    /// 当 `content_hash != generated_content_hash` 时，说明用户手工改了托管区段（managed drift）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_content_hash: Option<String>,
+    /// 仅对 user section 有意义：该区段前方最近的 managed section ID。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_after_section_id: Option<String>,
+    /// 仅对 user section 有意义：该区段后方最近的 managed section ID。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_before_section_id: Option<String>,
     /// 当前 section 依赖的源码 ID 集合。
     pub source_ids: Vec<String>,
     /// 当前 section 依赖的关系 ID 集合。
@@ -61,6 +72,9 @@ pub struct WikiPageState {
     pub summary: String,
     /// 页面 provenance 线索，表达它来自哪些模块、关系和源码。
     pub provenance: Vec<String>,
+    /// 页面当前 managed section 的稳定锚点列表，供 sync / change_set 复用。
+    #[serde(default)]
+    pub section_anchors: Vec<String>,
     /// 页面内部 section 的稳定状态集合。
     #[serde(default)]
     pub sections: Vec<WikiSectionState>,
@@ -146,7 +160,10 @@ pub fn assemble_state(
     module_tree: &ModuleTree,
     generated_at: &str,
 ) -> WikiState {
-    let pages = page_results.iter().map(build_page_state).collect::<Vec<_>>();
+    let pages = page_results
+        .iter()
+        .map(build_page_state)
+        .collect::<Vec<_>>();
 
     assemble_state_from_pages(
         &pages,
@@ -216,6 +233,7 @@ pub fn rebuild_state_from_metadata(metadata: &WikiMetadata) -> WikiState {
             module_ids: item.module_ids.clone(),
             summary: item.summary.clone(),
             provenance: item.provenance.clone(),
+            section_anchors: Vec::new(),
             sections: Vec::new(),
         })
         .collect::<Vec<_>>();
@@ -254,6 +272,22 @@ impl WikiPageState {
     pub fn section_ids(&self) -> Vec<String> {
         self.sections
             .iter()
+            .map(|section| section.section_id.clone())
+            .collect()
+    }
+
+    /// 返回当前页面的 managed section 锚点列表。
+    ///
+    /// # 返回
+    /// - 优先返回持久化的 `section_anchors`；为空时从 section 状态现算。
+    pub fn managed_section_anchors(&self) -> Vec<String> {
+        if !self.section_anchors.is_empty() {
+            return self.section_anchors.clone();
+        }
+
+        self.sections
+            .iter()
+            .filter(|section| section.managed)
             .map(|section| section.section_id.clone())
             .collect()
     }
@@ -332,6 +366,31 @@ pub fn compute_page_input_hash(
 /// # 返回
 /// - 返回可写入 `WikiState` 的 `WikiPageState`。
 pub fn build_page_state(result: &PageBuildResult) -> WikiPageState {
+    let sections = result
+        .sections
+        .iter()
+        .map(|section| WikiSectionState {
+            section_id: section.section_id.clone(),
+            title: section.title.clone(),
+            managed: section.managed,
+            content_hash: fingerprint_bytes(section.content.as_bytes()),
+            generated_content_hash: if section.managed {
+                Some(fingerprint_bytes(section.content.as_bytes()))
+            } else {
+                None
+            },
+            anchor_after_section_id: None,
+            anchor_before_section_id: None,
+            source_ids: section.source_ids.clone(),
+            relation_ids: section.relation_ids.clone(),
+        })
+        .collect::<Vec<_>>();
+    let section_anchors = sections
+        .iter()
+        .filter(|section| section.managed)
+        .map(|section| section.section_id.clone())
+        .collect::<Vec<_>>();
+
     WikiPageState {
         page_id: result.page.id.clone(),
         title: result.page.title.clone(),
@@ -346,18 +405,8 @@ pub fn build_page_state(result: &PageBuildResult) -> WikiPageState {
         module_ids: result.page.module_ids.clone(),
         summary: result.context.summary_inputs.join("；"),
         provenance: result.provenance.clone(),
-        sections: result
-            .sections
-            .iter()
-            .map(|section| WikiSectionState {
-                section_id: section.section_id.clone(),
-                title: section.title.clone(),
-                managed: section.managed,
-                content_hash: fingerprint_bytes(section.content.as_bytes()),
-                source_ids: section.source_ids.clone(),
-                relation_ids: section.relation_ids.clone(),
-            })
-            .collect(),
+        section_anchors,
+        sections,
     }
 }
 

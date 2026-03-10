@@ -11,8 +11,10 @@ fn main() {
             .expect("stdin should be readable");
 
         // 传输层只负责解析/分发；真正的业务逻辑都在 workflow 里。
-        let response = wiki_core::transport::json_rpc::handle_json(&input)
-            .unwrap_or_else(|error| wiki_core::transport::dto::CoreResponse::error(error.to_string()));
+        let response =
+            wiki_core::transport::json_rpc::handle_json(&input).unwrap_or_else(|error| {
+                wiki_core::transport::dto::CoreResponse::error(error.to_string())
+            });
 
         println!(
             "{}",

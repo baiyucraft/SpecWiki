@@ -1,0 +1,14 @@
+schema: spec-driven
+context: |
+  语言：中文（简体）
+  所有产出物必须用简体中文撰写。
+
+rules:
+  proposal:
+    - 提案时必须参考 DESIGN-CORE.md 和 DESIGN.md。
+  design: 
+    - 设计时必须参考 AGENTS.md 中的 “开发参考” 部分。
+  tasks:
+    - 任务时必须参考 AGENTS.md 中的 “实施约定” 和 “测试与变更” 部分。
+  apply:
+    - 应用时必须参考 AGENTS.md 中的 “实施约定” 部分。

@@ -3,5 +3,6 @@
 
 pub mod cache_store;
 pub mod metadata_store;
+pub mod sqlite_store;
 pub mod state_store;
 pub mod wiki_fs;

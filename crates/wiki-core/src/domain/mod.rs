@@ -7,6 +7,7 @@ pub mod metadata;
 pub mod metadata_mapper;
 pub mod module_tree;
 pub mod relation;
-pub mod state;
 pub mod stable_id;
+pub mod state;
+pub mod steering;
 pub mod wiki_item;

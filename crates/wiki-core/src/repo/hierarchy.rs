@@ -7,7 +7,7 @@ use crate::repo::detectors::detect_tech_hints;
 use crate::repo::scanner::{DependencyHint, ScanReport, ScannedFile};
 
 /// 模块根路径发现结果会被后续建树和页面规划共用。
-/// 这里把“显式根路径”和“为递归层级补出的祖先根路径”分开保存，避免后续再重复推断。
+/// 这里把"显式根路径"和"为递归层级补出的祖先根路径"分开保存，避免后续再重复推断。
 struct ModuleRootDiscovery {
     explicit_roots: BTreeSet<String>,
     parent_by_root: BTreeMap<String, String>,
@@ -16,7 +16,7 @@ struct ModuleRootDiscovery {
 }
 
 /// 基于扫描结果构建模块树。
-/// 这一层的目标不是做“完美架构分析”，而是把仓库稳定地切成可用于页面规划的模块层级。
+/// 这一层的目标不是做"完美架构分析"，而是把仓库稳定地切成可用于页面规划的模块层级。
 ///
 /// # 参数
 /// - `report`：仓库扫描阶段生成的扫描报告。
@@ -80,8 +80,8 @@ fn discover_module_roots(report: &ScanReport) -> ModuleRootDiscovery {
     let mut child_roots_by_parent = BTreeMap::new();
 
     for root_path in &all_roots {
-        let parent_root = nearest_parent_root(root_path, &all_roots)
-            .unwrap_or_else(|| ".".to_string());
+        let parent_root =
+            nearest_parent_root(root_path, &all_roots).unwrap_or_else(|| ".".to_string());
         parent_by_root.insert(root_path.clone(), parent_root.clone());
         child_roots_by_parent
             .entry(parent_root)
@@ -115,7 +115,8 @@ fn discover_explicit_module_roots(report: &ScanReport) -> BTreeSet<String> {
     }
 
     for file in &report.files {
-        if let Some(candidate) = top_level_boundary(&file.path).filter(|candidate| candidate != ".") {
+        if let Some(candidate) = top_level_boundary(&file.path).filter(|candidate| candidate != ".")
+        {
             roots.insert(candidate);
         }
     }
@@ -144,7 +145,7 @@ fn ancestor_roots(root_path: &str) -> Vec<String> {
     roots
 }
 
-/// 当前模块的父模块总是取“最长可匹配祖先根路径”。
+/// 当前模块的父模块总是取"最长可匹配祖先根路径"。
 /// 这样 `packages/domain/auth` 会挂到 `packages/domain`，而不是直接挂到 `packages` 或根模块。
 fn nearest_parent_root(root_path: &str, all_roots: &BTreeSet<String>) -> Option<String> {
     ancestor_roots(root_path)
@@ -185,20 +186,25 @@ fn build_module_node(
     let tags = module_tags(&source_files, report, root_path);
     let child_ids = child_ids_for_parent(root_path, child_roots_by_parent);
     let has_children = !child_ids.is_empty();
-    let parent_id = parent_by_root
-        .get(root_path)
-        .map(|parent_root| {
-            if parent_root == "." {
-                root_id.to_string()
-            } else {
-                stable_id("module", parent_root)
-            }
-        });
+    let parent_id = parent_by_root.get(root_path).map(|parent_root| {
+        if parent_root == "." {
+            root_id.to_string()
+        } else {
+            stable_id("module", parent_root)
+        }
+    });
 
     ModuleNode {
         id: module_id,
         name: module_name,
-        kind: module_kind(report, root_path, &tags, explicit_roots.contains(root_path), has_children),
+        kind: module_kind(
+            report,
+            root_path,
+            &tags,
+            explicit_roots.contains(root_path),
+            has_children,
+            &source_files,
+        ),
         root_paths: vec![root_path.to_string()],
         source_ids: source_files.iter().map(|file| file.id.clone()).collect(),
         parent_id,
@@ -247,18 +253,20 @@ fn top_level_boundary(path: &str) -> Option<String> {
     }
 }
 
-/// 这一组统计字段专门服务“顶层目录是否应晋升为模块”的评分。
+/// 这一组统计字段专门服务"顶层目录是否应晋升为模块"的评分。
 #[derive(Default)]
 struct TopLevelRootStats {
     total_files: usize,
     source_files: usize,
     config_files: usize,
     entry_points: usize,
+    has_subdirs: bool,
+    test_files: usize,
     languages: BTreeSet<String>,
     tags: BTreeSet<String>,
 }
 
-/// 兜底识别“看起来就是一个独立子系统”的顶层目录。
+/// 兜底识别"看起来就是一个独立子系统"的顶层目录。
 /// 这一步专门解决混合仓库场景：目录没有出现在固定白名单里，但明明是独立模块。
 fn discover_meaningful_top_level_roots(report: &ScanReport) -> Vec<String> {
     let mut stats_by_root = BTreeMap::new();
@@ -280,11 +288,17 @@ fn discover_meaningful_top_level_roots(report: &ScanReport) -> Vec<String> {
 
     stats_by_root
         .into_iter()
-        .filter_map(|(root_path, stats)| stats.should_promote().then_some(root_path))
+        .filter_map(|(root_path, stats)| {
+            // 单文件模块抑制：只含 1 个文件且无子目录的候选节点不提升为独立模块
+            if stats.total_files <= 1 && !stats.has_subdirs {
+                return None;
+            }
+            stats.should_promote().then_some(root_path)
+        })
         .collect()
 }
 
-/// 这里只取路径的第一段，因为我们判断的是“顶层目录是否可以成为模块”。
+/// 这里只取路径的第一段，因为我们判断的是"顶层目录是否可以成为模块"。
 fn top_level_segment(path: &str) -> Option<&str> {
     path.split('/').next().filter(|segment| !segment.is_empty())
 }
@@ -317,15 +331,26 @@ fn should_skip_top_level_root(root_path: &str) -> bool {
 fn observe_top_level_file(stats: &mut TopLevelRootStats, file: &ScannedFile) {
     stats.total_files += 1;
 
-    if file.kind == "source" {
+    // 检测是否有子目录（路径段数 > 2 说明不是直接在顶层目录下）
+    let depth = file.path.split('/').count();
+    if depth > 2 {
+        stats.has_subdirs = true;
+    }
+
+    // test-file 标记的文件单独计数，用于评分降权
+    if file.is_test_like() {
+        stats.test_files += 1;
+    }
+
+    if file.kind == "source" && !file.is_low_signal() {
         stats.source_files += 1;
     }
 
-    if file.kind == "config" {
+    if file.is_config_like() {
         stats.config_files += 1;
     }
 
-    if file.tags.iter().any(|tag| tag == "entry-point") {
+    if file.is_entry_like() {
         stats.entry_points += 1;
     }
 
@@ -357,6 +382,7 @@ fn observe_top_level_file(stats: &mut TopLevelRootStats, file: &ScannedFile) {
 
 impl TopLevelRootStats {
     /// 模块晋升评分是刻意保守的。
+    /// test-file 标记的文件在评分中被降权，避免测试产物主导模块提升。
     fn should_promote(&self) -> bool {
         let mut score = 0;
 
@@ -364,9 +390,11 @@ impl TopLevelRootStats {
             score += 3;
         }
 
-        if self.source_files >= 3 {
+        // 非 test 源码文件数量用于评分，test 文件不计入
+        let non_test_source_files = self.source_files.saturating_sub(self.test_files);
+        if non_test_source_files >= 3 {
             score += 2;
-        } else if self.source_files > 0 {
+        } else if non_test_source_files > 0 {
             score += 1;
         }
 
@@ -429,7 +457,10 @@ fn module_tags(source_files: &[&ScannedFile], report: &ScanReport, root_path: &s
         tags.insert("frontend".to_string());
     }
 
-    if source_files.iter().any(|file| file.path.ends_with("nginx.conf")) {
+    if source_files
+        .iter()
+        .any(|file| file.path.ends_with("nginx.conf"))
+    {
         tags.insert("infrastructure".to_string());
     }
 
@@ -441,7 +472,7 @@ fn module_tags(source_files: &[&ScannedFile], report: &ScanReport, root_path: &s
         tags.insert("entry".to_string());
     }
 
-    if source_files.iter().any(|file| file.kind == "config") {
+    if source_files.iter().any(|file| file.is_config_like()) {
         tags.insert("config".to_string());
     }
 
@@ -449,32 +480,129 @@ fn module_tags(source_files: &[&ScannedFile], report: &ScanReport, root_path: &s
 }
 
 /// `kind` 是页面和 query 的粗粒度角色说明。
-/// 对“只有子模块、没有自身 manifest”的节点，优先把它标记成 `module-group`。
+/// 综合 manifest 类型、入口文件、目录结构、模块标签和目录名/manifest 关键词判断。
+/// 优先级：module-group 结构判断 > manifest 声明 > 入口文件 > 目录结构 > 标签 > 默认值。
+///
+/// # 参数
+/// - `report`：仓库扫描报告，用于读取 manifest 和 workspace 信息。
+/// - `root_path`：模块根路径。
+/// - `tags`：模块标签列表。
+/// - `is_explicit_root`：是否为显式模块根路径（workspace 成员或固定边界）。
+/// - `has_children`：是否有子模块。
+/// - `source_files`：归属于该模块的文件列表。
+///
+/// # 返回
+/// - 返回模块的 kind 字符串，如 `library`、`cli-tool`、`infrastructure` 等。
 fn module_kind(
     report: &ScanReport,
     root_path: &str,
     tags: &[String],
     is_explicit_root: bool,
     has_children: bool,
+    source_files: &[&ScannedFile],
 ) -> String {
     if root_path == "." {
         return "application".to_string();
     }
 
+    // 组节点判断保持不变
     if has_children && (!is_explicit_root || !has_structural_manifest(report, root_path)) {
         return "module-group".to_string();
     }
 
+    // 收集 manifest 信号
+    let manifest_signal = detect_manifest_signal(report, root_path);
+
+    // 1. manifest 声明优先
+    if let Some(kind) = kind_from_manifest(&manifest_signal, root_path) {
+        return kind;
+    }
+
+    // 2. 入口文件信号
+    let has_main_entry = source_files.iter().any(|f| {
+        let file_name = Path::new(&f.path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        matches!(
+            file_name,
+            "main.rs"
+                | "main.go"
+                | "main.py"
+                | "main.ts"
+                | "main.js"
+                | "main.kt"
+                | "main.swift"
+                | "Program.cs"
+                | "Main.java"
+                | "__main__.py"
+        ) || f.is_entry_like()
+    });
+
+    // 3. 纯基础设施检测：没有应用源码，只有基础设施文件
+    let has_app_source = source_files.iter().any(|f| {
+        f.is_substantive_source()
+            && !matches!(
+                f.language.as_str(),
+                "yaml" | "toml" | "json" | "text" | "config" | "markdown"
+            )
+    });
+    let has_infra_files = source_files.iter().any(|f| {
+        let name = Path::new(&f.path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        name == "Dockerfile"
+            || name == "docker-compose.yml"
+            || name == "docker-compose.yaml"
+            || name == "nginx.conf"
+            || name.ends_with(".sh")
+    });
+
+    if !has_app_source && has_infra_files {
+        return "infrastructure".to_string();
+    }
+
+    // 4. 目录名/manifest 关键词覆盖标签判断
+    let is_agent_or_adapter = root_path.split('/').any(|seg| {
+        matches!(
+            seg.to_ascii_lowercase().as_str(),
+            "agent"
+                | "agents"
+                | "adapter"
+                | "adapters"
+                | "plugin"
+                | "plugins"
+                | "connector"
+                | "connectors"
+                | "bridge"
+        )
+    });
+
+    // 如果目录名暗示 agent/adapter/plugin，不要被 frontend/backend 标签误导
+    if is_agent_or_adapter {
+        if has_main_entry {
+            return "cli-tool".to_string();
+        }
+        return "module".to_string();
+    }
+
+    // 5. 标签兜底
     if tags.iter().any(|tag| tag == "infrastructure") {
         return "infrastructure".to_string();
     }
 
-    if tags.iter().any(|tag| tag == "frontend") {
+    if tags.iter().any(|tag| tag == "frontend") && !tags.iter().any(|tag| tag == "backend") {
         return "frontend-app".to_string();
     }
 
-    if tags.iter().any(|tag| tag == "backend") {
+    if tags.iter().any(|tag| tag == "backend") && !tags.iter().any(|tag| tag == "frontend") {
         return "backend-service".to_string();
+    }
+
+    // 前后端标签同时存在时，不做武断分类
+    if tags.iter().any(|tag| tag == "frontend") && tags.iter().any(|tag| tag == "backend") {
+        return "module".to_string();
     }
 
     if report
@@ -488,11 +616,111 @@ fn module_kind(
     "module".to_string()
 }
 
+/// manifest 信号聚合，用于 module kind 多维判断。
+/// 每个字段对应一种 manifest 声明的存在性，供 `kind_from_manifest()` 消费。
+struct ManifestSignal {
+    has_cargo_lib: bool,
+    has_cargo_bin: bool,
+    has_package_json_bin: bool,
+    has_package_json_main: bool,
+    has_go_mod: bool,
+}
+
+/// 从 manifest 文件内容中提取轻量级信号。
+/// 只做字符串匹配，不做完整 TOML/JSON 解析。
+fn detect_manifest_signal(report: &ScanReport, root_path: &str) -> ManifestSignal {
+    let repo_root = Path::new(&report.root);
+    let module_dir = if root_path == "." {
+        repo_root.to_path_buf()
+    } else {
+        repo_root.join(root_path)
+    };
+
+    let mut signal = ManifestSignal {
+        has_cargo_lib: false,
+        has_cargo_bin: false,
+        has_package_json_bin: false,
+        has_package_json_main: false,
+        has_go_mod: false,
+    };
+
+    // Cargo.toml 检查
+    if let Ok(content) = std::fs::read_to_string(module_dir.join("Cargo.toml")) {
+        signal.has_cargo_lib = has_cargo_lib_section(&content);
+        signal.has_cargo_bin = has_cargo_bin_section(&content);
+    }
+
+    // package.json 检查
+    if let Ok(content) = std::fs::read_to_string(module_dir.join("package.json")) {
+        signal.has_package_json_bin = has_package_json_bin(&content);
+        signal.has_package_json_main = has_package_json_main(&content);
+    }
+
+    // go.mod 检查
+    signal.has_go_mod = module_dir.join("go.mod").is_file();
+
+    signal
+}
+
+/// 基于 manifest 信号推断 kind。
+fn kind_from_manifest(signal: &ManifestSignal, root_path: &str) -> Option<String> {
+    // Cargo.toml: [lib] 且无 [[bin]] → library；有 [[bin]] → cli-tool
+    if signal.has_cargo_lib && !signal.has_cargo_bin {
+        return Some("library".to_string());
+    }
+    if signal.has_cargo_bin {
+        return Some("cli-tool".to_string());
+    }
+
+    // package.json: bin 字段 → cli-tool
+    if signal.has_package_json_bin {
+        return Some("cli-tool".to_string());
+    }
+
+    // go.mod: 检查是否有 cmd/ 目录暗示 CLI
+    if signal.has_go_mod {
+        let dir_name = root_path.split('/').next_back().unwrap_or_default();
+        if dir_name == "cmd" || root_path.contains("/cmd/") {
+            return Some("cli-tool".to_string());
+        }
+        // go.mod 本身不足以判断 library vs application，交给后续信号
+    }
+
+    None
+}
+
+/// 检查 Cargo.toml 是否包含 `[lib]` section。
+fn has_cargo_lib_section(content: &str) -> bool {
+    content.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed == "[lib]" || trimmed.starts_with("[lib]")
+    })
+}
+
+/// 检查 Cargo.toml 是否包含 `[[bin]]` section。
+fn has_cargo_bin_section(content: &str) -> bool {
+    content.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed == "[[bin]]" || trimmed.starts_with("[[bin]]")
+    })
+}
+
+/// 检查 package.json 是否包含 `"bin"` 字段。
+fn has_package_json_bin(content: &str) -> bool {
+    content.contains("\"bin\"")
+}
+
+/// 检查 package.json 是否包含 `"main"` 字段。
+fn has_package_json_main(content: &str) -> bool {
+    content.contains("\"main\"")
+}
+
 /// 模块根路径若自己没有 manifest，但能稳定承载子模块，则视为组节点。
 fn has_structural_manifest(report: &ScanReport, root_path: &str) -> bool {
-    report.config_files.iter().any(|config_path| {
-        structural_manifest_root(config_path).as_deref() == Some(root_path)
-    })
+    report
+        .config_files
+        .iter()
+        .any(|config_path| structural_manifest_root(config_path).as_deref() == Some(root_path))
 }
 
 fn structural_manifest_root(config_path: &str) -> Option<String> {
@@ -502,7 +730,12 @@ fn structural_manifest_root(config_path: &str) -> Option<String> {
 
     if !matches!(
         file_name,
-        "package.json" | "Cargo.toml" | "pyproject.toml" | "requirements.txt" | "Pipfile" | "nginx.conf"
+        "package.json"
+            | "Cargo.toml"
+            | "pyproject.toml"
+            | "requirements.txt"
+            | "Pipfile"
+            | "nginx.conf"
     ) {
         return None;
     }
@@ -512,11 +745,15 @@ fn structural_manifest_root(config_path: &str) -> Option<String> {
         .map(|path| path.to_string_lossy().replace('\\', "/"))
         .unwrap_or_else(|| ".".to_string());
 
-    Some(if parent.is_empty() { ".".to_string() } else { parent })
+    Some(if parent.is_empty() {
+        ".".to_string()
+    } else {
+        parent
+    })
 }
 
 /// 判断一个路径是否属于某个模块根路径。
-/// 根模块 `"."` 只兜底接住“没有被任何子模块显式吃掉的路径”。
+/// 根模块 `"."` 只兜底接住"没有被任何子模块显式吃掉的路径"。
 fn path_belongs_to_root(path: &str, root_path: &str) -> bool {
     if root_path == "." {
         return !matches!(
@@ -568,7 +805,10 @@ fn map_dependency_to_module_edge(
         return None;
     }
 
-    let edge_seed = format!("{}:{}:{}", source_module.id, target_module.id, dependency.kind);
+    let edge_seed = format!(
+        "{}:{}:{}",
+        source_module.id, target_module.id, dependency.kind
+    );
 
     Some(RelationEdge {
         id: stable_id("relation", edge_seed),
@@ -613,10 +853,16 @@ fn build_architecture_hints(
         .collect::<Vec<_>>();
 
     let mut hints = Vec::new();
-    hints.push(format!("技术栈：{}", join_or_default(&report.tech_hints, "未识别")));
+    hints.push(format!(
+        "技术栈：{}",
+        join_or_default(&report.tech_hints, "未识别")
+    ));
     hints.push(format!(
         "模块数量：{}",
-        modules.iter().filter(|module| module.parent_id.is_some()).count()
+        modules
+            .iter()
+            .filter(|module| module.parent_id.is_some())
+            .count()
     ));
     hints.push(format!("跨模块关系：{}", edges.len()));
     hints.push(format!(

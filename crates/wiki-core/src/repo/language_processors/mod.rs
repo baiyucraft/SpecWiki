@@ -139,7 +139,11 @@ pub(crate) fn extract_first_quoted_target(line: &str) -> Option<String> {
 pub(crate) fn collect_regex_targets(content: &str, regex: &Regex) -> Vec<String> {
     regex
         .captures_iter(content)
-        .filter_map(|captures| captures.get(1).map(|capture| capture.as_str().trim().to_string()))
+        .filter_map(|captures| {
+            captures
+                .get(1)
+                .map(|capture| capture.as_str().trim().to_string())
+        })
         .filter(|target| !target.is_empty())
         .collect()
 }

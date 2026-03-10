@@ -55,7 +55,9 @@ pub fn build_module_contexts(report: &ScanReport, module_tree: &ModuleTree) -> V
             let dependencies = module_tree
                 .cross_module_edges
                 .iter()
-                .filter(|edge| subtree_ids.contains(&edge.source) && !subtree_ids.contains(&edge.target))
+                .filter(|edge| {
+                    subtree_ids.contains(&edge.source) && !subtree_ids.contains(&edge.target)
+                })
                 .map(|edge| edge.target.clone())
                 .collect::<BTreeSet<_>>()
                 .into_iter()
@@ -63,7 +65,9 @@ pub fn build_module_contexts(report: &ScanReport, module_tree: &ModuleTree) -> V
             let dependents = module_tree
                 .cross_module_edges
                 .iter()
-                .filter(|edge| subtree_ids.contains(&edge.target) && !subtree_ids.contains(&edge.source))
+                .filter(|edge| {
+                    subtree_ids.contains(&edge.target) && !subtree_ids.contains(&edge.source)
+                })
                 .map(|edge| edge.source.clone())
                 .collect::<BTreeSet<_>>()
                 .into_iter()
@@ -144,17 +148,32 @@ fn key_source_score(
     module: &ModuleNode,
     dependency_evidence: &BTreeSet<String>,
 ) -> i32 {
-    if is_low_signal_key_source(file.path.as_str(), file.kind.as_str()) {
+    if is_low_signal_key_source(file.path.as_str(), file) {
+        return -1000;
+    }
+
+    // fixture 路径惩罚：这些文件不应出现在关键源码中
+    if is_fixture_path(&file.path) {
         return -1000;
     }
 
     let mut score = 0;
+
+    // test 路径降权：不完全排除，但显著降低优先级
+    if is_test_source_path(&file.path) {
+        score -= 50;
+    }
+
+    // test-file tag 降权：消费 scanner 阶段的标记
+    if file.is_test_like() {
+        score -= 30;
+    }
     let file_name = Path::new(&file.path)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
 
-    if module.entry_points.contains(&file.path) || file.tags.iter().any(|tag| tag == "entry-point") {
+    if module.entry_points.contains(&file.path) || file.is_entry_like() {
         score += 100;
     }
 
@@ -162,27 +181,11 @@ fn key_source_score(
         score += 70;
     }
 
-    match file.kind.as_str() {
-        "source" => score += 40,
-        "config" => score += 10,
-        "docs" => score -= 30,
-        "asset" => score -= 50,
-        _ => {}
-    }
+    score += file.purpose.signal_weight();
 
     match file.language.as_str() {
-        "typescript"
-        | "javascript"
-        | "react"
-        | "vue"
-        | "svelte"
-        | "python"
-        | "rust"
-        | "java"
-        | "csharp"
-        | "kotlin"
-        | "php"
-        | "swift" => score += 25,
+        "typescript" | "javascript" | "react" | "vue" | "svelte" | "python" | "rust" | "java"
+        | "csharp" | "kotlin" | "php" | "swift" => score += 25,
         "html" | "css" => score += 5,
         _ => {}
     }
@@ -206,11 +209,14 @@ fn key_source_score(
     }
 
     if module.tags.iter().any(|tag| tag == "infrastructure") {
-        if file.kind == "config" {
+        if file.is_config_like() {
             score += 35;
         }
 
-        if matches!(file.language.as_str(), "html" | "css" | "markdown" | "text") {
+        if file.is_docs_like()
+            || file.is_asset_like()
+            || matches!(file.language.as_str(), "html" | "css" | "markdown" | "text")
+        {
             score -= 35;
         }
 
@@ -219,7 +225,8 @@ fn key_source_score(
         }
     }
 
-    if file.path.contains("/src/") || file.path.contains("/app/") || file.path.contains("/modules/") {
+    if file.path.contains("/src/") || file.path.contains("/app/") || file.path.contains("/modules/")
+    {
         score += 15;
     }
 
@@ -247,7 +254,7 @@ fn key_source_score(
     score
 }
 
-fn is_low_signal_key_source(path: &str, kind: &str) -> bool {
+fn is_low_signal_key_source(path: &str, file: &crate::repo::scanner::ScannedFile) -> bool {
     let file_name = Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
@@ -260,7 +267,12 @@ fn is_low_signal_key_source(path: &str, kind: &str) -> bool {
 
     if matches!(
         file_name.as_str(),
-        "pnpm-lock.yaml" | "package-lock.json" | "yarn.lock" | "cargo.lock" | "readme" | "readme.md"
+        "pnpm-lock.yaml"
+            | "package-lock.json"
+            | "yarn.lock"
+            | "cargo.lock"
+            | "readme"
+            | "readme.md"
     ) {
         return true;
     }
@@ -273,7 +285,33 @@ fn is_low_signal_key_source(path: &str, kind: &str) -> bool {
         return true;
     }
 
-    kind == "docs" || kind == "asset"
+    file.is_low_signal()
+}
+
+/// fixture 路径检测：这些目录下的文件不应出现在关键源码列表中。
+fn is_fixture_path(path: &str) -> bool {
+    let segments: Vec<&str> = path.split('/').collect();
+    segments.iter().any(|seg| {
+        matches!(
+            *seg,
+            "fixtures"
+                | "__fixtures__"
+                | "test-data"
+                | "testdata"
+                | "test_data"
+                | "mock-data"
+                | "mocks"
+                | "__mocks__"
+        )
+    })
+}
+
+/// test 源码路径检测：用于关键源码评分降权。
+fn is_test_source_path(path: &str) -> bool {
+    let segments: Vec<&str> = path.split('/').collect();
+    segments
+        .iter()
+        .any(|seg| matches!(*seg, "tests" | "test" | "spec" | "__tests__" | "__test__"))
 }
 
 /// 把 `PlannedPage` 进一步转换成渲染器可直接消费的 `PageContext`。
@@ -318,6 +356,21 @@ pub fn build_page_context(
                     "无"
                 )
             ));
+            // 技术栈事实（供"技术栈" section 消费）
+            for tech in &repo_context.tech_stack {
+                facts.push(format!("技术栈：{tech}"));
+            }
+            // 入口与构建事实（供"入口与构建" section 消费）
+            for entry in &repo_context.key_entry_points {
+                summary_inputs.push(format!("入口：{entry}"));
+            }
+            // 构建命令线索
+            for config in &_report.config_files {
+                let name = config.rsplit('/').next().unwrap_or(config);
+                if matches!(name, "Makefile" | "makefile" | "GNUmakefile") {
+                    summary_inputs.push(format!("入口：构建工具 {name}"));
+                }
+            }
             summary_inputs.extend(
                 repo_context
                     .key_entry_points
@@ -327,24 +380,30 @@ pub fn build_page_context(
         }
         "architecture" => {
             facts.extend(module_tree.architecture_hints.clone());
-            facts.extend(render_module_tree_lines(module_tree, 0, &module_tree.root_modules));
-            summary_inputs.extend(
-                module_tree
-                    .cross_module_edges
-                    .iter()
-                    .map(|edge| {
-                        format!(
-                            "跨模块关系：{} -> {}",
-                            module_name(module_tree, &edge.source),
-                            module_name(module_tree, &edge.target)
-                        )
-                    }),
-            );
+            facts.extend(render_module_tree_lines(
+                module_tree,
+                0,
+                &module_tree.root_modules,
+            ));
+            // 跨模块关系（供"跨模块关系" section 消费）
+            for edge in &module_tree.cross_module_edges {
+                summary_inputs.push(format!(
+                    "关系：{} -> {} ({})",
+                    module_name(module_tree, &edge.source),
+                    module_name(module_tree, &edge.target),
+                    edge.relation_type
+                ));
+            }
+            // 架构提示（供"架构提示" section 消费）
+            for hint in &module_tree.architecture_hints {
+                summary_inputs.push(format!("架构：{hint}"));
+            }
         }
         "module" => {
             for module_id in &page.module_ids {
                 if let Some(module) = module_tree.module_by_id(module_id) {
                     facts.push(format!("模块名称：{}", module.name));
+                    facts.push(format!("模块类型：{}", module.kind));
                     facts.push(format!(
                         "模块根路径：{}",
                         join_or_default(&module.root_paths, ".")
@@ -353,39 +412,60 @@ pub fn build_page_context(
                         "入口文件：{}",
                         join_or_default(&module.entry_points, "无")
                     ));
+                    facts.push(format!("源文件数：{}", module.source_ids.len()));
 
                     if let Some(context) = module_context_index.get(module_id) {
                         summary_inputs.push(format!(
                             "模块角色：{}",
                             join_or_default(&context.role_hints, "未标注")
                         ));
-                        summary_inputs.push(format!(
-                            "关键源码：{}",
-                            join_or_default(&context.key_sources, "无")
-                        ));
-                        summary_inputs.push(format!(
-                            "依赖模块：{}",
-                            join_or_default(
-                                &context
-                                    .dependencies
-                                    .iter()
-                                    .map(|dependency| module_name(module_tree, dependency))
-                                    .collect::<Vec<_>>(),
-                                "无"
-                            )
-                        ));
-                        summary_inputs.push(format!(
-                            "被依赖模块：{}",
-                            join_or_default(
-                                &context
-                                    .dependents
-                                    .iter()
-                                    .map(|dependent| module_name(module_tree, dependent))
-                                    .collect::<Vec<_>>(),
-                                "无"
-                            )
-                        ));
+                        // 关键源码（供"关键源码" section 消费）
+                        for src in &context.key_sources {
+                            summary_inputs.push(format!("源码：{src}"));
+                        }
+                        // 依赖关系（供"依赖关系" section 消费）
+                        for dep in &context.dependencies {
+                            summary_inputs
+                                .push(format!("依赖：→ {}", module_name(module_tree, dep)));
+                        }
+                        for dep in &context.dependents {
+                            summary_inputs
+                                .push(format!("依赖：← {}", module_name(module_tree, dep)));
+                        }
                     }
+                }
+            }
+            // 子模块概述（供"子模块概述" section 消费）
+            for merged_id in &page.merged_module_ids {
+                if let Some(merged_module) = module_tree.module_by_id(merged_id) {
+                    summary_inputs.push(format!(
+                        "子模块：{} ({}，{} 个文件)",
+                        merged_module.name,
+                        merged_module.kind,
+                        merged_module.source_ids.len()
+                    ));
+                }
+            }
+        }
+        "workflow" => {
+            facts.push("页面类型：工作流与部署".to_string());
+            // 按类别分类工作流文件
+            for file in &_report.files {
+                let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                if file.path.starts_with(".github/workflows/") {
+                    facts.push(format!("CI：GitHub Actions - {}", file.path));
+                } else if file.path.starts_with(".gitlab/") || name == ".gitlab-ci.yml" {
+                    facts.push(format!("CI：GitLab CI - {}", file.path));
+                } else if file.path.starts_with(".circleci/") {
+                    facts.push(format!("CI：CircleCI - {}", file.path));
+                } else if name == ".travis.yml" {
+                    facts.push(format!("CI：Travis CI - {}", file.path));
+                } else if name == "Jenkinsfile" {
+                    facts.push(format!("CI：Jenkins - {}", file.path));
+                } else if matches!(name, "Makefile" | "makefile" | "GNUmakefile") {
+                    facts.push(format!("构建：{}", file.path));
+                } else if name == "Dockerfile" || name.starts_with("docker-compose") {
+                    facts.push(format!("容器：{}", file.path));
                 }
             }
         }
@@ -423,7 +503,9 @@ fn top_modules<'a>(module_tree: &'a ModuleTree) -> Vec<&'a ModuleNode> {
     module_tree
         .modules
         .iter()
-        .filter(|module| module.parent_id.as_deref() == module_tree.root_modules.first().map(String::as_str))
+        .filter(|module| {
+            module.parent_id.as_deref() == module_tree.root_modules.first().map(String::as_str)
+        })
         .collect()
 }
 

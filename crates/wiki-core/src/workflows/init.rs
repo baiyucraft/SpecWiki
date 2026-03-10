@@ -9,18 +9,20 @@ use std::time::SystemTime;
 use crate::domain::context::PageContext;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
 use crate::domain::state::{assemble_state, compute_page_input_hash, PageBuildResult};
+use crate::domain::steering::load_steering_config;
 use crate::generation::context::{build_module_contexts, build_page_context, build_repo_context};
 use crate::generation::planner::plan_pages;
 use crate::generation::renderer::render_page_bundle;
 use crate::repo::git::{current_branch, current_commit};
 use crate::repo::hierarchy::build_module_tree;
-use crate::repo::scanner::scan_repo;
+use crate::repo::scanner::scan_repo_with_boundary;
+use crate::repo::symbols::parse_symbols;
 use crate::storage::cache_store::{
     ensure_cache_dir, ensure_page_cache_dirs, write_module_tree_cache, write_page_context_cache,
     write_page_generation_cache, write_scan_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::metadata_store::write_metadata;
-use crate::storage::state_store::write_state;
+use crate::storage::state_store::write_state_with_symbols;
 use crate::storage::wiki_fs::{remove_runtime, write_page};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -59,11 +61,20 @@ pub fn run_init(repo_root: &Path) -> io::Result<InitReport> {
     remove_runtime(repo_root)?;
 
     // 按 deterministic pipeline 的顺序串起整条生成链。
-    let scan_report = scan_repo(repo_root)?;
+    let steering = load_steering_config(repo_root);
+    let (ignore_paths, include_paths) = steering.scan_boundary();
+    let scan_report = scan_repo_with_boundary(repo_root, ignore_paths, include_paths)?;
+    let symbol_snapshot = parse_symbols(repo_root, &scan_report)?;
     let module_tree = build_module_tree(&scan_report);
     let repo_context = build_repo_context(&scan_report, &module_tree);
     let module_contexts = build_module_contexts(&scan_report, &module_tree);
-    let pages = plan_pages(&scan_report, &module_tree, &repo_context, &module_contexts);
+    let pages = plan_pages(
+        &scan_report,
+        &module_tree,
+        &repo_context,
+        &module_contexts,
+        &steering,
+    );
 
     ensure_cache_dir(repo_root)?;
     ensure_page_cache_dirs(repo_root)?;
@@ -125,7 +136,7 @@ pub fn run_init(repo_root: &Path) -> io::Result<InitReport> {
 
     // 先装配 WikiState 并持久化，再通过 MetadataMapper 导出 WikiMetadata。
     let state = assemble_state(&page_results, &scan_report, &module_tree, &generated_at);
-    write_state(repo_root, &state)?;
+    write_state_with_symbols(repo_root, &state, &symbol_snapshot.symbols)?;
 
     let export_context = ExportContext {
         schema_version: "1".to_string(),

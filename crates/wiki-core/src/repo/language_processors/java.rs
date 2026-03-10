@@ -1,6 +1,6 @@
 use regex::Regex;
 
-use super::{LanguageProcessor, collect_regex_targets};
+use super::{collect_regex_targets, LanguageProcessor};
 
 /// Java 处理器沿用 `deepwiki-rs` 当前代码里的思路，以 package/import 为主。
 #[derive(Debug)]

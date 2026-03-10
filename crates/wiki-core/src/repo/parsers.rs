@@ -182,9 +182,7 @@ struct PackageJson {
 #[serde(untagged)]
 enum PackageWorkspaces {
     List(Vec<String>),
-    Object {
-        packages: Vec<String>,
-    },
+    Object { packages: Vec<String> },
 }
 
 #[derive(Debug, Deserialize)]
@@ -274,7 +272,9 @@ fn analyze_package_json(repo_root: &Path, file: &ScannedFile, collector: &mut Ma
         .into_iter()
         .flatten()
     {
-        if let Some(entry_path) = resolve_manifest_declared_path(repo_root, &manifest_root, &candidate) {
+        if let Some(entry_path) =
+            resolve_manifest_declared_path(repo_root, &manifest_root, &candidate)
+        {
             collector.entry_points.insert(entry_path);
         }
     }
@@ -345,7 +345,9 @@ fn analyze_cargo_toml(repo_root: &Path, file: &ScannedFile, collector: &mut Mani
 
     if let Some(lib) = manifest.lib {
         if let Some(path) = lib.path {
-            if let Some(entry_path) = resolve_manifest_declared_path(repo_root, &manifest_root, &path) {
+            if let Some(entry_path) =
+                resolve_manifest_declared_path(repo_root, &manifest_root, &path)
+            {
                 collector.entry_points.insert(entry_path);
             }
         }
@@ -353,14 +355,18 @@ fn analyze_cargo_toml(repo_root: &Path, file: &ScannedFile, collector: &mut Mani
 
     for target in manifest.bin.unwrap_or_default() {
         if let Some(path) = target.path {
-            if let Some(entry_path) = resolve_manifest_declared_path(repo_root, &manifest_root, &path) {
+            if let Some(entry_path) =
+                resolve_manifest_declared_path(repo_root, &manifest_root, &path)
+            {
                 collector.entry_points.insert(entry_path);
             }
         }
     }
 
     for fallback in ["src/main.rs", "src/lib.rs"] {
-        if let Some(entry_path) = resolve_manifest_declared_path(repo_root, &manifest_root, fallback) {
+        if let Some(entry_path) =
+            resolve_manifest_declared_path(repo_root, &manifest_root, fallback)
+        {
             collector.entry_points.insert(entry_path);
         }
     }
@@ -413,14 +419,18 @@ fn analyze_pyproject_toml(repo_root: &Path, file: &ScannedFile, collector: &mut 
         }
 
         for script_target in project.scripts.unwrap_or_default().into_values() {
-            if let Some(entry_path) = resolve_python_script_path(repo_root, &manifest_root, &script_target) {
+            if let Some(entry_path) =
+                resolve_python_script_path(repo_root, &manifest_root, &script_target)
+            {
                 collector.entry_points.insert(entry_path);
             }
         }
     }
 
     for fallback in ["app.py", "__main__.py"] {
-        if let Some(entry_path) = resolve_manifest_declared_path(repo_root, &manifest_root, fallback) {
+        if let Some(entry_path) =
+            resolve_manifest_declared_path(repo_root, &manifest_root, fallback)
+        {
             collector.entry_points.insert(entry_path);
         }
     }
@@ -444,7 +454,9 @@ fn analyze_nginx_manifest(file: &ScannedFile, collector: &mut ManifestCollector)
 /// manifest 里的依赖名只有在能映射到仓库内部别名时，才会成为正式依赖线索。
 fn finalize_manifest_dependencies(collector: &mut ManifestCollector) {
     for seed in &collector.dependency_seeds {
-        if let Some(target_root) = resolve_alias_target(&seed.target_name, &collector.import_aliases) {
+        if let Some(target_root) =
+            resolve_alias_target(&seed.target_name, &collector.import_aliases)
+        {
             collector.dependency_hints.push(DependencyHint {
                 from: seed.from_path.clone(),
                 to: target_root,
@@ -493,15 +505,24 @@ fn normalize_rust_target(source_path: &str, target: &str) -> Option<String> {
     }
 
     if let Some(relative_target) = target.strip_prefix("crate/") {
-        return Some(resolve_source_relative_path(source_path, &format!("../{relative_target}")));
+        return Some(resolve_source_relative_path(
+            source_path,
+            &format!("../{relative_target}"),
+        ));
     }
 
     if let Some(relative_target) = target.strip_prefix("self/") {
-        return Some(resolve_source_relative_path(source_path, &format!("./{relative_target}")));
+        return Some(resolve_source_relative_path(
+            source_path,
+            &format!("./{relative_target}"),
+        ));
     }
 
     if let Some(relative_target) = target.strip_prefix("super/") {
-        return Some(resolve_source_relative_path(source_path, &format!("../{relative_target}")));
+        return Some(resolve_source_relative_path(
+            source_path,
+            &format!("../{relative_target}"),
+        ));
     }
 
     None
@@ -525,7 +546,9 @@ fn normalize_namespace_target(target: &str) -> Option<String> {
 
 /// 按当前源码文件位置解析相对导入目标。
 fn resolve_source_relative_path(source_path: &str, target: &str) -> String {
-    let source_dir = Path::new(source_path).parent().unwrap_or_else(|| Path::new(""));
+    let source_dir = Path::new(source_path)
+        .parent()
+        .unwrap_or_else(|| Path::new(""));
     let joined = source_dir.join(target);
     normalize_path_like(&joined.to_string_lossy())
 }
@@ -551,7 +574,10 @@ fn source_root_for_alias(source_path: &str) -> String {
     let mut segments = segments.into_iter();
     let first = segments.next().unwrap_or(".");
 
-    if matches!(first, "crates" | "agents" | "apps" | "services" | "libs" | "packages") {
+    if matches!(
+        first,
+        "crates" | "agents" | "apps" | "services" | "libs" | "packages"
+    ) {
         let second = segments.next().unwrap_or(".");
         if second != "." {
             return format!("{first}/{second}");
@@ -577,7 +603,9 @@ fn record_alias(import_aliases: &mut BTreeMap<String, String>, alias: String, ro
         return;
     }
 
-    import_aliases.entry(alias).or_insert_with(|| root_path.to_string());
+    import_aliases
+        .entry(alias)
+        .or_insert_with(|| root_path.to_string());
 }
 
 /// 判断归一化后的别名是否可以匹配当前依赖目标。
@@ -621,8 +649,13 @@ fn resolve_python_script_path(
     let module_target = script_target.split(':').next()?.trim();
     let module_path = module_target.replace('.', "/");
 
-    for candidate in [format!("{module_path}.py"), format!("{module_path}/__init__.py")] {
-        if let Some(entry_path) = resolve_manifest_declared_path(repo_root, manifest_root, &candidate) {
+    for candidate in [
+        format!("{module_path}.py"),
+        format!("{module_path}/__init__.py"),
+    ] {
+        if let Some(entry_path) =
+            resolve_manifest_declared_path(repo_root, manifest_root, &candidate)
+        {
             return Some(entry_path);
         }
     }
@@ -647,10 +680,19 @@ fn expand_workspace_pattern(repo_root: &Path, manifest_root: &str, pattern: &str
     if !pattern.contains('*') {
         let candidate = manifest_root_path.join(pattern);
         let normalized = normalize_path_like(&candidate.to_string_lossy());
-        return repo_root.join(&normalized).is_dir().then_some(normalized).into_iter().collect();
+        return repo_root
+            .join(&normalized)
+            .is_dir()
+            .then_some(normalized)
+            .into_iter()
+            .collect();
     }
 
-    let prefix = pattern.split('*').next().unwrap_or_default().trim_end_matches('/');
+    let prefix = pattern
+        .split('*')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('/');
     let base_dir = manifest_root_path.join(prefix);
     let absolute_base_dir = repo_root.join(&base_dir);
     let Ok(entries) = fs::read_dir(&absolute_base_dir) else {
@@ -661,9 +703,9 @@ fn expand_workspace_pattern(repo_root: &Path, manifest_root: &str, pattern: &str
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| {
             let file_type = entry.file_type().ok()?;
-            file_type.is_dir().then(|| {
-                normalize_path_like(&base_dir.join(entry.file_name()).to_string_lossy())
-            })
+            file_type
+                .is_dir()
+                .then(|| normalize_path_like(&base_dir.join(entry.file_name()).to_string_lossy()))
         })
         .collect()
 }

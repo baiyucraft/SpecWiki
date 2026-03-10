@@ -1,6 +1,6 @@
 use regex::Regex;
 
-use super::{LanguageProcessor, collect_regex_targets};
+use super::{collect_regex_targets, LanguageProcessor};
 
 /// Swift 处理器当前先提取模块 import。
 #[derive(Debug)]

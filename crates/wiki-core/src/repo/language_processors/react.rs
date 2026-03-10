@@ -1,6 +1,6 @@
 use regex::Regex;
 
-use super::{LanguageProcessor, collect_regex_targets, extract_first_quoted_target};
+use super::{collect_regex_targets, extract_first_quoted_target, LanguageProcessor};
 
 /// React 处理器主要覆盖 JSX/TSX 文件中的 import / require / dynamic import。
 #[derive(Debug)]
@@ -12,7 +12,10 @@ impl ReactProcessor {
     /// 构建 React 处理器。
     pub fn new() -> Self {
         Self {
-            import_regex: Regex::new(r#"(?m)^\s*(?:import|export)\s+(?:.*\s+from\s+)?['"]([^'"]+)['"]"#).unwrap(),
+            import_regex: Regex::new(
+                r#"(?m)^\s*(?:import|export)\s+(?:.*\s+from\s+)?['"]([^'"]+)['"]"#,
+            )
+            .unwrap(),
         }
     }
 }

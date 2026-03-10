@@ -3,7 +3,7 @@
 
 use tree_sitter::{Node, Parser};
 
-use super::{LanguageProcessor, extract_first_quoted_target};
+use super::{extract_first_quoted_target, LanguageProcessor};
 
 /// TypeScript 处理器和 JavaScript 一样先依赖语法树，但使用 TypeScript 语法。
 #[derive(Debug)]
@@ -34,9 +34,8 @@ impl LanguageProcessor for TypeScriptProcessor {
 
 fn parse_typescript_tree(content: &str) -> Option<tree_sitter::Tree> {
     let mut parser = Parser::new();
-    parser
-        .set_language(tree_sitter_typescript::language_typescript())
-        .ok()?;
+    let language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+    parser.set_language(&language).ok()?;
     parser.parse(content, None)
 }
 

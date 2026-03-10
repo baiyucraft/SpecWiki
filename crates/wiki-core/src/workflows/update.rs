@@ -15,15 +15,18 @@ use crate::domain::state::{
     assemble_state_from_pages, build_page_state, compute_page_input_hash, PageBuildResult,
 };
 use crate::generation::context::{build_module_contexts, build_page_context, build_repo_context};
-use crate::generation::renderer::render_page_bundle;
+use crate::generation::managed_sections::{merge_sections, parse_wiki_page, ManagedSectionBlock};
+use crate::generation::renderer::{assemble_page_from_merge, render_page_bundle};
+use crate::generation::sections::section_titles_for_page_type;
 use crate::repo::fingerprint::fingerprint_bytes;
 use crate::repo::git::{current_branch, current_commit};
+use crate::repo::symbols::parse_symbols_for_paths;
 use crate::storage::cache_store::{
     remove_page_caches, write_module_tree_cache, write_page_context_cache,
     write_page_generation_cache, write_scan_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::metadata_store::write_metadata;
-use crate::storage::state_store::write_state;
+use crate::storage::state_store::write_state_with_symbols_for_files;
 use crate::storage::wiki_fs::{resolve_page_path, write_page};
 use crate::workflows::init::{
     ancestor_ids_for_page, current_timestamp, page_provenance, run_init, source_paths_for_page,
@@ -96,9 +99,10 @@ pub fn run_update(repo_root: &Path) -> io::Result<UpdateReport> {
 
 fn apply_incremental_update(repo_root: &Path, plan: &ChangePlan) -> io::Result<Vec<String>> {
     // 增量路径只重建受影响页面，其余页面状态直接沿用上一轮 runtime。
-    let previous_state = plan.previous_state.as_ref().ok_or_else(|| {
-        io::Error::other("incremental update requires previous wiki state")
-    })?;
+    let previous_state = plan
+        .previous_state
+        .as_ref()
+        .ok_or_else(|| io::Error::other("incremental update requires previous wiki state"))?;
     let scan_report = plan
         .scan_report
         .as_ref()
@@ -151,10 +155,19 @@ fn apply_incremental_update(repo_root: &Path, plan: &ChangePlan) -> io::Result<V
         );
         let input_hash = compute_page_input_hash(planned_page, &page_context, scan_report);
         let rendered_page = render_page_bundle(planned_page, &page_context);
-        let content_hash = fingerprint_bytes(rendered_page.content.as_bytes());
+
+        // 尝试从磁盘读取旧页面，解析出 user sections 并 merge 回新页面
+        let final_content = merge_user_sections_into_page(
+            repo_root,
+            planned_page,
+            &rendered_page.sections,
+            &rendered_page.content,
+        );
+
+        let content_hash = fingerprint_bytes(final_content.as_bytes());
         let page_path = format!(".wiki/{}", planned_page.relative_path);
 
-        write_page(repo_root, &planned_page.relative_path, &rendered_page.content)?;
+        write_page(repo_root, &planned_page.relative_path, &final_content)?;
         write_page_context_cache(
             repo_root,
             &PageContextCacheEntry {
@@ -205,10 +218,39 @@ fn apply_incremental_update(repo_root: &Path, plan: &ChangePlan) -> io::Result<V
         &generated_at,
         DirtyState::fresh(),
     );
+    let changed_symbol_paths = plan
+        .change_set
+        .added_sources
+        .iter()
+        .chain(plan.change_set.modified_sources.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let dirty_symbol_paths = plan
+        .change_set
+        .added_sources
+        .iter()
+        .chain(plan.change_set.modified_sources.iter())
+        .chain(plan.change_set.removed_sources.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let symbol_snapshot = if changed_symbol_paths.is_empty() {
+        crate::repo::symbols::ParsedSymbolsSnapshot::default()
+    } else {
+        parse_symbols_for_paths(repo_root, scan_report, &changed_symbol_paths)?
+    };
 
     write_scan_cache(repo_root, scan_report)?;
     write_module_tree_cache(repo_root, module_tree)?;
-    write_state(repo_root, &next_state)?;
+    write_state_with_symbols_for_files(
+        repo_root,
+        &next_state,
+        &dirty_symbol_paths,
+        &symbol_snapshot.symbols,
+    )?;
 
     let export_context = ExportContext {
         schema_version: "1".to_string(),
@@ -222,4 +264,47 @@ fn apply_incremental_update(repo_root: &Path, plan: &ChangePlan) -> io::Result<V
     write_metadata(repo_root, &metadata)?;
 
     Ok(touched_paths.into_iter().collect())
+}
+
+/// 从磁盘旧页面中解析 user sections，与新生成的 managed sections 合并。
+/// 如果旧页面不存在或没有 user sections，直接返回新生成的内容。
+fn merge_user_sections_into_page(
+    repo_root: &Path,
+    planned_page: &crate::generation::planner::PlannedPage,
+    new_sections: &[crate::generation::sections::SectionDraft],
+    new_content: &str,
+) -> String {
+    let page_path = resolve_page_path(repo_root, &format!(".wiki/{}", planned_page.relative_path));
+    let old_content = match fs::read_to_string(&page_path) {
+        Ok(c) => c,
+        Err(_) => return new_content.to_string(),
+    };
+
+    let known_titles = section_titles_for_page_type(&planned_page.page_type);
+    let known_titles_ref: Vec<&str> = known_titles.iter().copied().collect();
+    let old_parsed = parse_wiki_page(&old_content, &known_titles_ref);
+
+    // 检查旧页面是否有 user sections
+    let has_user_sections = old_parsed
+        .blocks
+        .iter()
+        .any(|b| matches!(b, crate::generation::managed_sections::PageBlock::User(_)));
+
+    if !has_user_sections {
+        return new_content.to_string();
+    }
+
+    // 把新 section drafts 转成 ManagedSectionBlock
+    let new_managed: Vec<ManagedSectionBlock> = new_sections
+        .iter()
+        .map(|s| ManagedSectionBlock {
+            section_id: s.section_id.clone(),
+            title: s.title.clone(),
+            version: crate::generation::managed_sections::MARKER_VERSION,
+            body: s.content.clone(),
+        })
+        .collect();
+
+    let merge_plan = merge_sections(&new_managed, &old_parsed);
+    assemble_page_from_merge(&planned_page.title, &merge_plan)
 }

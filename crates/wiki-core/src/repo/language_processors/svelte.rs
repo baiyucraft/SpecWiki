@@ -1,6 +1,6 @@
 use regex::Regex;
 
-use super::{LanguageProcessor, collect_regex_targets, extract_script_blocks};
+use super::{collect_regex_targets, extract_script_blocks, LanguageProcessor};
 
 /// Svelte 处理器先抽 `<script>`，再按 JS 风格提 import。
 #[derive(Debug)]
@@ -12,7 +12,10 @@ impl SvelteProcessor {
     /// 构建 Svelte 处理器。
     pub fn new() -> Self {
         Self {
-            import_regex: Regex::new(r#"(?m)^\s*(?:import|export)\s+(?:.*\s+from\s+)?['"]([^'"]+)['"]"#).unwrap(),
+            import_regex: Regex::new(
+                r#"(?m)^\s*(?:import|export)\s+(?:.*\s+from\s+)?['"]([^'"]+)['"]"#,
+            )
+            .unwrap(),
         }
     }
 }

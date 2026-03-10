@@ -2,6 +2,9 @@
 //! 它只关心表达形式，不参与模块树、变化规划和状态判断。
 
 use crate::domain::context::PageContext;
+use crate::generation::managed_sections::{
+    render_page_with_markers, ManagedSectionBlock, PageBlock, PageMergePlan,
+};
 use crate::generation::planner::PlannedPage;
 use crate::generation::sections::{build_section_drafts, SectionDraft};
 
@@ -28,7 +31,7 @@ pub fn render_page(page: &PlannedPage, context: &PageContext) -> String {
     render_page_bundle(page, context).content
 }
 
-/// 生成页面级 section 草稿并组装成最终 Markdown。
+/// 生成页面级 section 草稿并组装成带 managed marker 的最终 Markdown。
 ///
 /// # 参数
 /// - `page`：当前页面计划。
@@ -43,20 +46,52 @@ pub fn render_page_bundle(page: &PlannedPage, context: &PageContext) -> Rendered
     RenderedPage { sections, content }
 }
 
-/// 按稳定 section 顺序把草稿组装成整页 Markdown。
+/// 把 section 草稿转换成 managed blocks，用于 merge 和渲染。
+pub fn drafts_to_managed_blocks(sections: &[SectionDraft]) -> Vec<ManagedSectionBlock> {
+    sections
+        .iter()
+        .map(|s| ManagedSectionBlock {
+            section_id: s.section_id.clone(),
+            title: s.title.clone(),
+            version: crate::generation::managed_sections::MARKER_VERSION,
+            body: s.content.clone(),
+        })
+        .collect()
+}
+
+/// 按稳定 section 顺序把草稿组装成带 managed marker 的整页 Markdown。
 ///
 /// # 参数
 /// - `page`：当前页面计划。
 /// - `sections`：已经生成好的 section 草稿集合。
 ///
 /// # 返回
-/// - 返回可直接写入页面文件的整页 Markdown。
+/// - 返回可直接写入页面文件的整页 Markdown（含 managed marker）。
 pub fn assemble_page(page: &PlannedPage, sections: &[SectionDraft]) -> String {
-    let mut lines = vec![format!("# {}", page.title)];
+    let blocks: Vec<PageBlock> = sections
+        .iter()
+        .map(|s| {
+            PageBlock::Managed(ManagedSectionBlock {
+                section_id: s.section_id.clone(),
+                title: s.title.clone(),
+                version: crate::generation::managed_sections::MARKER_VERSION,
+                body: s.content.clone(),
+            })
+        })
+        .collect();
 
-    for section in sections {
-        lines.push(format!("## {}\n\n{}", section.title, section.content));
-    }
+    render_page_with_markers(&page.title, &blocks)
+}
 
-    lines.join("\n\n")
+/// 基于 merge plan 组装最终页面 Markdown。
+/// 这是 update / rebuild 保留 user sections 的统一出口。
+///
+/// # 参数
+/// - `title`：页面一级标题。
+/// - `merge_plan`：合并计划，包含 managed + user 区段序列。
+///
+/// # 返回
+/// - 返回可直接写入页面文件的整页 Markdown。
+pub fn assemble_page_from_merge(title: &str, merge_plan: &PageMergePlan) -> String {
+    render_page_with_markers(title, &merge_plan.blocks)
 }

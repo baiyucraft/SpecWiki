@@ -1,4 +1,4 @@
-# codebuddy-wiki
+# spec-wiki
 
 一个面向代码仓库的 Repo Wiki 原型项目。
 
@@ -142,3 +142,9 @@ pnpm run test
 - [crates/wiki-core/tests/repo_scan.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/repo_scan.rs)
 - [crates/wiki-core/tests/baseline_acceptance.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/baseline_acceptance.rs)
 - [crates/wiki-core/tests/query_sync_rebuild.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/query_sync_rebuild.rs)
+
+# 一些想法
+
+- [ ] 这个wiki是给agent用的 reference是不是应该更方便引用
+
+  

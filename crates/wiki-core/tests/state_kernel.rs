@@ -6,16 +6,9 @@ use std::path::Path;
 
 use tempfile::tempdir;
 use wiki_core::domain::change_set::plan_runtime_changes;
-use wiki_core::storage::cache_store::{
-    page_context_cache_path, page_generation_cache_path, read_page_context_cache,
-    read_page_generation_cache,
-};
-use wiki_core::storage::state_store::state_path;
-use wiki_core::workflows::{
-    init::run_init,
-    query::run_query,
-    status::run_status,
-};
+use wiki_core::storage::cache_store::{read_page_context_cache, read_page_generation_cache};
+use wiki_core::storage::sqlite_store;
+use wiki_core::workflows::{init::run_init, query::run_query, status::run_status};
 
 /// 8.1 WikiState -> MetadataMapper -> WikiMetadata 的 roundtrip 一致性。
 #[test]
@@ -23,7 +16,11 @@ fn state_metadata_roundtrip_produces_consistent_output() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
-    fs::write(repo_root.join("package.json"), r#"{"name":"roundtrip-test","version":"1.0.0"}"#).unwrap();
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"roundtrip-test","version":"1.0.0"}"#,
+    )
+    .unwrap();
     fs::write(repo_root.join("index.ts"), "export const main = () => {};").unwrap();
 
     run_init(repo_root).unwrap();
@@ -64,8 +61,14 @@ fn state_metadata_roundtrip_produces_consistent_output() {
         assert_eq!(source.source_id, record.id);
         assert_eq!(source.path, record.path);
         assert_eq!(source.fingerprint, record.fingerprint);
-        assert_eq!(source.page_ids, record.wiki_item_ids);
-        assert_eq!(source.module_ids, record.module_ids);
+        assert_eq!(
+            sorted(source.page_ids.clone()),
+            sorted(record.wiki_item_ids.clone())
+        );
+        assert_eq!(
+            sorted(source.module_ids.clone()),
+            sorted(record.module_ids.clone())
+        );
     }
 
     // dirty_state 一致
@@ -88,7 +91,10 @@ fn query_output_includes_context_pack_and_provenance_summary() {
 
     let report = run_query(repo_root, "项目概述").unwrap();
     assert!(!report.matches.is_empty(), "应该命中至少一个页面");
-    assert!(!report.provenance_summary.is_empty(), "provenance_summary 不应为空");
+    assert!(
+        !report.provenance_summary.is_empty(),
+        "provenance_summary 不应为空"
+    );
 
     for hit in &report.matches {
         // context_pack 应该有内容（至少有模块摘要）
@@ -106,26 +112,41 @@ fn status_and_query_work_after_state_cache_deleted() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
-    fs::write(repo_root.join("package.json"), r#"{"name":"fallback-test"}"#).unwrap();
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"fallback-test"}"#,
+    )
+    .unwrap();
     fs::write(repo_root.join("lib.ts"), "export const x = 1;").unwrap();
 
     run_init(repo_root).unwrap();
 
-    // 确认 wiki-state.json 存在
-    assert!(state_path(repo_root).exists());
+    // 确认 DB 存在且关系型状态可读
+    assert!(sqlite_store::db_exists(repo_root));
+    {
+        let conn = sqlite_store::open_db_readonly(repo_root).unwrap();
+        assert!(sqlite_store::runtime_tables_exist(&conn).unwrap());
+        assert!(sqlite_store::load_state_rows(&conn).is_ok());
+    }
 
-    // 删除 wiki-state.json
-    fs::remove_file(state_path(repo_root)).unwrap();
-    assert!(!state_path(repo_root).exists());
+    // 删除整个 DB 文件模拟 state cache 丢失
+    fs::remove_file(sqlite_store::db_path(repo_root)).unwrap();
+    assert!(!sqlite_store::db_exists(repo_root));
 
-    // status 应该报告 needs_rebuild（因为 has_cache_layout 现在检查 wiki-state.json）
+    // status 应该报告 needs_rebuild（因为关键状态表和扫描缓存都缺失）
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "needs_rebuild");
-    assert_eq!(status.needs_rebuild_reason.as_deref(), Some("cache_missing"));
+    assert_eq!(
+        status.needs_rebuild_reason.as_deref(),
+        Some("cache_missing")
+    );
 
     // query 仍然能从 metadata 回退工作
     let query = run_query(repo_root, "项目概述").unwrap();
-    assert!(!query.matches.is_empty(), "query 应该能从 metadata 回退并返回结果");
+    assert!(
+        !query.matches.is_empty(),
+        "query 应该能从 metadata 回退并返回结果"
+    );
     assert!(!query.provenance_summary.is_empty());
 }
 
@@ -145,7 +166,10 @@ fn status_works_after_full_cache_deletion() {
     // status 应该报告 needs_rebuild 而不是崩溃
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "needs_rebuild");
-    assert_eq!(status.needs_rebuild_reason.as_deref(), Some("cache_missing"));
+    assert_eq!(
+        status.needs_rebuild_reason.as_deref(),
+        Some("cache_missing")
+    );
 }
 
 /// 场景：init 必须一次性写出页面 input hash、section 状态和 page-level cache。
@@ -171,8 +195,10 @@ fn init_persists_page_input_hash_sections_and_page_caches() {
     for page in &state.pages {
         assert!(!page.input_hash.is_empty(), "页面必须持久化 input_hash");
         assert!(!page.sections.is_empty(), "页面必须包含稳定 section 状态");
-        assert!(page_context_cache_path(repo_root, &page.page_id).exists());
-        assert!(page_generation_cache_path(repo_root, &page.page_id).exists());
+
+        let conn = sqlite_store::open_db_readonly(repo_root).unwrap();
+        assert!(sqlite_store::page_context_exists(&conn, &page.page_id).unwrap());
+        assert!(sqlite_store::page_generation_exists(&conn, &page.page_id).unwrap());
 
         let context_cache = read_page_context_cache(repo_root, &page.page_id).unwrap();
         let generation_cache = read_page_generation_cache(repo_root, &page.page_id).unwrap();
@@ -210,7 +236,11 @@ fn change_plan_detects_modified_and_structural_sources() {
     );
     let modified_plan = plan_runtime_changes(repo_root).unwrap();
     assert_eq!(modified_plan.state(), "stale");
-    assert!(modified_plan.change_set.modified_sources.iter().any(|path| path == "src/util.ts"));
+    assert!(modified_plan
+        .change_set
+        .modified_sources
+        .iter()
+        .any(|path| path == "src/util.ts"));
     assert!(!modified_plan.change_set.requires_replan);
 
     run_init(repo_root).unwrap();
@@ -225,7 +255,11 @@ fn change_plan_detects_modified_and_structural_sources() {
 
     let structural_plan = plan_runtime_changes(repo_root).unwrap();
     assert_eq!(structural_plan.state(), "stale");
-    assert!(structural_plan.change_set.added_sources.iter().any(|path| path == "packages/shared/package.json"));
+    assert!(structural_plan
+        .change_set
+        .added_sources
+        .iter()
+        .any(|path| path == "packages/shared/package.json"));
     assert!(structural_plan.change_set.requires_replan);
     assert!(!structural_plan.affected_set.affected_page_ids.is_empty());
 }
@@ -250,7 +284,11 @@ fn change_plan_detects_removed_sources() {
 
     let plan = plan_runtime_changes(repo_root).unwrap();
     assert_eq!(plan.state(), "stale");
-    assert!(plan.change_set.removed_sources.iter().any(|path| path == "src/index.ts"));
+    assert!(plan
+        .change_set
+        .removed_sources
+        .iter()
+        .any(|path| path == "src/index.ts"));
     assert!(plan.change_set.requires_replan);
 }
 
@@ -277,11 +315,17 @@ fn status_reports_needs_rebuild_when_page_level_cache_is_missing() {
         .find(|page| page.page_type == "overview")
         .unwrap();
 
-    fs::remove_file(page_generation_cache_path(repo_root, &overview_page.page_id)).unwrap();
+    {
+        let conn = sqlite_store::open_db(repo_root).unwrap();
+        sqlite_store::remove_page_generation(&conn, &overview_page.page_id).unwrap();
+    }
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "needs_rebuild");
-    assert_eq!(status.needs_rebuild_reason.as_deref(), Some("cache_missing"));
+    assert_eq!(
+        status.needs_rebuild_reason.as_deref(),
+        Some("cache_missing")
+    );
 }
 
 fn write_file(path: &Path, content: &str) {
@@ -290,4 +334,9 @@ fn write_file(path: &Path, content: &str) {
     }
 
     fs::write(path, content).unwrap();
+}
+
+fn sorted(mut values: Vec<String>) -> Vec<String> {
+    values.sort();
+    values
 }

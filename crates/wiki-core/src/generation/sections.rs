@@ -28,15 +28,16 @@ pub struct SectionDraft {
 /// 返回某类页面的稳定 section 标题模板。
 ///
 /// # 参数
-/// - `page_type`：页面类型，如 `overview / architecture / module`。
+/// - `page_type`：页面类型，如 `overview / architecture / module / workflow`。
 ///
 /// # 返回
 /// - 返回该页面类型对应的稳定 section 标题顺序。
 pub fn section_titles_for_page_type(page_type: &str) -> Vec<&'static str> {
     match page_type {
-        "overview" => vec!["简介", "项目事实", "关键信息"],
-        "architecture" => vec!["架构概览", "模块结构", "关系摘要"],
-        "module" => vec!["模块说明", "模块事实", "关键摘要"],
+        "overview" => vec!["简介", "项目事实", "技术栈", "入口与构建", "关键信息"],
+        "architecture" => vec!["架构概览", "模块结构", "跨模块关系", "架构提示"],
+        "module" => vec!["模块说明", "关键源码", "依赖关系", "模块事实", "子模块概述"],
+        "workflow" => vec!["工作流概述", "构建流程", "CI/CD 配置", "容器化"],
         _ => vec!["简介"],
     }
 }
@@ -66,7 +67,11 @@ pub fn build_section_drafts(page: &PlannedPage, context: &PageContext) -> Vec<Se
         "overview" => overview_section_templates(context),
         "architecture" => architecture_section_templates(context),
         "module" => module_section_templates(context),
-        _ => vec![("简介".to_string(), "由 codebuddy-wiki 自动生成。".to_string())],
+        "workflow" => workflow_section_templates(context),
+        _ => vec![(
+            "简介".to_string(),
+            "由 codebuddy-wiki 自动生成。".to_string(),
+        )],
     };
 
     templates
@@ -84,42 +89,105 @@ pub fn build_section_drafts(page: &PlannedPage, context: &PageContext) -> Vec<Se
 
 fn overview_section_templates(context: &PageContext) -> Vec<(String, String)> {
     vec![
-        ("简介".to_string(), "由 codebuddy-wiki 自动生成的仓库概览。".to_string()),
+        (
+            "简介".to_string(),
+            "由 codebuddy-wiki 自动生成的仓库概览。".to_string(),
+        ),
         ("项目事实".to_string(), bullet_lines(&context.facts)),
-        ("关键信息".to_string(), bullet_lines(&context.summary_inputs)),
+        (
+            "技术栈".to_string(),
+            bullet_lines(&filter_prefixed(&context.facts, "技术栈")),
+        ),
+        (
+            "入口与构建".to_string(),
+            bullet_lines(&filter_prefixed(&context.summary_inputs, "入口")),
+        ),
+        (
+            "关键信息".to_string(),
+            bullet_lines(&context.summary_inputs),
+        ),
     ]
 }
 
 fn architecture_section_templates(context: &PageContext) -> Vec<(String, String)> {
     vec![
-        ("架构概览".to_string(), "该页面用于说明仓库的模块层级与主要关系。".to_string()),
+        (
+            "架构概览".to_string(),
+            "该页面用于说明仓库的模块层级与主要关系。".to_string(),
+        ),
         ("模块结构".to_string(), bullet_lines(&context.facts)),
-        ("关系摘要".to_string(), bullet_lines(&context.summary_inputs)),
+        (
+            "跨模块关系".to_string(),
+            bullet_lines(&filter_prefixed(&context.summary_inputs, "关系")),
+        ),
+        (
+            "架构提示".to_string(),
+            bullet_lines(&filter_prefixed(&context.summary_inputs, "架构")),
+        ),
     ]
 }
 
 fn module_section_templates(context: &PageContext) -> Vec<(String, String)> {
     vec![
-        ("模块说明".to_string(), "该页面围绕单个模块整理其边界、入口和依赖。".to_string()),
+        (
+            "模块说明".to_string(),
+            "该页面围绕单个模块整理其边界、入口和依赖。".to_string(),
+        ),
+        (
+            "关键源码".to_string(),
+            bullet_lines(&filter_prefixed(&context.summary_inputs, "源码")),
+        ),
+        (
+            "依赖关系".to_string(),
+            bullet_lines(&filter_prefixed(&context.summary_inputs, "依赖")),
+        ),
         ("模块事实".to_string(), bullet_lines(&context.facts)),
-        ("关键摘要".to_string(), bullet_lines(&context.summary_inputs)),
+        (
+            "子模块概述".to_string(),
+            bullet_lines(&filter_prefixed(&context.summary_inputs, "子模块")),
+        ),
+    ]
+}
+
+fn workflow_section_templates(context: &PageContext) -> Vec<(String, String)> {
+    vec![
+        (
+            "工作流概述".to_string(),
+            "该页面描述仓库的构建、CI/CD 和部署配置。".to_string(),
+        ),
+        (
+            "构建流程".to_string(),
+            bullet_lines(&filter_prefixed(&context.facts, "构建")),
+        ),
+        (
+            "CI/CD 配置".to_string(),
+            bullet_lines(&filter_prefixed(&context.facts, "CI")),
+        ),
+        (
+            "容器化".to_string(),
+            bullet_lines(&filter_prefixed(&context.facts, "容器")),
+        ),
     ]
 }
 
 /// 把字符串列表渲染成 Markdown 项目符号列表。
-///
-/// # 参数
-/// - `lines`：要渲染成列表的字符串集合。
-///
-/// # 返回
-/// - 返回 Markdown 项目符号列表文本；如果为空则返回 `- 无`。
 fn bullet_lines(lines: &[String]) -> String {
     if lines.is_empty() {
         return "- 无".to_string();
     }
 
-    lines.iter()
+    lines
+        .iter()
         .map(|line| format!("- {line}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// 从事实列表中筛选以指定前缀开头的条目。
+fn filter_prefixed(lines: &[String], prefix: &str) -> Vec<String> {
+    lines
+        .iter()
+        .filter(|line| line.starts_with(prefix))
+        .cloned()
+        .collect()
 }

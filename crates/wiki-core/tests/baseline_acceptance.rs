@@ -15,10 +15,13 @@ fn baseline_fixture_generates_hierarchical_wiki_and_structured_query_results() {
     assert!(repo_root.join(".wiki/项目概述.md").exists());
     assert!(repo_root.join(".wiki/系统架构.md").exists());
     assert!(repo_root.join(".wiki/核心模块/packages/domain.md").exists());
-    assert!(repo_root.join(".wiki/核心模块/packages/domain/auth.md").exists());
+    assert!(repo_root
+        .join(".wiki/核心模块/packages/domain/auth.md")
+        .exists());
     assert!(repo_root.join(".wiki/核心模块/infra/nginx.md").exists());
 
-    let auth_page = fs::read_to_string(repo_root.join(".wiki/核心模块/packages/domain/auth.md")).unwrap();
+    let auth_page =
+        fs::read_to_string(repo_root.join(".wiki/核心模块/packages/domain/auth.md")).unwrap();
     assert!(auth_page.contains("模块说明"));
     assert!(auth_page.contains("模块名称：auth"));
 
@@ -50,13 +53,22 @@ fn baseline_fixture_generates_hierarchical_wiki_and_structured_query_results() {
         .iter()
         .any(|path| path.ends_with("核心模块/packages/domain/auth.md")));
     assert!(query.matched_modules.iter().any(|module| {
-        module.root_paths.iter().any(|root| root == "packages/domain/auth")
+        module
+            .root_paths
+            .iter()
+            .any(|root| root == "packages/domain/auth")
     }));
-    assert!(query.matches.iter().all(|page| page.match_mode == "structure"));
     assert!(query
         .matches
         .iter()
-        .any(|page| page.summary.contains("模块名称匹配") || page.summary.contains("关联模块匹配")));
+        .all(|page| matches!(page.match_mode.as_str(), "structure" | "fts+structure")));
+    assert!(
+        query
+            .matches
+            .iter()
+            .any(|page| page.summary.contains("模块名称匹配")
+                || page.summary.contains("关联模块匹配"))
+    );
 }
 
 #[test]
@@ -87,7 +99,11 @@ fn mixed_local_fixture_filters_low_signal_key_sources_and_exports_relations() {
     assert!(!web_item.summary.contains("pnpm-lock.yaml"));
     assert!(spider_item.summary.contains("spider/app.py"));
     assert!(!spider_item.summary.contains("app.log.2026-03-07"));
-    assert!(nginx_item.summary.contains("依赖模块：web"));
+    assert!(
+        nginx_item.summary.contains("依赖：→ web") || nginx_item.summary.contains("依赖模块：web"),
+        "nginx summary should mention dependency on web, got: {}",
+        nginx_item.summary
+    );
 
     let module_names = metadata
         .modules
@@ -107,7 +123,10 @@ fn mixed_local_fixture_filters_low_signal_key_sources_and_exports_relations() {
     }));
 
     let query = run_query(repo_root, "api").unwrap();
-    assert!(query.matches.iter().all(|page| page.match_mode == "structure"));
+    assert!(query
+        .matches
+        .iter()
+        .all(|page| matches!(page.match_mode.as_str(), "structure" | "fts+structure")));
     assert!(!query.matched_relations.is_empty());
 }
 

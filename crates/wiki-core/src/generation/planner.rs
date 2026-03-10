@@ -1,12 +1,73 @@
 //! 页面规划层负责把模块树与上下文转换成稳定页面计划。
 //! 它服务于 `init / update` 的主链路，只决定“生成哪些页”和“每页依赖什么”。
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use crate::domain::context::{ModuleContext, RepoContext};
 use crate::domain::module_tree::{ModuleNode, ModuleTree};
 use crate::domain::stable_id::stable_id;
+use crate::domain::steering::SteeringConfig;
 use crate::repo::scanner::ScanReport;
 
-/// `PlannedPage` 描述“要生成什么页面”。
+/// 模块"页面权重"评分，供合并策略消费。
+/// 权重越高，越应该生成独立页面。
+///
+/// 评分因素：
+/// - 源码文件数量（非 test 文件）
+/// - 是否有子模块
+/// - 是否是 workspace 成员
+/// - 是否有入口文件
+/// - 模块 kind 是否为核心类型
+pub fn module_page_weight(module: &ModuleNode, report: &ScanReport) -> u32 {
+    let mut weight: u32 = 0;
+
+    // 源码文件数量（只计非 test 文件）
+    let source_count = module
+        .source_ids
+        .iter()
+        .filter(|sid| {
+            report
+                .files
+                .iter()
+                .find(|f| &f.id == *sid)
+                .map(|f| f.is_substantive_source())
+                .unwrap_or(false)
+        })
+        .count() as u32;
+    weight += source_count;
+
+    // 有子模块 +3
+    if !module.child_ids.is_empty() {
+        weight += 3;
+    }
+
+    // workspace 成员 +2
+    let is_workspace_member = module
+        .root_paths
+        .first()
+        .map(|rp| report.workspace_roots.iter().any(|wr| wr == rp))
+        .unwrap_or(false);
+    if is_workspace_member {
+        weight += 2;
+    }
+
+    // 有入口文件 +2
+    if !module.entry_points.is_empty() {
+        weight += 2;
+    }
+
+    // 核心 kind 类型 +1
+    if matches!(
+        module.kind.as_str(),
+        "library" | "cli-tool" | "backend-service" | "frontend-app"
+    ) {
+        weight += 1;
+    }
+
+    weight
+}
+
+/// `PlannedPage` 描述”要生成什么页面”。
 /// 这一层只决定页面结构和依赖范围，还不负责具体写出 Markdown 内容。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct PlannedPage {
@@ -32,16 +93,20 @@ pub struct PlannedPage {
     pub generation_mode: String,
     /// 页面规划优先级，供后续稳定排序。
     pub priority: usize,
+    /// 被合并到本页面的子模块 ID 集合（低权重模块不生成独立页面时记录在此）。
+    #[serde(default)]
+    pub merged_module_ids: Vec<String>,
 }
 
-/// 根据模块树和上下文规划页面集合。
-/// 当前固定生成：项目概述、系统架构、以及每个业务模块对应的模块页。
+/// 根据模块树、上下文和 steering 配置规划页面集合。
+/// 生成项目概述、系统架构、以及经过合并策略筛选后的模块页。
 ///
 /// # 参数
 /// - `report`：仓库扫描报告。
 /// - `module_tree`：当前仓库的模块树。
 /// - `repo_context`：仓库级页面上下文。
 /// - `module_contexts`：模块级上下文集合。
+/// - `steering`：steering 配置，控制合并阈值和模块提升/降级。
 ///
 /// # 返回
 /// - 返回当前仓库需要生成的页面计划列表。
@@ -50,6 +115,7 @@ pub fn plan_pages(
     module_tree: &ModuleTree,
     repo_context: &RepoContext,
     module_contexts: &[ModuleContext],
+    steering: &SteeringConfig,
 ) -> Vec<PlannedPage> {
     let overview_id = stable_id("page", "overview");
     let architecture_id = stable_id("page", "architecture");
@@ -71,6 +137,7 @@ pub fn plan_pages(
             .collect(),
         generation_mode: "deterministic".to_string(),
         priority: 0,
+        merged_module_ids: vec![],
     }];
 
     // 架构页与概述页并列存在，但在层级上作为概述页的直接子页面。
@@ -90,35 +157,76 @@ pub fn plan_pages(
             .collect(),
         generation_mode: "deterministic".to_string(),
         priority: 1,
+        merged_module_ids: vec![],
     });
 
-    let modules_to_render = modules_to_render(module_tree);
-    let module_context_index = module_contexts
+    let candidates = modules_to_render(module_tree);
+
+    // 当仓库存在工作流线索时，生成 workflow 页面。
+    if has_workflow_clues(report) {
+        let workflow_id = stable_id("page", "workflow");
+        let workflow_source_ids: Vec<String> = report
+            .files
+            .iter()
+            .filter(|f| is_workflow_file(&f.path))
+            .map(|f| f.id.clone())
+            .collect();
+
+        pages.push(PlannedPage {
+            id: workflow_id,
+            title: "工作流与部署".to_string(),
+            relative_path: "工作流与部署.md".to_string(),
+            page_type: "workflow".to_string(),
+            parent_id: Some(overview_id.clone()),
+            scope: "workflow".to_string(),
+            source_ids: workflow_source_ids,
+            module_ids: vec![],
+            relation_ids: vec![],
+            generation_mode: "deterministic".to_string(),
+            priority: 2,
+            merged_module_ids: vec![],
+        });
+    }
+
+    // 第一遍：决定哪些模块生成独立页面，哪些被合并。
+    let merged_ids = compute_merged_modules(&candidates, report, steering);
+
+    // 构建"模块 ID → 拥有独立页面的最近祖先页面 ID"索引，
+    // 用于被合并模块的子模块查找父页面。
+    let has_page: BTreeSet<String> = candidates
+        .iter()
+        .filter(|m| !merged_ids.contains(&m.id))
+        .map(|m| m.id.clone())
+        .collect();
+
+    let module_context_index: BTreeMap<String, &ModuleContext> = module_contexts
         .iter()
         .map(|context| (context.module_id.clone(), context))
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect();
 
-    // 模块页规划时会保留页面层级，这样后续如果出现嵌套模块，可以自然落成目录结构。
-    for (index, module) in modules_to_render.into_iter().enumerate() {
+    // 第二遍：为有独立页面的模块生成 PlannedPage，同时收集被合并模块。
+    let mut merged_into: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for (index, module) in candidates.iter().enumerate() {
+        if merged_ids.contains(&module.id) {
+            // 被合并模块：找到最近的有独立页面的祖先，记录到其 merged_module_ids。
+            let target_page_module_id = find_nearest_page_ancestor(module, module_tree, &has_page);
+            let target = target_page_module_id.unwrap_or_else(|| "__overview__".to_string());
+            merged_into
+                .entry(target)
+                .or_default()
+                .push(module.id.clone());
+            continue;
+        }
+
+        let page_id = module_page_id(module);
         let path = module_page_path(module);
-        let parent_id = module
-            .parent_id
-            .as_ref()
-            .and_then(|parent_module_id| {
-                if module_tree.root_modules.contains(parent_module_id) {
-                    Some(overview_id.clone())
-                } else {
-                    Some(stable_id(
-                        "page",
-                        &module_page_path(
-                            module_tree
-                                .module_by_id(parent_module_id)
-                                .expect("parent module should exist"),
-                        ),
-                    ))
-                }
-            })
-            .or_else(|| Some(overview_id.clone()));
+
+        // 父子关系按模块树层级分配：
+        // - 顶层模块（父模块是根模块）→ parent_id = overview
+        // - 嵌套模块 → parent_id = 父模块的页面 ID（如果父模块有独立页面）
+        // - 父模块被合并 → 向上查找最近的有独立页面的祖先模块
+        let parent_id = resolve_parent_page_id(module, module_tree, &has_page, &overview_id);
 
         let source_ids = module.source_ids.clone();
         let relation_ids = module_tree
@@ -135,31 +243,149 @@ pub fn plan_pages(
             .unwrap_or_else(|| "模块".to_string());
 
         pages.push(PlannedPage {
-            id: stable_id("page", &path),
+            id: page_id,
             title,
             relative_path: path,
             page_type: "module".to_string(),
-            parent_id,
+            parent_id: Some(parent_id),
             scope: format!("module:{}", module.id),
             source_ids,
             module_ids: vec![module.id.clone()],
             relation_ids,
             generation_mode: format!("deterministic:{summary_hint}"),
             priority: 10 + index,
+            merged_module_ids: vec![],
         });
+    }
+
+    // 第三遍：把被合并模块的 ID 写入对应父页面的 merged_module_ids。
+    for page in &mut pages {
+        // 模块页：按模块 ID 查找
+        if page.page_type == "module" {
+            if let Some(module_id) = page.module_ids.first() {
+                if let Some(merged) = merged_into.remove(module_id) {
+                    page.merged_module_ids = merged;
+                }
+            }
+        }
+    }
+    // 没有找到模块页归属的合并模块，挂到 overview 页。
+    if let Some(orphan_merged) = merged_into.remove("__overview__") {
+        if let Some(overview_page) = pages.iter_mut().find(|p| p.page_type == "overview") {
+            overview_page.merged_module_ids.extend(orphan_merged);
+        }
+    }
+    // 其余未归属的也挂到 overview
+    for (_, merged) in merged_into {
+        if let Some(overview_page) = pages.iter_mut().find(|p| p.page_type == "overview") {
+            overview_page.merged_module_ids.extend(merged);
+        }
     }
 
     pages
 }
 
+/// 决定哪些模块应该被合并（不生成独立页面）。
+/// 合并条件：权重 < 阈值 且 无子模块 且 未被 steering promote。
+/// steering demote 的模块强制合并。
+fn compute_merged_modules(
+    candidates: &[&ModuleNode],
+    report: &ScanReport,
+    steering: &SteeringConfig,
+) -> BTreeSet<String> {
+    let threshold = steering.merge_threshold;
+    let mut merged = BTreeSet::new();
+
+    for module in candidates {
+        let root_path = module.root_paths.first().map(|s| s.as_str()).unwrap_or("");
+
+        // steering demote 强制合并
+        if steering.is_demoted(root_path) {
+            merged.insert(module.id.clone());
+            continue;
+        }
+
+        // steering promote 强制保留独立页面
+        if steering.is_promoted(root_path) {
+            continue;
+        }
+
+        // 有子模块的模块不合并
+        if !module.child_ids.is_empty() {
+            continue;
+        }
+
+        let weight = module_page_weight(module, report);
+        if weight < threshold {
+            merged.insert(module.id.clone());
+        }
+    }
+
+    merged
+}
+
+/// 沿模块树向上查找最近的拥有独立页面的祖先模块 ID。
+fn find_nearest_page_ancestor(
+    module: &ModuleNode,
+    module_tree: &ModuleTree,
+    has_page: &BTreeSet<String>,
+) -> Option<String> {
+    let mut current_parent_id = module.parent_id.as_deref();
+    while let Some(pid) = current_parent_id {
+        if module_tree.root_modules.contains(&pid.to_string()) {
+            return None; // 到达根模块，返回 None 表示应挂到 overview
+        }
+        if has_page.contains(pid) {
+            return Some(pid.to_string());
+        }
+        current_parent_id = module_tree
+            .module_by_id(pid)
+            .and_then(|m| m.parent_id.as_deref());
+    }
+    None
+}
+
+/// 为模块页解析父页面 ID。
+/// 顶层模块挂到 overview，嵌套模块挂到父模块页面，父模块被合并时向上查找。
+fn resolve_parent_page_id(
+    module: &ModuleNode,
+    module_tree: &ModuleTree,
+    has_page: &BTreeSet<String>,
+    overview_id: &str,
+) -> String {
+    let Some(parent_module_id) = &module.parent_id else {
+        return overview_id.to_string();
+    };
+
+    // 父模块是根模块 → 挂到 overview
+    if module_tree.root_modules.contains(parent_module_id) {
+        return overview_id.to_string();
+    }
+
+    // 父模块有独立页面 → 挂到父模块页面
+    if has_page.contains(parent_module_id) {
+        let parent_module = module_tree
+            .module_by_id(parent_module_id)
+            .expect("parent module should exist");
+        return module_page_id(parent_module);
+    }
+
+    // 父模块被合并 → 向上查找最近的有独立页面的祖先
+    let parent_module = module_tree
+        .module_by_id(parent_module_id)
+        .expect("parent module should exist");
+    if let Some(ancestor_id) = find_nearest_page_ancestor(parent_module, module_tree, has_page) {
+        let ancestor = module_tree
+            .module_by_id(&ancestor_id)
+            .expect("ancestor module should exist");
+        return module_page_id(ancestor);
+    }
+
+    overview_id.to_string()
+}
+
 /// 如果存在真正的业务子模块，就只为这些子模块生成模块页；
 /// 否则退回到根模块，至少保证最小仓库也能拿到一个模块页。
-///
-/// # 参数
-/// - `module_tree`：当前仓库的模块树。
-///
-/// # 返回
-/// - 返回应该被实际渲染为模块页的模块列表。
 fn modules_to_render<'a>(module_tree: &'a ModuleTree) -> Vec<&'a ModuleNode> {
     let non_root_modules = module_tree.non_root_modules();
 
@@ -172,6 +398,17 @@ fn modules_to_render<'a>(module_tree: &'a ModuleTree) -> Vec<&'a ModuleNode> {
     }
 
     non_root_modules
+}
+
+/// 根据模块 root_paths[0] 生成稳定的 page_id。
+/// 锚定到归一化后的相对路径，而不是模块名或发现顺序。
+fn module_page_id(module: &ModuleNode) -> String {
+    let seed = module
+        .root_paths
+        .first()
+        .map(|p| normalize_root_path(p))
+        .unwrap_or_else(|| module.name.clone());
+    stable_id("page", &format!("module:{seed}"))
 }
 
 /// 根据模块祖先链生成模块页路径。
@@ -198,6 +435,17 @@ fn module_page_path(module: &ModuleNode) -> String {
         .unwrap_or_else(|| vec![slugify_segment(&module.name)]);
 
     format!("核心模块/{}.md", relative.join("/"))
+}
+
+/// 归一化 root_path：统一分隔符为 `/`，去掉前导 `./`。
+fn normalize_root_path(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    let normalized = normalized.trim_start_matches("./");
+    if normalized.is_empty() {
+        ".".to_string()
+    } else {
+        normalized.to_string()
+    }
 }
 
 /// 文件名规范化，保证模块页路径在 Windows 上也可安全落盘。
@@ -240,4 +488,36 @@ fn slugify_segment(value: &str) -> String {
     } else {
         normalized.to_string()
     }
+}
+
+/// 检测仓库是否存在工作流线索（CI/CD 配置、Makefile、Dockerfile）。
+fn has_workflow_clues(report: &ScanReport) -> bool {
+    report.files.iter().any(|f| is_workflow_file(&f.path))
+}
+
+/// 判断文件路径是否属于工作流相关文件。
+fn is_workflow_file(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+
+    // CI/CD 配置目录
+    if path.starts_with(".github/workflows/")
+        || path.starts_with(".gitlab/")
+        || path.starts_with(".circleci/")
+    {
+        return true;
+    }
+
+    // 顶层工作流文件
+    matches!(
+        name,
+        "Makefile"
+            | "makefile"
+            | "GNUmakefile"
+            | "Dockerfile"
+            | "docker-compose.yml"
+            | "docker-compose.yaml"
+            | "Jenkinsfile"
+            | ".gitlab-ci.yml"
+            | ".travis.yml"
+    )
 }

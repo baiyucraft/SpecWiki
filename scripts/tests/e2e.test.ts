@@ -42,8 +42,7 @@ test("agent init, status, update, query, sync, and rebuild work end to end", asy
     expect(existsSync(path.join(repoRoot, ".wiki", "项目概述.md"))).toBe(true);
     expect(existsSync(path.join(repoRoot, ".wiki", "系统架构.md"))).toBe(true);
     expect(existsSync(path.join(repoRoot, ".wiki", "wiki.metadata.json"))).toBe(true);
-    expect(existsSync(path.join(repoRoot, ".wiki", ".cache", "repo-scan.json"))).toBe(true);
-    expect(existsSync(path.join(repoRoot, ".wiki", ".cache", "module-tree.json"))).toBe(true);
+    expect(existsSync(path.join(repoRoot, ".wiki", ".cache", "wiki-cache.db"))).toBe(true);
 
     const freshStatus = await tools.wikiStatus({ repoRoot });
     expect(freshStatus.ok).toBe(true);

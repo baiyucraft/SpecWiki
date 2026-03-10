@@ -1,6 +1,6 @@
 use regex::Regex;
 
-use super::{LanguageProcessor, collect_regex_targets};
+use super::{collect_regex_targets, LanguageProcessor};
 
 /// C# 处理器先基于 `using` 和 `namespace` 建立最小依赖与别名信息。
 #[derive(Debug)]

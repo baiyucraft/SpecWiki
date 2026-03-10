@@ -9,16 +9,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::module_tree::ModuleTree;
 use crate::domain::state::{WikiPageState, WikiState};
+use crate::domain::steering::load_steering_config;
 use crate::generation::context::{build_module_contexts, build_repo_context};
 use crate::generation::planner::{plan_pages, PlannedPage};
 use crate::generation::sections::{section_id_for_title, section_titles_for_page_type};
 use crate::repo::hierarchy::build_module_tree;
-use crate::repo::scanner::{scan_repo, ScanReport, ScannedFile};
+use crate::repo::scanner::{scan_repo_with_boundary, ScanReport, ScannedFile};
 use crate::storage::cache_store::{
     missing_incremental_cache_components, read_module_tree_cache, read_scan_cache,
 };
 use crate::storage::metadata_store::metadata_exists;
-use crate::storage::state_store::{load_or_rebuild_state, read_state, state_path};
+use crate::storage::state_store::{load_or_rebuild_state, read_state};
 use crate::storage::wiki_fs::{page_exists, wiki_root};
 
 /// `ChangeSet` 描述当前仓库相对最近一次 runtime 的源码变化集合。
@@ -212,9 +213,11 @@ pub fn plan_runtime_changes(repo_root: &Path) -> io::Result<ChangePlan> {
     }
 
     let previous_state = load_or_rebuild_state(repo_root)?;
+    let steering = load_steering_config(repo_root);
     let previous_scan = read_scan_cache(repo_root).ok();
     let previous_module_tree = read_module_tree_cache(repo_root).ok();
-    let mut missing_cache_components = missing_incremental_cache_components(repo_root, &previous_state);
+    let mut missing_cache_components =
+        missing_incremental_cache_components(repo_root, &previous_state);
 
     if previous_scan.is_none() {
         missing_cache_components.push("repo-scan".to_string());
@@ -224,7 +227,7 @@ pub fn plan_runtime_changes(repo_root: &Path) -> io::Result<ChangePlan> {
         missing_cache_components.push("module-tree".to_string());
     }
 
-    if state_path(repo_root).exists() && read_state(repo_root).is_err() {
+    if crate::storage::sqlite_store::db_exists(repo_root) && read_state(repo_root).is_err() {
         missing_cache_components.push("wiki-state".to_string());
     }
 
@@ -264,13 +267,17 @@ pub fn plan_runtime_changes(repo_root: &Path) -> io::Result<ChangePlan> {
                 requires_rebuild: true,
                 ..ChangeSet::default()
             },
-            affected_set: affected_pages_for_missing_cache(&previous_state, &missing_cache_components),
+            affected_set: affected_pages_for_missing_cache(
+                &previous_state,
+                &missing_cache_components,
+            ),
             fallback_mode: FallbackMode::Rebuild,
             needs_rebuild_reason: Some("cache_missing".to_string()),
         });
     }
 
-    let scan_report = scan_repo(repo_root)?;
+    let (ignore_paths, include_paths) = steering.scan_boundary();
+    let scan_report = scan_repo_with_boundary(repo_root, ignore_paths, include_paths)?;
     let change_set = build_change_set(&previous_state, previous_scan.as_ref(), &scan_report);
     let current_module_tree = if change_set.requires_replan {
         build_module_tree(&scan_report)
@@ -282,7 +289,13 @@ pub fn plan_runtime_changes(repo_root: &Path) -> io::Result<ChangePlan> {
 
     let repo_context = build_repo_context(&scan_report, &current_module_tree);
     let module_contexts = build_module_contexts(&scan_report, &current_module_tree);
-    let planned_pages = plan_pages(&scan_report, &current_module_tree, &repo_context, &module_contexts);
+    let planned_pages = plan_pages(
+        &scan_report,
+        &current_module_tree,
+        &repo_context,
+        &module_contexts,
+        &steering,
+    );
     let affected_set = build_affected_set(
         &previous_state,
         previous_module_tree.as_ref(),
@@ -375,9 +388,8 @@ fn build_change_set(
         ));
     }
 
-    let requires_replan = !added_sources.is_empty()
-        || !removed_sources.is_empty()
-        || !structural_sources.is_empty();
+    let requires_replan =
+        !added_sources.is_empty() || !removed_sources.is_empty() || !structural_sources.is_empty();
 
     ChangeSet {
         added_sources,
@@ -509,7 +521,7 @@ fn build_affected_set(
     let mut affected_section_ids_by_page = BTreeMap::new();
     for page_id in &affected_page_ids {
         if let Some(page) = previous_pages.get(page_id) {
-            affected_section_ids_by_page.insert(page_id.clone(), page.section_ids());
+            affected_section_ids_by_page.insert(page_id.clone(), page.managed_section_anchors());
             continue;
         }
 
@@ -527,7 +539,10 @@ fn build_affected_set(
     }
 }
 
-fn affected_pages_for_missing_paths(previous_state: &WikiState, missing_paths: &[String]) -> AffectedSet {
+fn affected_pages_for_missing_paths(
+    previous_state: &WikiState,
+    missing_paths: &[String],
+) -> AffectedSet {
     let missing_paths = missing_paths.iter().cloned().collect::<BTreeSet<_>>();
     let removed_page_ids = previous_state
         .pages
@@ -585,14 +600,14 @@ fn is_structural_file(
     previous_file: Option<&ScannedFile>,
 ) -> bool {
     if current_file
-        .map(|file| file.kind == "config" || file.tags.iter().any(|tag| tag == "entry-point"))
+        .map(|file| file.is_config_like() || file.is_entry_like() || file.purpose.is_structural())
         .unwrap_or(false)
     {
         return true;
     }
 
     if previous_file
-        .map(|file| file.kind == "config" || file.tags.iter().any(|tag| tag == "entry-point"))
+        .map(|file| file.is_config_like() || file.is_entry_like() || file.purpose.is_structural())
         .unwrap_or(false)
     {
         return true;

@@ -1,6 +1,6 @@
 use regex::Regex;
 
-use super::{LanguageProcessor, collect_regex_targets};
+use super::{collect_regex_targets, LanguageProcessor};
 
 /// Kotlin 处理器主要依赖 package/import 两个结构信号。
 #[derive(Debug)]

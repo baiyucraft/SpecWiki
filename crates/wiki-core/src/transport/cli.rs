@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
+use crate::transport::dto::{CoreCommand, CoreResponse};
 use crate::workflows::init::run_init;
 use crate::workflows::query::run_query;
 use crate::workflows::rebuild::run_rebuild;
 use crate::workflows::status::run_status;
 use crate::workflows::sync::run_sync;
 use crate::workflows::update::run_update;
-use crate::transport::dto::{CoreCommand, CoreResponse};
 
 /// 按 `action` 分发到具体 workflow。
 /// transport 层不直接做业务判断，它只负责把协议转成 workflow 调用。
@@ -27,7 +27,9 @@ pub fn dispatch(command: CoreCommand) -> CoreResponse {
         "init" => encode_result(run_init(&repo_root).and_then(as_json)),
         "status" => encode_result(run_status(&repo_root).and_then(as_json)),
         "update" => encode_result(run_update(&repo_root).and_then(as_json)),
-        "query" => encode_result(run_query(&repo_root, command.term.as_deref().unwrap_or("")).and_then(as_json)),
+        "query" => encode_result(
+            run_query(&repo_root, command.term.as_deref().unwrap_or("")).and_then(as_json),
+        ),
         "sync" => encode_result(run_sync(&repo_root).and_then(as_json)),
         "rebuild" => encode_result(run_rebuild(&repo_root).and_then(as_json)),
         other => CoreResponse::error(format!("unsupported_action:{other}")),

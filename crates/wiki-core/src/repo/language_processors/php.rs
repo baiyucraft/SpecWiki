@@ -1,6 +1,6 @@
 use regex::Regex;
 
-use super::{LanguageProcessor, collect_regex_targets, extract_first_quoted_target};
+use super::{collect_regex_targets, extract_first_quoted_target, LanguageProcessor};
 
 /// PHP 处理器覆盖 namespace、use 和 require/include 这几类最常见依赖。
 #[derive(Debug)]

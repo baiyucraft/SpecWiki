@@ -5,8 +5,8 @@ use std::fs;
 use std::path::Path;
 
 use tempfile::tempdir;
-use wiki_core::storage::cache_store::{page_context_cache_path, page_generation_cache_path};
 use wiki_core::storage::metadata_store::read_metadata;
+use wiki_core::storage::sqlite_store;
 use wiki_core::storage::state_store::read_state;
 use wiki_core::workflows::{init::run_init, status::run_status, update::run_update};
 
@@ -35,7 +35,10 @@ fn status_reports_needs_rebuild_when_cache_is_missing() {
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "needs_rebuild");
-    assert_eq!(status.needs_rebuild_reason.as_deref(), Some("cache_missing"));
+    assert_eq!(
+        status.needs_rebuild_reason.as_deref(),
+        Some("cache_missing")
+    );
 }
 
 /// 场景：单页 cache 缺失时，update 必须回退到 rebuild 并补全 page cache。
@@ -54,14 +57,20 @@ fn update_falls_back_to_rebuild_when_page_cache_is_missing() {
         .find(|page| page.page_type == "overview")
         .unwrap();
 
-    fs::remove_file(page_context_cache_path(repo_root, &overview_page.page_id)).unwrap();
-    fs::remove_file(page_generation_cache_path(repo_root, &overview_page.page_id)).unwrap();
+    {
+        let conn = sqlite_store::open_db(repo_root).unwrap();
+        sqlite_store::remove_page_context(&conn, &overview_page.page_id).unwrap();
+        sqlite_store::remove_page_generation(&conn, &overview_page.page_id).unwrap();
+    }
 
     let update = run_update(repo_root).unwrap();
     assert_eq!(update.previous_state, "needs_rebuild");
     assert_eq!(update.state, "fresh");
-    assert!(page_context_cache_path(repo_root, &overview_page.page_id).exists());
-    assert!(page_generation_cache_path(repo_root, &overview_page.page_id).exists());
+    {
+        let conn = sqlite_store::open_db_readonly(repo_root).unwrap();
+        assert!(sqlite_store::page_context_exists(&conn, &overview_page.page_id).unwrap());
+        assert!(sqlite_store::page_generation_exists(&conn, &overview_page.page_id).unwrap());
+    }
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "fresh");
@@ -124,16 +133,19 @@ fn incremental_update_only_touches_related_pages() {
         .dirty_pages
         .iter()
         .any(|path| path == shared_page_path));
-    assert!(!status
-        .dirty_pages
-        .iter()
-        .any(|path| path == app_page_path));
+    assert!(!status.dirty_pages.iter().any(|path| path == app_page_path));
 
     let update = run_update(repo_root).unwrap();
     assert_eq!(update.previous_state, "stale");
     assert_eq!(update.state, "fresh");
-    assert!(update.updated_pages.iter().any(|path| path == shared_page_path));
-    assert!(!update.updated_pages.iter().any(|path| path == app_page_path));
+    assert!(update
+        .updated_pages
+        .iter()
+        .any(|path| path == shared_page_path));
+    assert!(!update
+        .updated_pages
+        .iter()
+        .any(|path| path == app_page_path));
 
     let app_section_hashes_after = read_state(repo_root)
         .unwrap()
