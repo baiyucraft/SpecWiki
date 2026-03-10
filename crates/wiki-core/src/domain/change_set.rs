@@ -19,6 +19,7 @@ use crate::storage::cache_store::{
     missing_incremental_cache_components, read_module_tree_cache, read_scan_cache,
 };
 use crate::storage::metadata_store::metadata_exists;
+use crate::storage::sqlite_store;
 use crate::storage::state_store::{load_or_rebuild_state, read_state};
 use crate::storage::wiki_fs::{page_exists, wiki_root};
 
@@ -33,6 +34,8 @@ pub struct ChangeSet {
     pub removed_sources: Vec<String>,
     /// 会影响模块树、页面规划或入口识别的结构性源码路径。
     pub structural_sources: Vec<String>,
+    /// 通过上一轮 `IMPORTS` edges 命中的一跳 graph 依赖文件。
+    pub graph_dependent_sources: Vec<String>,
     /// 是否需要重新计算模块树与页面计划，而不只是局部重渲染。
     pub requires_replan: bool,
     /// 当前 runtime 是否已经损坏到必须回退 full rebuild。
@@ -50,6 +53,9 @@ pub struct AffectedSet {
     pub affected_section_ids_by_page: BTreeMap<String, Vec<String>>,
     /// 相比上一轮页面计划已经消失、需要删盘的页面 ID 集合。
     pub removed_page_ids: Vec<String>,
+    /// 本轮 symbol/edge refresh 需要重新解析的源码路径集合。
+    #[serde(default)]
+    pub graph_refresh_sources: Vec<String>,
 }
 
 /// 增量 runtime 的后续动作选择。
@@ -93,6 +99,7 @@ impl ChangeSet {
             && self.modified_sources.is_empty()
             && self.removed_sources.is_empty()
             && self.structural_sources.is_empty()
+            && self.graph_dependent_sources.is_empty()
             && !self.requires_replan
             && !self.requires_rebuild
     }
@@ -109,6 +116,18 @@ impl ChangeSet {
         dirty.extend(self.structural_sources.iter().cloned());
         dirty.into_iter().collect()
     }
+
+    /// 返回需要重跑 symbol/edge refresh 的源码路径。
+    ///
+    /// # 返回
+    /// - 返回新增、修改和 graph 一跳依赖扩散后的源码路径，不包含已删除路径。
+    pub fn symbol_refresh_sources(&self) -> Vec<String> {
+        let mut dirty = BTreeSet::new();
+        dirty.extend(self.added_sources.iter().cloned());
+        dirty.extend(self.modified_sources.iter().cloned());
+        dirty.extend(self.graph_dependent_sources.iter().cloned());
+        dirty.into_iter().collect()
+    }
 }
 
 impl AffectedSet {
@@ -121,6 +140,7 @@ impl AffectedSet {
             && self.affected_page_ids.is_empty()
             && self.affected_section_ids_by_page.is_empty()
             && self.removed_page_ids.is_empty()
+            && self.graph_refresh_sources.is_empty()
     }
 
     /// 返回本次需要触达的全部页面 ID。
@@ -278,7 +298,9 @@ pub fn plan_runtime_changes(repo_root: &Path) -> io::Result<ChangePlan> {
 
     let (ignore_paths, include_paths) = steering.scan_boundary();
     let scan_report = scan_repo_with_boundary(repo_root, ignore_paths, include_paths)?;
-    let change_set = build_change_set(&previous_state, previous_scan.as_ref(), &scan_report);
+    let mut change_set = build_change_set(&previous_state, previous_scan.as_ref(), &scan_report);
+    change_set.graph_dependent_sources =
+        build_graph_dependent_sources(repo_root, &change_set.dirty_sources())?;
     let current_module_tree = if change_set.requires_replan {
         build_module_tree(&scan_report)
     } else {
@@ -396,6 +418,7 @@ fn build_change_set(
         modified_sources,
         removed_sources,
         structural_sources: structural_sources.into_iter().collect(),
+        graph_dependent_sources: Vec::new(),
         requires_replan,
         requires_rebuild: false,
     }
@@ -536,6 +559,7 @@ fn build_affected_set(
         affected_page_ids: affected_page_ids.into_iter().collect(),
         affected_section_ids_by_page,
         removed_page_ids: removed_page_ids.into_iter().collect(),
+        graph_refresh_sources: change_set.symbol_refresh_sources(),
     }
 }
 
@@ -556,6 +580,7 @@ fn affected_pages_for_missing_paths(
         affected_page_ids: Vec::new(),
         affected_section_ids_by_page: BTreeMap::new(),
         removed_page_ids,
+        graph_refresh_sources: Vec::new(),
     }
 }
 
@@ -580,7 +605,43 @@ fn affected_pages_for_missing_cache(
         affected_page_ids: page_ids.into_iter().collect(),
         affected_section_ids_by_page: BTreeMap::new(),
         removed_page_ids: Vec::new(),
+        graph_refresh_sources: Vec::new(),
     }
+}
+
+fn build_graph_dependent_sources(
+    repo_root: &Path,
+    dirty_source_paths: &[String],
+) -> io::Result<Vec<String>> {
+    if dirty_source_paths.is_empty() || !sqlite_store::db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+
+    let dirty = dirty_source_paths.iter().cloned().collect::<BTreeSet<_>>();
+    let symbols = sqlite_store::list_symbols(repo_root)?;
+    let edges = sqlite_store::list_edges(repo_root)?;
+    let symbol_files = symbols
+        .into_iter()
+        .map(|symbol| (symbol.symbol_id, symbol.file_path))
+        .collect::<BTreeMap<_, _>>();
+    let mut dependents = BTreeSet::new();
+
+    for edge in edges {
+        if edge.edge_type != "IMPORTS" {
+            continue;
+        }
+        let Some(source_file) = symbol_files.get(&edge.source_id) else {
+            continue;
+        };
+        let Some(target_file) = symbol_files.get(&edge.target_id) else {
+            continue;
+        };
+        if dirty.contains(target_file) && !dirty.contains(source_file) {
+            dependents.insert(source_file.clone());
+        }
+    }
+
+    Ok(dependents.into_iter().collect())
 }
 
 fn diff_string_sets(previous: &[String], current: &[String]) -> BTreeSet<String> {

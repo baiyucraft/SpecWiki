@@ -6,13 +6,18 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{
-    params, params_from_iter, Connection, OpenFlags, OptionalExtension, ToSql, Transaction,
+    params, params_from_iter, types::Value, Connection, OpenFlags, OptionalExtension, ToSql,
+    Transaction,
 };
 
 use crate::domain::metadata::DirtyState;
 use crate::domain::module_tree::ModuleNode;
 use crate::domain::relation::WikiRelation;
 use crate::domain::state::{BuildState, SourceState, WikiPageState, WikiSectionState, WikiState};
+use crate::repo::symbol_graph::{
+    CommunityMember, CommunityNode, GraphAnalysisSnapshot, ProcessNode, ProcessStep,
+    ResolvedGraphSnapshot, ResolvedSymbolEdge,
+};
 use crate::repo::symbols::SymbolNode;
 use crate::storage::cache_store::{cache_dir, ensure_cache_dir};
 
@@ -47,6 +52,25 @@ pub struct FtsSymbolHit {
     pub language: String,
     /// BM25 分数。
     pub score: f64,
+}
+
+/// 基于 `edges` 表递归追踪得到的调用链边。
+#[derive(Debug, Clone)]
+pub struct GraphTraceEdgeHit {
+    /// 图边稳定 ID。
+    pub edge_id: String,
+    /// 边起点 symbol ID。
+    pub source_id: String,
+    /// 边终点 symbol ID。
+    pub target_id: String,
+    /// 追踪方向：`outbound` 表示下游调用链，`inbound` 表示影响范围。
+    pub traversal_direction: String,
+    /// 相对种子 symbol 的跳数。
+    pub hop_distance: usize,
+    /// 当前边置信度。
+    pub confidence: f64,
+    /// resolve 阶段留下的原因文本。
+    pub reason: String,
 }
 
 /// 返回 DB 文件路径。
@@ -583,6 +607,124 @@ fn insert_symbol_rows_tx(tx: &Transaction<'_>, symbols: &[SymbolNode]) -> io::Re
     Ok(())
 }
 
+fn clear_symbol_graph_rows_tx(tx: &Transaction<'_>) -> io::Result<()> {
+    tx.execute_batch(
+        "DELETE FROM process_steps;
+         DELETE FROM processes;
+         DELETE FROM community_members;
+         DELETE FROM communities;
+         DELETE FROM edges;",
+    )
+    .map_err(|e| io::Error::other(format!("clear symbol graph tables: {e}")))?;
+    Ok(())
+}
+
+fn clear_graph_analysis_rows_tx(tx: &Transaction<'_>) -> io::Result<()> {
+    tx.execute_batch(
+        "DELETE FROM process_steps;
+         DELETE FROM processes;
+         DELETE FROM community_members;
+         DELETE FROM communities;",
+    )
+    .map_err(|e| io::Error::other(format!("clear graph analysis tables: {e}")))?;
+    Ok(())
+}
+
+fn insert_edge_rows_tx(
+    tx: &Transaction<'_>,
+    resolved_graph: &ResolvedGraphSnapshot,
+) -> io::Result<()> {
+    for edge in &resolved_graph.edges {
+        tx.execute(
+            "INSERT INTO edges
+             (id, source_id, target_id, edge_type, confidence, reason)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                edge.edge_id,
+                edge.source_id,
+                edge.target_id,
+                edge.edge_type,
+                edge.confidence,
+                edge.reason,
+            ],
+        )
+        .map_err(|e| io::Error::other(format!("insert edge {}: {e}", edge.edge_id)))?;
+    }
+
+    Ok(())
+}
+
+fn insert_graph_analysis_rows_tx(
+    tx: &Transaction<'_>,
+    analysis: &GraphAnalysisSnapshot,
+) -> io::Result<()> {
+    for community in &analysis.communities {
+        tx.execute(
+            "INSERT INTO communities (id, label, cohesion, symbol_count)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                community.community_id,
+                community.label,
+                community.cohesion,
+                community.symbol_count as i64,
+            ],
+        )
+        .map_err(|e| {
+            io::Error::other(format!(
+                "insert community {}: {e}",
+                community.community_id
+            ))
+        })?;
+    }
+
+    for member in &analysis.community_members {
+        tx.execute(
+            "INSERT INTO community_members (community_id, symbol_id)
+             VALUES (?1, ?2)",
+            params![member.community_id, member.symbol_id],
+        )
+        .map_err(|e| {
+            io::Error::other(format!(
+                "insert community member {}:{}: {e}",
+                member.community_id, member.symbol_id
+            ))
+        })?;
+    }
+
+    for process in &analysis.processes {
+        tx.execute(
+            "INSERT INTO processes
+             (id, label, process_type, step_count, entry_point_id, terminal_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                process.process_id,
+                process.label,
+                process.process_type,
+                process.step_count as i64,
+                process.entry_point_id,
+                process.terminal_id,
+            ],
+        )
+        .map_err(|e| io::Error::other(format!("insert process {}: {e}", process.process_id)))?;
+    }
+
+    for step in &analysis.process_steps {
+        tx.execute(
+            "INSERT INTO process_steps (process_id, symbol_id, step_order)
+             VALUES (?1, ?2, ?3)",
+            params![step.process_id, step.symbol_id, step.step_order as i64],
+        )
+        .map_err(|e| {
+            io::Error::other(format!(
+                "insert process step {}:{}: {e}",
+                step.process_id, step.step_order
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
 fn delete_symbol_rows_for_files_tx(tx: &Transaction<'_>, file_paths: &[String]) -> io::Result<()> {
     if file_paths.is_empty() {
         return Ok(());
@@ -602,6 +744,31 @@ fn delete_symbol_rows_for_files_tx(tx: &Transaction<'_>, file_paths: &[String]) 
     let params = file_paths.iter().map(|value| value as &dyn ToSql);
     tx.execute(&sql, params_from_iter(params))
         .map_err(|e| io::Error::other(format!("delete symbols by file: {e}")))?;
+    Ok(())
+}
+
+fn delete_edge_rows_for_symbol_ids_tx(
+    tx: &Transaction<'_>,
+    symbol_ids: &[String],
+) -> io::Result<()> {
+    if symbol_ids.is_empty() {
+        return Ok(());
+    }
+
+    let placeholders = sql_placeholders(symbol_ids.len());
+    let params = symbol_ids.iter().map(|value| value as &dyn ToSql);
+    tx.execute(
+        &format!("DELETE FROM edges WHERE source_id IN ({placeholders})"),
+        params_from_iter(params),
+    )
+    .map_err(|e| io::Error::other(format!("delete edges by source symbol: {e}")))?;
+
+    let params = symbol_ids.iter().map(|value| value as &dyn ToSql);
+    tx.execute(
+        &format!("DELETE FROM edges WHERE target_id IN ({placeholders})"),
+        params_from_iter(params),
+    )
+    .map_err(|e| io::Error::other(format!("delete edges by target symbol: {e}")))?;
     Ok(())
 }
 
@@ -661,6 +828,28 @@ pub fn replace_state_and_symbols(
         .map_err(|e| io::Error::other(format!("commit replace_state_and_symbols tx: {e}")))
 }
 
+/// 在同一事务里全量替换 state、symbols 和 symbol graph。
+/// 供 `init` / `rebuild` 接入 graph 主链时使用。
+pub fn replace_state_and_symbol_graph(
+    conn: &mut Connection,
+    state: &WikiState,
+    symbols: &[SymbolNode],
+    resolved_graph: &ResolvedGraphSnapshot,
+    analysis: &GraphAnalysisSnapshot,
+) -> io::Result<()> {
+    let tx = conn
+        .transaction()
+        .map_err(|e| io::Error::other(format!("begin replace_state_and_symbol_graph tx: {e}")))?;
+    replace_state_rows_tx(&tx, state)?;
+    clear_symbol_graph_rows_tx(&tx)?;
+    clear_symbol_rows_tx(&tx)?;
+    insert_symbol_rows_tx(&tx, symbols)?;
+    insert_edge_rows_tx(&tx, resolved_graph)?;
+    insert_graph_analysis_rows_tx(&tx, analysis)?;
+    tx.commit()
+        .map_err(|e| io::Error::other(format!("commit replace_state_and_symbol_graph tx: {e}")))
+}
+
 /// 在同一事务里全量替换 state，并只对指定文件刷新 symbols。
 /// 供 `update` 使用，避免无关文件的旧 symbol rows 被重写。
 pub fn replace_state_and_symbols_for_files(
@@ -678,6 +867,36 @@ pub fn replace_state_and_symbols_for_files(
     tx.commit().map_err(|e| {
         io::Error::other(format!(
             "commit replace_state_and_symbols_for_files tx: {e}"
+        ))
+    })
+}
+
+/// 在同一事务里按文件刷新 symbols / edges，并整体替换 graph-derived 结果。
+/// 供 `update` 的 symbol graph 增量阶段使用。
+pub fn replace_state_and_symbol_graph_for_files(
+    conn: &mut Connection,
+    state: &WikiState,
+    file_paths: &[String],
+    symbols: &[SymbolNode],
+    resolved_graph: &ResolvedGraphSnapshot,
+    analysis: &GraphAnalysisSnapshot,
+) -> io::Result<()> {
+    let tx = conn.transaction().map_err(|e| {
+        io::Error::other(format!(
+            "begin replace_state_and_symbol_graph_for_files tx: {e}"
+        ))
+    })?;
+    replace_state_rows_tx(&tx, state)?;
+    let stale_symbol_ids = select_symbol_ids_for_files_tx(&tx, file_paths)?;
+    clear_graph_analysis_rows_tx(&tx)?;
+    delete_edge_rows_for_symbol_ids_tx(&tx, &stale_symbol_ids)?;
+    delete_symbol_rows_for_files_tx(&tx, file_paths)?;
+    insert_symbol_rows_tx(&tx, symbols)?;
+    insert_edge_rows_tx(&tx, resolved_graph)?;
+    insert_graph_analysis_rows_tx(&tx, analysis)?;
+    tx.commit().map_err(|e| {
+        io::Error::other(format!(
+            "commit replace_state_and_symbol_graph_for_files tx: {e}"
         ))
     })
 }
@@ -1122,6 +1341,358 @@ fn list_symbols_in_conn(conn: &Connection) -> io::Result<Vec<SymbolNode>> {
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| io::Error::other(format!("collect list symbols: {e}")))
+}
+
+/// 列出当前 DB 内全部 symbol edges。
+pub fn list_edges(repo_root: &Path) -> io::Result<Vec<ResolvedSymbolEdge>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    list_edges_in_conn(&conn)
+}
+
+fn list_edges_in_conn(conn: &Connection) -> io::Result<Vec<ResolvedSymbolEdge>> {
+    if !table_exists(conn, "edges")? {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, source_id, target_id, edge_type, confidence, COALESCE(reason, '')
+             FROM edges
+             ORDER BY source_id, target_id, id",
+        )
+        .map_err(|e| io::Error::other(format!("prepare list edges: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ResolvedSymbolEdge {
+                edge_id: row.get(0)?,
+                source_id: row.get(1)?,
+                target_id: row.get(2)?,
+                edge_type: row.get(3)?,
+                confidence: row.get(4)?,
+                reason: row.get(5)?,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query list edges: {e}")))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect list edges: {e}")))
+}
+
+/// 基于 `edges` 表递归追踪有限深度的调用链与影响范围。
+pub fn trace_call_edges(
+    repo_root: &Path,
+    seed_symbol_ids: &[String],
+    max_depth: usize,
+    limit: usize,
+) -> io::Result<Vec<GraphTraceEdgeHit>> {
+    if seed_symbol_ids.is_empty() || max_depth == 0 || limit == 0 || !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    trace_call_edges_in_conn(&conn, seed_symbol_ids, max_depth, limit)
+}
+
+fn trace_call_edges_in_conn(
+    conn: &Connection,
+    seed_symbol_ids: &[String],
+    max_depth: usize,
+    limit: usize,
+) -> io::Result<Vec<GraphTraceEdgeHit>> {
+    if seed_symbol_ids.is_empty()
+        || max_depth == 0
+        || limit == 0
+        || !table_exists(conn, "edges")?
+        || !table_exists(conn, "symbols")?
+    {
+        return Ok(Vec::new());
+    }
+
+    let seed_sql = (0..seed_symbol_ids.len())
+        .map(|index| format!("SELECT ?{}", index + 1))
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
+    let depth_param = seed_symbol_ids.len() + 1;
+    let limit_param = seed_symbol_ids.len() + 2;
+    let sql = format!(
+        "WITH RECURSIVE
+            seed(symbol_id) AS ({seed_sql}),
+            outbound(depth, edge_id, source_id, target_id, confidence, reason, visited) AS (
+                SELECT
+                    1,
+                    e.id,
+                    e.source_id,
+                    e.target_id,
+                    e.confidence,
+                    COALESCE(e.reason, ''),
+                    printf('|%s|%s|', e.source_id, e.target_id)
+                FROM edges e
+                JOIN seed s ON e.source_id = s.symbol_id
+                WHERE e.edge_type = 'CALLS'
+              UNION ALL
+                SELECT
+                    outbound.depth + 1,
+                    e.id,
+                    e.source_id,
+                    e.target_id,
+                    e.confidence,
+                    COALESCE(e.reason, ''),
+                    outbound.visited || e.target_id || '|'
+                FROM edges e
+                JOIN outbound ON e.source_id = outbound.target_id
+                WHERE e.edge_type = 'CALLS'
+                  AND outbound.depth < ?{depth_param}
+                  AND instr(outbound.visited, printf('|%s|', e.target_id)) = 0
+            ),
+            inbound(depth, edge_id, source_id, target_id, confidence, reason, visited) AS (
+                SELECT
+                    1,
+                    e.id,
+                    e.source_id,
+                    e.target_id,
+                    e.confidence,
+                    COALESCE(e.reason, ''),
+                    printf('|%s|%s|', e.target_id, e.source_id)
+                FROM edges e
+                JOIN seed s ON e.target_id = s.symbol_id
+                WHERE e.edge_type = 'CALLS'
+              UNION ALL
+                SELECT
+                    inbound.depth + 1,
+                    e.id,
+                    e.source_id,
+                    e.target_id,
+                    e.confidence,
+                    COALESCE(e.reason, ''),
+                    inbound.visited || e.source_id || '|'
+                FROM edges e
+                JOIN inbound ON e.target_id = inbound.source_id
+                WHERE e.edge_type = 'CALLS'
+                  AND inbound.depth < ?{depth_param}
+                  AND instr(inbound.visited, printf('|%s|', e.source_id)) = 0
+            ),
+            traces(direction, depth, edge_id, source_id, target_id, confidence, reason) AS (
+                SELECT 'outbound', depth, edge_id, source_id, target_id, confidence, reason FROM outbound
+                UNION ALL
+                SELECT 'inbound', depth, edge_id, source_id, target_id, confidence, reason FROM inbound
+            )
+         SELECT
+            direction,
+            edge_id,
+            source_id,
+            target_id,
+            MIN(depth) AS hop_distance,
+            MAX(confidence) AS confidence,
+            MAX(reason) AS reason
+         FROM traces
+         GROUP BY direction, edge_id, source_id, target_id
+         ORDER BY hop_distance ASC, confidence DESC, edge_id ASC
+         LIMIT ?{limit_param}"
+    );
+
+    let mut params = seed_symbol_ids
+        .iter()
+        .cloned()
+        .map(Value::Text)
+        .collect::<Vec<_>>();
+    params.push(Value::Integer(max_depth as i64));
+    params.push(Value::Integer(limit as i64));
+
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| io::Error::other(format!("prepare trace_call_edges: {e}")))?;
+    let rows = stmt
+        .query_map(params_from_iter(params.iter()), |row| {
+            Ok(GraphTraceEdgeHit {
+                traversal_direction: row.get(0)?,
+                edge_id: row.get(1)?,
+                source_id: row.get(2)?,
+                target_id: row.get(3)?,
+                hop_distance: row.get::<_, i64>(4)? as usize,
+                confidence: row.get(5)?,
+                reason: row.get(6)?,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query trace_call_edges: {e}")))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect trace_call_edges: {e}")))
+}
+
+/// 列出当前 DB 内全部 communities。
+pub fn list_communities(repo_root: &Path) -> io::Result<Vec<CommunityNode>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    list_communities_in_conn(&conn)
+}
+
+fn list_communities_in_conn(conn: &Connection) -> io::Result<Vec<CommunityNode>> {
+    if !table_exists(conn, "communities")? {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, COALESCE(label, ''), COALESCE(cohesion, 0.0), COALESCE(symbol_count, 0)
+             FROM communities
+             ORDER BY id",
+        )
+        .map_err(|e| io::Error::other(format!("prepare list communities: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(CommunityNode {
+                community_id: row.get(0)?,
+                label: row.get(1)?,
+                cohesion: row.get(2)?,
+                symbol_count: row.get::<_, i64>(3)? as usize,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query list communities: {e}")))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect list communities: {e}")))
+}
+
+/// 列出当前 DB 内全部 community 成员映射。
+pub fn list_community_members(repo_root: &Path) -> io::Result<Vec<CommunityMember>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    list_community_members_in_conn(&conn)
+}
+
+fn list_community_members_in_conn(conn: &Connection) -> io::Result<Vec<CommunityMember>> {
+    if !table_exists(conn, "community_members")? {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT community_id, symbol_id
+             FROM community_members
+             ORDER BY community_id, symbol_id",
+        )
+        .map_err(|e| io::Error::other(format!("prepare list community members: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(CommunityMember {
+                community_id: row.get(0)?,
+                symbol_id: row.get(1)?,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query list community members: {e}")))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect list community members: {e}")))
+}
+
+/// 列出当前 DB 内全部 processes。
+pub fn list_processes(repo_root: &Path) -> io::Result<Vec<ProcessNode>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    list_processes_in_conn(&conn)
+}
+
+fn list_processes_in_conn(conn: &Connection) -> io::Result<Vec<ProcessNode>> {
+    if !table_exists(conn, "processes")? {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, COALESCE(label, ''), COALESCE(process_type, ''), COALESCE(step_count, 0),
+                    entry_point_id, terminal_id
+             FROM processes
+             ORDER BY id",
+        )
+        .map_err(|e| io::Error::other(format!("prepare list processes: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ProcessNode {
+                process_id: row.get(0)?,
+                label: row.get(1)?,
+                process_type: row.get(2)?,
+                step_count: row.get::<_, i64>(3)? as usize,
+                entry_point_id: row.get(4)?,
+                terminal_id: row.get(5)?,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query list processes: {e}")))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect list processes: {e}")))
+}
+
+/// 列出当前 DB 内全部 process steps。
+pub fn list_process_steps(repo_root: &Path) -> io::Result<Vec<ProcessStep>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    list_process_steps_in_conn(&conn)
+}
+
+fn list_process_steps_in_conn(conn: &Connection) -> io::Result<Vec<ProcessStep>> {
+    if !table_exists(conn, "process_steps")? {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT process_id, symbol_id, step_order
+             FROM process_steps
+             ORDER BY process_id, step_order",
+        )
+        .map_err(|e| io::Error::other(format!("prepare list process steps: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ProcessStep {
+                process_id: row.get(0)?,
+                symbol_id: row.get(1)?,
+                step_order: row.get::<_, i64>(2)? as usize,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query list process steps: {e}")))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect list process steps: {e}")))
 }
 
 /// 用 `symbols_fts` 执行符号级 FTS/BM25 搜索。

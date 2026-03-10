@@ -141,7 +141,15 @@ fn module_section_templates(context: &PageContext) -> Vec<(String, String)> {
             "依赖关系".to_string(),
             bullet_lines(&filter_prefixed(&context.summary_inputs, "依赖")),
         ),
-        ("模块事实".to_string(), bullet_lines(&context.facts)),
+        (
+            "模块事实".to_string(),
+            bullet_lines(&merge_lines(
+                &context.facts,
+                &filter_prefixed(&context.summary_inputs, "图热点"),
+                &filter_prefixed(&context.summary_inputs, "社区"),
+                &filter_prefixed(&context.summary_inputs, "循环"),
+            )),
+        ),
         (
             "子模块概述".to_string(),
             bullet_lines(&filter_prefixed(&context.summary_inputs, "子模块")),
@@ -188,6 +196,16 @@ fn filter_prefixed(lines: &[String], prefix: &str) -> Vec<String> {
     lines
         .iter()
         .filter(|line| line.starts_with(prefix))
+        .cloned()
+        .collect()
+}
+
+fn merge_lines(groups: &[String], extra_a: &[String], extra_b: &[String], extra_c: &[String]) -> Vec<String> {
+    groups
+        .iter()
+        .chain(extra_a.iter())
+        .chain(extra_b.iter())
+        .chain(extra_c.iter())
         .cloned()
         .collect()
 }

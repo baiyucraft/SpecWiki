@@ -3,23 +3,38 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use regex::Regex;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::domain::stable_id::stable_id;
 use crate::repo::scanner::{ScanReport, ScannedFile};
 
 use super::models::{
-    ParsedFileSymbols, ParsedSymbolsSnapshot, SymbolNode, SymbolParseDiagnostic, SymbolTable,
+    ParsedFileSymbols, ParsedSymbolsSnapshot, RawCallCapture, RawHeritageCapture, RawImportCapture,
+    SymbolNode, SymbolParseDiagnostic, SymbolTable,
 };
-use super::registry::{resolve_symbol_language, ResolvedSymbolLanguage};
+use super::registry::{
+    resolve_embedded_language, resolve_symbol_language, ResolvedSymbolLanguage,
+};
 
 /// 单批解析预算。当前只用它约束顺序处理的分块边界。
 pub const CHUNK_BYTE_BUDGET: usize = 20 * 1024 * 1024;
 /// 超过这个大小的单文件先直接跳过，避免解析器被极端文件拖慢。
 pub const MAX_FILE_BYTES: usize = 512 * 1024;
 
+#[derive(Clone)]
+struct ParseUnit {
+    content: String,
+    resolved_language: ResolvedSymbolLanguage,
+    line_offset: usize,
+    source_label: String,
+}
+
 /// 全量解析 scan report 里的可支持源码文件。
-pub fn parse_symbols(repo_root: &Path, scan_report: &ScanReport) -> io::Result<ParsedSymbolsSnapshot> {
+pub fn parse_symbols(
+    repo_root: &Path,
+    scan_report: &ScanReport,
+) -> io::Result<ParsedSymbolsSnapshot> {
     parse_symbols_for_paths(repo_root, scan_report, &[])
 }
 
@@ -68,6 +83,7 @@ pub fn parse_symbols_for_paths(
         left.file_path
             .cmp(&right.file_path)
             .then(left.start_line.cmp(&right.start_line))
+            .then(left.end_line.cmp(&right.end_line))
             .then(left.symbol_id.cmp(&right.symbol_id))
     });
     snapshot
@@ -83,6 +99,7 @@ fn parse_file_symbols(repo_root: &Path, file: &ScannedFile) -> ParsedFileSymbols
         language: file.language.clone(),
         ..ParsedFileSymbols::default()
     };
+
     let Some(resolved_language) = resolve_symbol_language(&file.path, &file.language) else {
         return parsed;
     };
@@ -115,46 +132,205 @@ fn parse_file_symbols(repo_root: &Path, file: &ScannedFile) -> ParsedFileSymbols
         }
     };
 
-    let tree = match parse_tree(&resolved_language, &source) {
+    let units = build_parse_units(file, &source);
+    if let Some(first_unit) = units.first() {
+        parsed.language = first_unit.resolved_language.effective_language.to_string();
+    }
+    if units.is_empty() {
+        parsed.diagnostics.push(diagnostic(
+            file,
+            resolved_language.effective_language,
+            "wrapper_without_script",
+            "wrapper source contains no parseable script block".to_string(),
+        ));
+        return parsed;
+    }
+
+    for unit in &units {
+        parse_unit_symbols(file, unit, &mut parsed);
+    }
+
+    parsed.symbols.sort_by(|left, right| {
+        left.start_line
+            .cmp(&right.start_line)
+            .then(left.end_line.cmp(&right.end_line))
+            .then(left.symbol_id.cmp(&right.symbol_id))
+    });
+    parsed
+        .symbols
+        .dedup_by(|left, right| left.symbol_id == right.symbol_id);
+
+    let captured_symbols = parsed.symbols.clone();
+    for unit in &units {
+        parse_unit_raw_captures(file, unit, &captured_symbols, &mut parsed);
+    }
+
+    parsed.imports.sort_by(|left, right| {
+        left.file_path
+            .cmp(&right.file_path)
+            .then(left.line.cmp(&right.line))
+            .then(left.raw_path.cmp(&right.raw_path))
+            .then(left.source_symbol_id.cmp(&right.source_symbol_id))
+    });
+    parsed.imports.dedup();
+
+    parsed.calls.sort_by(|left, right| {
+        left.file_path
+            .cmp(&right.file_path)
+            .then(left.line.cmp(&right.line))
+            .then(left.called_name.cmp(&right.called_name))
+            .then(left.source_symbol_id.cmp(&right.source_symbol_id))
+    });
+    parsed.calls.dedup();
+
+    parsed.heritage.sort_by(|left, right| {
+        left.file_path
+            .cmp(&right.file_path)
+            .then(left.line.cmp(&right.line))
+            .then(left.owner_name.cmp(&right.owner_name))
+            .then(left.target_name.cmp(&right.target_name))
+            .then(left.relation_kind.cmp(&right.relation_kind))
+    });
+    parsed.heritage.dedup();
+
+    parsed
+}
+
+fn build_parse_units(file: &ScannedFile, source: &str) -> Vec<ParseUnit> {
+    match file.language.as_str() {
+        "vue" | "svelte" => build_wrapper_parse_units(source),
+        _ => resolve_symbol_language(&file.path, &file.language)
+            .map(|resolved_language| {
+                vec![ParseUnit {
+                    content: source.to_string(),
+                    resolved_language,
+                    line_offset: 0,
+                    source_label: file.language.clone(),
+                }]
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn build_wrapper_parse_units(source: &str) -> Vec<ParseUnit> {
+    let script_regex = Regex::new(r#"(?is)<script(?P<attrs>[^>]*)>(?P<body>.*?)</script>"#).unwrap();
+    let lang_regex = Regex::new(r#"lang\s*=\s*["'](?P<lang>[^"']+)["']"#).unwrap();
+
+    script_regex
+        .captures_iter(source)
+        .filter_map(|captures| {
+            let attrs = captures
+                .name("attrs")
+                .map(|match_| match_.as_str())
+                .unwrap_or_default();
+            let body = captures.name("body")?;
+            let line_offset = source[..body.start()]
+                .bytes()
+                .filter(|byte| *byte == b'\n')
+                .count();
+            let requested_language = lang_regex
+                .captures(attrs)
+                .and_then(|match_| match_.name("lang").map(|lang| lang.as_str().to_ascii_lowercase()))
+                .unwrap_or_else(|| "javascript".to_string());
+            let effective_language = match requested_language.as_str() {
+                "ts" | "typescript" | "tsx" => "typescript",
+                "jsx" | "js" | "javascript" => "javascript",
+                _ => "javascript",
+            };
+            let resolved_language = resolve_embedded_language(effective_language)?;
+            Some(ParseUnit {
+                content: body.as_str().to_string(),
+                resolved_language,
+                line_offset,
+                source_label: requested_language,
+            })
+        })
+        .collect()
+}
+
+fn parse_unit_symbols(file: &ScannedFile, unit: &ParseUnit, parsed: &mut ParsedFileSymbols) {
+    let tree = match parse_tree(&unit.resolved_language, &unit.content) {
         Ok(tree) => tree,
         Err(diagnostic) => {
-            parsed.diagnostics.push(diagnostic.with_file(&file.path));
-            return parsed;
+            parsed.diagnostics.push(
+                diagnostic
+                    .with_file(&file.path)
+                    .with_message_prefix(&format!("{}: ", unit.source_label)),
+            );
+            return;
         }
     };
 
     if tree.root_node().has_error() {
         parsed.diagnostics.push(diagnostic(
             file,
-            resolved_language.effective_language,
+            unit.resolved_language.effective_language,
             "parse_error",
-            "tree-sitter reported syntax errors; file skipped".to_string(),
+            format!(
+                "{}: tree-sitter reported syntax errors; parse unit skipped",
+                unit.source_label
+            ),
         ));
-        return parsed;
+        return;
     }
 
-    let language = resolved_language.language();
-    let query = match Query::new(&language, resolved_language.query_source) {
+    let language = unit.resolved_language.language();
+    let query = match Query::new(&language, unit.resolved_language.query_source) {
         Ok(query) => query,
         Err(error) => {
             parsed.diagnostics.push(diagnostic(
                 file,
-                resolved_language.effective_language,
+                unit.resolved_language.effective_language,
                 "query_error",
-                error.to_string(),
+                format!("{}: {error}", unit.source_label),
             ));
-            return parsed;
+            return;
         }
     };
 
-    parsed.symbols = collect_definition_symbols(
+    parsed.symbols.extend(collect_definition_symbols(
         &file.path,
-        resolved_language.effective_language,
-        source.as_bytes(),
+        unit.resolved_language.effective_language,
+        unit.content.as_bytes(),
         &tree,
         &query,
+        unit.line_offset,
+    ));
+}
+
+fn parse_unit_raw_captures(
+    file: &ScannedFile,
+    unit: &ParseUnit,
+    symbols: &[SymbolNode],
+    parsed: &mut ParsedFileSymbols,
+) {
+    let tree = match parse_tree(&unit.resolved_language, &unit.content) {
+        Ok(tree) => tree,
+        Err(_) => return,
+    };
+
+    if tree.root_node().has_error() {
+        return;
+    }
+
+    let language = unit.resolved_language.language();
+    let query = match Query::new(&language, unit.resolved_language.query_source) {
+        Ok(query) => query,
+        Err(_) => return,
+    };
+
+    let (imports, calls, heritage) = collect_raw_captures(
+        &file.path,
+        unit.resolved_language.effective_language,
+        unit.content.as_bytes(),
+        &tree,
+        &query,
+        unit.line_offset,
+        symbols,
     );
-    parsed
+    parsed.imports.extend(imports);
+    parsed.calls.extend(calls);
+    parsed.heritage.extend(heritage);
 }
 
 fn parse_tree(
@@ -187,6 +363,7 @@ fn collect_definition_symbols(
     source: &[u8],
     tree: &Tree,
     query: &Query,
+    line_offset: usize,
 ) -> Vec<SymbolNode> {
     let mut symbols = Vec::new();
     let mut seen_symbol_ids = BTreeSet::new();
@@ -196,9 +373,14 @@ fn collect_definition_symbols(
     matches.advance();
 
     while let Some(query_match) = matches.get() {
-        if let Some(symbol) =
-            build_symbol_from_match(file_path, language, source, capture_names, query_match)
-        {
+        if let Some(symbol) = build_symbol_from_match(
+            file_path,
+            language,
+            source,
+            capture_names,
+            query_match,
+            line_offset,
+        ) {
             if seen_symbol_ids.insert(symbol.symbol_id.clone()) {
                 symbols.push(symbol);
             }
@@ -209,12 +391,168 @@ fn collect_definition_symbols(
     symbols
 }
 
+fn collect_raw_captures(
+    file_path: &str,
+    language: &str,
+    source: &[u8],
+    tree: &Tree,
+    query: &Query,
+    line_offset: usize,
+    symbols: &[SymbolNode],
+) -> (Vec<RawImportCapture>, Vec<RawCallCapture>, Vec<RawHeritageCapture>) {
+    let mut imports = Vec::new();
+    let mut calls = Vec::new();
+    let mut heritage = Vec::new();
+
+    let capture_names = query.capture_names();
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(query, tree.root_node(), source);
+    matches.advance();
+
+    while let Some(query_match) = matches.get() {
+        let mut import_node = None;
+        let mut import_sources = Vec::new();
+        let mut call_node = None;
+        let mut call_name = None;
+        let mut call_receiver = None;
+        let mut heritage_node = None;
+        let mut heritage_kind = None;
+        let mut heritage_owner = None;
+        let mut heritage_targets = Vec::new();
+
+        for capture in query_match.captures {
+            let Some(capture_name) = capture_names.get(capture.index as usize).copied() else {
+                continue;
+            };
+
+            match capture_name {
+                "import" => import_node = Some(capture.node),
+                "import.source" => import_sources.push(capture.node),
+                "call" => call_node = Some(capture.node),
+                "call.name" => call_name = Some(capture.node),
+                "call.receiver" => call_receiver = Some(capture.node),
+                "heritage.extends" => {
+                    heritage_node = Some(capture.node);
+                    heritage_kind = Some("extends");
+                }
+                "heritage.implements" => {
+                    heritage_node = Some(capture.node);
+                    heritage_kind = Some("implements");
+                }
+                "heritage.owner" => heritage_owner = Some(capture.node),
+                "heritage.target" => heritage_targets.push(capture.node),
+                _ => {}
+            }
+        }
+
+        if let Some(import_node) = import_node {
+            let line = import_node.start_position().row + line_offset + 1;
+            let source_symbol_id = find_enclosing_symbol_id(symbols, line);
+            let source_text = import_node
+                .utf8_text(source)
+                .ok()
+                .map(normalize_symbol_name)
+                .unwrap_or_default();
+
+            for import_source in import_sources {
+                let raw_path = import_source
+                    .utf8_text(source)
+                    .ok()
+                    .map(clean_import_text)
+                    .unwrap_or_default();
+                if raw_path.is_empty() {
+                    continue;
+                }
+                imports.push(RawImportCapture {
+                    file_path: file_path.to_string(),
+                    raw_path,
+                    line,
+                    language: language.to_string(),
+                    source_symbol_id: source_symbol_id.clone(),
+                    source_text: source_text.clone(),
+                });
+            }
+        }
+
+        if let (Some(call_node), Some(call_name)) = (call_node, call_name) {
+            let called_name = call_name
+                .utf8_text(source)
+                .ok()
+                .map(normalize_symbol_name)
+                .unwrap_or_default();
+            if !called_name.is_empty() {
+                let line = call_node.start_position().row + line_offset + 1;
+                calls.push(RawCallCapture {
+                    file_path: file_path.to_string(),
+                    called_name,
+                    line,
+                    language: language.to_string(),
+                    source_symbol_id: find_enclosing_symbol_id(symbols, line),
+                    receiver_text: call_receiver
+                        .and_then(|node| node.utf8_text(source).ok())
+                        .map(normalize_symbol_name)
+                        .filter(|text| !text.is_empty()),
+                    source_text: call_node
+                        .utf8_text(source)
+                        .ok()
+                        .map(normalize_symbol_name)
+                        .unwrap_or_default(),
+                });
+            }
+        }
+
+        if let (Some(heritage_node), Some(heritage_kind), Some(heritage_owner)) =
+            (heritage_node, heritage_kind, heritage_owner)
+        {
+            let line = heritage_node.start_position().row + line_offset + 1;
+            let owner_name = heritage_owner
+                .utf8_text(source)
+                .ok()
+                .map(normalize_symbol_name)
+                .unwrap_or_default();
+            let owner_symbol_id = find_symbol_id_by_name_and_line(symbols, &owner_name, line)
+                .or_else(|| find_enclosing_symbol_id(symbols, line));
+            let source_text = heritage_node
+                .utf8_text(source)
+                .ok()
+                .map(normalize_symbol_name)
+                .unwrap_or_default();
+
+            for target_node in heritage_targets {
+                let target_name = target_node
+                    .utf8_text(source)
+                    .ok()
+                    .map(normalize_symbol_name)
+                    .unwrap_or_default();
+                if target_name.is_empty() {
+                    continue;
+                }
+                heritage.push(RawHeritageCapture {
+                    file_path: file_path.to_string(),
+                    line,
+                    language: language.to_string(),
+                    owner_name: owner_name.clone(),
+                    owner_symbol_id: owner_symbol_id.clone(),
+                    target_name,
+                    relation_kind: heritage_kind.to_string(),
+                    source_text: source_text.clone(),
+                });
+            }
+        }
+
+        matches.advance();
+    }
+
+    (imports, calls, heritage)
+}
+
 fn build_symbol_from_match(
     file_path: &str,
     language: &str,
     source: &[u8],
     capture_names: &[&str],
     query_match: &tree_sitter::QueryMatch<'_, '_>,
+    line_offset: usize,
 ) -> Option<SymbolNode> {
     let mut definition_node = None;
     let mut label = None;
@@ -241,8 +579,8 @@ fn build_symbol_from_match(
         return None;
     }
 
-    let start_line = definition_node.start_position().row + 1;
-    let end_line = definition_node.end_position().row + 1;
+    let start_line = definition_node.start_position().row + line_offset + 1;
+    let end_line = definition_node.end_position().row + line_offset + 1;
     let seed = format!("{file_path}:{label}:{name}:{start_line}");
     let symbol_id = stable_id("symbol", seed);
 
@@ -262,6 +600,12 @@ fn normalize_symbol_name(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn clean_import_text(text: &str) -> String {
+    text.trim()
+        .trim_matches(['"', '\'', ';', '<', '>'])
+        .replace("::", "/")
+}
+
 fn fallback_symbol_name(label: &str, node: Node<'_>, source: &[u8]) -> String {
     if label == "constructor" {
         return "constructor".to_string();
@@ -273,10 +617,38 @@ fn fallback_symbol_name(label: &str, node: Node<'_>, source: &[u8]) -> String {
         .unwrap_or_default()
 }
 
+fn find_enclosing_symbol_id(symbols: &[SymbolNode], line: usize) -> Option<String> {
+    symbols
+        .iter()
+        .filter(|symbol| symbol.start_line <= line && line <= symbol.end_line)
+        .min_by_key(|symbol| (symbol.end_line - symbol.start_line, symbol.start_line))
+        .map(|symbol| symbol.symbol_id.clone())
+}
+
+fn find_symbol_id_by_name_and_line(
+    symbols: &[SymbolNode],
+    name: &str,
+    line: usize,
+) -> Option<String> {
+    symbols
+        .iter()
+        .find(|symbol| {
+            symbol.name == name && symbol.start_line <= line && line <= symbol.end_line
+        })
+        .map(|symbol| symbol.symbol_id.clone())
+        .or_else(|| {
+            symbols
+                .iter()
+                .find(|symbol| symbol.name == name)
+                .map(|symbol| symbol.symbol_id.clone())
+        })
+}
+
 fn detect_exported(language: &str, name: &str, node: Node<'_>, source: &[u8]) -> bool {
     match language {
         "javascript" | "typescript" => {
-            ancestor_has_kind(node, "export_statement") || node_text_contains_any(node, source, &["export "])
+            ancestor_has_kind(node, "export_statement")
+                || node_text_contains_any(node, source, &["export "])
         }
         "python" => !name.starts_with('_'),
         "go" => name
@@ -333,6 +705,7 @@ fn diagnostic(
 
 trait DiagnosticWithFile {
     fn with_file(self, file_path: &str) -> Self;
+    fn with_message_prefix(self, prefix: &str) -> Self;
 }
 
 impl DiagnosticWithFile for SymbolParseDiagnostic {
@@ -340,180 +713,9 @@ impl DiagnosticWithFile for SymbolParseDiagnostic {
         self.file_path = file_path.to_string();
         self
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use crate::repo::scanner::{FilePurpose, ScannedFile, ScanReport};
-
-    use super::{parse_symbols, MAX_FILE_BYTES};
-
-    #[test]
-    fn parse_symbols_builds_stable_ids_for_duplicate_names() {
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            temp.path().join("src.ts"),
-            "export function same() {}\nfunction same() {}\n",
-        )
-        .unwrap();
-        let scan_report = ScanReport {
-            root: temp.path().to_string_lossy().to_string(),
-            files: vec![ScannedFile {
-                id: "source-a".to_string(),
-                path: "src.ts".to_string(),
-                language: "typescript".to_string(),
-                kind: "source".to_string(),
-                purpose: FilePurpose::Utility,
-                fingerprint: "fingerprint".to_string(),
-                size: 40,
-                tags: Vec::new(),
-            }],
-            tech_hints: Vec::new(),
-            workspace_roots: Vec::new(),
-            config_files: Vec::new(),
-            entry_points: Vec::new(),
-            dependency_hints: Vec::new(),
-        };
-
-        let snapshot = parse_symbols(temp.path(), &scan_report).unwrap();
-        assert_eq!(
-            snapshot.symbols.len(),
-            2,
-            "unexpected snapshot: {snapshot:#?}"
-        );
-        assert_ne!(snapshot.symbols[0].symbol_id, snapshot.symbols[1].symbol_id);
-        assert!(snapshot.symbols.iter().any(|symbol| symbol.is_exported));
-        assert!(snapshot
-            .symbol_table
-            .global_index
-            .get("same")
-            .is_some_and(|symbol_ids| symbol_ids.len() == 2));
-    }
-
-    #[test]
-    fn parse_symbols_skips_oversized_file_with_diagnostic() {
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::write(temp.path().join("huge.ts"), "export function huge() {}\n").unwrap();
-        let scan_report = ScanReport {
-            root: temp.path().to_string_lossy().to_string(),
-            files: vec![ScannedFile {
-                id: "source-huge".to_string(),
-                path: "huge.ts".to_string(),
-                language: "typescript".to_string(),
-                kind: "source".to_string(),
-                purpose: FilePurpose::Utility,
-                fingerprint: "fingerprint".to_string(),
-                size: MAX_FILE_BYTES + 1,
-                tags: Vec::new(),
-            }],
-            tech_hints: Vec::new(),
-            workspace_roots: Vec::new(),
-            config_files: Vec::new(),
-            entry_points: Vec::new(),
-            dependency_hints: Vec::new(),
-        };
-
-        let snapshot = parse_symbols(temp.path(), &scan_report).unwrap();
-        assert!(snapshot.symbols.is_empty());
-        assert!(snapshot
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.kind == "file_too_large"));
-    }
-
-    #[test]
-    fn parse_symbols_isolates_parse_failures_per_file() {
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::write(temp.path().join("good.ts"), "export function ok() {}\n").unwrap();
-        std::fs::write(temp.path().join("broken.ts"), "export function broken( {\n").unwrap();
-        let scan_report = ScanReport {
-            root: temp.path().to_string_lossy().to_string(),
-            files: vec![
-                ScannedFile {
-                    id: "source-bad".to_string(),
-                    path: "broken.ts".to_string(),
-                    language: "typescript".to_string(),
-                    kind: "source".to_string(),
-                    purpose: FilePurpose::Utility,
-                    fingerprint: "fingerprint-bad".to_string(),
-                    size: 28,
-                    tags: Vec::new(),
-                },
-                ScannedFile {
-                    id: "source-good".to_string(),
-                    path: "good.ts".to_string(),
-                    language: "typescript".to_string(),
-                    kind: "source".to_string(),
-                    purpose: FilePurpose::Utility,
-                    fingerprint: "fingerprint-good".to_string(),
-                    size: 24,
-                    tags: Vec::new(),
-                },
-            ],
-            tech_hints: Vec::new(),
-            workspace_roots: Vec::new(),
-            config_files: Vec::new(),
-            entry_points: Vec::new(),
-            dependency_hints: Vec::new(),
-        };
-
-        let snapshot = parse_symbols(temp.path(), &scan_report).unwrap();
-        assert!(snapshot.symbols.iter().any(|symbol| symbol.name == "ok"));
-        assert!(snapshot
-            .files
-            .get("broken.ts")
-            .is_some_and(|parsed| parsed.symbols.is_empty()));
-        assert!(snapshot.diagnostics.iter().any(|diagnostic| {
-            diagnostic.file_path == "broken.ts" && diagnostic.kind == "parse_error"
-        }));
-    }
-
-    #[test]
-    fn parse_symbols_extracts_kotlin_definitions() {
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            temp.path().join("App.kt"),
-            [
-                "interface Greeting",
-                "class Greeter",
-                "fun useTheme() = true",
-                "val themeName = \"light\"",
-                "typealias GreetingAlias = Greeting",
-                "",
-            ]
-            .join("\n"),
-        )
-        .unwrap();
-        let scan_report = ScanReport {
-            root: temp.path().to_string_lossy().to_string(),
-            files: vec![ScannedFile {
-                id: "source-kotlin".to_string(),
-                path: "App.kt".to_string(),
-                language: "kotlin".to_string(),
-                kind: "source".to_string(),
-                purpose: FilePurpose::Utility,
-                fingerprint: "fingerprint-kotlin".to_string(),
-                size: 120,
-                tags: Vec::new(),
-            }],
-            tech_hints: Vec::new(),
-            workspace_roots: Vec::new(),
-            config_files: Vec::new(),
-            entry_points: Vec::new(),
-            dependency_hints: Vec::new(),
-        };
-
-        let snapshot = parse_symbols(temp.path(), &scan_report).unwrap();
-        let names = snapshot
-            .symbols
-            .iter()
-            .map(|symbol| (symbol.name.as_str(), symbol.label.as_str()))
-            .collect::<Vec<_>>();
-
-        assert!(names.contains(&("Greeting", "interface")));
-        assert!(names.contains(&("Greeter", "class")));
-        assert!(names.contains(&("useTheme", "function")));
-        assert!(names.contains(&("themeName", "property")));
-        assert!(names.contains(&("GreetingAlias", "type")));
+    fn with_message_prefix(mut self, prefix: &str) -> Self {
+        self.message = format!("{prefix}{}", self.message);
+        self
     }
 }

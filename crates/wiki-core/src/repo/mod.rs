@@ -8,4 +8,5 @@ pub mod hierarchy;
 pub mod language_processors;
 pub mod parsers;
 pub mod scanner;
+pub mod symbol_graph;
 pub mod symbols;

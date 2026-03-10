@@ -5,6 +5,7 @@ use crate::domain::context::{ModuleContext, PageContext, RepoContext};
 use crate::domain::module_tree::{ModuleNode, ModuleTree};
 use crate::generation::planner::PlannedPage;
 use crate::repo::scanner::ScanReport;
+use crate::repo::symbol_graph::GraphSummary;
 
 /// 构建仓库级上下文。
 /// 这一步把扫描事实和模块树压缩成“项目概述 / 系统架构”真正会用到的信息。
@@ -16,6 +17,15 @@ use crate::repo::scanner::ScanReport;
 /// # 返回
 /// - 返回供仓库级页面使用的 `RepoContext`。
 pub fn build_repo_context(report: &ScanReport, module_tree: &ModuleTree) -> RepoContext {
+    build_repo_context_with_graph(report, module_tree, &GraphSummary::default())
+}
+
+/// 构建消费 graph summary 的仓库级上下文。
+pub fn build_repo_context_with_graph(
+    report: &ScanReport,
+    module_tree: &ModuleTree,
+    graph_summary: &GraphSummary,
+) -> RepoContext {
     RepoContext {
         repo_summary_inputs: vec![
             format!("仓库根路径：{}", report.root),
@@ -34,6 +44,21 @@ pub fn build_repo_context(report: &ScanReport, module_tree: &ModuleTree) -> Repo
             .map(|edge| format!("{} -> {}", edge.source, edge.target))
             .collect(),
         tech_stack: report.tech_hints.clone(),
+        graph_hotspots: graph_summary
+            .module_call_hotspots
+            .values()
+            .flat_map(|items| items.iter().cloned())
+            .take(12)
+            .collect(),
+        detected_processes: graph_summary.detected_processes.clone(),
+        community_labels: graph_summary
+            .communities_by_module
+            .values()
+            .flat_map(|items| items.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        cycle_warnings: graph_summary.cycle_warnings.clone(),
     }
 }
 
@@ -47,6 +72,15 @@ pub fn build_repo_context(report: &ScanReport, module_tree: &ModuleTree) -> Repo
 /// # 返回
 /// - 返回每个模块对应的上下文对象列表。
 pub fn build_module_contexts(report: &ScanReport, module_tree: &ModuleTree) -> Vec<ModuleContext> {
+    build_module_contexts_with_graph(report, module_tree, &GraphSummary::default())
+}
+
+/// 为每个模块构建消费 graph summary 的独立上下文。
+pub fn build_module_contexts_with_graph(
+    report: &ScanReport,
+    module_tree: &ModuleTree,
+    graph_summary: &GraphSummary,
+) -> Vec<ModuleContext> {
     module_tree
         .modules
         .iter()
@@ -73,6 +107,7 @@ pub fn build_module_contexts(report: &ScanReport, module_tree: &ModuleTree) -> V
                 .into_iter()
                 .collect::<Vec<_>>();
             let key_sources = select_key_sources(report, module);
+            let module_root = module.root_paths.first().cloned().unwrap_or_else(|| ".".to_string());
 
             ModuleContext {
                 module_id: module.id.clone(),
@@ -81,6 +116,17 @@ pub fn build_module_contexts(report: &ScanReport, module_tree: &ModuleTree) -> V
                 dependencies,
                 dependents,
                 key_sources,
+                graph_hotspots: graph_summary
+                    .module_call_hotspots
+                    .get(&module_root)
+                    .cloned()
+                    .unwrap_or_default(),
+                communities: graph_summary
+                    .communities_by_module
+                    .get(&module_root)
+                    .cloned()
+                    .unwrap_or_default(),
+                cycle_warnings: graph_summary.cycle_warnings.clone(),
             }
         })
         .collect()
@@ -360,6 +406,18 @@ pub fn build_page_context(
             for tech in &repo_context.tech_stack {
                 facts.push(format!("技术栈：{tech}"));
             }
+            for hotspot in &repo_context.graph_hotspots {
+                summary_inputs.push(format!("图热点：{hotspot}"));
+            }
+            for process in &repo_context.detected_processes {
+                summary_inputs.push(format!("流程：{process}"));
+            }
+            for community in &repo_context.community_labels {
+                summary_inputs.push(format!("社区：{community}"));
+            }
+            for warning in &repo_context.cycle_warnings {
+                summary_inputs.push(format!("循环：{warning}"));
+            }
             // 入口与构建事实（供"入口与构建" section 消费）
             for entry in &repo_context.key_entry_points {
                 summary_inputs.push(format!("入口：{entry}"));
@@ -432,6 +490,15 @@ pub fn build_page_context(
                             summary_inputs
                                 .push(format!("依赖：← {}", module_name(module_tree, dep)));
                         }
+                        for hotspot in &context.graph_hotspots {
+                            summary_inputs.push(format!("图热点：{hotspot}"));
+                        }
+                        for community in &context.communities {
+                            summary_inputs.push(format!("社区：{community}"));
+                        }
+                        for warning in &context.cycle_warnings {
+                            summary_inputs.push(format!("循环：{warning}"));
+                        }
                     }
                 }
             }
@@ -449,6 +516,12 @@ pub fn build_page_context(
         }
         "workflow" => {
             facts.push("页面类型：工作流与部署".to_string());
+            for process in &repo_context.detected_processes {
+                facts.push(format!("构建：检测到流程 {process}"));
+            }
+            for warning in &repo_context.cycle_warnings {
+                facts.push(format!("构建：循环提示 {warning}"));
+            }
             // 按类别分类工作流文件
             for file in &_report.files {
                 let name = file.path.rsplit('/').next().unwrap_or(&file.path);

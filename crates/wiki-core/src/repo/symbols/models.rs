@@ -38,8 +38,16 @@ impl SymbolNode {
 pub struct RawImportCapture {
     /// 捕获所在文件。
     pub file_path: String,
-    /// 原始 import 片段文本。
-    pub source: String,
+    /// 原始 import 路径或模块文本。
+    pub raw_path: String,
+    /// import 出现的原始行号。
+    pub line: usize,
+    /// 解析时实际使用的底层语言标签。
+    pub language: String,
+    /// 若 import 位于某个符号定义内部，则记录该源符号 ID。
+    pub source_symbol_id: Option<String>,
+    /// 原始 import 片段文本，供 diagnostics 与 resolution reason 复用。
+    pub source_text: String,
 }
 
 /// 原始 call capture 先保留模型，当前迭代暂不持久化。
@@ -48,9 +56,17 @@ pub struct RawCallCapture {
     /// 捕获所在文件。
     pub file_path: String,
     /// 被调用符号的原始名称。
-    pub name: String,
+    pub called_name: String,
     /// 调用发生行号。
     pub line: usize,
+    /// 解析时实际使用的底层语言标签。
+    pub language: String,
+    /// 调用发生时所在的源符号 ID。
+    pub source_symbol_id: Option<String>,
+    /// 若调用带 receiver/member 语义，这里保留原始 receiver 文本。
+    pub receiver_text: Option<String>,
+    /// 原始调用片段文本。
+    pub source_text: String,
 }
 
 /// 原始 heritage capture 先保留模型，当前迭代暂不持久化。
@@ -58,12 +74,20 @@ pub struct RawCallCapture {
 pub struct RawHeritageCapture {
     /// 捕获所在文件。
     pub file_path: String,
+    /// 关系出现的原始行号。
+    pub line: usize,
+    /// 解析时实际使用的底层语言标签。
+    pub language: String,
     /// 关系拥有者，例如当前类或接口。
-    pub owner: String,
+    pub owner_name: String,
+    /// 关系拥有者对应的稳定 symbol ID。
+    pub owner_symbol_id: Option<String>,
     /// 继承或实现目标。
-    pub target: String,
+    pub target_name: String,
     /// 关系类别，例如 extends / implements。
     pub relation_kind: String,
+    /// 原始 heritage 片段文本。
+    pub source_text: String,
 }
 
 /// 单文件符号解析结果。
@@ -153,5 +177,19 @@ impl SymbolTable {
         }
 
         table
+    }
+
+    /// 返回同文件内同名定义候选。
+    pub fn lookup_exact(&self, file_path: &str, name: &str) -> Vec<String> {
+        self.file_index
+            .get(file_path)
+            .and_then(|symbols| symbols.get(name))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// 返回全局同名定义候选。
+    pub fn lookup_global(&self, name: &str) -> Vec<String> {
+        self.global_index.get(name).cloned().unwrap_or_default()
     }
 }

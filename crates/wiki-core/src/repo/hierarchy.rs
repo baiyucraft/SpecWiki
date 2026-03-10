@@ -5,6 +5,7 @@ use crate::domain::module_tree::{ModuleNode, ModuleTree, RelationEdge};
 use crate::domain::stable_id::stable_id;
 use crate::repo::detectors::detect_tech_hints;
 use crate::repo::scanner::{DependencyHint, ScanReport, ScannedFile};
+use crate::repo::symbol_graph::GraphSummary;
 
 /// 模块根路径发现结果会被后续建树和页面规划共用。
 /// 这里把"显式根路径"和"为递归层级补出的祖先根路径"分开保存，避免后续再重复推断。
@@ -24,6 +25,11 @@ struct ModuleRootDiscovery {
 /// # 返回
 /// - 返回供页面规划、metadata 和 query 使用的模块树。
 pub fn build_module_tree(report: &ScanReport) -> ModuleTree {
+    build_module_tree_with_graph(report, &GraphSummary::default())
+}
+
+/// 基于扫描结果和 graph summary 构建模块树。
+pub fn build_module_tree_with_graph(report: &ScanReport, graph_summary: &GraphSummary) -> ModuleTree {
     let root_name = repo_name_from_root(&report.root);
     let root_id = stable_id("module", &report.root);
     let discovery = discover_module_roots(report);
@@ -53,8 +59,9 @@ pub fn build_module_tree(report: &ScanReport) -> ModuleTree {
         ));
     }
 
-    let cross_module_edges = build_cross_module_edges(report, &modules);
-    let architecture_hints = build_architecture_hints(report, &modules, &cross_module_edges);
+    let cross_module_edges = build_cross_module_edges(report, &modules, graph_summary);
+    let architecture_hints =
+        build_architecture_hints(report, &modules, &cross_module_edges, graph_summary);
 
     ModuleTree {
         root_modules: vec![root_id],
@@ -766,7 +773,11 @@ fn path_belongs_to_root(path: &str, root_path: &str) -> bool {
 }
 
 /// 把文件级依赖线索折叠成模块级关系。
-fn build_cross_module_edges(report: &ScanReport, modules: &[ModuleNode]) -> Vec<RelationEdge> {
+fn build_cross_module_edges(
+    report: &ScanReport,
+    modules: &[ModuleNode],
+    graph_summary: &GraphSummary,
+) -> Vec<RelationEdge> {
     let mut edges: BTreeMap<String, RelationEdge> = BTreeMap::new();
 
     for dependency in &report.dependency_hints {
@@ -781,6 +792,25 @@ fn build_cross_module_edges(report: &ScanReport, modules: &[ModuleNode]) -> Vec<
                 }
                 None => {
                     edges.insert(edge.id.clone(), edge);
+                }
+            }
+        }
+    }
+
+    for (source_root, target_roots) in &graph_summary.module_dependency_hints {
+        for target_root in target_roots {
+            if let Some(edge) = map_graph_roots_to_module_edge(source_root, target_root, modules) {
+                match edges.get_mut(&edge.id) {
+                    Some(existing) => {
+                        for evidence in edge.evidence {
+                            if !existing.evidence.contains(&evidence) {
+                                existing.evidence.push(evidence);
+                            }
+                        }
+                    }
+                    None => {
+                        edges.insert(edge.id.clone(), edge);
+                    }
                 }
             }
         }
@@ -819,6 +849,28 @@ fn map_dependency_to_module_edge(
     })
 }
 
+fn map_graph_roots_to_module_edge(
+    source_root: &str,
+    target_root: &str,
+    modules: &[ModuleNode],
+) -> Option<RelationEdge> {
+    let source_module = find_best_module_for_path(source_root, modules)?;
+    let target_module = find_best_module_for_path(target_root, modules)?;
+
+    if source_module.id == target_module.id {
+        return None;
+    }
+
+    let edge_seed = format!("{}:{}:GRAPH_DEPENDS_ON", source_module.id, target_module.id);
+    Some(RelationEdge {
+        id: stable_id("relation", edge_seed),
+        source: source_module.id.clone(),
+        target: target_module.id.clone(),
+        relation_type: "GRAPH_DEPENDS_ON".to_string(),
+        evidence: vec![format!("graph:{source_root}"), format!("graph:{target_root}")],
+    })
+}
+
 /// 在所有可匹配模块中，优先选根路径最长的那个。
 fn find_best_module_for_path<'a>(path: &str, modules: &'a [ModuleNode]) -> Option<&'a ModuleNode> {
     modules
@@ -844,6 +896,7 @@ fn build_architecture_hints(
     report: &ScanReport,
     modules: &[ModuleNode],
     edges: &[RelationEdge],
+    graph_summary: &GraphSummary,
 ) -> Vec<String> {
     let root_id = modules.first().map(|module| module.id.as_str());
     let top_level_modules = modules
@@ -874,6 +927,19 @@ fn build_architecture_hints(
         hints.push(format!(
             "关键入口：{}",
             join_or_default(&report.entry_points, "无")
+        ));
+    }
+
+    if !graph_summary.detected_processes.is_empty() {
+        hints.push(format!(
+            "检测流程：{}",
+            join_or_default(&graph_summary.detected_processes, "无")
+        ));
+    }
+    if !graph_summary.cycle_warnings.is_empty() {
+        hints.push(format!(
+            "循环提示：{}",
+            join_or_default(&graph_summary.cycle_warnings, "无")
         ));
     }
 

@@ -9,6 +9,14 @@ pub struct RepoContext {
     pub key_entry_points: Vec<String>,
     pub global_relations: Vec<String>,
     pub tech_stack: Vec<String>,
+    #[serde(default)]
+    pub graph_hotspots: Vec<String>,
+    #[serde(default)]
+    pub detected_processes: Vec<String>,
+    #[serde(default)]
+    pub community_labels: Vec<String>,
+    #[serde(default)]
+    pub cycle_warnings: Vec<String>,
 }
 
 /// `ModuleContext` 是模块页生成的输入。
@@ -21,6 +29,12 @@ pub struct ModuleContext {
     pub dependencies: Vec<String>,
     pub dependents: Vec<String>,
     pub key_sources: Vec<String>,
+    #[serde(default)]
+    pub graph_hotspots: Vec<String>,
+    #[serde(default)]
+    pub communities: Vec<String>,
+    #[serde(default)]
+    pub cycle_warnings: Vec<String>,
 }
 
 /// `PageContext` 是最终传给渲染器的统一输入。

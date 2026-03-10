@@ -24,7 +24,7 @@ import {
   callCore,
   countFilesWithMarker,
   countMdFiles,
-} from "./test-helpers.mjs";
+} from "./testing/helpers.mjs";
 
 const REFERENCE_DIR = path.join(TMP_DIR, "reference");
 
@@ -36,10 +36,37 @@ const REFERENCE_DIR = path.join(TMP_DIR, "reference");
  * @returns 去掉首尾空白后的结果文本。
  */
 function querySqlite(dbPath, sql) {
-  return execFileSync("sqlite3", [dbPath, sql], {
-    encoding: "utf-8",
-    timeout: 30_000,
-  }).trim();
+  const rows = querySqliteLines(dbPath, sql);
+  return rows.at(-1) ?? "";
+}
+
+function querySqliteLines(dbPath, sql) {
+  const statement = `PRAGMA busy_timeout=30000; ${sql}`;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const output = execFileSync("sqlite3", [dbPath, statement], {
+        encoding: "utf-8",
+        timeout: 35_000,
+      })
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (output[0] === "30000") {
+        output.shift();
+      }
+      return output;
+    } catch (error) {
+      lastError = error;
+      if (!String(error.stderr || error.message || "").includes("database is locked")) {
+        throw error;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+  }
+
+  throw lastError;
 }
 
 /**
@@ -50,8 +77,7 @@ function querySqlite(dbPath, sql) {
  * @returns 按行切分后的结果。
  */
 function querySqliteRows(dbPath, sql) {
-  const output = querySqlite(dbPath, sql);
-  return output ? output.split(/\r?\n/).filter(Boolean) : [];
+  return querySqliteLines(dbPath, sql);
 }
 
 /**
@@ -118,6 +144,24 @@ function listRepresentativeSymbols(dbPath) {
   );
 }
 
+function listRepresentativeGraphSymbols(dbPath) {
+  return querySqliteRows(
+    dbPath,
+    [
+      "select s.name",
+      "from edges e",
+      "join symbols s on s.id = e.source_id",
+      "where length(s.name) >= 6",
+      "and s.name glob '[A-Za-z_]*'",
+      "and s.name not glob '[A-Z0-9_]*'",
+      "group by s.name",
+      "having count(*) = 1",
+      "order by max(s.is_exported) desc, count(*) desc, length(s.name) asc, s.name asc",
+      "limit 24;",
+    ].join(" "),
+  );
+}
+
 /**
  * 把 `key|value` 风格的 sqlite group by 结果转成对象数组。
  *
@@ -155,6 +199,9 @@ function collectProject(project) {
   const exportedSymbolCount = Number(
     querySqlite(dbPath, "select count(*) from symbols where is_exported = 1;") || "0",
   );
+  const edgeCount = Number(querySqlite(dbPath, "select count(*) from edges;") || "0");
+  const communityCount = Number(querySqlite(dbPath, "select count(*) from communities;") || "0");
+  const processCount = Number(querySqlite(dbPath, "select count(*) from processes;") || "0");
   const languageBreakdown = parseGroupedRows(
     querySqliteRows(
       dbPath,
@@ -168,6 +215,7 @@ function collectProject(project) {
     ),
   );
   const representativeSymbols = listRepresentativeSymbols(dbPath);
+  const representativeGraphSymbols = listRepresentativeGraphSymbols(dbPath);
 
   let representativeSymbol = "";
   let querySummary = null;
@@ -213,6 +261,38 @@ function collectProject(project) {
   }
   querySummary ??= fallbackQuerySummary;
 
+  let graphQuerySummary = null;
+  let fallbackGraphQuerySummary = null;
+  for (const candidate of representativeGraphSymbols) {
+    const query = callCore({
+      action: "query",
+      repoRoot: path.relative(process.cwd(), repoRoot).replaceAll("\\", "/"),
+      term: candidate,
+    });
+    if (!query.ok) {
+      throw new Error(`${project} graph query failed: ${query.error ?? "unknown error"}`);
+    }
+
+    const report = query.data;
+    const summary = {
+      term: candidate,
+      matchedGraphEdges: report.matched_symbol_edges?.length ?? 0,
+      matchedProcesses: report.matched_processes?.length ?? 0,
+      matchedCommunities: report.matched_communities?.length ?? 0,
+      provenanceSummary: report.provenance_summary ?? "",
+    };
+    fallbackGraphQuerySummary ??= summary;
+    if (
+      summary.matchedGraphEdges > 0
+      || summary.matchedProcesses > 0
+      || summary.matchedCommunities > 0
+    ) {
+      graphQuerySummary = summary;
+      break;
+    }
+  }
+  graphQuerySummary ??= fallbackGraphQuerySummary;
+
   return {
     project,
     pageCount,
@@ -221,10 +301,14 @@ function collectProject(project) {
     sourceCount,
     symbolCount,
     exportedSymbolCount,
+    edgeCount,
+    communityCount,
+    processCount,
     languageBreakdown,
     labelBreakdown,
     representativeSymbol,
     querySummary,
+    graphQuerySummary,
     reference: collectReference(project),
   };
 }
@@ -236,10 +320,64 @@ function discoverProjects() {
     .sort();
 }
 
-function main(projects) {
+function toMarkdown(results) {
+  const lines = ["# Test Project Analysis", ""];
+
+  for (const result of results) {
+    lines.push(`## ${result.project}`);
+    lines.push("");
+    lines.push(
+      `- Pages: ${result.pageCount}, Modules: ${result.moduleCount}, Sources: ${result.sourceCount}`,
+    );
+    lines.push(
+      `- Symbols: ${result.symbolCount} (exported ${result.exportedSymbolCount}), Edges: ${result.edgeCount}, Communities: ${result.communityCount}, Processes: ${result.processCount}`,
+    );
+    if (result.querySummary) {
+      lines.push(
+        `- Symbol query: \`${result.querySummary.term}\` -> symbols ${result.querySummary.matchedSymbols}, pages ${result.querySummary.matchedPages}, exact=${result.querySummary.exactSymbolMatched}`,
+      );
+    } else {
+      lines.push("- Symbol query: none");
+    }
+    if (result.graphQuerySummary) {
+      lines.push(
+        `- Graph query: \`${result.graphQuerySummary.term}\` -> edges ${result.graphQuerySummary.matchedGraphEdges}, processes ${result.graphQuerySummary.matchedProcesses}, communities ${result.graphQuerySummary.matchedCommunities}`,
+      );
+      lines.push(`- Graph provenance: ${result.graphQuerySummary.provenanceSummary || "n/a"}`);
+    } else {
+      lines.push("- Graph query: none");
+    }
+    lines.push(
+      result.reference.hasReference
+        ? `- Reference: yes (${result.reference.pageCount} pages, delta ${result.pageCount - result.reference.pageCount >= 0 ? "+" : ""}${result.pageCount - result.reference.pageCount})`
+        : "- Reference: none",
+    );
+    lines.push("");
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function parseCliArgs(argv) {
+  const projects = [];
+  let markdown = false;
+
+  for (const arg of argv) {
+    if (arg === "--markdown") {
+      markdown = true;
+      continue;
+    }
+    projects.push(arg);
+  }
+
+  return { markdown, projects };
+}
+
+function main(argv) {
+  const { markdown, projects } = parseCliArgs(argv);
   const names = projects.length > 0 ? projects : discoverProjects();
   const results = names.map(collectProject);
-  process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
+  process.stdout.write(markdown ? toMarkdown(results) : `${JSON.stringify(results, null, 2)}\n`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

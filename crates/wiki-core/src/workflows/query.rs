@@ -7,6 +7,7 @@ use std::path::Path;
 use crate::domain::module_tree::ModuleNode;
 use crate::domain::relation::WikiRelation;
 use crate::domain::state::{SourceState, WikiPageState, WikiState};
+use crate::repo::symbols::SymbolNode;
 use crate::storage::sqlite_store;
 use crate::storage::state_store::load_or_rebuild_state;
 use crate::storage::wiki_fs::resolve_page_path;
@@ -120,6 +121,77 @@ pub struct QuerySymbolMatch {
     pub score: f64,
 }
 
+/// `QueryGraphEdgeMatch` 是 query 返回的 graph edge 视图。
+#[derive(Debug, Clone, Serialize)]
+pub struct QueryGraphEdgeMatch {
+    /// graph edge 稳定 ID。
+    pub edge_id: String,
+    /// 关系类型，例如 `CALLS` / `IMPORTS`。
+    pub edge_type: String,
+    /// edge 起点 symbol ID。
+    pub source_symbol_id: String,
+    /// edge 起点 symbol 名称。
+    pub source_symbol: String,
+    /// edge 终点 symbol ID。
+    pub target_symbol_id: String,
+    /// edge 终点 symbol 名称。
+    pub target_symbol: String,
+    /// edge 置信度。
+    pub confidence: f64,
+    /// resolve 阶段留下的解释文本。
+    pub reason: String,
+    /// 相对命中 symbol 的最短跳数。
+    #[serde(default)]
+    pub hop_distance: usize,
+    /// 该边是直接命中、下游调用链还是上游影响范围。
+    #[serde(default)]
+    pub traversal_modes: Vec<String>,
+    /// graph 命中的原因。
+    pub reasons: Vec<String>,
+    /// graph 命中 provenance。
+    pub provenance: Vec<String>,
+}
+
+/// `QueryProcessMatch` 是 query 返回的 process 视图。
+#[derive(Debug, Clone, Serialize)]
+pub struct QueryProcessMatch {
+    /// process 稳定 ID。
+    pub process_id: String,
+    /// process 展示标签。
+    pub label: String,
+    /// process 类型。
+    pub process_type: String,
+    /// 用于展示的步骤符号名。
+    pub steps: Vec<String>,
+    /// 当前 query 直接命中或经 graph 扩展命中的 symbol IDs。
+    pub matched_symbol_ids: Vec<String>,
+    /// graph 命中的原因。
+    pub reasons: Vec<String>,
+    /// graph 命中 provenance。
+    pub provenance: Vec<String>,
+}
+
+/// `QueryCommunityMatch` 是 query 返回的 community 视图。
+#[derive(Debug, Clone, Serialize)]
+pub struct QueryCommunityMatch {
+    /// community 稳定 ID。
+    pub community_id: String,
+    /// community 标签。
+    pub label: String,
+    /// 内聚度。
+    pub cohesion: f64,
+    /// 成员数量。
+    pub symbol_count: usize,
+    /// 当前 query 直接命中或经 graph 扩展命中的 symbol IDs。
+    pub matched_symbol_ids: Vec<String>,
+    /// 用于展示的成员符号名。
+    pub member_symbols: Vec<String>,
+    /// graph 命中的原因。
+    pub reasons: Vec<String>,
+    /// graph 命中 provenance。
+    pub provenance: Vec<String>,
+}
+
 /// `QueryReport` 是当前对 Agent 最友好的结构化返回。
 #[derive(Debug, Clone, Serialize)]
 pub struct QueryReport {
@@ -135,6 +207,15 @@ pub struct QueryReport {
     pub matched_relations: Vec<QueryRelationMatch>,
     /// 结构化符号命中。
     pub matched_symbols: Vec<QuerySymbolMatch>,
+    /// graph edge 命中。
+    #[serde(default)]
+    pub matched_symbol_edges: Vec<QueryGraphEdgeMatch>,
+    /// process 命中。
+    #[serde(default)]
+    pub matched_processes: Vec<QueryProcessMatch>,
+    /// community 命中。
+    #[serde(default)]
+    pub matched_communities: Vec<QueryCommunityMatch>,
     /// Agent 直接消费的页面级结果。
     pub matches: Vec<QueryMatch>,
     /// provenance 汇总文本，方便测试和日志检查。
@@ -166,6 +247,45 @@ struct SymbolMatchState {
     module_ids: BTreeSet<String>,
 }
 
+#[derive(Default)]
+struct GraphEdgeMatchState {
+    edge_id: String,
+    edge_type: String,
+    source_symbol_id: String,
+    source_symbol: String,
+    target_symbol_id: String,
+    target_symbol: String,
+    confidence: f64,
+    reason: String,
+    hop_distance: usize,
+    traversal_modes: BTreeSet<String>,
+    reasons: BTreeSet<String>,
+    provenance: BTreeSet<String>,
+}
+
+#[derive(Default)]
+struct ProcessMatchState {
+    process_id: String,
+    label: String,
+    process_type: String,
+    steps: BTreeSet<String>,
+    matched_symbol_ids: BTreeSet<String>,
+    reasons: BTreeSet<String>,
+    provenance: BTreeSet<String>,
+}
+
+#[derive(Default)]
+struct CommunityMatchState {
+    community_id: String,
+    label: String,
+    cohesion: f64,
+    symbol_count: usize,
+    matched_symbol_ids: BTreeSet<String>,
+    member_symbols: BTreeSet<String>,
+    reasons: BTreeSet<String>,
+    provenance: BTreeSet<String>,
+}
+
 /// 执行关键词查询。
 /// 优先从 WikiState 构建查询索引，WikiState 丢失时从 metadata 重建。
 /// 结构化索引是主命中来源，仅在没有结构命中时回退到 Markdown 内容匹配。
@@ -181,6 +301,9 @@ pub fn run_query(repo_root: &Path, term: &str) -> io::Result<QueryReport> {
             matched_sources: Vec::new(),
             matched_relations: Vec::new(),
             matched_symbols: Vec::new(),
+            matched_symbol_edges: Vec::new(),
+            matched_processes: Vec::new(),
+            matched_communities: Vec::new(),
             matches: Vec::new(),
             provenance_summary: String::new(),
         });
@@ -214,6 +337,9 @@ pub fn run_query(repo_root: &Path, term: &str) -> io::Result<QueryReport> {
     let mut source_matches = BTreeMap::new();
     let mut relation_matches = BTreeMap::new();
     let mut symbol_matches = BTreeMap::new();
+    let mut graph_edge_matches = BTreeMap::new();
+    let mut process_matches = BTreeMap::new();
+    let mut community_matches = BTreeMap::new();
 
     collect_fts_page_matches(repo_root, &needle, &page_index, &mut page_matches);
     collect_symbol_matches(
@@ -261,6 +387,20 @@ pub fn run_query(repo_root: &Path, term: &str) -> io::Result<QueryReport> {
         &mut source_matches,
         &mut relation_matches,
     );
+    collect_graph_matches(
+        repo_root,
+        &needle,
+        &page_index,
+        &module_index,
+        &source_path_index,
+        &mut page_matches,
+        &mut module_matches,
+        &mut source_matches,
+        &symbol_matches,
+        &mut graph_edge_matches,
+        &mut process_matches,
+        &mut community_matches,
+    );
 
     // 页面命中建立后，再补齐与这些页面相关联的模块和源码，保证返回结果自洽。
     let matched_page_ids = page_matches.keys().cloned().collect::<Vec<_>>();
@@ -282,7 +422,10 @@ pub fn run_query(repo_root: &Path, term: &str) -> io::Result<QueryReport> {
         || !module_matches.is_empty()
         || !source_matches.is_empty()
         || !relation_matches.is_empty()
-        || !symbol_matches.is_empty();
+        || !symbol_matches.is_empty()
+        || !graph_edge_matches.is_empty()
+        || !process_matches.is_empty()
+        || !community_matches.is_empty();
 
     if !had_structural_match {
         collect_markdown_fallback_matches(
@@ -302,6 +445,9 @@ pub fn run_query(repo_root: &Path, term: &str) -> io::Result<QueryReport> {
         &source_matches,
         &relation_matches,
         &symbol_matches,
+        &graph_edge_matches,
+        &process_matches,
+        &community_matches,
     );
     let matched_symbols = finalize_symbol_matches(&symbol_matches);
     let matched_symbols_by_file = build_symbols_by_file(&matched_symbols);
@@ -313,6 +459,9 @@ pub fn run_query(repo_root: &Path, term: &str) -> io::Result<QueryReport> {
         matched_sources: finalize_source_matches(&source_matches, &source_index),
         matched_relations: finalize_relation_matches(&relation_matches, &state.relations),
         matched_symbols,
+        matched_symbol_edges: finalize_graph_edge_matches(&graph_edge_matches),
+        matched_processes: finalize_process_matches(&process_matches),
+        matched_communities: finalize_community_matches(&community_matches),
         matches: finalize_page_matches(
             &page_matches,
             &page_index,
@@ -482,6 +631,578 @@ fn symbol_match_reasons(hit: &sqlite_store::FtsSymbolHit, needle: &str) -> Vec<&
         reasons.push("符号 FTS BM25 匹配");
     }
     reasons
+}
+
+fn graph_expansion_seed_ids(
+    needle: &str,
+    symbol_matches: &BTreeMap<String, SymbolMatchState>,
+) -> Vec<String> {
+    let mut candidates = symbol_matches
+        .values()
+        .map(|state| {
+            let exact_name = state.name.to_lowercase() == needle;
+            let name_match = state.reasons.contains("符号名称匹配");
+            let priority = if exact_name {
+                0
+            } else if name_match {
+                1
+            } else {
+                2
+            };
+
+            (
+                priority,
+                state.score,
+                state.file_path.clone(),
+                state.symbol_id.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.partial_cmp(&right.1).unwrap_or(std::cmp::Ordering::Equal))
+            .then(left.2.cmp(&right.2))
+            .then(left.3.cmp(&right.3))
+    });
+
+    candidates
+        .into_iter()
+        .map(|(_, _, _, symbol_id)| symbol_id)
+        .take(4)
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_graph_matches(
+    repo_root: &Path,
+    needle: &str,
+    page_index: &BTreeMap<String, &WikiPageState>,
+    module_index: &BTreeMap<String, &ModuleNode>,
+    source_path_index: &BTreeMap<String, &SourceState>,
+    page_matches: &mut BTreeMap<String, PageMatchState>,
+    module_matches: &mut BTreeMap<String, RelatedMatchState>,
+    source_matches: &mut BTreeMap<String, RelatedMatchState>,
+    symbol_matches: &BTreeMap<String, SymbolMatchState>,
+    graph_edge_matches: &mut BTreeMap<String, GraphEdgeMatchState>,
+    process_matches: &mut BTreeMap<String, ProcessMatchState>,
+    community_matches: &mut BTreeMap<String, CommunityMatchState>,
+) {
+    let symbols = match sqlite_store::list_symbols(repo_root) {
+        Ok(symbols) => symbols,
+        Err(_) => return,
+    };
+    if symbols.is_empty() {
+        return;
+    }
+
+    let symbols_by_id = symbols
+        .iter()
+        .map(|symbol| (symbol.symbol_id.clone(), symbol))
+        .collect::<BTreeMap<_, _>>();
+    let direct_matched_symbol_ids = symbol_matches.keys().cloned().collect::<BTreeSet<_>>();
+    let graph_seed_symbol_ids = graph_expansion_seed_ids(needle, symbol_matches);
+    let traced_call_edges =
+        sqlite_store::trace_call_edges(repo_root, &graph_seed_symbol_ids, 3, 48).unwrap_or_default();
+    let mut expanded_symbol_ids = direct_matched_symbol_ids.clone();
+
+    collect_graph_edge_matches(
+        repo_root,
+        needle,
+        &symbols_by_id,
+        &direct_matched_symbol_ids,
+        &traced_call_edges,
+        page_index,
+        module_index,
+        source_path_index,
+        page_matches,
+        module_matches,
+        source_matches,
+        graph_edge_matches,
+        &mut expanded_symbol_ids,
+    );
+    collect_process_graph_matches(
+        repo_root,
+        needle,
+        &symbols_by_id,
+        &direct_matched_symbol_ids,
+        &expanded_symbol_ids,
+        page_index,
+        module_index,
+        source_path_index,
+        page_matches,
+        module_matches,
+        source_matches,
+        process_matches,
+    );
+    collect_community_graph_matches(
+        repo_root,
+        needle,
+        &symbols_by_id,
+        &direct_matched_symbol_ids,
+        &expanded_symbol_ids,
+        page_index,
+        module_index,
+        source_path_index,
+        page_matches,
+        module_matches,
+        source_matches,
+        community_matches,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_graph_edge_matches(
+    repo_root: &Path,
+    needle: &str,
+    symbols_by_id: &BTreeMap<String, &SymbolNode>,
+    matched_symbol_ids: &BTreeSet<String>,
+    traced_call_edges: &[sqlite_store::GraphTraceEdgeHit],
+    page_index: &BTreeMap<String, &WikiPageState>,
+    module_index: &BTreeMap<String, &ModuleNode>,
+    source_path_index: &BTreeMap<String, &SourceState>,
+    page_matches: &mut BTreeMap<String, PageMatchState>,
+    module_matches: &mut BTreeMap<String, RelatedMatchState>,
+    source_matches: &mut BTreeMap<String, RelatedMatchState>,
+    graph_edge_matches: &mut BTreeMap<String, GraphEdgeMatchState>,
+    expanded_symbol_ids: &mut BTreeSet<String>,
+) {
+    let edges = match sqlite_store::list_edges(repo_root) {
+        Ok(edges) => edges,
+        Err(_) => return,
+    };
+
+    for edge in edges {
+        let Some(source_symbol) = symbols_by_id.get(&edge.source_id).copied() else {
+            continue;
+        };
+        let Some(target_symbol) = symbols_by_id.get(&edge.target_id).copied() else {
+            continue;
+        };
+        let source_matched = matched_symbol_ids.contains(&edge.source_id);
+        let target_matched = matched_symbol_ids.contains(&edge.target_id);
+        let mut reasons = Vec::new();
+        let mut provenance = Vec::new();
+
+        if source_matched {
+            reasons.push("命中符号的出边");
+            provenance.push("graph-direct:outbound".to_string());
+        }
+        if target_matched {
+            reasons.push("命中符号的入边");
+            provenance.push("graph-direct:inbound".to_string());
+        }
+        if contains_case_insensitive(&edge.edge_type, needle) {
+            reasons.push("图关系类型匹配");
+            provenance.push("graph-filter:type".to_string());
+        }
+        if contains_case_insensitive(&edge.reason, needle) {
+            reasons.push("图关系原因匹配");
+            provenance.push("graph-filter:reason".to_string());
+        }
+        if contains_case_insensitive(&source_symbol.name, needle)
+            || contains_case_insensitive(&target_symbol.name, needle)
+        {
+            reasons.push("图关系端点匹配");
+            provenance.push("graph-filter:endpoint".to_string());
+        }
+
+        if reasons.is_empty() {
+            continue;
+        }
+
+        record_graph_edge_match(
+            graph_edge_matches,
+            &edge.edge_id,
+            &edge.edge_type,
+            &edge.source_id,
+            &source_symbol.name,
+            &edge.target_id,
+            &target_symbol.name,
+            edge.confidence,
+            &edge.reason,
+            1,
+            Some("direct"),
+            reasons.into_iter().map(str::to_string),
+            provenance,
+        );
+
+        record_graph_symbol_context(
+            source_symbol,
+            page_index,
+            module_index,
+            source_path_index,
+            page_matches,
+            module_matches,
+            source_matches,
+            "关联图关系匹配",
+            &[
+                format!("graph-edge:{}", edge.edge_type),
+                format!("source:{}", source_symbol.file_path),
+            ],
+        );
+        record_graph_symbol_context(
+            target_symbol,
+            page_index,
+            module_index,
+            source_path_index,
+            page_matches,
+            module_matches,
+            source_matches,
+            "关联图关系匹配",
+            &[
+                format!("graph-edge:{}", edge.edge_type),
+                format!("source:{}", target_symbol.file_path),
+            ],
+        );
+    }
+
+    for traced in traced_call_edges {
+        let Some(source_symbol) = symbols_by_id.get(&traced.source_id).copied() else {
+            continue;
+        };
+        let Some(target_symbol) = symbols_by_id.get(&traced.target_id).copied() else {
+            continue;
+        };
+
+        expanded_symbol_ids.insert(traced.source_id.clone());
+        expanded_symbol_ids.insert(traced.target_id.clone());
+
+        let (reason, mode, provenance, context_reason) = match traced.traversal_direction.as_str() {
+            "inbound" => (
+                "命中 symbol 的上游影响范围",
+                "impact-inbound",
+                format!("graph-cte:inbound:depth={}", traced.hop_distance),
+                "关联影响范围匹配",
+            ),
+            _ => (
+                "命中 symbol 的下游调用链",
+                "call-chain-outbound",
+                format!("graph-cte:outbound:depth={}", traced.hop_distance),
+                "关联调用链匹配",
+            ),
+        };
+
+        record_graph_edge_match(
+            graph_edge_matches,
+            &traced.edge_id,
+            "CALLS",
+            &traced.source_id,
+            &source_symbol.name,
+            &traced.target_id,
+            &target_symbol.name,
+            traced.confidence,
+            &traced.reason,
+            traced.hop_distance,
+            Some(mode),
+            [reason.to_string()],
+            [provenance],
+        );
+
+        record_graph_symbol_context(
+            source_symbol,
+            page_index,
+            module_index,
+            source_path_index,
+            page_matches,
+            module_matches,
+            source_matches,
+            context_reason,
+            &[
+                format!("graph-cte:{}", traced.traversal_direction),
+                format!("source:{}", source_symbol.file_path),
+            ],
+        );
+        record_graph_symbol_context(
+            target_symbol,
+            page_index,
+            module_index,
+            source_path_index,
+            page_matches,
+            module_matches,
+            source_matches,
+            context_reason,
+            &[
+                format!("graph-cte:{}", traced.traversal_direction),
+                format!("source:{}", target_symbol.file_path),
+            ],
+        );
+    }
+}
+
+fn record_graph_edge_match<I, P>(
+    graph_edge_matches: &mut BTreeMap<String, GraphEdgeMatchState>,
+    edge_id: &str,
+    edge_type: &str,
+    source_symbol_id: &str,
+    source_symbol: &str,
+    target_symbol_id: &str,
+    target_symbol: &str,
+    confidence: f64,
+    reason: &str,
+    hop_distance: usize,
+    traversal_mode: Option<&str>,
+    reasons: I,
+    provenance: P,
+) where
+    I: IntoIterator<Item = String>,
+    P: IntoIterator<Item = String>,
+{
+    let state = graph_edge_matches
+        .entry(edge_id.to_string())
+        .or_insert_with(|| GraphEdgeMatchState {
+            edge_id: edge_id.to_string(),
+            edge_type: edge_type.to_string(),
+            source_symbol_id: source_symbol_id.to_string(),
+            source_symbol: source_symbol.to_string(),
+            target_symbol_id: target_symbol_id.to_string(),
+            target_symbol: target_symbol.to_string(),
+            confidence,
+            reason: reason.to_string(),
+            hop_distance,
+            ..GraphEdgeMatchState::default()
+        });
+
+    if state.hop_distance == 0 || hop_distance < state.hop_distance {
+        state.hop_distance = hop_distance;
+    }
+    if let Some(mode) = traversal_mode {
+        state.traversal_modes.insert(mode.to_string());
+    }
+    state
+        .reasons
+        .extend(reasons.into_iter().filter(|item| !item.is_empty()));
+    state
+        .provenance
+        .extend(provenance.into_iter().filter(|item| !item.is_empty()));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_process_graph_matches(
+    repo_root: &Path,
+    needle: &str,
+    symbols_by_id: &BTreeMap<String, &SymbolNode>,
+    direct_matched_symbol_ids: &BTreeSet<String>,
+    expanded_symbol_ids: &BTreeSet<String>,
+    page_index: &BTreeMap<String, &WikiPageState>,
+    module_index: &BTreeMap<String, &ModuleNode>,
+    source_path_index: &BTreeMap<String, &SourceState>,
+    page_matches: &mut BTreeMap<String, PageMatchState>,
+    module_matches: &mut BTreeMap<String, RelatedMatchState>,
+    source_matches: &mut BTreeMap<String, RelatedMatchState>,
+    process_matches: &mut BTreeMap<String, ProcessMatchState>,
+) {
+    let processes = match sqlite_store::list_processes(repo_root) {
+        Ok(processes) => processes,
+        Err(_) => return,
+    };
+    let process_steps = match sqlite_store::list_process_steps(repo_root) {
+        Ok(process_steps) => process_steps,
+        Err(_) => return,
+    };
+    let steps_by_process = process_steps
+        .iter()
+        .fold(BTreeMap::<String, Vec<_>>::new(), |mut acc, step| {
+            acc.entry(step.process_id.clone()).or_default().push(step);
+            acc
+        });
+
+    for process in processes {
+        let steps = steps_by_process
+            .get(&process.process_id)
+            .cloned()
+            .unwrap_or_default();
+        let step_symbols = steps
+            .iter()
+            .filter_map(|step| symbols_by_id.get(&step.symbol_id).copied())
+            .collect::<Vec<_>>();
+        let direct_hits = step_symbols
+            .iter()
+            .filter(|symbol| direct_matched_symbol_ids.contains(&symbol.symbol_id))
+            .map(|symbol| symbol.symbol_id.clone())
+            .collect::<BTreeSet<_>>();
+        let expanded_hits = step_symbols
+            .iter()
+            .filter(|symbol| expanded_symbol_ids.contains(&symbol.symbol_id))
+            .map(|symbol| symbol.symbol_id.clone())
+            .collect::<BTreeSet<_>>();
+        let step_name_match = step_symbols
+            .iter()
+            .any(|symbol| contains_case_insensitive(&symbol.name, needle));
+        let mut reasons = Vec::new();
+        let mut provenance = Vec::new();
+
+        if !direct_hits.is_empty() {
+            reasons.push("命中符号参与流程");
+            provenance.push("process-trace:matched-symbol".to_string());
+        } else if !expanded_hits.is_empty() {
+            reasons.push("扩展调用链参与流程");
+            provenance.push("process-trace:graph-expansion".to_string());
+        }
+        if contains_case_insensitive(&process.label, needle) {
+            reasons.push("流程标签匹配");
+            provenance.push("process-trace:label".to_string());
+        }
+        if contains_case_insensitive(&process.process_type, needle) {
+            reasons.push("流程类型匹配");
+            provenance.push("process-trace:type".to_string());
+        }
+        if step_name_match {
+            reasons.push("流程步骤匹配");
+            provenance.push("process-trace:step".to_string());
+        }
+
+        if reasons.is_empty() {
+            continue;
+        }
+
+        let state = process_matches
+            .entry(process.process_id.clone())
+            .or_insert_with(|| ProcessMatchState {
+                process_id: process.process_id.clone(),
+                label: process.label.clone(),
+                process_type: process.process_type.clone(),
+                ..ProcessMatchState::default()
+            });
+        state.steps.extend(step_symbols.iter().map(|symbol| symbol.name.clone()));
+        state.matched_symbol_ids.extend(expanded_hits);
+        state
+            .reasons
+            .extend(reasons.into_iter().map(str::to_string));
+        state.provenance.extend(provenance);
+
+        for symbol in step_symbols.into_iter().take(8) {
+            record_graph_symbol_context(
+                symbol,
+                page_index,
+                module_index,
+                source_path_index,
+                page_matches,
+                module_matches,
+                source_matches,
+                "关联流程匹配",
+                &[
+                    format!("process:{}", process.process_id),
+                    format!("source:{}", symbol.file_path),
+                ],
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_community_graph_matches(
+    repo_root: &Path,
+    needle: &str,
+    symbols_by_id: &BTreeMap<String, &SymbolNode>,
+    direct_matched_symbol_ids: &BTreeSet<String>,
+    expanded_symbol_ids: &BTreeSet<String>,
+    page_index: &BTreeMap<String, &WikiPageState>,
+    module_index: &BTreeMap<String, &ModuleNode>,
+    source_path_index: &BTreeMap<String, &SourceState>,
+    page_matches: &mut BTreeMap<String, PageMatchState>,
+    module_matches: &mut BTreeMap<String, RelatedMatchState>,
+    source_matches: &mut BTreeMap<String, RelatedMatchState>,
+    community_matches: &mut BTreeMap<String, CommunityMatchState>,
+) {
+    let communities = match sqlite_store::list_communities(repo_root) {
+        Ok(communities) => communities,
+        Err(_) => return,
+    };
+    let community_members = match sqlite_store::list_community_members(repo_root) {
+        Ok(community_members) => community_members,
+        Err(_) => return,
+    };
+    let members_by_community = community_members
+        .iter()
+        .fold(BTreeMap::<String, Vec<String>>::new(), |mut acc, member| {
+            acc.entry(member.community_id.clone())
+                .or_default()
+                .push(member.symbol_id.clone());
+            acc
+        });
+
+    for community in communities {
+        let member_ids = members_by_community
+            .get(&community.community_id)
+            .cloned()
+            .unwrap_or_default();
+        let member_symbols = member_ids
+            .iter()
+            .filter_map(|symbol_id| symbols_by_id.get(symbol_id).copied())
+            .collect::<Vec<_>>();
+        let direct_hits = member_symbols
+            .iter()
+            .filter(|symbol| direct_matched_symbol_ids.contains(&symbol.symbol_id))
+            .map(|symbol| symbol.symbol_id.clone())
+            .collect::<BTreeSet<_>>();
+        let expanded_hits = member_symbols
+            .iter()
+            .filter(|symbol| expanded_symbol_ids.contains(&symbol.symbol_id))
+            .map(|symbol| symbol.symbol_id.clone())
+            .collect::<BTreeSet<_>>();
+        let member_name_match = member_symbols
+            .iter()
+            .any(|symbol| contains_case_insensitive(&symbol.name, needle));
+        let mut reasons = Vec::new();
+        let mut provenance = Vec::new();
+
+        if !direct_hits.is_empty() {
+            reasons.push("命中符号属于社区");
+            provenance.push("community-membership:matched-symbol".to_string());
+        } else if !expanded_hits.is_empty() {
+            reasons.push("扩展调用链属于社区");
+            provenance.push("community-membership:graph-expansion".to_string());
+        }
+        if contains_case_insensitive(&community.label, needle) {
+            reasons.push("社区标签匹配");
+            provenance.push("community-membership:label".to_string());
+        }
+        if member_name_match {
+            reasons.push("社区成员匹配");
+            provenance.push("community-membership:member".to_string());
+        }
+
+        if reasons.is_empty() {
+            continue;
+        }
+
+        let state = community_matches
+            .entry(community.community_id.clone())
+            .or_insert_with(|| CommunityMatchState {
+                community_id: community.community_id.clone(),
+                label: community.label.clone(),
+                cohesion: community.cohesion,
+                symbol_count: community.symbol_count,
+                ..CommunityMatchState::default()
+            });
+        state.matched_symbol_ids.extend(expanded_hits);
+        state
+            .member_symbols
+            .extend(member_symbols.iter().map(|symbol| symbol.name.clone()));
+        state
+            .reasons
+            .extend(reasons.into_iter().map(str::to_string));
+        state.provenance.extend(provenance);
+
+        for symbol in member_symbols.into_iter().take(8) {
+            record_graph_symbol_context(
+                symbol,
+                page_index,
+                module_index,
+                source_path_index,
+                page_matches,
+                module_matches,
+                source_matches,
+                "关联社区匹配",
+                &[
+                    format!("community:{}", community.community_id),
+                    format!("source:{}", symbol.file_path),
+                ],
+            );
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -861,6 +1582,9 @@ fn build_provenance_summary(
     source_matches: &BTreeMap<String, RelatedMatchState>,
     relation_matches: &BTreeMap<String, RelatedMatchState>,
     symbol_matches: &BTreeMap<String, SymbolMatchState>,
+    graph_edge_matches: &BTreeMap<String, GraphEdgeMatchState>,
+    process_matches: &BTreeMap<String, ProcessMatchState>,
+    community_matches: &BTreeMap<String, CommunityMatchState>,
 ) -> String {
     let mut parts = Vec::new();
 
@@ -897,6 +1621,15 @@ fn build_provenance_summary(
     }
     if !symbol_matches.is_empty() {
         parts.push(format!("命中 {} 符号", symbol_matches.len()));
+    }
+    if !graph_edge_matches.is_empty() {
+        parts.push(format!("扩展 {} 图边", graph_edge_matches.len()));
+    }
+    if !process_matches.is_empty() {
+        parts.push(format!("扩展 {} 流程", process_matches.len()));
+    }
+    if !community_matches.is_empty() {
+        parts.push(format!("扩展 {} 社区", community_matches.len()));
     }
 
     parts.join("、")
@@ -1110,6 +1843,87 @@ fn finalize_symbol_matches(
     matches
 }
 
+fn finalize_graph_edge_matches(
+    graph_edge_matches: &BTreeMap<String, GraphEdgeMatchState>,
+) -> Vec<QueryGraphEdgeMatch> {
+    let mut matches = graph_edge_matches
+        .values()
+        .map(|state| QueryGraphEdgeMatch {
+            edge_id: state.edge_id.clone(),
+            edge_type: state.edge_type.clone(),
+            source_symbol_id: state.source_symbol_id.clone(),
+            source_symbol: state.source_symbol.clone(),
+            target_symbol_id: state.target_symbol_id.clone(),
+            target_symbol: state.target_symbol.clone(),
+            confidence: state.confidence,
+            reason: state.reason.clone(),
+            hop_distance: state.hop_distance,
+            traversal_modes: state.traversal_modes.iter().cloned().collect(),
+            reasons: state.reasons.iter().cloned().collect(),
+            provenance: state.provenance.iter().cloned().collect(),
+        })
+        .collect::<Vec<_>>();
+
+    matches.sort_by(|left, right| {
+        left.hop_distance
+            .cmp(&right.hop_distance)
+            .then(left.source_symbol.cmp(&right.source_symbol))
+            .then(left.target_symbol.cmp(&right.target_symbol))
+            .then(left.edge_type.cmp(&right.edge_type))
+            .then(left.edge_id.cmp(&right.edge_id))
+    });
+    matches
+}
+
+fn finalize_process_matches(
+    process_matches: &BTreeMap<String, ProcessMatchState>,
+) -> Vec<QueryProcessMatch> {
+    let mut matches = process_matches
+        .values()
+        .map(|state| QueryProcessMatch {
+            process_id: state.process_id.clone(),
+            label: state.label.clone(),
+            process_type: state.process_type.clone(),
+            steps: state.steps.iter().cloned().take(12).collect(),
+            matched_symbol_ids: state.matched_symbol_ids.iter().cloned().collect(),
+            reasons: state.reasons.iter().cloned().collect(),
+            provenance: state.provenance.iter().cloned().collect(),
+        })
+        .collect::<Vec<_>>();
+
+    matches.sort_by(|left, right| {
+        left.label
+            .cmp(&right.label)
+            .then(left.process_id.cmp(&right.process_id))
+    });
+    matches
+}
+
+fn finalize_community_matches(
+    community_matches: &BTreeMap<String, CommunityMatchState>,
+) -> Vec<QueryCommunityMatch> {
+    let mut matches = community_matches
+        .values()
+        .map(|state| QueryCommunityMatch {
+            community_id: state.community_id.clone(),
+            label: state.label.clone(),
+            cohesion: state.cohesion,
+            symbol_count: state.symbol_count,
+            matched_symbol_ids: state.matched_symbol_ids.iter().cloned().collect(),
+            member_symbols: state.member_symbols.iter().cloned().take(12).collect(),
+            reasons: state.reasons.iter().cloned().collect(),
+            provenance: state.provenance.iter().cloned().collect(),
+        })
+        .collect::<Vec<_>>();
+
+    matches.sort_by(|left, right| {
+        left.label
+            .cmp(&right.label)
+            .then(left.community_id.cmp(&right.community_id))
+    });
+    matches
+}
+
 fn build_symbols_by_file(symbol_matches: &[QuerySymbolMatch]) -> BTreeMap<String, Vec<String>> {
     let mut symbols_by_file = BTreeMap::<String, Vec<String>>::new();
 
@@ -1140,6 +1954,43 @@ fn relation_identity(relation: &WikiRelation) -> String {
 
 fn contains_case_insensitive(value: &str, needle: &str) -> bool {
     value.to_lowercase().contains(needle)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_graph_symbol_context(
+    symbol: &SymbolNode,
+    page_index: &BTreeMap<String, &WikiPageState>,
+    module_index: &BTreeMap<String, &ModuleNode>,
+    source_path_index: &BTreeMap<String, &SourceState>,
+    page_matches: &mut BTreeMap<String, PageMatchState>,
+    module_matches: &mut BTreeMap<String, RelatedMatchState>,
+    source_matches: &mut BTreeMap<String, RelatedMatchState>,
+    reason: &str,
+    provenance: &[String],
+) {
+    let Some(source) = source_path_index.get(&symbol.file_path) else {
+        return;
+    };
+
+    record_related_match(source_matches, &source.source_id, [reason]);
+
+    for page_id in &source.page_ids {
+        if page_index.contains_key(page_id) {
+            record_page_match(
+                page_matches,
+                page_id,
+                [reason],
+                provenance.iter().cloned(),
+                "structure",
+            );
+        }
+    }
+
+    for module_id in &source.module_ids {
+        if module_index.contains_key(module_id) {
+            record_related_match(module_matches, module_id, [reason]);
+        }
+    }
 }
 
 fn merge_match_mode(current: &str, next: &str) -> String {

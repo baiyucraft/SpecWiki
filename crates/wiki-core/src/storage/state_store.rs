@@ -2,6 +2,7 @@ use std::io;
 use std::path::Path;
 
 use crate::domain::state::{rebuild_state_from_metadata, WikiState};
+use crate::repo::symbol_graph::{GraphAnalysisSnapshot, ResolvedGraphSnapshot};
 use crate::repo::symbols::SymbolNode;
 use crate::storage::metadata_store::read_metadata;
 use crate::storage::sqlite_store;
@@ -31,6 +32,44 @@ pub fn write_state_with_symbols_for_files(
 ) -> io::Result<()> {
     let mut conn = sqlite_store::open_db(repo_root)?;
     sqlite_store::replace_state_and_symbols_for_files(&mut conn, state, file_paths, symbols)
+}
+
+/// 写入 WikiState、完整 symbol snapshot 与 symbol graph。
+pub fn write_state_with_symbol_graph(
+    repo_root: &Path,
+    state: &WikiState,
+    symbols: &[SymbolNode],
+    resolved_graph: &ResolvedGraphSnapshot,
+    analysis: &GraphAnalysisSnapshot,
+) -> io::Result<()> {
+    let mut conn = sqlite_store::open_db(repo_root)?;
+    sqlite_store::replace_state_and_symbol_graph(
+        &mut conn,
+        state,
+        symbols,
+        resolved_graph,
+        analysis,
+    )
+}
+
+/// 写入 WikiState，并按文件刷新 symbols / edges，同时整体替换 graph-derived 结果。
+pub fn write_state_with_symbol_graph_for_files(
+    repo_root: &Path,
+    state: &WikiState,
+    file_paths: &[String],
+    symbols: &[SymbolNode],
+    resolved_graph: &ResolvedGraphSnapshot,
+    analysis: &GraphAnalysisSnapshot,
+) -> io::Result<()> {
+    let mut conn = sqlite_store::open_db(repo_root)?;
+    sqlite_store::replace_state_and_symbol_graph_for_files(
+        &mut conn,
+        state,
+        file_paths,
+        symbols,
+        resolved_graph,
+        analysis,
+    )
 }
 
 /// 从 SQLite 关系型状态表读取 WikiState。

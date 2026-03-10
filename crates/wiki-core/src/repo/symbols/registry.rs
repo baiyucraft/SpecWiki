@@ -21,12 +21,15 @@ pub fn supported_symbol_languages() -> &'static [&'static str] {
         "python",
         "react",
         "rust",
+        "svelte",
         "swift",
         "typescript",
+        "vue",
     ]
 }
 
 /// 解析 registry 后得到的实际 grammar 和 query 绑定。
+#[derive(Clone, Copy)]
 pub struct ResolvedSymbolLanguage {
     /// 当前文件最终采用的语言标签；React 之类包装语言会在这里降到 JS/TS。
     pub effective_language: &'static str,
@@ -58,9 +61,11 @@ pub fn resolve_symbol_language(
         "php" => Some(spec("php", php_language, PHP_QUERY)),
         "python" => Some(spec("python", python_language, PYTHON_QUERY)),
         "rust" => Some(spec("rust", rust_language, RUST_QUERY)),
+        "svelte" => resolve_embedded_language("javascript"),
         "swift" => Some(spec("swift", swift_language, SWIFT_QUERY)),
         "typescript" => Some(spec("typescript", typescript_language, TYPESCRIPT_QUERY)),
         "react" => resolve_react_language(file_path),
+        "vue" => resolve_embedded_language("javascript"),
         _ => None,
     }
 }
@@ -72,6 +77,17 @@ fn resolve_react_language(file_path: &str) -> Option<ResolvedSymbolLanguage> {
     {
         Some("tsx") => Some(spec("typescript", tsx_language, TYPESCRIPT_QUERY)),
         Some("jsx") => Some(spec("javascript", javascript_language, JAVASCRIPT_QUERY)),
+        _ => None,
+    }
+}
+
+/// 包装语言默认先落到最保守的底层 JS parser；
+/// Vue/Svelte 的 `lang` 细分会在 pipeline 的虚拟脚本切片阶段再二次收口。
+pub fn resolve_embedded_language(effective_language: &str) -> Option<ResolvedSymbolLanguage> {
+    match effective_language {
+        "javascript" => Some(spec("javascript", javascript_language, JAVASCRIPT_QUERY)),
+        "typescript" => Some(spec("typescript", typescript_language, TYPESCRIPT_QUERY)),
+        "tsx" => Some(spec("typescript", tsx_language, TYPESCRIPT_QUERY)),
         _ => None,
     }
 }
@@ -142,7 +158,7 @@ fn tsx_language() -> Language {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_symbol_language, supported_symbol_languages};
+    use super::{resolve_embedded_language, resolve_symbol_language, supported_symbol_languages};
 
     #[test]
     fn registry_resolves_every_supported_language() {
@@ -157,9 +173,11 @@ mod tests {
             ("src/index.php", "php"),
             ("src/main.py", "python"),
             ("src/App.tsx", "react"),
+            ("src/App.svelte", "svelte"),
             ("src/lib.rs", "rust"),
             ("src/App.swift", "swift"),
             ("src/index.ts", "typescript"),
+            ("src/App.vue", "vue"),
         ];
 
         for (file_path, language) in samples {
@@ -171,5 +189,8 @@ mod tests {
         }
 
         assert!(supported_symbol_languages().contains(&"react"));
+        assert!(supported_symbol_languages().contains(&"vue"));
+        assert!(supported_symbol_languages().contains(&"svelte"));
+        assert!(resolve_embedded_language("typescript").is_some());
     }
 }

@@ -18,7 +18,7 @@ import {
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { callCore, ensureBinary, ROOT_DIR, TEST_DIR, TMP_DIR } from "./test-helpers.mjs";
+import { callCore, ensureBinary, ROOT_DIR, TEST_DIR, TMP_DIR } from "./testing/helpers.mjs";
 
 // -------------------------------------------------------------------------
 // 特殊项目：需要指向真实仓库 init 再拷贝回来
@@ -73,6 +73,54 @@ function countPages(wikiDir) {
   return count;
 }
 
+function querySqlite(dbPath, sql) {
+  const statement = `PRAGMA busy_timeout=30000; ${sql}`;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const output = execFileSync("sqlite3", [dbPath, statement], {
+        encoding: "utf-8",
+        timeout: 35_000,
+      })
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (output[0] === "30000") {
+        output.shift();
+      }
+      return output.at(-1) ?? "";
+    } catch (error) {
+      lastError = error;
+      if (!String(error.stderr || error.message || "").includes("database is locked")) {
+        throw error;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+  }
+
+  throw lastError;
+}
+
+function readGraphCounts(wikiDir) {
+  const dbPath = path.join(wikiDir, ".cache", "wiki-cache.db");
+  if (!existsSync(dbPath)) {
+    return {
+      symbols: 0,
+      edges: 0,
+      communities: 0,
+      processes: 0,
+    };
+  }
+
+  return {
+    symbols: Number(querySqlite(dbPath, "select count(*) from symbols;") || "0"),
+    edges: Number(querySqlite(dbPath, "select count(*) from edges;") || "0"),
+    communities: Number(querySqlite(dbPath, "select count(*) from communities;") || "0"),
+    processes: Number(querySqlite(dbPath, "select count(*) from processes;") || "0"),
+  };
+}
+
 export function runTestProjects(names) {
   ensureBinary({ fresh: true });
 
@@ -109,7 +157,10 @@ export function runTestProjects(names) {
       }
 
       const pages = countPages(wikiDir);
-      console.log(`  OK  ${pages} pages`);
+      const graph = readGraphCounts(wikiDir);
+      console.log(
+        `  OK  ${pages} pages, ${graph.symbols} symbols, ${graph.edges} edges, ${graph.communities} communities, ${graph.processes} processes`,
+      );
       passed++;
     } catch (e) {
       console.log(`  FAIL ${e.message}`);

@@ -8,6 +8,7 @@ use crate::domain::module_tree::{ModuleNode, ModuleTree};
 use crate::domain::stable_id::stable_id;
 use crate::domain::steering::SteeringConfig;
 use crate::repo::scanner::ScanReport;
+use crate::repo::symbol_graph::GraphSummary;
 
 /// 模块"页面权重"评分，供合并策略消费。
 /// 权重越高，越应该生成独立页面。
@@ -117,6 +118,25 @@ pub fn plan_pages(
     module_contexts: &[ModuleContext],
     steering: &SteeringConfig,
 ) -> Vec<PlannedPage> {
+    plan_pages_with_graph(
+        report,
+        module_tree,
+        repo_context,
+        module_contexts,
+        steering,
+        &GraphSummary::default(),
+    )
+}
+
+/// 根据 graph summary 增强页面规划。
+pub fn plan_pages_with_graph(
+    report: &ScanReport,
+    module_tree: &ModuleTree,
+    repo_context: &RepoContext,
+    module_contexts: &[ModuleContext],
+    steering: &SteeringConfig,
+    graph_summary: &GraphSummary,
+) -> Vec<PlannedPage> {
     let overview_id = stable_id("page", "overview");
     let architecture_id = stable_id("page", "architecture");
 
@@ -163,14 +183,23 @@ pub fn plan_pages(
     let candidates = modules_to_render(module_tree);
 
     // 当仓库存在工作流线索时，生成 workflow 页面。
-    if has_workflow_clues(report) {
+    if has_workflow_clues(report, graph_summary) {
         let workflow_id = stable_id("page", "workflow");
-        let workflow_source_ids: Vec<String> = report
+        let mut workflow_source_ids: Vec<String> = report
             .files
             .iter()
             .filter(|f| is_workflow_file(&f.path))
             .map(|f| f.id.clone())
             .collect();
+        if workflow_source_ids.is_empty() && !graph_summary.detected_processes.is_empty() {
+            workflow_source_ids = report
+                .files
+                .iter()
+                .filter(|file| file.kind == "source")
+                .take(12)
+                .map(|file| file.id.clone())
+                .collect();
+        }
 
         pages.push(PlannedPage {
             id: workflow_id,
@@ -180,9 +209,13 @@ pub fn plan_pages(
             parent_id: Some(overview_id.clone()),
             scope: "workflow".to_string(),
             source_ids: workflow_source_ids,
-            module_ids: vec![],
+            module_ids: repo_context.top_modules.clone(),
             relation_ids: vec![],
-            generation_mode: "deterministic".to_string(),
+            generation_mode: if graph_summary.detected_processes.is_empty() {
+                "deterministic".to_string()
+            } else {
+                "deterministic:graph-workflow".to_string()
+            },
             priority: 2,
             merged_module_ids: vec![],
         });
@@ -491,8 +524,9 @@ fn slugify_segment(value: &str) -> String {
 }
 
 /// 检测仓库是否存在工作流线索（CI/CD 配置、Makefile、Dockerfile）。
-fn has_workflow_clues(report: &ScanReport) -> bool {
+fn has_workflow_clues(report: &ScanReport, graph_summary: &GraphSummary) -> bool {
     report.files.iter().any(|f| is_workflow_file(&f.path))
+        || !graph_summary.detected_processes.is_empty()
 }
 
 /// 判断文件路径是否属于工作流相关文件。

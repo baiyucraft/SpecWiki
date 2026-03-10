@@ -29,7 +29,7 @@ import {
   ROOT_DIR,
   TEST_DIR,
   TestRunner,
-} from "./test-helpers.mjs";
+} from "./testing/helpers.mjs";
 
 const REAL_REPO_MAP = {
   aLocal: "E:\\project\\aLocal",
@@ -94,6 +94,9 @@ function querySqlite(dbPath, sql) {
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean);
+      if (output[0] === "30000") {
+        output.shift();
+      }
       return output.at(-1) ?? "";
     } catch (error) {
       lastError = error;
@@ -111,6 +114,23 @@ function readSymbolCount(wikiDir) {
   const dbPath = path.join(wikiDir, ".cache", "wiki-cache.db");
   if (!existsSync(dbPath)) return 0;
   return Number(querySqlite(dbPath, "select count(*) from symbols;") || "0");
+}
+
+function readGraphCounts(wikiDir) {
+  const dbPath = path.join(wikiDir, ".cache", "wiki-cache.db");
+  if (!existsSync(dbPath)) {
+    return {
+      edges: 0,
+      communities: 0,
+      processes: 0,
+    };
+  }
+
+  return {
+    edges: Number(querySqlite(dbPath, "select count(*) from edges;") || "0"),
+    communities: Number(querySqlite(dbPath, "select count(*) from communities;") || "0"),
+    processes: Number(querySqlite(dbPath, "select count(*) from processes;") || "0"),
+  };
 }
 
 function querySqliteRows(dbPath, sql) {
@@ -173,6 +193,29 @@ function pickRepresentativeSymbol(wikiDir) {
   );
 }
 
+function pickRepresentativeGraphSymbol(wikiDir) {
+  const dbPath = path.join(wikiDir, ".cache", "wiki-cache.db");
+  if (!existsSync(dbPath)) return "";
+  return querySqlite(
+    dbPath,
+    [
+      "select s.name",
+      "from edges e",
+      "join symbols s on s.id = e.source_id",
+      "where length(s.name) >= 6",
+      "and s.name glob '[A-Za-z_]*'",
+      "and s.name not glob '[A-Z0-9_]*'",
+      "group by s.name",
+      "having count(*) = 1",
+      "order by max(s.is_exported) desc,",
+      "count(*) desc,",
+      "length(s.name) asc,",
+      "s.name asc",
+      "limit 1;",
+    ].join(" "),
+  );
+}
+
 function captureSymbolProbe(ctx, t, label) {
   const symbolCount = readSymbolCount(ctx.wikiDir);
   const probe = {
@@ -203,6 +246,47 @@ function assertSymbolSnapshot(ctx, t, label, expectedCount = null) {
   return symbolCount;
 }
 
+function captureGraphProbe(ctx, t, label) {
+  const counts = readGraphCounts(ctx.wikiDir);
+  const term = counts.edges > 0 ? pickRepresentativeGraphSymbol(ctx.wikiDir) : "";
+
+  if (counts.edges > 0 && !term) {
+    t.fail(
+      `${label} representative graph symbol selected`,
+      "graph edges exist but no representative graph symbol was chosen",
+    );
+  } else if (counts.edges > 0) {
+    t.pass(`${label} representative graph symbol selected`);
+  } else {
+    t.skip(`${label} graph probe skipped (no graph edges)`);
+  }
+
+  return { counts, term };
+}
+
+function assertGraphSnapshot(ctx, t, label, expectedCounts = null) {
+  const counts = readGraphCounts(ctx.wikiDir);
+  if (expectedCounts === null) {
+    t.pass(
+      `${label} graph tables readable (edges=${counts.edges}, communities=${counts.communities}, processes=${counts.processes})`,
+    );
+    return counts;
+  }
+
+  t.assertEqual(`${label} edge count stable`, counts.edges, expectedCounts.edges);
+  t.assertEqual(
+    `${label} community count stable`,
+    counts.communities,
+    expectedCounts.communities,
+  );
+  t.assertEqual(
+    `${label} process count stable`,
+    counts.processes,
+    expectedCounts.processes,
+  );
+  return counts;
+}
+
 function assertSymbolQuery(ctx, t, probe, label) {
   if (ctx.isRealRepo) {
     t.skip(`${label} symbol query skipped (real-repo project, .wiki not at repoRoot)`);
@@ -225,6 +309,44 @@ function assertSymbolQuery(ctx, t, probe, label) {
   exactMatch
     ? t.pass(`${label} exact symbol hit present`)
     : t.fail(`${label} exact symbol hit present`, `missing ${probe.term} in matched_symbols`);
+}
+
+function assertGraphQuery(ctx, t, probe, label) {
+  if (ctx.isRealRepo) {
+    t.skip(`${label} graph query skipped (real-repo project, .wiki not at repoRoot)`);
+    return;
+  }
+
+  if (!probe.term) {
+    t.skip(`${label} graph query skipped (no representative graph symbol)`);
+    return;
+  }
+
+  const queryResult = callCore({
+    action: "query",
+    repoRoot: ctx.repoArg,
+    term: probe.term,
+  });
+  t.assertOk(`${label} graph query returns ok`, queryResult);
+
+  const matchedGraphEdges = queryResult.data?.matched_symbol_edges?.length ?? 0;
+  const matchedProcesses = queryResult.data?.matched_processes?.length ?? 0;
+  const matchedCommunities = queryResult.data?.matched_communities?.length ?? 0;
+  const matchedGraphTotal = matchedGraphEdges + matchedProcesses + matchedCommunities;
+
+  matchedGraphTotal > 0
+    ? t.pass(`${label} graph query returns graph context`)
+    : t.fail(
+      `${label} graph query returns graph context`,
+      `missing graph matches for ${probe.term}`,
+    );
+
+  queryResult.data?.provenance_summary?.includes("扩展")
+    ? t.pass(`${label} graph provenance summary recorded`)
+    : t.fail(
+      `${label} graph provenance summary recorded`,
+      `summary=${JSON.stringify(queryResult.data?.provenance_summary ?? "")}`,
+    );
 }
 
 function findSourceFile(projDir) {
@@ -300,6 +422,8 @@ function runSymbolSnapshotAfterInit(ctx, t) {
   console.log("  [symbols after init]");
   ctx.symbolProbe = captureSymbolProbe(ctx, t, "after init");
   ctx.initialSymbolCount = assertSymbolSnapshot(ctx, t, "after init");
+  ctx.graphProbe = captureGraphProbe(ctx, t, "after init");
+  ctx.initialGraphCounts = assertGraphSnapshot(ctx, t, "after init");
 }
 
 function runSyncNoChange(ctx, t) {
@@ -315,6 +439,7 @@ function runSyncNoChange(ctx, t) {
 function runQuery(ctx, t) {
   console.log("  [query]");
   assertSymbolQuery(ctx, t, ctx.symbolProbe || captureSymbolProbe(ctx, t, "query"), "steady");
+  assertGraphQuery(ctx, t, ctx.graphProbe || captureGraphProbe(ctx, t, "query"), "steady");
 }
 
 function runUpdateNoop(ctx, t) {
@@ -323,7 +448,9 @@ function runUpdateNoop(ctx, t) {
   t.assertOk("update returns ok", updateNoop);
   t.assertContains("state is fresh", updateNoop.data, "state", "fresh");
   assertSymbolSnapshot(ctx, t, "after no-op update", ctx.initialSymbolCount);
+  assertGraphSnapshot(ctx, t, "after no-op update", ctx.initialGraphCounts);
   assertSymbolQuery(ctx, t, ctx.symbolProbe, "after no-op update");
+  assertGraphQuery(ctx, t, ctx.graphProbe, "after no-op update");
 }
 
 function runMutation(ctx, t) {
@@ -351,7 +478,9 @@ function runMutation(ctx, t) {
     t.assertOk("update after touch returns ok", updateTouch);
     t.assertContains("state is fresh after touch update", updateTouch.data, "state", "fresh");
     assertSymbolSnapshot(ctx, t, "after touch update", ctx.initialSymbolCount);
+    assertGraphSnapshot(ctx, t, "after touch update", ctx.initialGraphCounts);
     assertSymbolQuery(ctx, t, ctx.symbolProbe, "after touch update");
+    assertGraphQuery(ctx, t, ctx.graphProbe, "after touch update");
   } finally {
     writeFileSync(srcFile, original);
   }
@@ -364,7 +493,9 @@ function runRebuild(ctx, t) {
   t.assertContains("rebuild state is fresh", rebuildResult.data, "state", "fresh");
   t.assertMarkerCoverage("markers preserved after rebuild", ctx.wikiDir);
   assertSymbolSnapshot(ctx, t, "after rebuild", ctx.initialSymbolCount);
+  assertGraphSnapshot(ctx, t, "after rebuild", ctx.initialGraphCounts);
   assertSymbolQuery(ctx, t, ctx.symbolProbe, "after rebuild");
+  assertGraphQuery(ctx, t, ctx.graphProbe, "after rebuild");
 }
 
 function runStatusAfterRebuild(ctx, t) {
