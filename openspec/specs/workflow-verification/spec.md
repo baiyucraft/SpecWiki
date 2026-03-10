@@ -1,5 +1,9 @@
-## MODIFIED Requirements
+# workflow-verification Specification
 
+## Purpose
+定义 Repo Wiki workflow 的验证面，确保主链行为、graph 能力、progress 协议和热路径优化都能被自动化测试覆盖。
+
+## Requirements
 ### Requirement: 系统必须提供端到端验证适配层到 Wiki 产物的主链路
 系统 MUST 提供自动化测试，验证适配层调用 Rust core 后能够在目标仓库完成 Wiki 初始化、手工编辑同步、增量更新、强制重建并执行查询，且生成的 `.wiki/` 产物与返回结果符合预期。针对迭代 7 收口，验证 MUST 继续覆盖 page identity 稳定性（增删少量源文件后核心页面 `page_id` 不变）、steering 配置生效（忽略路径、模块提升/降级、合并阈值）、页面合并/拆分正确性、父子关系按模块树层级分配、扩展 section 模板的内容密度，并新增覆盖多语言 symbol parsing 质量、`symbols` / `symbols_fts` 写盘、一致性的增量重解析、symbol BM25 query 和解析失败隔离。验证脚本还 MUST 使用与当前源码一致的 release binary，并允许对 `init / update / rebuild` 这类重 workflow 使用更长超时，避免把大型 monorepo 的正常初始化误判为失败。每轮与迭代 7 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init` 分析；如果目标仓库存在 reference，则必须对照 `.wiki/*.md` 与 `wiki.metadata.json`。项目集分析报告 MUST 按项目逐个输出，而不是只给总表或总括结论。
 
@@ -91,8 +95,6 @@
 - **THEN** 验证脚本必须为这类重 workflow 提供足够超时
 - **THEN** 系统不得因为验证脚本层的固定短超时把正常 workflow 误记为失败
 
-## ADDED Requirements
-
 ### Requirement: 端到端验证必须覆盖 symbol resolution 与 graph analysis 生命周期
 系统 MUST 提供自动化测试，验证适配层调用 Rust core 后能够在目标仓库完成 symbol resolution、graph analysis、增量 edge refresh 和 graph query，而不仅是 symbol definitions 的写盘。验证 MUST 覆盖 `edges`、`communities`、`community_members`、`processes`、`process_steps` 的生成、一致性与增量清理，并继续确保页面 runtime、不变页面和 user section 保持稳定。
 
@@ -123,3 +125,34 @@
 - **WHEN** 迭代 8 的 tasks 设计或测试阶段执行完整项目集 `init` 分析
 - **THEN** 报告 MUST 按项目逐个说明 edges / communities / processes 的生成表现
 - **THEN** 报告 MUST 说明 graph query 的命中表现以及与 reference 的差异或“无 reference”状态
+
+### Requirement: 端到端验证必须覆盖 progress 事件流
+系统 MUST 提供自动化测试，验证 `wiki-core --json` 在执行 `init`、`update` 或 `rebuild` 时会输出 progress 事件流。验证 MUST 同时覆盖 core 直接调用与 CodeBuddy Agent 流式消费路径。
+
+#### Scenario: core 直接调用时输出 progress 与最终 result
+- **WHEN** 测试执行 `init`、`update` 或 `rebuild`
+- **THEN** 测试 MUST 观察到至少一个 `progress` 事件和一个最终 `result` 或 `error` 事件
+- **THEN** 测试 MUST 观察到最终终态事件可恢复出现有 `CoreResponse` 语义
+
+#### Scenario: Agent 流式消费 progress 后仍返回最终结果
+- **WHEN** 测试通过 CodeBuddy Agent 调用长流程 workflow
+- **THEN** 测试 MUST 观察到 Agent 能消费 progress 事件而不报协议错误
+- **THEN** 测试 MUST 观察到 Agent 最终仍返回与终态事件等价的最终结果
+
+### Requirement: 验证必须覆盖 parser 热路径优化的一致性与局部读取行为
+系统 MUST 提供自动化测试，验证 parse/query 复用与有限并行不会改变 symbol parsing 结果，并验证 `update` 在小范围 graph 变化下优先走局部 symbol/edge 读取，而不是固定回退为全量读取。
+
+#### Scenario: parse 工件复用不改变 symbol 语义
+- **WHEN** 测试对包含 definitions 与 raw relation captures 的代表性源码执行 symbol parsing
+- **THEN** 测试 MUST 观察到优化后的 symbols、imports、calls 和 heritage 结果与基线语义一致
+- **THEN** 测试 MUST 观察到诊断隔离行为保持不变
+
+#### Scenario: 不同并行度下 symbol parsing 结果一致
+- **WHEN** 测试分别以单工作单元和默认并行度执行同一批源码的 symbol parsing
+- **THEN** 测试 MUST 观察到相同的 symbol IDs、raw captures 和诊断集合
+- **THEN** 测试 MUST 观察到结果排序保持一致
+
+#### Scenario: 小范围 update 优先走局部读取
+- **WHEN** 测试在 `init` 后只修改少量源码文件并执行 `update`
+- **THEN** 测试 MUST 观察到系统优先使用局部 symbol/edge 读取路径
+- **THEN** 测试 MUST 观察到系统不会对该类小变更固定执行全量 `symbols / edges` 枚举

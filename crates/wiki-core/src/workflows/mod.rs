@@ -2,6 +2,8 @@
 //! 目前包括 init / status / update / query / sync / rebuild 六条主链路。
 
 pub mod init;
+pub mod page_render;
+pub mod progress;
 pub mod query;
 pub mod rebuild;
 pub mod status;

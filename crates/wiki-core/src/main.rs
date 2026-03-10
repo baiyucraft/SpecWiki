@@ -10,16 +10,26 @@ fn main() {
             .read_to_string(&mut input)
             .expect("stdin should be readable");
 
-        // 传输层只负责解析/分发；真正的业务逻辑都在 workflow 里。
-        let response =
-            wiki_core::transport::json_rpc::handle_json(&input).unwrap_or_else(|error| {
-                wiki_core::transport::dto::CoreResponse::error(error.to_string())
-            });
+        if wiki_core::transport::json_rpc::should_stream(&input) {
+            let mut stdout = io::stdout().lock();
+            if let Err(error) =
+                wiki_core::transport::json_rpc::handle_json_stream(&input, &mut stdout)
+            {
+                let response = wiki_core::transport::dto::CoreResponse::error(error.to_string());
+                let event = wiki_core::transport::dto::CoreEvent::terminal(response);
+                serde_json::to_writer(&mut stdout, &event).expect("terminal event should serialize");
+                use std::io::Write;
+                stdout
+                    .write_all(b"\n")
+                    .expect("terminal event newline should be writable");
+            }
+            return;
+        }
 
-        println!(
-            "{}",
-            serde_json::to_string(&response).expect("response should serialize")
-        );
+        let response = wiki_core::transport::json_rpc::handle_json(&input)
+            .unwrap_or_else(|error| wiki_core::transport::dto::CoreResponse::error(error.to_string()));
+
+        println!("{}", serde_json::to_string(&response).expect("response should serialize"));
         return;
     }
 

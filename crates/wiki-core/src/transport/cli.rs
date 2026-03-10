@@ -1,12 +1,13 @@
 use std::path::PathBuf;
 
 use crate::transport::dto::{CoreCommand, CoreResponse};
-use crate::workflows::init::run_init;
+use crate::workflows::init::run_init_with_progress_as;
 use crate::workflows::query::run_query;
-use crate::workflows::rebuild::run_rebuild;
+use crate::workflows::progress::{NoopProgressSink, ProgressSink};
+use crate::workflows::rebuild::run_rebuild_with_progress_as;
 use crate::workflows::status::run_status;
 use crate::workflows::sync::run_sync;
-use crate::workflows::update::run_update;
+use crate::workflows::update::run_update_with_progress_as;
 
 /// 按 `action` 分发到具体 workflow。
 /// transport 层不直接做业务判断，它只负责把协议转成 workflow 调用。
@@ -17,6 +18,15 @@ use crate::workflows::update::run_update;
 /// # 返回
 /// - 返回统一编码后的 `CoreResponse`。
 pub fn dispatch(command: CoreCommand) -> CoreResponse {
+    let mut sink = NoopProgressSink;
+    dispatch_with_progress(command, &mut sink)
+}
+
+/// 在 transport 已经决定启用流式协议时，允许 workflow 上报阶段进度。
+pub fn dispatch_with_progress(
+    command: CoreCommand,
+    progress_sink: &mut dyn ProgressSink,
+) -> CoreResponse {
     let repo_root = command
         .repo_root
         .map(PathBuf::from)
@@ -24,14 +34,18 @@ pub fn dispatch(command: CoreCommand) -> CoreResponse {
 
     // `query` 是唯一依赖 `term` 的动作；其他动作只需要 repo_root。
     match command.action.as_str() {
-        "init" => encode_result(run_init(&repo_root).and_then(as_json)),
+        "init" => encode_result(run_init_with_progress_as("init", &repo_root, progress_sink).and_then(as_json)),
         "status" => encode_result(run_status(&repo_root).and_then(as_json)),
-        "update" => encode_result(run_update(&repo_root).and_then(as_json)),
+        "update" => encode_result(
+            run_update_with_progress_as("update", &repo_root, progress_sink).and_then(as_json),
+        ),
         "query" => encode_result(
             run_query(&repo_root, command.term.as_deref().unwrap_or("")).and_then(as_json),
         ),
         "sync" => encode_result(run_sync(&repo_root).and_then(as_json)),
-        "rebuild" => encode_result(run_rebuild(&repo_root).and_then(as_json)),
+        "rebuild" => encode_result(
+            run_rebuild_with_progress_as("rebuild", &repo_root, progress_sink).and_then(as_json),
+        ),
         other => CoreResponse::error(format!("unsupported_action:{other}")),
     }
 }

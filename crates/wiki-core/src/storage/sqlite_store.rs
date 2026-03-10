@@ -1343,6 +1343,65 @@ fn list_symbols_in_conn(conn: &Connection) -> io::Result<Vec<SymbolNode>> {
         .map_err(|e| io::Error::other(format!("collect list symbols: {e}")))
 }
 
+/// 按文件路径集合读取 symbol rows，供 update 局部工作集组装使用。
+pub fn list_symbols_for_files(repo_root: &Path, file_paths: &[String]) -> io::Result<Vec<SymbolNode>> {
+    if file_paths.is_empty() || !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    list_symbols_for_files_in_conn(&conn, file_paths)
+}
+
+fn list_symbols_for_files_in_conn(
+    conn: &Connection,
+    file_paths: &[String],
+) -> io::Result<Vec<SymbolNode>> {
+    if file_paths.is_empty() || !table_exists(conn, "symbols")? {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = sql_placeholders(file_paths.len());
+    let sql = format!(
+        "SELECT id, name, label, file_path, start_line, end_line, is_exported, language
+         FROM symbols
+         WHERE file_path IN ({placeholders})
+         ORDER BY file_path, start_line, id"
+    );
+    let params = file_paths.iter().map(|value| value as &dyn ToSql);
+    list_symbols_with_params(conn, &sql, params)
+}
+
+/// 返回当前 symbols 表里覆盖的去重文件数。
+pub fn count_symbol_files(repo_root: &Path) -> io::Result<usize> {
+    if !db_exists(repo_root) {
+        return Ok(0);
+    }
+
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(0),
+    };
+
+    count_symbol_files_in_conn(&conn)
+}
+
+fn count_symbol_files_in_conn(conn: &Connection) -> io::Result<usize> {
+    if !table_exists(conn, "symbols")? {
+        return Ok(0);
+    }
+
+    conn.query_row("SELECT COUNT(DISTINCT file_path) FROM symbols", [], |row| {
+        row.get::<_, i64>(0)
+    })
+    .map(|count| count as usize)
+    .map_err(|e| io::Error::other(format!("count distinct symbol files: {e}")))
+}
+
 /// 列出当前 DB 内全部 symbol edges。
 pub fn list_edges(repo_root: &Path) -> io::Result<Vec<ResolvedSymbolEdge>> {
     if !db_exists(repo_root) {
@@ -1384,6 +1443,147 @@ fn list_edges_in_conn(conn: &Connection) -> io::Result<Vec<ResolvedSymbolEdge>> 
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| io::Error::other(format!("collect list edges: {e}")))
+}
+
+/// 按文件路径集合读取与这些文件相邻的 symbol edges。
+pub fn list_edges_for_files(
+    repo_root: &Path,
+    file_paths: &[String],
+) -> io::Result<Vec<ResolvedSymbolEdge>> {
+    if file_paths.is_empty() || !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    list_edges_for_files_in_conn(&conn, file_paths)
+}
+
+fn list_edges_for_files_in_conn(
+    conn: &Connection,
+    file_paths: &[String],
+) -> io::Result<Vec<ResolvedSymbolEdge>> {
+    if file_paths.is_empty() || !table_exists(conn, "edges")? || !table_exists(conn, "symbols")? {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = sql_placeholders(file_paths.len());
+    let sql = format!(
+        "SELECT DISTINCT e.id, e.source_id, e.target_id, e.edge_type, e.confidence, COALESCE(e.reason, '')
+         FROM edges e
+         JOIN symbols src ON src.id = e.source_id
+         JOIN symbols tgt ON tgt.id = e.target_id
+         WHERE src.file_path IN ({placeholders}) OR tgt.file_path IN ({placeholders})
+         ORDER BY e.source_id, e.target_id, e.id"
+    );
+    let param_refs = file_paths.iter().map(|value| value as &dyn ToSql);
+    list_edges_with_params(conn, &sql, param_refs)
+}
+
+/// 返回与指定文件集合通过 edge 相邻的一跳源码路径。
+pub fn list_adjacent_symbol_files(
+    repo_root: &Path,
+    file_paths: &[String],
+) -> io::Result<Vec<String>> {
+    if file_paths.is_empty() || !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    list_adjacent_symbol_files_in_conn(&conn, file_paths)
+}
+
+fn list_adjacent_symbol_files_in_conn(
+    conn: &Connection,
+    file_paths: &[String],
+) -> io::Result<Vec<String>> {
+    if file_paths.is_empty() || !table_exists(conn, "edges")? || !table_exists(conn, "symbols")? {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = sql_placeholders(file_paths.len());
+    let sql = format!(
+        "SELECT DISTINCT
+             CASE
+                 WHEN src.file_path IN ({placeholders}) THEN tgt.file_path
+                 ELSE src.file_path
+             END AS adjacent_file
+         FROM edges e
+         JOIN symbols src ON src.id = e.source_id
+         JOIN symbols tgt ON tgt.id = e.target_id
+         WHERE src.file_path IN ({placeholders}) OR tgt.file_path IN ({placeholders})
+         ORDER BY adjacent_file"
+    );
+    let param_refs = file_paths.iter().map(|value| value as &dyn ToSql);
+
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| io::Error::other(format!("prepare list adjacent symbol files: {e}")))?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(param_refs), |row| row.get::<_, String>(0))
+        .map_err(|e| io::Error::other(format!("query adjacent symbol files: {e}")))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect adjacent symbol files: {e}")))
+}
+
+fn list_symbols_with_params<'a>(
+    conn: &Connection,
+    sql: &str,
+    params: impl IntoIterator<Item = &'a dyn ToSql>,
+) -> io::Result<Vec<SymbolNode>> {
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| io::Error::other(format!("prepare list symbols by files: {e}")))?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params), |row| {
+            Ok(SymbolNode {
+                symbol_id: row.get(0)?,
+                name: row.get(1)?,
+                label: row.get(2)?,
+                file_path: row.get(3)?,
+                start_line: row.get::<_, i64>(4)? as usize,
+                end_line: row.get::<_, i64>(5)? as usize,
+                is_exported: row.get::<_, i64>(6)? != 0,
+                language: row.get(7)?,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query list symbols by files: {e}")))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect list symbols by files: {e}")))
+}
+
+fn list_edges_with_params<'a>(
+    conn: &Connection,
+    sql: &str,
+    params: impl IntoIterator<Item = &'a dyn ToSql>,
+) -> io::Result<Vec<ResolvedSymbolEdge>> {
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| io::Error::other(format!("prepare list edges by files: {e}")))?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params), |row| {
+            Ok(ResolvedSymbolEdge {
+                edge_id: row.get(0)?,
+                source_id: row.get(1)?,
+                target_id: row.get(2)?,
+                edge_type: row.get(3)?,
+                confidence: row.get(4)?,
+                reason: row.get(5)?,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query list edges by files: {e}")))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect list edges by files: {e}")))
 }
 
 /// 基于 `edges` 表递归追踪有限深度的调用链与影响范围。

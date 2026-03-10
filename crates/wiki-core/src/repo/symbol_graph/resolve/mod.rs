@@ -6,7 +6,8 @@ mod heritage;
 mod imports;
 
 pub use imports::{
-    build_import_resolution_context, resolve_imports, ImportResolutionContext, SuffixIndex,
+    build_import_resolution_context, collect_import_target_files, resolve_imports,
+    ImportResolutionContext, SuffixIndex,
 };
 pub use calls::resolve_calls;
 pub use heritage::resolve_heritage;

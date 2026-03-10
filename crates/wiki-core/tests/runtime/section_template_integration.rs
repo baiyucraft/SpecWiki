@@ -14,6 +14,7 @@ use wiki_core::generation::renderer::render_page_bundle;
 use wiki_core::generation::sections::section_titles_for_page_type;
 use wiki_core::repo::hierarchy::build_module_tree;
 use wiki_core::repo::scanner::scan_repo;
+use wiki_core::workflows::init::run_init;
 
 fn make_repo_with_ci() -> TempDir {
     let dir = TempDir::new().unwrap();
@@ -57,6 +58,42 @@ fn make_repo_without_ci() -> TempDir {
     fs::write(dir.path().join("src/app.ts"), "export function app() {}\n").unwrap();
     fs::write(dir.path().join("src/utils.ts"), "export function u() {}\n").unwrap();
     fs::write(dir.path().join("src/types.ts"), "export type T = string;\n").unwrap();
+    dir
+}
+
+fn make_repo_with_process_only() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("package.json"),
+        r#"{"name":"test","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    fs::write(
+        dir.path().join("src/shared.ts"),
+        "export function finalizePayment() { return true; }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("src/service.ts"),
+        concat!(
+            "import { finalizePayment } from \"./shared\";\n",
+            "export function runPayment() {\n",
+            "  return finalizePayment();\n",
+            "}\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("src/controller.ts"),
+        concat!(
+            "import { runPayment } from \"./service\";\n",
+            "export function handleCheckout() {\n",
+            "  return runPayment();\n",
+            "}\n",
+        ),
+    )
+    .unwrap();
     dir
 }
 
@@ -176,6 +213,21 @@ fn workflow_page_not_generated_without_ci() {
     assert!(
         workflow.is_none(),
         "workflow page should NOT be generated without CI/CD files"
+    );
+}
+
+#[test]
+fn workflow_page_generated_from_detected_process_without_ci() {
+    let repo = make_repo_with_process_only();
+    run_init(repo.path()).unwrap();
+
+    let workflow_path = repo.path().join(".wiki/工作流与部署.md");
+    assert!(workflow_path.exists(), "expected workflow page to be generated");
+
+    let workflow = fs::read_to_string(workflow_path).unwrap();
+    assert!(
+        workflow.contains("handleCheckout flow"),
+        "expected graph-derived process on workflow page, got:\n{workflow}"
     );
 }
 

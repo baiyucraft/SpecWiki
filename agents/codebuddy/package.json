@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "build": "vite build",
-    "test": "vitest run src/index.test.ts"
+    "test": "vitest run src/index.test.ts src/runtime/invokeCore.test.ts"
   },
   "devDependencies": {
     "@types/node": "catalog:",

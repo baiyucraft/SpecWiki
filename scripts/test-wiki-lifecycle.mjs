@@ -7,6 +7,7 @@
 //   node scripts/test-wiki-lifecycle.mjs --phase steady axum zustand
 //   node scripts/test-wiki-lifecycle.mjs --phase mutation
 //   node scripts/test-wiki-lifecycle.mjs --phase rebuild
+//   node scripts/test-wiki-lifecycle.mjs --jobs 6
 //   node scripts/test-wiki-lifecycle.mjs                    # 默认 full
 
 import {
@@ -15,21 +16,26 @@ import {
   existsSync,
   readdirSync,
   readFileSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   callCore,
   ensureBinary,
   ROOT_DIR,
+  removePathWithRetry,
+  resolveProjectJobs,
+  runCommandCapture,
+  runTaskPool,
   TEST_DIR,
   TestRunner,
 } from "./testing/helpers.mjs";
+
+const SCRIPT_PATH = fileURLToPath(import.meta.url);
 
 const REAL_REPO_MAP = {
   aLocal: "E:\\project\\aLocal",
@@ -48,15 +54,15 @@ function initViaRealRepo(proj, realRepo) {
   const projDir = path.join(TEST_DIR, proj);
   const wikiInReal = path.join(realRepo, ".wiki");
 
-  if (existsSync(wikiInReal)) rmSync(wikiInReal, { recursive: true });
+  removePathWithRetry(wikiInReal);
 
   callCore({ action: "init", repoRoot: realRepo });
 
   const wikiDest = path.join(projDir, ".wiki");
-  if (existsSync(wikiDest)) rmSync(wikiDest, { recursive: true });
+  removePathWithRetry(wikiDest);
   cpSync(wikiInReal, wikiDest, { recursive: true });
 
-  rmSync(wikiInReal, { recursive: true });
+  removePathWithRetry(wikiInReal);
 }
 
 function discoverProjects() {
@@ -388,7 +394,7 @@ function initProject(ctx, t) {
   const { proj, projDir, wikiDir, repoArg, isRealRepo } = ctx;
 
   console.log("  [init]");
-  if (existsSync(wikiDir)) rmSync(wikiDir, { recursive: true });
+  removePathWithRetry(wikiDir);
 
   try {
     if (isRealRepo) {
@@ -554,35 +560,119 @@ function runProjectPhase(ctx, phase, t) {
   console.log("");
 }
 
-export function runLifecycleTests(names, options = {}) {
-  ensureBinary({ fresh: true });
+function runLifecycleProject(proj, options = {}) {
+  const phase = options.phase || "full";
+  const projDir = path.join(TEST_DIR, proj);
+  const wikiDir = path.join(projDir, ".wiki");
+  const repoArg = REAL_REPO_MAP[proj] || `tmp/test/${proj}`;
+  const isRealRepo = !!REAL_REPO_MAP[proj];
 
+  if (!existsSync(projDir)) {
+    return {
+      proj,
+      ok: true,
+      skipped: true,
+      total: 0,
+      passed: 0,
+      failed: 0,
+      logs: [],
+    };
+  }
+
+  const captureLogs = options.captureLogs ?? false;
+  const logs = [];
+  const originalLog = console.log;
+  if (captureLogs) {
+    console.log = (...args) => {
+      logs.push(args.join(" "));
+    };
+  }
+
+  try {
+    const t = new TestRunner();
+    runProjectPhase({ isRealRepo, phase, proj, projDir, repoArg, wikiDir }, phase, t);
+    return {
+      proj,
+      ok: t.failed === 0,
+      skipped: false,
+      total: t.total,
+      passed: t.passed,
+      failed: t.failed,
+      logs,
+    };
+  } finally {
+    if (captureLogs) {
+      console.log = originalLog;
+    }
+  }
+}
+
+function printLifecycleProjectResult(result, index, total, phase) {
+  if (result.skipped) {
+    console.log(`[${index + 1}/${total}] SKIP ${result.proj} (not found)`);
+    return;
+  }
+
+  console.log(`[${index + 1}/${total}] ${result.proj} [phase=${phase}]`);
+  for (const line of result.logs ?? []) {
+    console.log(line);
+  }
+}
+
+async function runLifecycleProjectInChild(proj, phase) {
+  const child = await runCommandCapture(
+    process.execPath,
+    [SCRIPT_PATH, "--child-json", "--phase", phase, "--no-build", proj],
+    { cwd: ROOT_DIR },
+  );
+
+  if (!child.stdout.trim()) {
+    throw new Error(child.stderr || `child worker for ${proj} produced empty stdout`);
+  }
+
+  return JSON.parse(child.stdout.trim());
+}
+
+export async function runLifecycleTests(names, options = {}) {
   const phase = options.phase || "full";
   if (!(phase in LIFECYCLE_PHASES)) {
     throw new Error(`unknown lifecycle phase: ${phase}`);
   }
 
   const projects = names && names.length > 0 ? names : discoverProjects();
+  ensureBinary({ fresh: options.ensureFresh ?? true });
+
   const total = projects.length;
-  const t = new TestRunner();
+  const jobs = resolveProjectJobs(options.jobs, total);
+  const useParallel = total > 1 && jobs > 1 && !options.childMode;
+  let passed = 0;
+  let failed = 0;
+  let assertionTotal = 0;
 
-  for (let index = 0; index < total; index++) {
-    const proj = projects[index];
-    const projDir = path.join(TEST_DIR, proj);
-    const wikiDir = path.join(projDir, ".wiki");
-    const repoArg = REAL_REPO_MAP[proj] || `tmp/test/${proj}`;
-    const isRealRepo = !!REAL_REPO_MAP[proj];
+  const results = useParallel
+    ? await runTaskPool(projects, jobs, async (proj, index) => {
+      const result = await runLifecycleProjectInChild(proj, phase);
+      printLifecycleProjectResult(result, index, total, phase);
+      return result;
+    })
+    : projects.map((proj, index) => {
+      console.log(`[${index + 1}/${total}] ${proj} [phase=${phase}]`);
+      const result = runLifecycleProject(proj, { phase });
+      return result;
+    });
 
-    if (!existsSync(projDir)) {
-      console.log(`[${index + 1}/${total}] SKIP ${proj} (not found)`);
-      continue;
-    }
-
-    console.log(`[${index + 1}/${total}] ${proj} [phase=${phase}]`);
-    runProjectPhase({ isRealRepo, phase, proj, projDir, repoArg, wikiDir }, phase, t);
+  for (const result of results) {
+    assertionTotal += result.total ?? 0;
+    passed += result.passed ?? 0;
+    failed += result.failed ?? 0;
   }
 
-  return t.summary();
+  console.log("");
+  console.log("=== Results ===");
+  console.log(
+    `Total: ${assertionTotal}  \x1b[32mPassed: ${passed}\x1b[0m  \x1b[31mFailed: ${failed}\x1b[0m  jobs=${jobs}`,
+  );
+  return failed === 0;
 }
 
 function printPhaseList() {
@@ -596,6 +686,9 @@ function parseCliArgs(argv) {
   const names = [];
   let phase = "full";
   let listPhases = false;
+  let jobs;
+  let childMode = false;
+  let ensureFresh = true;
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -604,14 +697,27 @@ function parseCliArgs(argv) {
       index++;
       continue;
     }
+    if (arg === "--jobs") {
+      jobs = argv[index + 1];
+      index++;
+      continue;
+    }
     if (arg === "--list-phases") {
       listPhases = true;
+      continue;
+    }
+    if (arg === "--child-json") {
+      childMode = true;
+      continue;
+    }
+    if (arg === "--no-build") {
+      ensureFresh = false;
       continue;
     }
     names.push(arg);
   }
 
-  return { listPhases, names, phase };
+  return { childMode, ensureFresh, jobs, listPhases, names, phase };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -621,6 +727,20 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     process.exit(0);
   }
 
-  const ok = runLifecycleTests(names.length > 0 ? names : undefined, { phase });
+  const args = parseCliArgs(process.argv.slice(2));
+  if (args.childMode) {
+    const result = runLifecycleProject(args.names[0], {
+      captureLogs: true,
+      phase: args.phase,
+    });
+    process.stdout.write(JSON.stringify(result));
+    process.exit(0);
+  }
+
+  const ok = await runLifecycleTests(args.names.length > 0 ? args.names : undefined, {
+    ensureFresh: args.ensureFresh,
+    jobs: args.jobs,
+    phase: args.phase,
+  });
   if (!ok) process.exit(1);
 }

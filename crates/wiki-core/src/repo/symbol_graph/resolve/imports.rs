@@ -284,6 +284,27 @@ pub fn resolve_imports(
     ResolvedGraphSnapshot { edges, diagnostics }
 }
 
+/// 预取指定文件集合的 import 目标文件路径，供 update 组装局部工作集。
+pub fn collect_import_target_files(
+    snapshot: &ParsedSymbolsSnapshot,
+    context: &ImportResolutionContext,
+    file_paths: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut resolved = BTreeSet::new();
+
+    for parsed_file in snapshot.files.values() {
+        if !file_paths.contains(&parsed_file.file_path) {
+            continue;
+        }
+
+        for capture in &parsed_file.imports {
+            resolved.extend(resolve_import_capture(context, capture));
+        }
+    }
+
+    resolved
+}
+
 fn unresolved_import_diagnostic(
     capture: &RawImportCapture,
     kind: &str,

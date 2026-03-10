@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::time::Instant;
 
 use serde::Serialize;
 
@@ -27,7 +28,10 @@ use crate::repo::hierarchy::build_module_tree_with_graph;
 use crate::repo::symbol_graph::{
     analyze_symbol_graph, build_graph_summary, resolve_symbol_graph, ResolvedGraphSnapshot,
 };
-use crate::repo::symbols::{parse_symbols_for_paths, ParsedSymbolsSnapshot, SymbolTable};
+use crate::repo::symbol_graph::resolve::{
+    build_import_resolution_context, collect_import_target_files,
+};
+use crate::repo::symbols::{ParsedSymbolsSnapshot, SymbolTable};
 use crate::storage::cache_store::{
     remove_page_caches, write_module_tree_cache, write_page_context_cache,
     write_page_generation_cache, write_scan_cache, PageContextCacheEntry, PageGenerationCacheEntry,
@@ -37,9 +41,13 @@ use crate::storage::sqlite_store;
 use crate::storage::state_store::write_state_with_symbol_graph_for_files;
 use crate::storage::wiki_fs::{resolve_page_path, write_page};
 use crate::workflows::init::{
-    ancestor_ids_for_page, current_timestamp, page_provenance, run_init, source_paths_for_page,
+    ancestor_ids_for_page, current_timestamp, page_provenance, run_init_with_progress_as,
+    source_paths_for_page,
 };
-use crate::workflows::rebuild::run_rebuild;
+use crate::workflows::progress::{NoopProgressSink, ProgressSink, WorkflowReporter};
+use crate::workflows::rebuild::run_rebuild_with_progress_as;
+
+const LOCAL_UPDATE_MAX_FILES: usize = 32;
 
 /// `update` 当前会优先走增量 runtime。
 /// 只有 runtime 缺失或已损坏时，才回退到 init / rebuild。
@@ -65,12 +73,26 @@ pub struct UpdateReport {
 /// # 错误
 /// - 当变化规划、页面重生成或 runtime 落盘失败时返回错误。
 pub fn run_update(repo_root: &Path) -> io::Result<UpdateReport> {
+    let mut sink = NoopProgressSink;
+    run_update_with_progress_as("update", repo_root, &mut sink)
+}
+
+pub fn run_update_with_progress_as(
+    action: &'static str,
+    repo_root: &Path,
+    progress_sink: &mut dyn ProgressSink,
+) -> io::Result<UpdateReport> {
+    let started_at = Instant::now();
+    WorkflowReporter::from_started_at(action, progress_sink, started_at)
+        .phase("plan_changes", "规划增量变更");
     let plan = plan_runtime_changes(repo_root)?;
     let previous_state = plan.state().to_string();
 
     match plan.fallback_mode {
         FallbackMode::Init => {
-            let init = run_init(repo_root)?;
+            WorkflowReporter::from_started_at(action, progress_sink, started_at)
+                .phase("plan_changes", "runtime 缺失，回退到 init");
+            let init = run_init_with_progress_as(action, repo_root, progress_sink)?;
             return Ok(UpdateReport {
                 previous_state,
                 state: init.state,
@@ -78,7 +100,9 @@ pub fn run_update(repo_root: &Path) -> io::Result<UpdateReport> {
             });
         }
         FallbackMode::Rebuild => {
-            let rebuild = run_rebuild(repo_root)?;
+            WorkflowReporter::from_started_at(action, progress_sink, started_at)
+                .phase("plan_changes", "runtime 缺失或损坏，回退到 rebuild");
+            let rebuild = run_rebuild_with_progress_as(action, repo_root, progress_sink)?;
             return Ok(UpdateReport {
                 previous_state,
                 state: rebuild.state,
@@ -96,7 +120,9 @@ pub fn run_update(repo_root: &Path) -> io::Result<UpdateReport> {
         });
     }
 
-    let updated_pages = apply_incremental_update(repo_root, &plan)?;
+    let mut reporter = WorkflowReporter::from_started_at(action, progress_sink, started_at);
+    reporter.phase("plan_changes", "应用增量变更");
+    let updated_pages = apply_incremental_update(repo_root, &plan, &mut reporter)?;
 
     Ok(UpdateReport {
         previous_state,
@@ -105,7 +131,11 @@ pub fn run_update(repo_root: &Path) -> io::Result<UpdateReport> {
     })
 }
 
-fn apply_incremental_update(repo_root: &Path, plan: &ChangePlan) -> io::Result<Vec<String>> {
+fn apply_incremental_update(
+    repo_root: &Path,
+    plan: &ChangePlan,
+    reporter: &mut WorkflowReporter<'_>,
+) -> io::Result<Vec<String>> {
     // 增量路径保持 symbols/edges 按文件刷新，但 graph-derived 视图整体重算。
     let previous_state = plan
         .previous_state
@@ -126,33 +156,66 @@ fn apply_incremental_update(repo_root: &Path, plan: &ChangePlan) -> io::Result<V
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
+    let parse_total =
+        crate::repo::symbols::symbol_parse_file_count(scan_report, &changed_symbol_paths);
+    reporter.counted("parse_symbols", "解析受影响源码符号", 0, parse_total);
     let changed_symbol_snapshot = if changed_symbol_paths.is_empty() {
         ParsedSymbolsSnapshot::default()
     } else {
-        parse_symbols_for_paths(repo_root, scan_report, &changed_symbol_paths)?
+        crate::repo::symbols::parse_symbols_for_paths_with_progress(
+            repo_root,
+            scan_report,
+            &changed_symbol_paths,
+            &mut |processed, total| {
+                reporter.counted(
+                    "parse_symbols",
+                    format!("解析受影响源码符号 {processed}/{total}"),
+                    processed,
+                    total,
+                );
+            },
+        )?
     };
-    let persisted_symbols = sqlite_store::list_symbols(repo_root)?;
-    let persisted_edges = sqlite_store::list_edges(repo_root)?;
+    let working_set = load_incremental_working_set(
+        repo_root,
+        scan_report,
+        plan,
+        &changed_symbol_snapshot,
+        &dirty_symbol_paths,
+    )?;
+    reporter.phase("plan_changes", working_set.note.clone());
+    let persisted_symbols = working_set.persisted_symbols;
+    let persisted_edges = working_set.persisted_edges;
     let full_symbol_snapshot = merge_symbol_snapshots(
         &persisted_symbols,
         &dirty_symbol_paths,
         &changed_symbol_snapshot,
     );
-    let resolution_snapshot = build_resolution_snapshot(&changed_symbol_snapshot, &full_symbol_snapshot);
+    let resolution_snapshot =
+        build_resolution_snapshot(&changed_symbol_snapshot, &full_symbol_snapshot);
+    reporter.phase("resolve_symbol_graph", "解析符号关系");
     let changed_resolved_graph = if changed_symbol_paths.is_empty() {
         ResolvedGraphSnapshot::default()
     } else {
         resolve_symbol_graph(repo_root, scan_report, &resolution_snapshot)?
     };
-    let full_resolved_graph =
-        merge_resolved_graphs(&persisted_symbols, &persisted_edges, &dirty_symbol_paths, &changed_resolved_graph);
+    let full_resolved_graph = merge_resolved_graphs(
+        &persisted_symbols,
+        &persisted_edges,
+        &dirty_symbol_paths,
+        &changed_resolved_graph,
+    );
+    reporter.phase("analyze_symbol_graph", "分析符号图");
     let analysis = analyze_symbol_graph(&full_symbol_snapshot, &full_resolved_graph);
     let graph_summary =
         build_graph_summary(scan_report, &full_symbol_snapshot, &full_resolved_graph, &analysis);
+    reporter.phase("build_module_tree", "构建模块树");
     let module_tree = build_module_tree_with_graph(scan_report, &graph_summary);
+    reporter.phase("build_contexts", "构建页面上下文");
     let repo_context = build_repo_context_with_graph(scan_report, &module_tree, &graph_summary);
     let module_contexts =
         build_module_contexts_with_graph(scan_report, &module_tree, &graph_summary);
+    reporter.phase("plan_pages", "规划 Wiki 页面");
     let pages = crate::generation::planner::plan_pages_with_graph(
         scan_report,
         &module_tree,
@@ -190,8 +253,11 @@ fn apply_incremental_update(repo_root: &Path, plan: &ChangePlan) -> io::Result<V
     let mut ancestor_ids_by_page = BTreeMap::new();
     let mut next_pages = Vec::new();
     let mut touched_paths = BTreeSet::new();
+    let page_total = pages.len();
 
-    for planned_page in &pages {
+    reporter.counted("render_pages", "渲染页面", 0, page_total);
+
+    for (index, planned_page) in pages.iter().enumerate() {
         let ancestor_ids = ancestor_ids_for_page(planned_page, &ancestor_ids_by_page);
         ancestor_ids_by_page.insert(planned_page.id.clone(), ancestor_ids.clone());
         let current_page_path = format!(".wiki/{}", planned_page.relative_path);
@@ -275,6 +341,12 @@ fn apply_incremental_update(repo_root: &Path, plan: &ChangePlan) -> io::Result<V
             sections: rendered_page.sections,
         }));
         touched_paths.insert(current_page_path);
+        reporter.counted(
+            "render_pages",
+            format!("渲染页面 {}/{}", index + 1, page_total),
+            index + 1,
+            page_total,
+        );
     }
 
     for removed_page_id in removed_page_ids {
@@ -299,6 +371,7 @@ fn apply_incremental_update(repo_root: &Path, plan: &ChangePlan) -> io::Result<V
 
     write_scan_cache(repo_root, scan_report)?;
     write_module_tree_cache(repo_root, &module_tree)?;
+    reporter.phase("write_state", "写入运行时状态");
     write_state_with_symbol_graph_for_files(
         repo_root,
         &next_state,
@@ -317,6 +390,7 @@ fn apply_incremental_update(repo_root: &Path, plan: &ChangePlan) -> io::Result<V
         last_indexed_commit: current_commit(repo_root),
     };
     let metadata = export_metadata(&next_state, &export_context);
+    reporter.phase("write_metadata", "写入元数据");
     write_metadata(repo_root, &metadata)?;
 
     Ok(touched_paths.into_iter().collect())
@@ -450,4 +524,72 @@ fn merge_resolved_graphs(
         edges: merged_edges,
         diagnostics: changed_resolved_graph.diagnostics.clone(),
     }
+}
+
+struct IncrementalWorkingSet {
+    persisted_symbols: Vec<crate::repo::symbols::SymbolNode>,
+    persisted_edges: Vec<crate::repo::symbol_graph::ResolvedSymbolEdge>,
+    note: String,
+}
+
+fn load_incremental_working_set(
+    repo_root: &Path,
+    scan_report: &crate::repo::scanner::ScanReport,
+    plan: &ChangePlan,
+    changed_symbol_snapshot: &ParsedSymbolsSnapshot,
+    dirty_symbol_paths: &[String],
+) -> io::Result<IncrementalWorkingSet> {
+    let total_symbol_files = sqlite_store::count_symbol_files(repo_root)?;
+    let mut workset_paths = dirty_symbol_paths
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    workset_paths.extend(plan.affected_set.graph_refresh_sources.iter().cloned());
+
+    if !changed_symbol_snapshot.files.is_empty() {
+        let import_context = build_import_resolution_context(repo_root, scan_report)?;
+        let selected_files = dirty_symbol_paths.iter().cloned().collect::<BTreeSet<_>>();
+        workset_paths.extend(collect_import_target_files(
+            changed_symbol_snapshot,
+            &import_context,
+            &selected_files,
+        ));
+    }
+
+    let seed_paths = workset_paths.iter().cloned().collect::<Vec<_>>();
+    workset_paths.extend(sqlite_store::list_adjacent_symbol_files(repo_root, &seed_paths)?);
+
+    if total_symbol_files > 0
+        && workset_paths.len() <= LOCAL_UPDATE_MAX_FILES
+        && workset_paths.len() >= total_symbol_files
+    {
+        let scoped_paths = workset_paths.into_iter().collect::<Vec<_>>();
+        return Ok(IncrementalWorkingSet {
+            persisted_symbols: sqlite_store::list_symbols_for_files(repo_root, &scoped_paths)?,
+            persisted_edges: sqlite_store::list_edges_for_files(repo_root, &scoped_paths)?,
+            note: format!("使用局部 symbol/edge 工作集（{} 个文件）", scoped_paths.len()),
+        });
+    }
+
+    let note = if total_symbol_files == 0 {
+        "symbol 图状态缺失，回退到全量 symbol/edge 读取".to_string()
+    } else if workset_paths.len() > LOCAL_UPDATE_MAX_FILES {
+        format!(
+            "局部工作集 {} 个文件超过阈值 {}，回退到全量 symbol/edge 读取",
+            workset_paths.len(),
+            LOCAL_UPDATE_MAX_FILES
+        )
+    } else {
+        format!(
+            "局部工作集仅覆盖 {}/{} 个 symbol 文件，回退到全量 symbol/edge 读取",
+            workset_paths.len(),
+            total_symbol_files
+        )
+    };
+
+    Ok(IncrementalWorkingSet {
+        persisted_symbols: sqlite_store::list_symbols(repo_root)?,
+        persisted_edges: sqlite_store::list_edges(repo_root)?,
+        note,
+    })
 }

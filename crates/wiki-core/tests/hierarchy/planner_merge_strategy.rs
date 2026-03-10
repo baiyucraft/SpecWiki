@@ -159,6 +159,10 @@ fn make_test_data() -> (ScanReport, ModuleTree, RepoContext, Vec<ModuleContext>)
         key_entry_points: vec![],
         global_relations: vec![],
         tech_stack: vec!["rust".to_string()],
+        graph_hotspots: vec![],
+        detected_processes: vec![],
+        community_labels: vec![],
+        cycle_warnings: vec![],
     };
 
     let module_contexts = vec![
@@ -169,6 +173,9 @@ fn make_test_data() -> (ScanReport, ModuleTree, RepoContext, Vec<ModuleContext>)
             dependencies: vec![],
             dependents: vec![],
             key_sources: vec![],
+            graph_hotspots: vec![],
+            communities: vec![],
+            cycle_warnings: vec![],
         },
         ModuleContext {
             module_id: small_id,
@@ -177,6 +184,9 @@ fn make_test_data() -> (ScanReport, ModuleTree, RepoContext, Vec<ModuleContext>)
             dependencies: vec![],
             dependents: vec![],
             key_sources: vec![],
+            graph_hotspots: vec![],
+            communities: vec![],
+            cycle_warnings: vec![],
         },
         ModuleContext {
             module_id: group_id,
@@ -185,6 +195,9 @@ fn make_test_data() -> (ScanReport, ModuleTree, RepoContext, Vec<ModuleContext>)
             dependencies: vec![],
             dependents: vec![],
             key_sources: vec![],
+            graph_hotspots: vec![],
+            communities: vec![],
+            cycle_warnings: vec![],
         },
         ModuleContext {
             module_id: child_a_id,
@@ -193,6 +206,9 @@ fn make_test_data() -> (ScanReport, ModuleTree, RepoContext, Vec<ModuleContext>)
             dependencies: vec![],
             dependents: vec![],
             key_sources: vec![],
+            graph_hotspots: vec![],
+            communities: vec![],
+            cycle_warnings: vec![],
         },
         ModuleContext {
             module_id: child_b_id,
@@ -201,6 +217,9 @@ fn make_test_data() -> (ScanReport, ModuleTree, RepoContext, Vec<ModuleContext>)
             dependencies: vec![],
             dependents: vec![],
             key_sources: vec![],
+            graph_hotspots: vec![],
+            communities: vec![],
+            cycle_warnings: vec![],
         },
     ];
 

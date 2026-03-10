@@ -1,5 +1,9 @@
-## MODIFIED Requirements
+# sqlite-cache-storage Specification
 
+## Purpose
+定义 Repo Wiki SQLite 缓存与状态库的结构、原子性，以及增量 workflow 需要的局部读取能力。
+
+## Requirements
 ### Requirement: 系统必须使用 SQLite 数据库统一承载缓存和状态数据
 系统 MUST 使用单个 SQLite 数据库文件 `.wiki/.cache/wiki-cache.db` 统一承载运行时状态、增量缓存、symbol graph 和全文索引数据。数据库初始化时 MUST 启用 WAL journal mode（`PRAGMA journal_mode=WAL`）。除了现有的每页缓存表外，数据库 MUST 至少包含以下状态与索引表：`wiki_pages`、`wiki_page_sections`、`source_states`、`modules`、`module_source_map`、`page_source_map`、`page_module_map`、`wiki_relations`、`scan_cache`、`llm_cache`、`symbols`、`edges`、`communities`、`community_members`、`processes`、`process_steps`、`wiki_pages_fts`、`symbols_fts`。系统 MAY 保留 `kv_store` 表壳用于历史遗留测试，但不得继续把它作为运行时事实源或自动升级入口。与迭代 7 不同的是，`symbols`、`edges`、`communities`、`community_members`、`processes` 和 `process_steps` 在本迭代起 MUST 承载真实的 symbol graph 与 graph-derived rows，而不再只是空 schema。
 
@@ -26,3 +30,16 @@
 - **WHEN** `update` 完成增量页面重建、symbol/edge 刷新和 graph-derived 结果重算
 - **THEN** 受影响页面的状态行、section 行、页面缓存、symbol rows、edge rows、community/process rows、`wiki_pages_fts` 和 `symbols_fts` 更新 MUST 在同一事务中完成
 - **THEN** 系统不得出现页面正文已更新但 graph tables 仍是旧值的部分成功状态
+
+### Requirement: SQLite 必须支持增量 workflow 所需的文件级 symbol 与 edge 读取
+系统 MUST 为增量 workflow 提供按文件路径集合读取 `symbols` 与 `edges` 的能力，而不是只暴露全量枚举接口。文件级读取能力 MUST 能支撑 `update` 组装局部 symbol/edge 工作集，并允许继续向外扩展必要的一跳 dependents 或 graph frontier。相关查询不得破坏现有事务一致性要求。
+
+#### Scenario: 按文件集合读取 symbol rows
+- **WHEN** `update` 需要刷新一组受影响源码文件的 symbol snapshot
+- **THEN** 系统 MUST 能只读取这些文件对应的 `symbols` rows
+- **THEN** 结果中不得混入与该文件集合无关的 symbol rows
+
+#### Scenario: 按文件集合读取 edge rows 并补充必要 frontier
+- **WHEN** `update` 需要为一组受影响源码文件重建局部 graph 工作集
+- **THEN** 系统 MUST 能读取这些文件相关的 `edges` rows，并补充后续合并所需的必要 frontier
+- **THEN** 系统不得要求任何小范围更新都先执行一次无条件全表 edge 枚举

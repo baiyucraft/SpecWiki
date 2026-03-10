@@ -7,15 +7,15 @@ use std::io;
 use std::path::Path;
 
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
-use crate::domain::state::{assemble_state, compute_page_input_hash, PageBuildResult};
+use crate::domain::state::{assemble_state, PageBuildResult};
 use crate::domain::steering::load_steering_config;
 use crate::generation::context::{
-    build_module_contexts_with_graph, build_page_context, build_repo_context_with_graph,
+    build_module_contexts_with_graph, build_repo_context_with_graph,
 };
 use crate::generation::managed_sections::{
     merge_sections, parse_wiki_page, ManagedSectionBlock, PageBlock,
 };
-use crate::generation::renderer::{assemble_page_from_merge, render_page_bundle};
+use crate::generation::renderer::assemble_page_from_merge;
 use crate::generation::sections::section_titles_for_page_type;
 use crate::repo::fingerprint::fingerprint_bytes;
 use crate::repo::git::{current_branch, current_commit};
@@ -24,7 +24,6 @@ use crate::repo::scanner::scan_repo_with_boundary;
 use crate::repo::symbol_graph::{
     analyze_symbol_graph, build_graph_summary, resolve_symbol_graph,
 };
-use crate::repo::symbols::parse_symbols;
 use crate::storage::cache_store::{
     ensure_cache_dir, ensure_page_cache_dirs, write_module_tree_cache, write_page_context_cache,
     write_page_generation_cache, write_scan_cache, PageContextCacheEntry, PageGenerationCacheEntry,
@@ -35,6 +34,8 @@ use crate::storage::wiki_fs::{resolve_page_path, write_page};
 use crate::workflows::init::{
     ancestor_ids_for_page, current_timestamp, page_provenance, source_paths_for_page,
 };
+use crate::workflows::page_render::prepare_page_artifacts;
+use crate::workflows::progress::{NoopProgressSink, ProgressSink, WorkflowReporter};
 
 /// `rebuild` 是显式的"强制重建"入口。
 /// 迭代 5 之后，rebuild 会保留同 page_id 页面中已同步的 user sections。
@@ -49,6 +50,16 @@ pub struct RebuildReport {
 
 /// 强制全量重建 Repo Wiki，保留同页 user sections。
 pub fn run_rebuild(repo_root: &Path) -> io::Result<RebuildReport> {
+    let mut sink = NoopProgressSink;
+    run_rebuild_with_progress_as("rebuild", repo_root, &mut sink)
+}
+
+/// 允许 transport 以指定 action 名称执行 rebuild 主链。
+pub fn run_rebuild_with_progress_as(
+    action: &'static str,
+    repo_root: &Path,
+    progress_sink: &mut dyn ProgressSink,
+) -> io::Result<RebuildReport> {
     if !repo_root.exists() || !repo_root.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -56,25 +67,44 @@ pub fn run_rebuild(repo_root: &Path) -> io::Result<RebuildReport> {
         ));
     }
 
+    let mut reporter = WorkflowReporter::new(action, progress_sink);
+
     // 在清理前，读取旧页面的磁盘内容用于 user section 恢复
     let old_page_contents = read_old_page_contents(repo_root);
 
     // 清理旧 runtime
+    reporter.phase("clear_runtime", "清理旧运行时");
     crate::storage::wiki_fs::remove_runtime(repo_root)?;
 
     // 全量 pipeline
     let steering = load_steering_config(repo_root);
     let (ignore_paths, include_paths) = steering.scan_boundary();
+    reporter.phase("scan", "扫描仓库源码");
     let scan_report = scan_repo_with_boundary(repo_root, ignore_paths, include_paths)?;
-    let symbol_snapshot = parse_symbols(repo_root, &scan_report)?;
+    let symbol_total = crate::repo::symbols::symbol_parse_file_count(&scan_report, &[]);
+    reporter.counted("parse_symbols", "解析源码符号", 0, symbol_total);
+    let symbol_snapshot =
+        crate::repo::symbols::parse_symbols_with_progress(repo_root, &scan_report, &mut |processed, total| {
+            reporter.counted(
+                "parse_symbols",
+                format!("解析源码符号 {processed}/{total}"),
+                processed,
+                total,
+            );
+        })?;
+    reporter.phase("resolve_symbol_graph", "解析符号关系");
     let resolved_graph = resolve_symbol_graph(repo_root, &scan_report, &symbol_snapshot)?;
+    reporter.phase("analyze_symbol_graph", "分析符号图");
     let analysis = analyze_symbol_graph(&symbol_snapshot, &resolved_graph);
     let graph_summary =
         build_graph_summary(&scan_report, &symbol_snapshot, &resolved_graph, &analysis);
+    reporter.phase("build_module_tree", "构建模块树");
     let module_tree = build_module_tree_with_graph(&scan_report, &graph_summary);
+    reporter.phase("build_contexts", "构建页面上下文");
     let repo_context = build_repo_context_with_graph(&scan_report, &module_tree, &graph_summary);
     let module_contexts =
         build_module_contexts_with_graph(&scan_report, &module_tree, &graph_summary);
+    reporter.phase("plan_pages", "规划 Wiki 页面");
     let pages = crate::generation::planner::plan_pages_with_graph(
         &scan_report,
         &module_tree,
@@ -89,73 +119,82 @@ pub fn run_rebuild(repo_root: &Path) -> io::Result<RebuildReport> {
     write_scan_cache(repo_root, &scan_report)?;
     write_module_tree_cache(repo_root, &module_tree)?;
 
+    let page_total = pages.len();
+
+    reporter.counted("render_pages", "渲染页面", 0, page_total);
+    let prepared_pages = prepare_page_artifacts(
+        &pages,
+        &scan_report,
+        &module_tree,
+        &repo_context,
+        &module_contexts,
+    );
+
     let mut page_results = Vec::new();
     let mut generated_pages = Vec::new();
     let mut all_warnings = Vec::new();
     let generated_at = current_timestamp();
     let mut ancestor_ids_by_page = BTreeMap::new();
 
-    for page in &pages {
-        let page_context = build_page_context(
-            page,
-            &scan_report,
-            &module_tree,
-            &repo_context,
-            &module_contexts,
-        );
-        let input_hash = compute_page_input_hash(page, &page_context, &scan_report);
-        let rendered_page = render_page_bundle(page, &page_context);
-
+    for (index, artifact) in prepared_pages.into_iter().enumerate() {
         // 尝试从旧页面恢复 user sections
-        let final_content = match old_page_contents.get(&page.id) {
+        let final_content = match old_page_contents.get(&artifact.page.id) {
             Some(old_content) => merge_old_user_sections(
-                page,
-                &rendered_page.sections,
-                &rendered_page.content,
+                &artifact.page,
+                &artifact.rendered_page.sections,
+                &artifact.rendered_page.content,
                 old_content,
                 &mut all_warnings,
             ),
-            None => rendered_page.content.clone(),
+            None => artifact.rendered_page.content.clone(),
         };
 
-        write_page(repo_root, &page.relative_path, &final_content)?;
-        let page_path = format!(".wiki/{}", page.relative_path);
+        write_page(repo_root, &artifact.page.relative_path, &final_content)?;
+        let page_path = format!(".wiki/{}", artifact.page.relative_path);
         generated_pages.push(page_path);
-        let ancestor_ids = ancestor_ids_for_page(page, &ancestor_ids_by_page);
-        ancestor_ids_by_page.insert(page.id.clone(), ancestor_ids.clone());
+        let ancestor_ids = ancestor_ids_for_page(&artifact.page, &ancestor_ids_by_page);
+        ancestor_ids_by_page.insert(artifact.page.id.clone(), ancestor_ids.clone());
         let content_hash = fingerprint_bytes(final_content.as_bytes());
 
         write_page_context_cache(
             repo_root,
             &PageContextCacheEntry {
-                page_id: page.id.clone(),
-                input_hash: input_hash.clone(),
-                context: page_context.clone(),
+                page_id: artifact.page.id.clone(),
+                input_hash: artifact.input_hash.clone(),
+                context: artifact.page_context.clone(),
             },
         )?;
         write_page_generation_cache(
             repo_root,
             &PageGenerationCacheEntry {
-                page_id: page.id.clone(),
-                input_hash: input_hash.clone(),
+                page_id: artifact.page.id.clone(),
+                input_hash: artifact.input_hash.clone(),
                 content_hash: content_hash.clone(),
-                sections: rendered_page.sections.clone(),
+                sections: artifact.rendered_page.sections.clone(),
             },
         )?;
 
         page_results.push(PageBuildResult {
-            page: page.clone(),
-            context: page_context.clone(),
-            input_hash,
+            page: artifact.page.clone(),
+            context: artifact.page_context.clone(),
+            input_hash: artifact.input_hash,
             content_hash,
-            source_paths: source_paths_for_page(&scan_report, &page_context),
+            source_paths: source_paths_for_page(&scan_report, &artifact.page_context),
             ancestor_ids,
-            provenance: page_provenance(page, &page_context, &scan_report),
-            sections: rendered_page.sections,
+            provenance: page_provenance(&artifact.page, &artifact.page_context, &scan_report),
+            sections: artifact.rendered_page.sections,
         });
+
+        reporter.counted(
+            "render_pages",
+            format!("渲染页面 {}/{}", index + 1, page_total),
+            index + 1,
+            page_total,
+        );
     }
 
     let state = assemble_state(&page_results, &scan_report, &module_tree, &generated_at);
+    reporter.phase("write_state", "写入运行时状态");
     write_state_with_symbol_graph(
         repo_root,
         &state,
@@ -173,6 +212,7 @@ pub fn run_rebuild(repo_root: &Path) -> io::Result<RebuildReport> {
         last_indexed_commit: current_commit(repo_root),
     };
     let metadata = export_metadata(&state, &export_context);
+    reporter.phase("write_metadata", "写入元数据");
     write_metadata(repo_root, &metadata)?;
 
     Ok(RebuildReport {

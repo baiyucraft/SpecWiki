@@ -8,6 +8,10 @@ use rusqlite::Connection;
 use tempfile::TempDir;
 use wiki_core::domain::metadata::DirtyState;
 use wiki_core::domain::state::{BuildState, WikiState};
+use wiki_core::repo::symbol_graph::{
+    CommunityMember, CommunityNode, GraphAnalysisSnapshot, ProcessNode, ProcessStep,
+    ResolvedGraphSnapshot, ResolvedSymbolEdge,
+};
 use wiki_core::repo::symbols::SymbolNode;
 use wiki_core::storage::cache_store::has_cache_layout;
 use wiki_core::storage::sqlite_store;
@@ -37,6 +41,86 @@ fn empty_state() -> WikiState {
             module_count: 0,
         },
     }
+}
+
+fn sample_symbols() -> Vec<SymbolNode> {
+    vec![
+        SymbolNode {
+            symbol_id: "symbol-service".to_string(),
+            name: "PaymentService".to_string(),
+            label: "class".to_string(),
+            file_path: "src/service.ts".to_string(),
+            start_line: 1,
+            end_line: 12,
+            is_exported: true,
+            language: "typescript".to_string(),
+        },
+        SymbolNode {
+            symbol_id: "symbol-helper".to_string(),
+            name: "runHelper".to_string(),
+            label: "function".to_string(),
+            file_path: "src/helper.ts".to_string(),
+            start_line: 1,
+            end_line: 3,
+            is_exported: true,
+            language: "typescript".to_string(),
+        },
+    ]
+}
+
+fn sample_graph() -> (ResolvedGraphSnapshot, GraphAnalysisSnapshot) {
+    let resolved = ResolvedGraphSnapshot {
+        edges: vec![ResolvedSymbolEdge {
+            edge_id: "edge-calls".to_string(),
+            source_id: "symbol-service".to_string(),
+            target_id: "symbol-helper".to_string(),
+            edge_type: "CALLS".to_string(),
+            confidence: 0.95,
+            reason: "same-file".to_string(),
+        }],
+        diagnostics: Vec::new(),
+    };
+    let analysis = GraphAnalysisSnapshot {
+        communities: vec![CommunityNode {
+            community_id: "community-payments".to_string(),
+            label: "payments".to_string(),
+            cohesion: 0.8,
+            symbol_count: 2,
+        }],
+        community_members: vec![
+            CommunityMember {
+                community_id: "community-payments".to_string(),
+                symbol_id: "symbol-service".to_string(),
+            },
+            CommunityMember {
+                community_id: "community-payments".to_string(),
+                symbol_id: "symbol-helper".to_string(),
+            },
+        ],
+        processes: vec![ProcessNode {
+            process_id: "process-payment".to_string(),
+            label: "payment flow".to_string(),
+            process_type: "request-flow".to_string(),
+            step_count: 2,
+            entry_point_id: Some("symbol-service".to_string()),
+            terminal_id: Some("symbol-helper".to_string()),
+        }],
+        process_steps: vec![
+            ProcessStep {
+                process_id: "process-payment".to_string(),
+                symbol_id: "symbol-service".to_string(),
+                step_order: 0,
+            },
+            ProcessStep {
+                process_id: "process-payment".to_string(),
+                symbol_id: "symbol-helper".to_string(),
+                step_order: 1,
+            },
+        ],
+        cycles: Vec::new(),
+        diagnostics: Vec::new(),
+    };
+    (resolved, analysis)
 }
 
 fn write_legacy_db(repo_root: &Path, entries: &[(&str, &str)]) {
@@ -248,6 +332,192 @@ fn symbols_roundtrip_and_fts_query() {
     let hits = sqlite_store::search_symbols_fts(repo.path(), "settlePayment", 8).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].symbol_id, "symbol-1");
+}
+
+#[test]
+fn symbol_graph_roundtrip_persists_edges_communities_and_processes() {
+    let repo = make_repo();
+    let mut conn = sqlite_store::open_db(repo.path()).unwrap();
+    let symbols = sample_symbols();
+    let (resolved_graph, analysis) = sample_graph();
+
+    sqlite_store::replace_state_and_symbol_graph(
+        &mut conn,
+        &empty_state(),
+        &symbols,
+        &resolved_graph,
+        &analysis,
+    )
+    .unwrap();
+
+    let edges = sqlite_store::list_edges(repo.path()).unwrap();
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].edge_id, "edge-calls");
+    assert_eq!(edges[0].edge_type, "CALLS");
+
+    let communities = sqlite_store::list_communities(repo.path()).unwrap();
+    assert_eq!(communities.len(), 1);
+    assert_eq!(communities[0].community_id, "community-payments");
+
+    let members = sqlite_store::list_community_members(repo.path()).unwrap();
+    assert_eq!(members.len(), 2);
+    assert!(members.iter().any(|member| member.symbol_id == "symbol-service"));
+
+    let processes = sqlite_store::list_processes(repo.path()).unwrap();
+    assert_eq!(processes.len(), 1);
+    assert_eq!(processes[0].process_id, "process-payment");
+    assert_eq!(processes[0].step_count, 2);
+
+    let steps = sqlite_store::list_process_steps(repo.path()).unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0].symbol_id, "symbol-service");
+    assert_eq!(steps[1].symbol_id, "symbol-helper");
+}
+
+#[test]
+fn scoped_symbol_graph_reads_only_return_requested_files_and_frontier() {
+    let repo = make_repo();
+    let mut conn = sqlite_store::open_db(repo.path()).unwrap();
+    let symbols = sample_symbols();
+    let (resolved_graph, analysis) = sample_graph();
+
+    sqlite_store::replace_state_and_symbol_graph(
+        &mut conn,
+        &empty_state(),
+        &symbols,
+        &resolved_graph,
+        &analysis,
+    )
+    .unwrap();
+
+    let scoped_symbols =
+        sqlite_store::list_symbols_for_files(repo.path(), &["src/service.ts".to_string()]).unwrap();
+    assert_eq!(scoped_symbols.len(), 1);
+    assert_eq!(scoped_symbols[0].symbol_id, "symbol-service");
+
+    let scoped_edges =
+        sqlite_store::list_edges_for_files(repo.path(), &["src/service.ts".to_string()]).unwrap();
+    assert_eq!(scoped_edges.len(), 1);
+    assert_eq!(scoped_edges[0].edge_id, "edge-calls");
+
+    let adjacent =
+        sqlite_store::list_adjacent_symbol_files(repo.path(), &["src/service.ts".to_string()])
+            .unwrap();
+    assert_eq!(adjacent, vec!["src/helper.ts".to_string()]);
+    assert_eq!(sqlite_store::count_symbol_files(repo.path()).unwrap(), 2);
+}
+
+#[test]
+fn symbol_graph_for_files_refresh_replaces_stale_edges_and_analysis() {
+    let repo = make_repo();
+    let mut conn = sqlite_store::open_db(repo.path()).unwrap();
+    let symbols = sample_symbols();
+    let (resolved_graph, analysis) = sample_graph();
+
+    sqlite_store::replace_state_and_symbol_graph(
+        &mut conn,
+        &empty_state(),
+        &symbols,
+        &resolved_graph,
+        &analysis,
+    )
+    .unwrap();
+
+    let refreshed_symbols = vec![SymbolNode {
+        symbol_id: "symbol-service-v2".to_string(),
+        name: "PaymentServiceV2".to_string(),
+        label: "class".to_string(),
+        file_path: "src/service.ts".to_string(),
+        start_line: 1,
+        end_line: 14,
+        is_exported: true,
+        language: "typescript".to_string(),
+    }];
+    let refreshed_graph = ResolvedGraphSnapshot {
+        edges: vec![ResolvedSymbolEdge {
+            edge_id: "edge-calls-v2".to_string(),
+            source_id: "symbol-service-v2".to_string(),
+            target_id: "symbol-helper".to_string(),
+            edge_type: "CALLS".to_string(),
+            confidence: 0.98,
+            reason: "import-resolved".to_string(),
+        }],
+        diagnostics: Vec::new(),
+    };
+    let refreshed_analysis = GraphAnalysisSnapshot {
+        communities: vec![CommunityNode {
+            community_id: "community-payments-v2".to_string(),
+            label: "payments-v2".to_string(),
+            cohesion: 0.9,
+            symbol_count: 2,
+        }],
+        community_members: vec![
+            CommunityMember {
+                community_id: "community-payments-v2".to_string(),
+                symbol_id: "symbol-service-v2".to_string(),
+            },
+            CommunityMember {
+                community_id: "community-payments-v2".to_string(),
+                symbol_id: "symbol-helper".to_string(),
+            },
+        ],
+        processes: vec![ProcessNode {
+            process_id: "process-payment-v2".to_string(),
+            label: "payment flow v2".to_string(),
+            process_type: "request-flow".to_string(),
+            step_count: 2,
+            entry_point_id: Some("symbol-service-v2".to_string()),
+            terminal_id: Some("symbol-helper".to_string()),
+        }],
+        process_steps: vec![
+            ProcessStep {
+                process_id: "process-payment-v2".to_string(),
+                symbol_id: "symbol-service-v2".to_string(),
+                step_order: 0,
+            },
+            ProcessStep {
+                process_id: "process-payment-v2".to_string(),
+                symbol_id: "symbol-helper".to_string(),
+                step_order: 1,
+            },
+        ],
+        cycles: Vec::new(),
+        diagnostics: Vec::new(),
+    };
+
+    sqlite_store::replace_state_and_symbol_graph_for_files(
+        &mut conn,
+        &empty_state(),
+        &["src/service.ts".to_string()],
+        &refreshed_symbols,
+        &refreshed_graph,
+        &refreshed_analysis,
+    )
+    .unwrap();
+
+    let stored_symbols = sqlite_store::list_symbols(repo.path()).unwrap();
+    assert!(stored_symbols
+        .iter()
+        .any(|symbol| symbol.symbol_id == "symbol-service-v2"));
+    assert!(stored_symbols
+        .iter()
+        .any(|symbol| symbol.symbol_id == "symbol-helper"));
+    assert!(!stored_symbols
+        .iter()
+        .any(|symbol| symbol.symbol_id == "symbol-service"));
+
+    let edges = sqlite_store::list_edges(repo.path()).unwrap();
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].edge_id, "edge-calls-v2");
+    assert_eq!(edges[0].source_id, "symbol-service-v2");
+
+    let communities = sqlite_store::list_communities(repo.path()).unwrap();
+    assert_eq!(communities.len(), 1);
+    assert_eq!(communities[0].community_id, "community-payments-v2");
+
+    let processes = sqlite_store::list_processes(repo.path()).unwrap();
+    assert_eq!(processes.len(), 1);
+    assert_eq!(processes[0].process_id, "process-payment-v2");
 }
 
 // ---------------------------------------------------------------------------

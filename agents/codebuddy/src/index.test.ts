@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import { createTools } from "./index.js";
-import { parseResult } from "./runtime/parseResult.js";
+import { parseEventLine, parseResult } from "./runtime/parseResult.js";
 import { resolveBinary } from "./runtime/resolveBinary.js";
 
 test("all wiki tools delegate to the expected core action", async () => {
@@ -91,5 +91,29 @@ test("parseResult preserves explicit core errors", () => {
   expect(parsed).toEqual({
     ok: false,
     error: "repo root must be a git repository",
+  });
+});
+
+test("parseEventLine validates progress events", () => {
+  const event = parseEventLine(
+    JSON.stringify({
+      type: "progress",
+      action: "init",
+      phase: "parse_symbols",
+      message: "解析源码符号 1/3",
+      elapsed_ms: 5,
+      processed: 1,
+      total: 3,
+    }),
+  );
+
+  expect(event).toEqual({
+    type: "progress",
+    action: "init",
+    phase: "parse_symbols",
+    message: "解析源码符号 1/3",
+    elapsed_ms: 5,
+    processed: 1,
+    total: 3,
   });
 });

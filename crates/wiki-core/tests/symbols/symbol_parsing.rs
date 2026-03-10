@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use tempfile::tempdir;
 use wiki_core::repo::scanner::scan_repo;
@@ -18,6 +19,11 @@ fn write_repo_file(repo_root: &Path, relative_path: &str, content: &str) {
 fn parse_repo_symbols(repo_root: &Path) -> wiki_core::repo::symbols::ParsedSymbolsSnapshot {
     let scan_report = scan_repo(repo_root, &[]).unwrap();
     parse_symbols(repo_root, &scan_report).unwrap()
+}
+
+fn parse_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 #[test]
@@ -380,4 +386,65 @@ fn svelte_wrapper_symbols_keep_original_line_numbers() {
     assert_eq!(symbol.file_path, "src/App.svelte");
     assert_eq!(symbol.language, "typescript");
     assert_eq!(symbol.start_line, 4);
+}
+
+#[test]
+fn parallel_symbol_parsing_keeps_deterministic_results() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    let _guard = parse_env_lock().lock().unwrap();
+
+    write_repo_file(repo_root, "package.json", r#"{"name":"demo"}"#);
+    for index in 0..8 {
+        write_repo_file(
+            repo_root,
+            &format!("src/file-{index}.ts"),
+            &format!(
+                "export function fn{index}() {{ return helper{index}(); }}\nexport function helper{index}() {{ return {index}; }}\n"
+            ),
+        );
+    }
+
+    std::env::set_var("WIKI_SYMBOL_PARSE_WORKERS", "1");
+    let single_worker = parse_repo_symbols(repo_root);
+    std::env::set_var("WIKI_SYMBOL_PARSE_WORKERS", "4");
+    let multi_worker = parse_repo_symbols(repo_root);
+    std::env::remove_var("WIKI_SYMBOL_PARSE_WORKERS");
+
+    assert_eq!(single_worker.symbols, multi_worker.symbols);
+    assert_eq!(single_worker.diagnostics, multi_worker.diagnostics);
+    assert_eq!(single_worker.files, multi_worker.files);
+}
+
+#[test]
+fn parse_symbols_keeps_single_file_failures_isolated() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    write_repo_file(repo_root, "package.json", r#"{"name":"demo"}"#);
+    write_repo_file(
+        repo_root,
+        "src/good.ts",
+        "export function settlePayment() { return true; }\n",
+    );
+    write_repo_file(
+        repo_root,
+        "src/bad.ts",
+        "export function broken( {\n  return true;\n}\n",
+    );
+
+    let snapshot = parse_repo_symbols(repo_root);
+
+    assert!(snapshot
+        .symbols
+        .iter()
+        .any(|symbol| symbol.file_path == "src/good.ts" && symbol.name == "settlePayment"));
+    assert!(snapshot
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.file_path == "src/bad.ts"));
+    assert!(
+        !snapshot.files["src/good.ts"].symbols.is_empty(),
+        "good file should still parse"
+    );
 }

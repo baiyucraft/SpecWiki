@@ -5,16 +5,34 @@ import path from "node:path";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEFAULT_ROOT_DIR = path.resolve(__dirname, "..");
+const AGENT_DIR = path.join(DEFAULT_ROOT_DIR, "agents", "codebuddy");
 const TEST_COMMANDS = [
-  ["cargo", ["test", "-p", "wiki-core", "--target-dir", "target"]],
-  [
-    "pnpm",
-    ["exec", "vitest", "run", "--root", "agents/codebuddy", "--config", "vite.config.mjs"],
-  ],
-  ["cargo", ["build", "-p", "wiki-core", "--target-dir", "target"]],
-  ["pnpm", ["exec", "vite", "build", "--config", "agents/codebuddy/vite.config.mjs"]],
-  ["cargo", ["build", "-p", "wiki-core", "--target-dir", "target/e2e"]],
-  ["pnpm", ["exec", "vitest", "run", "--config", "vitest.config.mjs"]],
+  {
+    command: "cargo",
+    args: ["test", "-p", "wiki-core", "--target-dir", "target"],
+  },
+  {
+    command: "pnpm",
+    args: ["test"],
+    cwd: AGENT_DIR,
+  },
+  {
+    command: "cargo",
+    args: ["build", "-p", "wiki-core", "--target-dir", "target"],
+  },
+  {
+    command: "pnpm",
+    args: ["build"],
+    cwd: AGENT_DIR,
+  },
+  {
+    command: "cargo",
+    args: ["build", "-p", "wiki-core", "--target-dir", "target/e2e"],
+  },
+  {
+    command: "pnpm",
+    args: ["exec", "vitest", "run", "--config", "vitest.config.mjs"],
+  },
 ];
 
 async function runCommand(command, args, { cwd = DEFAULT_ROOT_DIR } = {}) {
@@ -41,8 +59,9 @@ async function runCommand(command, args, { cwd = DEFAULT_ROOT_DIR } = {}) {
 }
 
 export async function runAllTests({ rootDir = DEFAULT_ROOT_DIR } = {}) {
-  for (const [command, args] of TEST_COMMANDS) {
-    await runCommand(command, args, { cwd: rootDir });
+  for (const { command, args, cwd } of TEST_COMMANDS) {
+    const commandCwd = cwd ?? rootDir;
+    await runCommand(command, args, { cwd: commandCwd });
   }
 }
 

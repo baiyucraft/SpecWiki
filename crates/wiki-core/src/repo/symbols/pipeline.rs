@@ -1,7 +1,10 @@
-use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::thread;
 
 use regex::Regex;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
@@ -30,12 +33,26 @@ struct ParseUnit {
     source_label: String,
 }
 
+struct ParsedUnitArtifacts {
+    resolved_language: ResolvedSymbolLanguage,
+    line_offset: usize,
+    source_bytes: Vec<u8>,
+    tree: Tree,
+}
+
+#[derive(Default)]
+struct ParseWorkerContext {
+    parser_cache: HashMap<usize, Parser>,
+    query_cache: HashMap<usize, Query>,
+}
+
 /// 全量解析 scan report 里的可支持源码文件。
 pub fn parse_symbols(
     repo_root: &Path,
     scan_report: &ScanReport,
 ) -> io::Result<ParsedSymbolsSnapshot> {
-    parse_symbols_for_paths(repo_root, scan_report, &[])
+    let mut on_progress = |_processed: usize, _total: usize| {};
+    parse_symbols_with_progress(repo_root, scan_report, &mut on_progress)
 }
 
 /// 只对指定文件路径做符号解析；空数组表示全量。
@@ -44,6 +61,67 @@ pub fn parse_symbols_for_paths(
     scan_report: &ScanReport,
     target_paths: &[String],
 ) -> io::Result<ParsedSymbolsSnapshot> {
+    let mut on_progress = |_processed: usize, _total: usize| {};
+    parse_symbols_for_paths_with_progress(repo_root, scan_report, target_paths, &mut on_progress)
+}
+
+pub(crate) fn parse_symbols_with_progress<F>(
+    repo_root: &Path,
+    scan_report: &ScanReport,
+    on_progress: &mut F,
+) -> io::Result<ParsedSymbolsSnapshot>
+where
+    F: FnMut(usize, usize),
+{
+    parse_symbols_for_paths_with_progress(repo_root, scan_report, &[], on_progress)
+}
+
+pub(crate) fn parse_symbols_for_paths_with_progress<F>(
+    repo_root: &Path,
+    scan_report: &ScanReport,
+    target_paths: &[String],
+    on_progress: &mut F,
+) -> io::Result<ParsedSymbolsSnapshot>
+where
+    F: FnMut(usize, usize),
+{
+    let candidates = collect_parse_candidates(scan_report, target_paths);
+    let mut snapshot = ParsedSymbolsSnapshot::default();
+    let total = candidates.len();
+    let mut processed = 0usize;
+
+    for chunk in chunk_parse_candidates(&candidates) {
+        for parsed in parse_file_chunk(repo_root, &chunk) {
+            processed += 1;
+            snapshot.diagnostics.extend(parsed.diagnostics.iter().cloned());
+            snapshot.symbols.extend(parsed.symbols.iter().cloned());
+            snapshot.files.insert(parsed.file_path.clone(), parsed);
+            on_progress(processed, total);
+        }
+    }
+
+    snapshot.symbols.sort_by(|left, right| {
+        left.file_path
+            .cmp(&right.file_path)
+            .then(left.start_line.cmp(&right.start_line))
+            .then(left.end_line.cmp(&right.end_line))
+            .then(left.symbol_id.cmp(&right.symbol_id))
+    });
+    snapshot
+        .symbols
+        .dedup_by(|left, right| left.symbol_id == right.symbol_id);
+    snapshot.symbol_table = SymbolTable::from_symbols(&snapshot.symbols);
+    Ok(snapshot)
+}
+
+pub(crate) fn symbol_parse_file_count(scan_report: &ScanReport, target_paths: &[String]) -> usize {
+    collect_parse_candidates(scan_report, target_paths).len()
+}
+
+fn collect_parse_candidates<'a>(
+    scan_report: &'a ScanReport,
+    target_paths: &[String],
+) -> Vec<&'a ScannedFile> {
     let target_set = (!target_paths.is_empty()).then(|| {
         target_paths
             .iter()
@@ -63,37 +141,85 @@ pub fn parse_symbols_for_paths(
         .filter(|file| resolve_symbol_language(&file.path, &file.language).is_some())
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| left.path.cmp(&right.path));
+    candidates
+}
 
-    let mut snapshot = ParsedSymbolsSnapshot::default();
+fn chunk_parse_candidates<'a>(candidates: &[&'a ScannedFile]) -> Vec<Vec<&'a ScannedFile>> {
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
     let mut chunk_bytes = 0usize;
 
     for file in candidates {
         if chunk_bytes > 0 && chunk_bytes + file.size > CHUNK_BYTE_BUDGET {
+            chunks.push(current);
+            current = Vec::new();
             chunk_bytes = 0;
         }
-        chunk_bytes += file.size.min(CHUNK_BYTE_BUDGET);
 
-        let parsed = parse_file_symbols(repo_root, file);
-        snapshot.diagnostics.extend(parsed.diagnostics.iter().cloned());
-        snapshot.symbols.extend(parsed.symbols.iter().cloned());
-        snapshot.files.insert(file.path.clone(), parsed);
+        chunk_bytes += file.size.min(CHUNK_BYTE_BUDGET);
+        current.push(*file);
     }
 
-    snapshot.symbols.sort_by(|left, right| {
-        left.file_path
-            .cmp(&right.file_path)
-            .then(left.start_line.cmp(&right.start_line))
-            .then(left.end_line.cmp(&right.end_line))
-            .then(left.symbol_id.cmp(&right.symbol_id))
-    });
-    snapshot
-        .symbols
-        .dedup_by(|left, right| left.symbol_id == right.symbol_id);
-    snapshot.symbol_table = SymbolTable::from_symbols(&snapshot.symbols);
-    Ok(snapshot)
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    chunks
 }
 
-fn parse_file_symbols(repo_root: &Path, file: &ScannedFile) -> ParsedFileSymbols {
+fn parse_file_chunk(repo_root: &Path, files: &[&ScannedFile]) -> Vec<ParsedFileSymbols> {
+    let worker_count = configured_worker_count(files.len());
+    if worker_count <= 1 || files.len() <= 1 {
+        let mut context = ParseWorkerContext::default();
+        return files
+            .iter()
+            .map(|file| parse_file_symbols(repo_root, file, &mut context))
+            .collect();
+    }
+
+    let next_index = AtomicUsize::new(0);
+    let results = Mutex::new(Vec::<(usize, ParsedFileSymbols)>::with_capacity(files.len()));
+
+    thread::scope(|scope| {
+        for _ in 0..worker_count {
+            scope.spawn(|| {
+                let mut context = ParseWorkerContext::default();
+                loop {
+                    let index = next_index.fetch_add(1, Ordering::Relaxed);
+                    if index >= files.len() {
+                        break;
+                    }
+
+                    let parsed = parse_file_symbols(repo_root, files[index], &mut context);
+                    results.lock().unwrap().push((index, parsed));
+                }
+            });
+        }
+    });
+
+    let mut results = results.into_inner().unwrap();
+    results.sort_by_key(|(index, _)| *index);
+    results.into_iter().map(|(_, parsed)| parsed).collect()
+}
+
+fn configured_worker_count(file_count: usize) -> usize {
+    let configured = std::env::var("WIKI_SYMBOL_PARSE_WORKERS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0);
+    let default = thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1)
+        .min(4);
+
+    configured.unwrap_or(default).clamp(1, file_count.max(1))
+}
+
+fn parse_file_symbols(
+    repo_root: &Path,
+    file: &ScannedFile,
+    parse_context: &mut ParseWorkerContext,
+) -> ParsedFileSymbols {
     let mut parsed = ParsedFileSymbols {
         file_path: file.path.clone(),
         language: file.language.clone(),
@@ -146,8 +272,29 @@ fn parse_file_symbols(repo_root: &Path, file: &ScannedFile) -> ParsedFileSymbols
         return parsed;
     }
 
+    let mut artifacts = Vec::new();
     for unit in &units {
-        parse_unit_symbols(file, unit, &mut parsed);
+        match build_unit_artifacts(file, unit, parse_context) {
+            Ok(artifact) => {
+                let query = parse_context
+                    .query_for(artifact.resolved_language)
+                    .expect("query should exist after artifact build");
+                parsed.symbols.extend(collect_definition_symbols(
+                    &file.path,
+                    artifact.resolved_language.effective_language,
+                    &artifact.source_bytes,
+                    &artifact.tree,
+                    query,
+                    artifact.line_offset,
+                ));
+                artifacts.push(artifact);
+            }
+            Err(diagnostic) => parsed.diagnostics.push(
+                diagnostic
+                    .with_file(&file.path)
+                    .with_message_prefix(&format!("{}: ", unit.source_label)),
+            ),
+        }
     }
 
     parsed.symbols.sort_by(|left, right| {
@@ -161,8 +308,22 @@ fn parse_file_symbols(repo_root: &Path, file: &ScannedFile) -> ParsedFileSymbols
         .dedup_by(|left, right| left.symbol_id == right.symbol_id);
 
     let captured_symbols = parsed.symbols.clone();
-    for unit in &units {
-        parse_unit_raw_captures(file, unit, &captured_symbols, &mut parsed);
+    for artifact in &artifacts {
+        let query = parse_context
+            .query_for(artifact.resolved_language)
+            .expect("query should exist after artifact build");
+        let (imports, calls, heritage) = collect_raw_captures(
+            &file.path,
+            artifact.resolved_language.effective_language,
+            &artifact.source_bytes,
+            &artifact.tree,
+            query,
+            artifact.line_offset,
+            &captured_symbols,
+        );
+        parsed.imports.extend(imports);
+        parsed.calls.extend(calls);
+        parsed.heritage.extend(heritage);
     }
 
     parsed.imports.sort_by(|left, right| {
@@ -213,8 +374,8 @@ fn build_parse_units(file: &ScannedFile, source: &str) -> Vec<ParseUnit> {
 }
 
 fn build_wrapper_parse_units(source: &str) -> Vec<ParseUnit> {
-    let script_regex = Regex::new(r#"(?is)<script(?P<attrs>[^>]*)>(?P<body>.*?)</script>"#).unwrap();
-    let lang_regex = Regex::new(r#"lang\s*=\s*["'](?P<lang>[^"']+)["']"#).unwrap();
+    let script_regex = wrapper_script_regex();
+    let lang_regex = wrapper_lang_regex();
 
     script_regex
         .captures_iter(source)
@@ -248,21 +409,18 @@ fn build_wrapper_parse_units(source: &str) -> Vec<ParseUnit> {
         .collect()
 }
 
-fn parse_unit_symbols(file: &ScannedFile, unit: &ParseUnit, parsed: &mut ParsedFileSymbols) {
-    let tree = match parse_tree(&unit.resolved_language, &unit.content) {
+fn build_unit_artifacts(
+    file: &ScannedFile,
+    unit: &ParseUnit,
+    parse_context: &mut ParseWorkerContext,
+) -> Result<ParsedUnitArtifacts, SymbolParseDiagnostic> {
+    let tree = match parse_tree(&unit.resolved_language, &unit.content, parse_context) {
         Ok(tree) => tree,
-        Err(diagnostic) => {
-            parsed.diagnostics.push(
-                diagnostic
-                    .with_file(&file.path)
-                    .with_message_prefix(&format!("{}: ", unit.source_label)),
-            );
-            return;
-        }
+        Err(diagnostic) => return Err(diagnostic),
     };
 
     if tree.root_node().has_error() {
-        parsed.diagnostics.push(diagnostic(
+        return Err(diagnostic(
             file,
             unit.resolved_language.effective_language,
             "parse_error",
@@ -271,83 +429,41 @@ fn parse_unit_symbols(file: &ScannedFile, unit: &ParseUnit, parsed: &mut ParsedF
                 unit.source_label
             ),
         ));
-        return;
     }
 
-    let language = unit.resolved_language.language();
-    let query = match Query::new(&language, unit.resolved_language.query_source) {
-        Ok(query) => query,
-        Err(error) => {
-            parsed.diagnostics.push(diagnostic(
-                file,
-                unit.resolved_language.effective_language,
-                "query_error",
-                format!("{}: {error}", unit.source_label),
-            ));
-            return;
-        }
-    };
-
-    parsed.symbols.extend(collect_definition_symbols(
-        &file.path,
-        unit.resolved_language.effective_language,
-        unit.content.as_bytes(),
-        &tree,
-        &query,
-        unit.line_offset,
-    ));
-}
-
-fn parse_unit_raw_captures(
-    file: &ScannedFile,
-    unit: &ParseUnit,
-    symbols: &[SymbolNode],
-    parsed: &mut ParsedFileSymbols,
-) {
-    let tree = match parse_tree(&unit.resolved_language, &unit.content) {
-        Ok(tree) => tree,
-        Err(_) => return,
-    };
-
-    if tree.root_node().has_error() {
-        return;
+    if let Err(error) = parse_context.query_for(unit.resolved_language) {
+        return Err(diagnostic(
+            file,
+            unit.resolved_language.effective_language,
+            "query_error",
+            format!("{}: {error}", unit.source_label),
+        ));
     }
 
-    let language = unit.resolved_language.language();
-    let query = match Query::new(&language, unit.resolved_language.query_source) {
-        Ok(query) => query,
-        Err(_) => return,
-    };
-
-    let (imports, calls, heritage) = collect_raw_captures(
-        &file.path,
-        unit.resolved_language.effective_language,
-        unit.content.as_bytes(),
-        &tree,
-        &query,
-        unit.line_offset,
-        symbols,
-    );
-    parsed.imports.extend(imports);
-    parsed.calls.extend(calls);
-    parsed.heritage.extend(heritage);
+    Ok(ParsedUnitArtifacts {
+        resolved_language: unit.resolved_language,
+        line_offset: unit.line_offset,
+        source_bytes: unit.content.as_bytes().to_vec(),
+        tree,
+    })
 }
 
 fn parse_tree(
     resolved_language: &ResolvedSymbolLanguage,
     source: &str,
+    parse_context: &mut ParseWorkerContext,
 ) -> Result<Tree, SymbolParseDiagnostic> {
-    let mut parser = Parser::new();
-    let language = resolved_language.language();
-    parser
-        .set_language(&language)
+    parse_context
+        .parser_for(*resolved_language)
         .map_err(|error| SymbolParseDiagnostic {
             file_path: String::new(),
             language: resolved_language.effective_language.to_string(),
             kind: "set_language_failed".to_string(),
-            message: error.to_string(),
+            message: error,
         })?;
-    parser
+    parse_context
+        .parser_for(*resolved_language)
+        .expect("parser should exist after cache lookup")
         .parse(source, None)
         .ok_or_else(|| SymbolParseDiagnostic {
             file_path: String::new(),
@@ -355,6 +471,52 @@ fn parse_tree(
             kind: "parse_failed".to_string(),
             message: "tree-sitter returned no syntax tree".to_string(),
         })
+}
+
+impl ParseWorkerContext {
+    fn parser_for(
+        &mut self,
+        resolved_language: ResolvedSymbolLanguage,
+    ) -> Result<&mut Parser, String> {
+        let cache_key = resolved_language.cache_key();
+        if !self.parser_cache.contains_key(&cache_key) {
+            let mut parser = Parser::new();
+            let language = resolved_language.language();
+            parser
+                .set_language(&language)
+                .map_err(|error| error.to_string())?;
+            self.parser_cache.insert(cache_key, parser);
+        }
+
+        self.parser_cache
+            .get_mut(&cache_key)
+            .ok_or_else(|| "parser cache lookup failed".to_string())
+    }
+
+    fn query_for(&mut self, resolved_language: ResolvedSymbolLanguage) -> Result<&Query, String> {
+        let cache_key = resolved_language.cache_key();
+        if !self.query_cache.contains_key(&cache_key) {
+            let language = resolved_language.language();
+            let query = Query::new(&language, resolved_language.query_source)
+                .map_err(|error| error.to_string())?;
+            self.query_cache.insert(cache_key, query);
+        }
+
+        self.query_cache
+            .get(&cache_key)
+            .ok_or_else(|| "query cache lookup failed".to_string())
+    }
+}
+
+fn wrapper_script_regex() -> &'static Regex {
+    static SCRIPT_REGEX: OnceLock<Regex> = OnceLock::new();
+    SCRIPT_REGEX
+        .get_or_init(|| Regex::new(r#"(?is)<script(?P<attrs>[^>]*)>(?P<body>.*?)</script>"#).unwrap())
+}
+
+fn wrapper_lang_regex() -> &'static Regex {
+    static LANG_REGEX: OnceLock<Regex> = OnceLock::new();
+    LANG_REGEX.get_or_init(|| Regex::new(r#"lang\s*=\s*["'](?P<lang>[^"']+)["']"#).unwrap())
 }
 
 fn collect_definition_symbols(

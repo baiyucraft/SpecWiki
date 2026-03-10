@@ -20,7 +20,7 @@ test("agent init, status, update, query, sync, and rebuild work end to end", asy
     writeFileSync(path.join(repoRoot, "package.json"), JSON.stringify({ name: "demo-repo" }));
     writeFileSync(path.join(repoRoot, "src.ts"), "export const version = 1;\n");
 
-    const { resolveBuiltBinary } = await import("../core-paths.mjs");
+    const { resolveBuiltBinary } = await import("../build/core-paths.mjs");
     let binaryPath;
 
     try {

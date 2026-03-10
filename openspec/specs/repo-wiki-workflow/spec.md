@@ -1,5 +1,9 @@
-## MODIFIED Requirements
+# repo-wiki-workflow Specification
 
+## Purpose
+定义 Repo Wiki 核心 workflow 在 `init`、`update` 与 `rebuild` 场景下的执行边界、可观测性与状态收口要求。
+
+## Requirements
 ### Requirement: `init` 必须为有效本地代码目录建立第一阶段 Repo Wiki
 系统 MUST 在有效本地代码目录上执行完整初始化，生成第一阶段所需的 Wiki 页面、metadata、关系型状态表、symbol snapshot、symbol graph 和增量缓存，并在页面规划阶段基于递归模块树生成层级化页面。Git 信息在存在时可作为元数据补充，但不得成为初始化前提。初始化主链 MUST 按 `scan -> parse_symbols -> resolve_symbol_graph -> analyze_symbol_graph -> module_tree -> page_planner -> render` 的顺序执行，而不是绕过新增的关系解析和图分析阶段。init 完成后 MUST 把 definitions 写入 `symbols`，把 `IMPORTS / CALLS / EXTENDS / IMPLEMENTS` 写入 `edges`，把 community/process 结果写入对应图分析表，再装配 `WikiState` 并导出 `wiki.metadata.json`。为了支撑 editable runtime 和后续检索，init 还 MUST 初始化 page context cache、page generation cache、section 状态、managed section marker、页面级 `section_anchors` 和 `wiki_pages_fts`，而不是只落盘 plain Markdown。
 
@@ -61,3 +65,29 @@
 - **WHEN** 用户执行 `rebuild`
 - **THEN** 系统 MUST 对全部受支持源码重新执行 `parse_symbols`、`resolve_symbol_graph` 和 `analyze_symbol_graph`
 - **THEN** 系统 MUST 重建 `symbols`、`edges`、`communities`、`processes` 及其派生表，而不是复用旧 graph rows
+
+### Requirement: `init`、`update` 与 `rebuild` 必须输出稳定的阶段进度
+系统 MUST 让 `init`、`update` 和 `rebuild` 在真实 workflow 阶段边界上输出稳定 progress 事件，而不是只输出最终结果。阶段划分 MUST 基于当前主链中的实际步骤，例如扫描、symbol parsing、graph resolution、graph analysis、module tree、context、page planning、render、state write 与 metadata write。
+
+#### Scenario: init 输出主链阶段进度
+- **WHEN** 调用方执行 `init`
+- **THEN** 系统 MUST 至少为扫描、符号解析、页面渲染和状态写盘这些阶段输出 progress 事件
+- **THEN** 这些事件的阶段顺序 MUST 与实际 `init` 主链执行顺序一致
+
+#### Scenario: update 回退时仍输出当前实际路径的阶段进度
+- **WHEN** `update` 因 `missing` 或 `needs_rebuild` 回退到 `init` 或 `rebuild`
+- **THEN** 系统 MUST 继续输出回退后实际执行路径对应的 progress 事件
+- **THEN** 调用方 MUST 能从事件流中区分“增量 update”与“回退到 init/rebuild”的真实执行情况
+
+### Requirement: `update` 必须优先使用局部 symbol/edge 工作集刷新
+当 `update` 只涉及有限数量的 `graph_refresh_sources` 时，系统 MUST 优先按受影响文件及其必要 graph frontier 读取 symbol/edge 工作集，并与本轮 changed snapshot 合并，而不是对任意小变更都无条件回读全量 `symbols / edges`。当受影响范围、frontier 膨胀或状态缺失超出局部刷新可控范围时，系统 MUST 显式回退到全量读取或更高等级的 fallback 路径，而不是静默退化为固定的全量路径。
+
+#### Scenario: 小范围图变化优先走局部工作集
+- **WHEN** `update` 只涉及少量受影响源码文件，且 graph frontier 仍处于可控范围
+- **THEN** 系统 MUST 优先读取这些文件及必要 dependents 对应的 symbol/edge rows
+- **THEN** 系统 MUST 不得对这类小变更固定执行全量 `symbols / edges` 回读
+
+#### Scenario: 局部工作集超阈值时显式回退
+- **WHEN** `update` 的受影响文件集合、graph frontier 或关键状态缺失超出局部刷新阈值
+- **THEN** 系统 MUST 显式回退到全量读取或更高等级 fallback 路径
+- **THEN** 该回退 MUST 能被 progress 事件、诊断或等价可观测方式识别

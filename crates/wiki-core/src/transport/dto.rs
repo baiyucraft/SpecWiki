@@ -1,18 +1,22 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::workflows::progress::WorkflowProgressEvent;
+
 /// `CoreCommand` 是 Agent -> core 的最小命令协议。
-/// 当前只保留 action / repoRoot / term 三个字段，避免接入层过早复杂化。
+/// `streamProgress` 保留为协议字段，但长流程现在统一按事件流输出。
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CoreCommand {
     pub action: String,
     #[serde(rename = "repoRoot")]
     pub repo_root: Option<String>,
     pub term: Option<String>,
+    #[serde(rename = "streamProgress", default)]
+    pub stream_progress: bool,
 }
 
 /// `CoreResponse` 是 core -> Agent 的统一响应协议。
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CoreResponse {
     pub ok: bool,
     pub error: Option<String>,
@@ -47,6 +51,43 @@ impl CoreResponse {
             ok: true,
             error: None,
             data: Some(data),
+        }
+    }
+}
+
+/// `CoreEvent` 是长流程 JSON IPC 的事件封装。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CoreEvent {
+    Progress(WorkflowProgressEvent),
+    Result { response: CoreResponse },
+    Error { response: CoreResponse },
+}
+
+impl CoreEvent {
+    /// 构造进度事件。
+    ///
+    /// # 参数
+    /// - `event`：workflow 阶段上报的最小进度事实。
+    ///
+    /// # 返回
+    /// - 返回可序列化为 NDJSON 的 `progress` 事件。
+    pub fn progress(event: WorkflowProgressEvent) -> Self {
+        Self::Progress(event)
+    }
+
+    /// 构造唯一终态事件。
+    ///
+    /// # 参数
+    /// - `response`：workflow 最终成功或失败响应。
+    ///
+    /// # 返回
+    /// - 成功时返回 `result`，失败时返回 `error`。
+    pub fn terminal(response: CoreResponse) -> Self {
+        if response.ok {
+            Self::Result { response }
+        } else {
+            Self::Error { response }
         }
     }
 }

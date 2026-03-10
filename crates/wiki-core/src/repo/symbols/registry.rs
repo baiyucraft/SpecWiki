@@ -43,6 +43,12 @@ impl ResolvedSymbolLanguage {
     pub fn language(&self) -> Language {
         (self.language_fn)()
     }
+
+    /// 返回 grammar 级缓存键。
+    /// TS 与 TSX 虽然都归到 `typescript` 标签，但 parser/query 不能共用。
+    pub fn cache_key(&self) -> usize {
+        self.language_fn as usize
+    }
 }
 
 /// 按扫描语言和文件扩展解析真正要用的 tree-sitter grammar。
