@@ -19,7 +19,10 @@
 │  └─ package.json        # core build / test 脚本入口
 ├─ agents/codebuddy/      # CodeBuddy Agent
 │  └─ src/*.test.ts       # Agent 自身测试
-├─ scripts/tests/         # 根级整体测试：staging / e2e / 工作区检查
+├─ scripts/               # 根级编排入口与测试脚本
+│  ├─ build/              # 构建/发布共享路径解析
+│  ├─ testing/            # 测试共享工具与 lifecycle phase wrapper
+│  └─ tests/              # 根级整体测试：staging / e2e / 工作区检查
 ├─ openspec/              # proposal / design / tasks
 ├─ DESIGN.md              # 项目级设计
 └─ DESIGN-CORE.md         # core 设计
@@ -48,7 +51,7 @@
 ```bash
 pnpm install
 cargo build -p wiki-core --target-dir target
-pnpm exec vite build --config agents/codebuddy/vite.config.mjs
+pnpm --dir agents/codebuddy build
 pnpm run lint
 ```
 
@@ -56,7 +59,7 @@ pnpm run lint
 
 - `cargo build -p wiki-core --target-dir target`
   - 只编译 `wiki-core`
-- `pnpm exec vite build --config agents/codebuddy/vite.config.mjs`
+- `pnpm --dir agents/codebuddy build`
   - 只编译 `codebuddy`
 - `pnpm run lint`
   - 根级统一检查仓库文件，忽略 `dist/`、`target/` 等生成产物
@@ -86,7 +89,8 @@ dist/
 
 - 子包仍然自管 `build / test` 脚本
 - 实际调用统一从 workspace 根发起
-- 根级负责“编排全部模块并整理发布产物”
+- `agents/codebuddy/dist/` 持有 Agent 自身 bundle
+- 根级 `dist/` 只作为发布 staging，固定只保留 `core/` 和 `npm/`
 
 ## 开发调试
 
@@ -100,8 +104,8 @@ dist/
 
 ```bash
 cargo test -p wiki-core --target-dir target
-pnpm exec vite build --config agents/codebuddy/vite.config.mjs
-pnpm exec vitest run --root agents/codebuddy --config vite.config.mjs
+pnpm --dir agents/codebuddy build
+pnpm --dir agents/codebuddy test
 pnpm run test
 ```
 
@@ -109,7 +113,7 @@ pnpm run test
 
 - `cargo test -p wiki-core --target-dir target`
   - 只跑 core 自身测试
-- `pnpm exec vitest run --root agents/codebuddy --config vite.config.mjs`
+- `pnpm --dir agents/codebuddy test`
   - 只跑 Agent 自身测试
 - `pnpm run test`
   - 根级总入口，顺序执行 core 测试、Agent 测试和根级整体测试
@@ -138,10 +142,10 @@ pnpm run test
 
 如果你要手工验证 baseline，优先看这些测试：
 
-- [crates/wiki-core/tests/hierarchy_planning.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/hierarchy_planning.rs)
-- [crates/wiki-core/tests/repo_scan.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/repo_scan.rs)
-- [crates/wiki-core/tests/baseline_acceptance.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/baseline_acceptance.rs)
-- [crates/wiki-core/tests/query_sync_rebuild.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/query_sync_rebuild.rs)
+- [crates/wiki-core/tests/hierarchy/hierarchy_planning.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/hierarchy/hierarchy_planning.rs)
+- [crates/wiki-core/tests/repo/repo_scan.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/repo/repo_scan.rs)
+- [crates/wiki-core/tests/acceptance/baseline_acceptance.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/acceptance/baseline_acceptance.rs)
+- [crates/wiki-core/tests/runtime/query_sync_rebuild.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/runtime/query_sync_rebuild.rs)
 
 # 一些想法
 

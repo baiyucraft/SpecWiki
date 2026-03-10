@@ -12,10 +12,11 @@ const externalModules = new Set([
 ]);
 
 export default defineConfig({
+  root: __dirname,
   build: {
     // The Agent package is a Node-side library, so the bundle targets Node rather than browsers.
     target: "node18",
-    outDir: "dist",
+    outDir: path.resolve(__dirname, "dist"),
     emptyOutDir: true,
     sourcemap: true,
     lib: {

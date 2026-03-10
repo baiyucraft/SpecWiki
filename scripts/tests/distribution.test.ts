@@ -24,13 +24,19 @@ test("workspace skeleton files exist", () => {
     "agents/codebuddy/vite.config.mjs",
     "agents/codebuddy/src/index.ts",
     "agents/codebuddy/bin/codebuddy.js",
-    "scripts/core-paths.mjs",
+    "scripts/build/core-paths.mjs",
     "scripts/build-dist.mjs",
     "scripts/publish-packages.mjs",
     "scripts/run-tests.mjs",
+    "scripts/testing/helpers.mjs",
+    "scripts/testing/lifecycle/bootstrap.mjs",
+    "scripts/testing/lifecycle/steady.mjs",
+    "scripts/testing/lifecycle/mutation.mjs",
+    "scripts/testing/lifecycle/rebuild.mjs",
     "vitest.config.mjs",
     "scripts/tests/distribution.test.ts",
     "scripts/tests/e2e.test.ts",
+    "scripts/tests/streaming-protocol.test.ts",
     "scripts/templates/platform-package.json",
   ];
 
@@ -52,7 +58,7 @@ test("staging script creates platform package manifest", async () => {
   mkdirSync(binaryDir, { recursive: true });
   writeFileSync(binaryPath, "mock-binary");
 
-  const { resolvePlatformPackageName } = await import("../core-paths.mjs");
+  const { resolvePlatformPackageName } = await import("../build/core-paths.mjs");
   const { stagePackages } = await import("../build-dist.mjs");
   const staged = await stagePackages({ rootDir, profile, outputDir });
   const platformPackageName = resolvePlatformPackageName(adapterManifest.name);
@@ -84,4 +90,14 @@ test("staging script creates platform package manifest", async () => {
   expect(staged.platformManifest.name).toBe(platformPackageName);
 
   rmSync(outputDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+});
+
+test("codebuddy build writes bundle into the agent package dist directory", async () => {
+  const agentDir = path.join(rootDir, "agents", "codebuddy");
+  const viteConfig = (await import("../../agents/codebuddy/vite.config.mjs")).default;
+
+  expect(path.normalize(viteConfig.root)).toBe(path.normalize(agentDir));
+  expect(path.normalize(viteConfig.build.outDir)).toBe(
+    path.normalize(path.join(agentDir, "dist")),
+  );
 });

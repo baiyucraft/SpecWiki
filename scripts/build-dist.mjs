@@ -7,7 +7,7 @@ import {
   resolveBuiltBinary,
   resolvePlatformManifestConstraints,
   resolvePlatformPackageName,
-} from "./core-paths.mjs";
+} from "./build/core-paths.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -179,6 +179,8 @@ export async function stagePackages({
 }
 
 export async function buildDistribution({ rootDir = DEFAULT_ROOT_DIR, profile = "debug" } = {}) {
+  const agentRootDir = path.join(rootDir, AGENT_PACKAGE_DIR);
+
   rmSync(path.join(rootDir, "dist"), {
     recursive: true,
     force: true,
@@ -189,9 +191,7 @@ export async function buildDistribution({ rootDir = DEFAULT_ROOT_DIR, profile = 
   await runCommand("cargo", ["build", "-p", "wiki-core", "--target-dir", "target"], {
     cwd: rootDir,
   });
-  await runCommand("pnpm", ["exec", "vite", "build", "--config", "agents/codebuddy/vite.config.mjs"], {
-    cwd: rootDir,
-  });
+  await runCommand("pnpm", ["build"], { cwd: agentRootDir });
 
   const core = collectCoreBinary({ rootDir, profile });
   const npm = await stagePackages({ rootDir, profile });
