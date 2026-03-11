@@ -20,6 +20,8 @@ pub struct SteeringConfig {
     pub modules: ModulesConfig,
     /// 页面优先级和提示配置。
     pub pages: PagesConfig,
+    /// 可选的 debug trace 配置。
+    pub debug: DebugConfig,
     /// LLM 辅助增强配置。
     pub llm: LlmConfig,
     /// 小模块合并阈值（源文件数 ≤ 该值且无子模块的模块被合并）。
@@ -65,6 +67,20 @@ pub struct PagesConfig {
     /// 自定义页面提示。
     /// 当前同时服务 deterministic hints 透传和 LLM 增强输入。
     pub hints: Vec<PageHint>,
+}
+
+/// debug trace 配置。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct DebugConfig {
+    /// 是否允许 workflow 进入 debug trace 路径。
+    pub enabled: bool,
+    /// trace 输出目录；相对路径基于 repo root 解析。
+    #[serde(alias = "traceDir")]
+    pub trace_dir: String,
+    /// 是否把 trace 条目实时镜像到 `stderr`。
+    #[serde(alias = "echoToStderr")]
+    pub echo_to_stderr: bool,
 }
 
 /// 页面优先级提升条目。
@@ -162,6 +178,7 @@ struct RawSteeringConfig {
     ignore: Option<LegacyIgnoreConfig>,
     modules: Option<ModulesConfig>,
     pages: Option<PagesConfig>,
+    debug: Option<RawDebugConfig>,
     llm: Option<RawLlmConfig>,
     merge_threshold: Option<u32>,
 }
@@ -177,7 +194,18 @@ struct LegacyIgnoreConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 struct RawDevConfig {
+    debug: Option<RawDebugConfig>,
     llm: Option<RawLlmConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct RawDebugConfig {
+    enabled: Option<bool>,
+    #[serde(alias = "traceDir")]
+    trace_dir: Option<String>,
+    #[serde(alias = "echoToStderr")]
+    echo_to_stderr: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -224,6 +252,7 @@ impl Default for SteeringConfig {
             scan: ScanConfig::default(),
             modules: ModulesConfig::default(),
             pages: PagesConfig::default(),
+            debug: DebugConfig::default(),
             llm: LlmConfig::default(),
             merge_threshold: 3,
         }
@@ -400,6 +429,9 @@ pub fn load_steering_config(repo_root: &Path) -> SteeringConfig {
         apply_raw_steering_config(&mut config, raw);
     }
     if let Some(raw) = read_yaml_file::<RawDevConfig>(&dev_path, "ignoring dev overrides") {
+        if let Some(raw_debug) = raw.debug {
+            apply_raw_debug_config(&mut config.debug, raw_debug);
+        }
         if let Some(raw_llm) = raw.llm {
             apply_raw_llm_config(&mut config.llm, raw_llm);
         }
@@ -422,6 +454,9 @@ fn apply_raw_steering_config(config: &mut SteeringConfig, raw: RawSteeringConfig
     if let Some(pages) = raw.pages {
         config.pages = pages;
     }
+    if let Some(raw_debug) = raw.debug {
+        apply_raw_debug_config(&mut config.debug, raw_debug);
+    }
     if let Some(raw_llm) = raw.llm {
         apply_raw_llm_config(&mut config.llm, raw_llm);
     }
@@ -433,6 +468,18 @@ fn apply_raw_steering_config(config: &mut SteeringConfig, raw: RawSteeringConfig
         for paths in legacy_ignore.per_language.into_values() {
             config.scan.ignore.extend(paths);
         }
+    }
+}
+
+fn apply_raw_debug_config(config: &mut DebugConfig, raw: RawDebugConfig) {
+    if let Some(enabled) = raw.enabled {
+        config.enabled = enabled;
+    }
+    if let Some(trace_dir) = raw.trace_dir {
+        config.trace_dir = trace_dir;
+    }
+    if let Some(echo_to_stderr) = raw.echo_to_stderr {
+        config.echo_to_stderr = echo_to_stderr;
     }
 }
 
@@ -497,6 +544,7 @@ fn normalize_steering_config(config: &mut SteeringConfig) {
     normalize_patterns(&mut config.scan.ignore);
     normalize_patterns(&mut config.scan.include);
     normalize_page_hints(&mut config.pages.hints);
+    normalize_debug_config(&mut config.debug);
     normalize_llm_config(&mut config.llm);
 }
 
@@ -549,6 +597,10 @@ fn normalize_page_hints(hints: &mut Vec<PageHint>) {
     }
 
     *hints = normalized;
+}
+
+fn normalize_debug_config(config: &mut DebugConfig) {
+    config.trace_dir = config.trace_dir.trim().to_string();
 }
 
 fn normalize_llm_config(config: &mut LlmConfig) {

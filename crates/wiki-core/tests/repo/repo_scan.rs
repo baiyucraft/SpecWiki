@@ -43,6 +43,46 @@ impl LlmService for ScanBatchFilePurposeService {
     }
 }
 
+#[derive(Default)]
+struct StructuralOverrideService;
+
+impl LlmService for StructuralOverrideService {
+    fn request(&mut self, request: &LlmPromptRequest) -> io::Result<LlmCompletion> {
+        let output = match request.prompt_type.as_str() {
+            "file_purpose" => {
+                let items = request
+                    .input
+                    .get("items")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                serde_json::json!({
+                    "items": items.into_iter().filter_map(|item| {
+                        let path = item.get("path")?.as_str()?;
+                        let purpose = if path.ends_with("mux.go") {
+                            "router"
+                        } else if path.ends_with("Makefile") || path.ends_with("wiki.dev.yaml") {
+                            "config"
+                        } else {
+                            "utility"
+                        };
+                        Some(serde_json::json!({
+                            "path": path,
+                            "purpose": purpose,
+                        }))
+                    }).collect::<Vec<_>>()
+                })
+            }
+            _ => serde_json::json!({}),
+        };
+
+        Ok(LlmCompletion {
+            output,
+            model: Some("structural-override-model".to_string()),
+        })
+    }
+}
+
 #[test]
 fn scan_repo_discovers_files_and_detected_stack() {
     let fixture = [
@@ -351,4 +391,42 @@ fn scan_repo_detects_go_stack_from_go_mod_and_source_files() {
 
     assert!(report.tech_hints.iter().any(|topic| topic == "backend"));
     assert!(report.tech_hints.iter().any(|topic| topic == "go"));
+}
+
+#[test]
+fn llm_file_purpose_override_does_not_change_structural_sets() {
+    let fixture = tempdir().unwrap();
+    let root = fixture.path();
+
+    std::fs::write(root.join("go.mod"), "module example.com/demo\n\ngo 1.23\n").unwrap();
+    std::fs::write(root.join("Makefile"), "build:\n\tgo test ./...\n").unwrap();
+    std::fs::write(root.join("wiki.dev.yaml"), "llm:\n  enabled: true\n").unwrap();
+    std::fs::write(root.join("main.go"), "package main\nfunc main() {}\n").unwrap();
+    std::fs::write(root.join("mux.go"), "package main\nfunc routeMux() {}\n").unwrap();
+
+    let deterministic = scan_repo(root, &[]).unwrap();
+    let config = wiki_core::domain::steering::LlmConfig {
+        enabled: true,
+        model: "bridge/mock-model".to_string(),
+        max_calls: 8,
+        parallel_requests: 3,
+        cache_ttl_seconds: 60 * 60,
+        allow_mermaid: true,
+        providers: std::collections::BTreeMap::new(),
+    };
+    let mut service = StructuralOverrideService;
+    let mut runtime = LlmRuntime::new(root, &config, Some(&mut service));
+    let llm_report = scan_repo_with_boundary_and_llm(root, &[], &[], Some(&mut runtime)).unwrap();
+
+    let by_path = llm_report
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.purpose))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    assert_eq!(by_path.get("Makefile"), Some(&FilePurpose::Config));
+    assert_eq!(by_path.get("wiki.dev.yaml"), Some(&FilePurpose::Config));
+    assert_eq!(by_path.get("mux.go"), Some(&FilePurpose::Router));
+    assert_eq!(llm_report.config_files, deterministic.config_files);
+    assert_eq!(llm_report.entry_points, deterministic.entry_points);
 }

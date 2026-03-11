@@ -1,10 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::domain::context::{ModuleContext, PageContext, RepoContext};
+use crate::domain::context::{
+    ModuleContext, PageContext, PageDiagramEdge, PageDiagramInput, PageDiagramNode,
+    PageEvidenceGroup, PageEvidenceItem, RepoContext, TopicSeed,
+};
 use crate::domain::module_tree::{ModuleNode, ModuleTree};
+use crate::domain::stable_id::stable_id;
 use crate::generation::planner::PlannedPage;
-use crate::repo::scanner::ScanReport;
+use crate::repo::hierarchy::discover_root_topic_seeds;
+use crate::repo::scanner::{FilePurpose, ScanReport};
 use crate::repo::symbol_graph::GraphSummary;
 
 /// 构建仓库级上下文。
@@ -66,6 +71,8 @@ pub fn build_repo_context_with_graph(
             .into_iter()
             .collect(),
         cycle_warnings: graph_summary.cycle_warnings.clone(),
+        root_topics: discover_root_topic_seeds(report, graph_summary),
+        process_topics: discover_process_topic_seeds(report, graph_summary),
     }
 }
 
@@ -138,9 +145,131 @@ pub fn build_module_contexts_with_graph(
                     .cloned()
                     .unwrap_or_default(),
                 cycle_warnings: graph_summary.cycle_warnings.clone(),
+                capability_topics: discover_module_capability_topics(report, module, graph_summary),
             }
         })
         .collect()
+}
+
+fn discover_process_topic_seeds(
+    report: &ScanReport,
+    graph_summary: &GraphSummary,
+) -> Vec<TopicSeed> {
+    let source_by_path = report
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.id.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let entry_source_ids = report
+        .entry_points
+        .iter()
+        .filter_map(|path| source_by_path.get(path.as_str()).cloned())
+        .collect::<Vec<_>>();
+
+    graph_summary
+        .detected_processes
+        .iter()
+        .enumerate()
+        .map(|(index, process)| {
+            let title = process
+                .split(':')
+                .next()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("流程主题");
+            TopicSeed {
+                topic_kind: "process".to_string(),
+                topic_key: format!("process-{}", slug_key(title)),
+                title: format!("流程主题：{title}"),
+                summary: process.clone(),
+                source_ids: entry_source_ids.clone(),
+                source_paths: report.entry_points.iter().take(6).cloned().collect(),
+                module_ids: Vec::new(),
+                relation_ids: vec![format!("process:{index}")],
+            }
+        })
+        .collect()
+}
+
+fn discover_module_capability_topics(
+    report: &ScanReport,
+    module: &ModuleNode,
+    graph_summary: &GraphSummary,
+) -> Vec<TopicSeed> {
+    if module.source_ids.len() < 4 {
+        return Vec::new();
+    }
+
+    let mut by_purpose =
+        BTreeMap::<String, (FilePurpose, Vec<&crate::repo::scanner::ScannedFile>)>::new();
+    for file in report
+        .files
+        .iter()
+        .filter(|file| module.source_ids.contains(&file.id))
+        .filter(|file| file.is_substantive_source())
+    {
+        by_purpose
+            .entry(format!("{:?}", file.purpose))
+            .or_insert_with(|| (file.purpose, Vec::new()))
+            .1
+            .push(file);
+    }
+
+    let Some((purpose, files)) = by_purpose
+        .into_iter()
+        .map(|(_, entry)| entry)
+        .filter(|(purpose, files)| purpose.signal_weight() >= 45 && files.len() >= 2)
+        .max_by(|left, right| {
+            left.1
+                .len()
+                .cmp(&right.1.len())
+                .then(left.0.signal_weight().cmp(&right.0.signal_weight()))
+        })
+    else {
+        return Vec::new();
+    };
+
+    let mut selected = files
+        .into_iter()
+        .map(|file| (file.path.len(), file.path.clone(), file.id.clone()))
+        .collect::<Vec<_>>();
+    selected.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+    let selected = selected.into_iter().take(4).collect::<Vec<_>>();
+    let module_root = module
+        .root_paths
+        .first()
+        .cloned()
+        .unwrap_or_else(|| module.name.clone());
+    let hotspots = graph_summary
+        .module_call_hotspots
+        .get(&module_root)
+        .cloned()
+        .unwrap_or_default();
+    let summary = if hotspots.is_empty() {
+        format!(
+            "该主题聚焦 `{}` 模块中的{}能力。",
+            module.name,
+            file_purpose_label(purpose)
+        )
+    } else {
+        format!(
+            "该主题聚焦 `{}` 模块中的{}能力，相关热点包括 {}。",
+            module.name,
+            file_purpose_label(purpose),
+            hotspots.into_iter().take(2).collect::<Vec<_>>().join("、")
+        )
+    };
+
+    vec![TopicSeed {
+        topic_kind: "module-capability".to_string(),
+        topic_key: format!("{}-{}", slug_key(&module.id), file_purpose_key(purpose)),
+        title: format!("{}能力：{}", module.name, file_purpose_label(purpose)),
+        summary,
+        source_ids: selected.iter().map(|(_, _, id)| id.clone()).collect(),
+        source_paths: selected.iter().map(|(_, path, _)| path.clone()).collect(),
+        module_ids: vec![module.id.clone()],
+        relation_ids: Vec::new(),
+    }]
 }
 
 fn collect_module_subtree_ids(module_tree: &ModuleTree, module_id: &str) -> BTreeSet<String> {
@@ -405,7 +534,7 @@ pub fn build_page_context(
 /// 这条路径服务迭代 9 的页面增强输入，但 deterministic 渲染仍然只消费稳定 facts。
 pub fn build_page_context_with_inputs(
     page: &PlannedPage,
-    _report: &ScanReport,
+    report: &ScanReport,
     module_tree: &ModuleTree,
     repo_context: &RepoContext,
     module_contexts: &[ModuleContext],
@@ -421,6 +550,8 @@ pub fn build_page_context_with_inputs(
     // `summary_inputs` 则是用来组织段落的补充说明输入。
     let mut facts = Vec::new();
     let mut summary_inputs = Vec::new();
+    let mut evidence_groups = Vec::new();
+    let mut diagram_inputs = Vec::new();
 
     match page.page_type.as_str() {
         "overview" => {
@@ -439,7 +570,7 @@ pub fn build_page_context_with_inputs(
             for tech in &repo_context.tech_stack {
                 facts.push(format!("技术栈：{tech}"));
             }
-            for source in select_repo_core_sources(_report) {
+            for source in select_repo_core_sources(report) {
                 summary_inputs.push(format!("核心源码：{source}"));
             }
             for hotspot in repo_context.graph_hotspots.iter().take(8) {
@@ -459,11 +590,33 @@ pub fn build_page_context_with_inputs(
                 summary_inputs.push(format!("入口：{entry}"));
             }
             // 构建命令线索
-            for config in &_report.config_files {
+            for config in &report.config_files {
                 let name = config.rsplit('/').next().unwrap_or(config);
                 if matches!(name, "Makefile" | "makefile" | "GNUmakefile") {
                     summary_inputs.push(format!("入口：构建工具 {name}"));
                 }
+            }
+            if let Some(group) = build_evidence_group(
+                &page.id,
+                "关键信息",
+                "repo-core-sources",
+                "关键来源",
+                "这些高信号源码共同支撑仓库概述中的核心判断。",
+                select_repo_core_source_records(report)
+                    .into_iter()
+                    .map(|(source_id, path)| (Some(source_id), path, String::new()))
+                    .collect(),
+            ) {
+                evidence_groups.push(group);
+            }
+            if let Some(diagram) = build_structure_diagram_for_modules(
+                &page.id,
+                "关键信息",
+                "顶层结构图",
+                module_tree,
+                &top_level_module_ids(module_tree),
+            ) {
+                diagram_inputs.push(diagram);
             }
         }
         "architecture" => {
@@ -485,6 +638,34 @@ pub fn build_page_context_with_inputs(
             // 架构提示（供"架构提示" section 消费）
             for hint in &module_tree.architecture_hints {
                 summary_inputs.push(format!("架构：{hint}"));
+            }
+            if let Some(group) = build_evidence_group(
+                &page.id,
+                "模块结构",
+                "architecture-sources",
+                "架构关键来源",
+                "这些源码和入口共同支撑当前架构拆分与模块边界。",
+                architecture_evidence_items(module_tree, &module_context_index),
+            ) {
+                evidence_groups.push(group);
+            }
+            if let Some(diagram) = build_structure_diagram_for_modules(
+                &page.id,
+                "模块结构",
+                "模块层级图",
+                module_tree,
+                &top_level_module_ids(module_tree),
+            ) {
+                diagram_inputs.push(diagram);
+            }
+            if let Some(diagram) = build_dependency_diagram_for_modules(
+                &page.id,
+                "跨模块关系",
+                "模块依赖图",
+                module_tree,
+                &top_level_module_ids(module_tree),
+            ) {
+                diagram_inputs.push(diagram);
             }
         }
         "module" => {
@@ -529,6 +710,44 @@ pub fn build_page_context_with_inputs(
                         for warning in context.cycle_warnings.iter().take(6) {
                             summary_inputs.push(format!("循环：{warning}"));
                         }
+                        if let Some(group) = build_evidence_group(
+                            &page.id,
+                            "关键源码",
+                            &format!("module-key-sources:{module_id}"),
+                            "关键来源",
+                            "这些高信号源码最能代表当前模块的职责和公开表面。",
+                            context
+                                .key_sources
+                                .iter()
+                                .map(|path| {
+                                    (
+                                        source_id_for_path(report, path),
+                                        path.clone(),
+                                        String::new(),
+                                    )
+                                })
+                                .collect(),
+                        ) {
+                            evidence_groups.push(group);
+                        }
+                    }
+                    if let Some(diagram) = build_dependency_diagram_for_modules(
+                        &page.id,
+                        "依赖关系",
+                        "模块依赖图",
+                        module_tree,
+                        std::slice::from_ref(module_id),
+                    ) {
+                        diagram_inputs.push(diagram);
+                    }
+                    if let Some(diagram) = build_structure_diagram_for_modules(
+                        &page.id,
+                        "子模块概述",
+                        "子模块结构图",
+                        module_tree,
+                        std::slice::from_ref(module_id),
+                    ) {
+                        diagram_inputs.push(diagram);
                     }
                 }
             }
@@ -553,7 +772,7 @@ pub fn build_page_context_with_inputs(
                 facts.push(format!("构建：循环提示 {warning}"));
             }
             // 按类别分类工作流文件
-            for file in &_report.files {
+            for file in &report.files {
                 let name = file.path.rsplit('/').next().unwrap_or(&file.path);
                 if file.path.starts_with(".github/workflows/") {
                     facts.push(format!("CI：GitHub Actions - {}", file.path));
@@ -569,6 +788,104 @@ pub fn build_page_context_with_inputs(
                     facts.push(format!("构建：{}", file.path));
                 } else if name == "Dockerfile" || name.starts_with("docker-compose") {
                     facts.push(format!("容器：{}", file.path));
+                }
+            }
+            let workflow_items = report
+                .files
+                .iter()
+                .filter(|file| is_workflow_support_file(file.path.as_str()))
+                .map(|file| (Some(file.id.clone()), file.path.clone(), String::new()))
+                .collect::<Vec<_>>();
+            if let Some(group) = build_evidence_group(
+                &page.id,
+                "构建流程",
+                "workflow-files",
+                "工作流来源",
+                "这些配置文件直接支撑构建、CI/CD 或容器化说明。",
+                workflow_items,
+            ) {
+                evidence_groups.push(group);
+            }
+            if let Some(diagram) = repo_context.detected_processes.first().and_then(|process| {
+                build_process_diagram(&page.id, "工作流概述", "流程图", process)
+            }) {
+                diagram_inputs.push(diagram);
+            }
+        }
+        "topic" => {
+            let topic_seed = lookup_topic_seed(page, repo_context, module_contexts);
+            let topic_summary = page
+                .topic_summary
+                .as_ref()
+                .filter(|summary| !summary.is_empty())
+                .cloned()
+                .or_else(|| topic_seed.as_ref().map(|seed| seed.summary.clone()))
+                .unwrap_or_else(|| "当前主题由 deterministic planner 生成。".to_string());
+            let topic_kind = page
+                .topic_kind
+                .clone()
+                .or_else(|| topic_seed.as_ref().map(|seed| seed.topic_kind.clone()))
+                .unwrap_or_else(|| "topic".to_string());
+
+            facts.push(format!("主题类别：{topic_kind}"));
+            facts.push(format!("主题标题：{}", page.title));
+            facts.push(format!("关联源码数：{}", page.source_ids.len()));
+            summary_inputs.push(format!("主题摘要：{topic_summary}"));
+            for module_id in &page.module_ids {
+                summary_inputs.push(format!("关联模块：{}", module_name(module_tree, module_id)));
+            }
+            for source_path in topic_seed
+                .as_ref()
+                .map(|seed| seed.source_paths.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .take(6)
+            {
+                summary_inputs.push(format!("关键源码：{source_path}"));
+            }
+            if let Some(seed) = topic_seed {
+                if let Some(group) = build_evidence_group(
+                    &page.id,
+                    "关键证据",
+                    &format!("topic-evidence:{}", seed.topic_key),
+                    "关键来源",
+                    "这些 evidence 直接支撑当前专题页的主题判断。",
+                    seed.source_paths
+                        .iter()
+                        .zip(
+                            seed.source_ids
+                                .iter()
+                                .cloned()
+                                .chain(std::iter::repeat(String::new())),
+                        )
+                        .take(8)
+                        .map(|(path, source_id)| {
+                            (
+                                (!source_id.is_empty()).then_some(source_id),
+                                path.clone(),
+                                String::new(),
+                            )
+                        })
+                        .collect(),
+                ) {
+                    evidence_groups.push(group);
+                }
+                if seed.topic_kind == "process" {
+                    if let Some(diagram) =
+                        build_process_diagram(&page.id, "结构图", "流程图", &seed.summary)
+                    {
+                        diagram_inputs.push(diagram);
+                    }
+                } else if !page.module_ids.is_empty() {
+                    if let Some(diagram) = build_dependency_diagram_for_modules(
+                        &page.id,
+                        "关联模块",
+                        "关联模块图",
+                        module_tree,
+                        &page.module_ids,
+                    ) {
+                        diagram_inputs.push(diagram);
+                    }
                 }
             }
         }
@@ -595,7 +912,324 @@ pub fn build_page_context_with_inputs(
         summary_inputs,
         hints,
         child_summaries,
+        evidence_groups,
+        diagram_inputs,
     }
+}
+
+fn lookup_topic_seed(
+    page: &PlannedPage,
+    repo_context: &RepoContext,
+    module_contexts: &[ModuleContext],
+) -> Option<TopicSeed> {
+    let topic_key = page.topic_key.as_deref()?;
+
+    repo_context
+        .root_topics
+        .iter()
+        .chain(repo_context.process_topics.iter())
+        .find(|seed| seed.topic_key == topic_key)
+        .cloned()
+        .or_else(|| {
+            module_contexts
+                .iter()
+                .flat_map(|context| context.capability_topics.iter())
+                .find(|seed| seed.topic_key == topic_key)
+                .cloned()
+        })
+}
+
+fn source_id_for_path(report: &ScanReport, path: &str) -> Option<String> {
+    report
+        .files
+        .iter()
+        .find(|file| file.path == path)
+        .map(|file| file.id.clone())
+}
+
+fn architecture_evidence_items(
+    module_tree: &ModuleTree,
+    module_context_index: &BTreeMap<String, &ModuleContext>,
+) -> Vec<(Option<String>, String, String)> {
+    top_level_module_ids(module_tree)
+        .into_iter()
+        .filter_map(|module_id| {
+            let context = module_context_index.get(&module_id)?;
+            let key_source = context.key_sources.first()?.clone();
+            Some((
+                None,
+                key_source,
+                format!("对应模块 {}", module_name(module_tree, &module_id)),
+            ))
+        })
+        .take(8)
+        .collect()
+}
+
+fn build_evidence_group(
+    page_id: &str,
+    section_title: &str,
+    group_key: &str,
+    title: &str,
+    summary: &str,
+    items: Vec<(Option<String>, String, String)>,
+) -> Option<PageEvidenceGroup> {
+    let mut deduped = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for (source_id, path, note) in items {
+        let normalized = path.trim().to_string();
+        if normalized.is_empty() || !seen.insert(normalized.clone()) {
+            continue;
+        }
+        deduped.push(PageEvidenceItem {
+            evidence_id: stable_id(
+                "evidence",
+                &format!("{page_id}:{section_title}:{group_key}:{normalized}"),
+            ),
+            label: normalized.clone(),
+            path: normalized,
+            source_id,
+            note,
+        });
+    }
+
+    (!deduped.is_empty()).then(|| PageEvidenceGroup {
+        group_id: stable_id(
+            "evidence-group",
+            &format!("{page_id}:{section_title}:{group_key}"),
+        ),
+        section_title: section_title.to_string(),
+        title: title.to_string(),
+        summary: summary.to_string(),
+        items: deduped,
+    })
+}
+
+fn build_structure_diagram_for_modules(
+    page_id: &str,
+    section_title: &str,
+    title: &str,
+    module_tree: &ModuleTree,
+    module_ids: &[String],
+) -> Option<PageDiagramInput> {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut seen_nodes = BTreeSet::new();
+
+    for module_id in module_ids {
+        let Some(module) = module_tree.module_by_id(module_id) else {
+            continue;
+        };
+        if seen_nodes.insert(module.id.clone()) {
+            nodes.push(PageDiagramNode {
+                node_id: module.id.clone(),
+                label: module.name.clone(),
+            });
+        }
+
+        for child_id in &module.child_ids {
+            let Some(child) = module_tree.module_by_id(child_id) else {
+                continue;
+            };
+            if seen_nodes.insert(child.id.clone()) {
+                nodes.push(PageDiagramNode {
+                    node_id: child.id.clone(),
+                    label: child.name.clone(),
+                });
+            }
+            edges.push(PageDiagramEdge {
+                source: module.id.clone(),
+                target: child.id.clone(),
+                label: Some("contains".to_string()),
+            });
+        }
+    }
+
+    (!nodes.is_empty() && !edges.is_empty()).then(|| PageDiagramInput {
+        diagram_id: stable_id("diagram", &format!("{page_id}:{section_title}:structure")),
+        section_title: section_title.to_string(),
+        diagram_type: "structure".to_string(),
+        title: title.to_string(),
+        summary: "图结构来自模块树父子关系。".to_string(),
+        nodes,
+        edges,
+    })
+}
+
+fn build_dependency_diagram_for_modules(
+    page_id: &str,
+    section_title: &str,
+    title: &str,
+    module_tree: &ModuleTree,
+    focus_module_ids: &[String],
+) -> Option<PageDiagramInput> {
+    let focus = focus_module_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut seen_nodes = BTreeSet::new();
+
+    for edge in &module_tree.cross_module_edges {
+        if !focus.is_empty() && !focus.contains(&edge.source) && !focus.contains(&edge.target) {
+            continue;
+        }
+        let Some(source) = module_tree.module_by_id(&edge.source) else {
+            continue;
+        };
+        let Some(target) = module_tree.module_by_id(&edge.target) else {
+            continue;
+        };
+        if seen_nodes.insert(source.id.clone()) {
+            nodes.push(PageDiagramNode {
+                node_id: source.id.clone(),
+                label: source.name.clone(),
+            });
+        }
+        if seen_nodes.insert(target.id.clone()) {
+            nodes.push(PageDiagramNode {
+                node_id: target.id.clone(),
+                label: target.name.clone(),
+            });
+        }
+        edges.push(PageDiagramEdge {
+            source: source.id.clone(),
+            target: target.id.clone(),
+            label: Some(edge.relation_type.clone()),
+        });
+    }
+
+    (!nodes.is_empty() && !edges.is_empty()).then(|| PageDiagramInput {
+        diagram_id: stable_id("diagram", &format!("{page_id}:{section_title}:dependency")),
+        section_title: section_title.to_string(),
+        diagram_type: "dependency".to_string(),
+        title: title.to_string(),
+        summary: "图结构来自 cross-module edges。".to_string(),
+        nodes,
+        edges,
+    })
+}
+
+fn build_process_diagram(
+    page_id: &str,
+    section_title: &str,
+    title: &str,
+    process_summary: &str,
+) -> Option<PageDiagramInput> {
+    let steps = parse_process_steps(process_summary);
+    if steps.len() < 3 {
+        return None;
+    }
+
+    let nodes = steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| PageDiagramNode {
+            node_id: stable_id(
+                "diagram-node",
+                &format!("{page_id}:{section_title}:{index}:{step}"),
+            ),
+            label: step.clone(),
+        })
+        .collect::<Vec<_>>();
+    let edges = nodes
+        .windows(2)
+        .map(|pair| PageDiagramEdge {
+            source: pair[0].node_id.clone(),
+            target: pair[1].node_id.clone(),
+            label: None,
+        })
+        .collect::<Vec<_>>();
+
+    Some(PageDiagramInput {
+        diagram_id: stable_id("diagram", &format!("{page_id}:{section_title}:flow")),
+        section_title: section_title.to_string(),
+        diagram_type: "flow".to_string(),
+        title: title.to_string(),
+        summary: process_summary.to_string(),
+        nodes,
+        edges,
+    })
+}
+
+fn parse_process_steps(process_summary: &str) -> Vec<String> {
+    let trace = process_summary.split(':').nth(1).unwrap_or(process_summary);
+    trace
+        .split("->")
+        .map(str::trim)
+        .filter(|step| !step.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn is_workflow_support_file(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    path.starts_with(".github/workflows/")
+        || path.starts_with(".gitlab/")
+        || path.starts_with(".circleci/")
+        || matches!(
+            name,
+            "Makefile"
+                | "makefile"
+                | "GNUmakefile"
+                | "Dockerfile"
+                | "docker-compose.yml"
+                | "docker-compose.yaml"
+                | "Jenkinsfile"
+                | ".gitlab-ci.yml"
+                | ".travis.yml"
+        )
+}
+
+fn file_purpose_label(purpose: FilePurpose) -> &'static str {
+    match purpose {
+        FilePurpose::Entry => "入口编排",
+        FilePurpose::Router => "路由",
+        FilePurpose::Controller | FilePurpose::Handler => "处理流程",
+        FilePurpose::Service => "服务协作",
+        FilePurpose::Repository => "数据访问",
+        FilePurpose::Domain | FilePurpose::Model => "领域建模",
+        FilePurpose::Middleware => "中间件",
+        FilePurpose::Component | FilePurpose::Widget | FilePurpose::Page | FilePurpose::Layout => {
+            "界面组成"
+        }
+        FilePurpose::Library | FilePurpose::Plugin => "扩展机制",
+        _ => "核心实现",
+    }
+}
+
+fn file_purpose_key(purpose: FilePurpose) -> &'static str {
+    match purpose {
+        FilePurpose::Entry => "entry",
+        FilePurpose::Router => "router",
+        FilePurpose::Controller => "controller",
+        FilePurpose::Handler => "handler",
+        FilePurpose::Service => "service",
+        FilePurpose::Repository => "repository",
+        FilePurpose::Domain => "domain",
+        FilePurpose::Model => "model",
+        FilePurpose::Middleware => "middleware",
+        FilePurpose::Library => "library",
+        FilePurpose::Plugin => "plugin",
+        FilePurpose::Component => "component",
+        FilePurpose::Widget => "widget",
+        FilePurpose::Page => "page",
+        FilePurpose::Layout => "layout",
+        _ => "core",
+    }
+}
+
+fn slug_key(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| match character {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => character,
+            ' ' | '/' | '\\' | ':' => '-',
+            _ if character.is_ascii_alphanumeric() => character,
+            _ => '-',
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_ascii_lowercase()
 }
 
 /// 找到顶层业务模块。
@@ -770,5 +1404,18 @@ fn select_repo_core_sources(report: &ScanReport) -> Vec<String> {
         .into_iter()
         .map(|(_, _, path)| path)
         .take(8)
+        .collect()
+}
+
+fn select_repo_core_source_records(report: &ScanReport) -> Vec<(String, String)> {
+    let selected = select_repo_core_sources(report)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+
+    report
+        .files
+        .iter()
+        .filter(|file| selected.contains(&file.path))
+        .map(|file| (file.id.clone(), file.path.clone()))
         .collect()
 }

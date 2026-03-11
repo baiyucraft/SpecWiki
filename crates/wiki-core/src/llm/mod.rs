@@ -16,7 +16,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::domain::context::PageContext;
+use crate::debug_trace;
+use crate::domain::context::{PageContext, PageDiagramInput, PageEvidenceGroup};
 use crate::domain::stable_id::stable_id;
 use crate::domain::steering::{LlmConfig, LlmProviderConfig};
 use crate::generation::planner::PlannedPage;
@@ -236,6 +237,33 @@ impl LlmService for ProviderApiLlmService {
             io::Error::other("provider direct call requires llm.providers.<provider>.api_base")
         })?;
         let model = self.request_model()?;
+        let request_body = json!({
+            "model": model,
+            "temperature": 0,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": format!(
+                        "{}\n你必须只返回一个 JSON 对象，不要使用 Markdown 代码块。",
+                        request.system
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": build_provider_user_message(request),
+                }
+            ]
+        });
+        debug_trace::record_json(
+            "llm_provider_request",
+            &json!({
+                "request": request,
+                "http": {
+                    "url": endpoint,
+                    "body": request_body.clone(),
+                },
+            }),
+        );
         let mut http_request = self
             .client
             .post(endpoint)
@@ -245,37 +273,77 @@ impl LlmService for ProviderApiLlmService {
         }
 
         let response = http_request
-            .json(&json!({
-                "model": model,
-                "temperature": 0,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": format!(
-                            "{}\n你必须只返回一个 JSON 对象，不要使用 Markdown 代码块。",
-                            request.system
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": build_provider_user_message(request),
-                    }
-                ]
-            }))
+            .json(&request_body)
             .send()
             .and_then(reqwest::blocking::Response::error_for_status)
-            .map_err(|error| io::Error::other(error.to_string()))?;
+            .map_err(|error| {
+                debug_trace::record_json(
+                    "llm_provider_error",
+                    &json!({
+                        "request_id": request.request_id,
+                        "stage": "http",
+                        "error": error.to_string(),
+                    }),
+                );
+                io::Error::other(error.to_string())
+            })?;
 
         let response_json = response
             .json::<Value>()
-            .map_err(|error| io::Error::other(error.to_string()))?;
+            .map_err(|error| {
+                debug_trace::record_json(
+                    "llm_provider_error",
+                    &json!({
+                        "request_id": request.request_id,
+                        "stage": "decode_response",
+                        "error": error.to_string(),
+                    }),
+                );
+                io::Error::other(error.to_string())
+            })?;
+        debug_trace::record_json(
+            "llm_provider_response",
+            &json!({
+                "request_id": request.request_id,
+                "response": response_json.clone(),
+            }),
+        );
         let response_model = response_json
             .get("model")
             .and_then(Value::as_str)
             .map(str::to_string)
             .or_else(|| Some(model.to_string()));
-        let content = extract_provider_content(&response_json)?;
-        let output = parse_provider_json_output(&content)?;
+        let content = extract_provider_content(&response_json).inspect_err(|error| {
+            debug_trace::record_json(
+                "llm_provider_error",
+                &json!({
+                    "request_id": request.request_id,
+                    "stage": "extract_content",
+                    "error": error.to_string(),
+                }),
+            );
+        })?;
+        let output = parse_provider_json_output(&content).inspect_err(|error| {
+            debug_trace::record_json(
+                "llm_provider_error",
+                &json!({
+                    "request_id": request.request_id,
+                    "stage": "parse_output",
+                    "error": error.to_string(),
+                    "content": content,
+                }),
+            );
+        })?;
+        debug_trace::record_json(
+            "llm_provider_completion",
+            &json!({
+                "request_id": request.request_id,
+                "completion": {
+                    "model": response_model.clone(),
+                    "output": output.clone(),
+                },
+            }),
+        );
 
         Ok(LlmCompletion {
             output,
@@ -383,6 +451,12 @@ pub struct PageEnrichmentInput {
     pub hints: Vec<String>,
     /// 来自子页面的摘要。
     pub child_summaries: Vec<String>,
+    /// 当前页面的稳定 evidence groups。
+    #[serde(default)]
+    pub evidence_groups: Vec<PageEvidenceGroup>,
+    /// 当前页面的 deterministic 图输入。
+    #[serde(default)]
+    pub diagram_inputs: Vec<PageDiagramInput>,
     /// 当前页面是否允许产出 Mermaid 图。
     pub allow_mermaid: bool,
 }
@@ -403,6 +477,8 @@ impl PageEnrichmentInput {
             summary_inputs: context.summary_inputs.clone(),
             hints: context.hints.clone(),
             child_summaries: context.child_summaries.clone(),
+            evidence_groups: context.evidence_groups.clone(),
+            diagram_inputs: context.diagram_inputs.clone(),
             allow_mermaid,
         }
     }
@@ -440,6 +516,11 @@ impl PageEnrichmentResult {
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
+        let diagram_titles = input
+            .diagram_inputs
+            .iter()
+            .map(|diagram| diagram.section_title.clone())
+            .collect::<BTreeSet<_>>();
         self.section_overrides = self
             .section_overrides
             .into_iter()
@@ -454,7 +535,10 @@ impl PageEnrichmentResult {
             .into_iter()
             .filter_map(|(title, content)| {
                 let title = title.trim().to_string();
-                if !input.allow_mermaid || !allowed_titles.contains(&title) {
+                if !input.allow_mermaid
+                    || !allowed_titles.contains(&title)
+                    || !diagram_titles.contains(&title)
+                {
                     return None;
                 }
                 sanitize_mermaid_body(&content).map(|normalized| (title, normalized))
@@ -497,10 +581,28 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         config: &'cfg LlmConfig,
         agent_service: Option<&'svc mut dyn LlmService>,
     ) -> Self {
+        let service = select_runtime_service(config, agent_service);
+        let selected_path = service.as_ref().map(|service| match service.path() {
+            SelectedLlmPath::ProviderApi => "provider_api",
+            SelectedLlmPath::AgentBridge => "agent_bridge",
+        });
+        debug_trace::record_json(
+            "llm_runtime_selected",
+            &json!({
+                "enabled": config.enabled,
+                "model": config.model,
+                "selected_path": selected_path,
+                "provider_parallel_requests": if selected_path == Some("provider_api") {
+                    config.provider_parallel_requests()
+                } else {
+                    1
+                },
+            }),
+        );
         Self {
             repo_root,
             config,
-            service: select_runtime_service(config, agent_service),
+            service,
             real_calls: 0,
             uncertainty_calls: 0,
             enrichment_calls: 0,
@@ -1456,20 +1558,25 @@ fn build_page_enrichment_instruction(input: &PageEnrichmentInput) -> String {
             "页面标题：{title}\n",
             "页面作用域：{scope}\n",
             "允许覆盖的 section 标题：{section_titles}\n",
+            "evidence groups 数量：{evidence_group_count}\n",
+            "diagram inputs 数量：{diagram_input_count}\n",
             "{focus}\n",
             "输出要求：\n",
             "1. `summary` 用 1 到 2 句总结页面真正关心的核心内容。\n",
             "2. `section_overrides` 尽量为每个 section 标题生成非空正文；优先写解释性段落，必要时可用 3 到 6 条项目符号。\n",
             "3. 不要简单回显 `技术栈：`、`图热点：`、`关系：` 这类原始前缀；请去重、压缩重复项，并过滤低价值噪音。\n",
             "4. 只有在 facts 明确支持时才提及循环、社区或流程；如果信息不足，请明确写出“当前事实未显示”或“当前未检测到”，不要猜测。\n",
-            "5. 若 `hints` 或 `child_summaries` 对正文有帮助，请在内容里自然吸收，并把实际使用的条目写入 `consumed_hints` / `consumed_child_summaries`。\n",
-            "6. `mermaid_blocks` 只在确实有助于解释结构或流程时填写，且仅允许 `graph TD/LR` 或 `flowchart TD/LR`。\n",
-            "7. 整体目标是把稳定 facts 组织成可读、可复用的 Wiki 正文，而不是列出原始事实清单。"
+            "5. 若 `hints`、`child_summaries`、`evidence_groups` 或 `diagram_inputs` 对正文有帮助，请在内容里自然吸收，并把实际使用的 hints/child summaries 写入 `consumed_hints` / `consumed_child_summaries`。\n",
+            "6. `mermaid_blocks` 只能复用 `diagram_inputs` 已经给出的稳定图类型与关系；若当前 section 没有 diagram input，请不要返回 Mermaid。\n",
+            "7. 不要删除、改写或重新命名 evidence groups 的稳定身份；正文应解释这些 evidence 为什么重要。\n",
+            "8. 整体目标是把稳定 facts 组织成可读、可复用的 Wiki 正文，而不是列出原始事实清单。"
         ),
         page_type = input.page_type,
         title = input.title,
         scope = input.scope,
         section_titles = input.section_titles.join("、"),
+        evidence_group_count = input.evidence_groups.len(),
+        diagram_input_count = input.diagram_inputs.len(),
         focus = page_enrichment_focus(input.page_type.as_str()),
     )
 }
@@ -1480,6 +1587,7 @@ fn page_enrichment_focus(page_type: &str) -> &'static str {
         "architecture" => "优先解释顶层模块分工、结构边界、跨模块协作和关键流程。",
         "module" => "优先解释模块职责、关键源码入口、上下游依赖以及子模块分工。",
         "workflow" => "优先解释构建、CI/CD、部署与运行流程。",
+        "topic" => "优先解释专题边界、关键 evidence、相关模块以及图中体现出的稳定关系。",
         _ => "优先解释页面主题和稳定事实之间的关系。",
     }
 }

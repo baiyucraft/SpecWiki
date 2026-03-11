@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::domain::context::{ModuleContext, RepoContext};
+use crate::domain::context::{ModuleContext, RepoContext, TopicSeed};
 use crate::domain::module_tree::{ModuleNode, ModuleTree};
 use crate::domain::stable_id::stable_id;
 use crate::domain::steering::SteeringConfig;
@@ -97,6 +97,24 @@ pub struct PlannedPage {
     /// 被合并到本页面的子模块 ID 集合（低权重模块不生成独立页面时记录在此）。
     #[serde(default)]
     pub merged_module_ids: Vec<String>,
+    /// `topic` 页面使用的稳定主题类别。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic_kind: Option<String>,
+    /// `topic` 页面使用的稳定主题键。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic_key: Option<String>,
+    /// `topic` 页面可直接复用的稳定主题摘要。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic_summary: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct TopicCandidate {
+    seed: TopicSeed,
+    parent_page_id: String,
+    parent_scope: String,
+    scope: String,
+    priority: usize,
 }
 
 /// 根据模块树、上下文和 steering 配置规划页面集合。
@@ -158,6 +176,9 @@ pub fn plan_pages_with_graph(
         generation_mode: "deterministic".to_string(),
         priority: 0,
         merged_module_ids: vec![],
+        topic_kind: None,
+        topic_key: None,
+        topic_summary: None,
     }];
 
     // 架构页与概述页并列存在，但在层级上作为概述页的直接子页面。
@@ -178,9 +199,13 @@ pub fn plan_pages_with_graph(
         generation_mode: "deterministic".to_string(),
         priority: 1,
         merged_module_ids: vec![],
+        topic_kind: None,
+        topic_key: None,
+        topic_summary: None,
     });
 
     let candidates = modules_to_render(module_tree);
+    let mut workflow_page_id = None::<String>;
 
     // 当仓库存在工作流线索时，生成 workflow 页面。
     if has_workflow_clues(report, graph_summary) {
@@ -202,7 +227,7 @@ pub fn plan_pages_with_graph(
         }
 
         pages.push(PlannedPage {
-            id: workflow_id,
+            id: workflow_id.clone(),
             title: "工作流与部署".to_string(),
             relative_path: "工作流与部署.md".to_string(),
             page_type: "workflow".to_string(),
@@ -218,7 +243,11 @@ pub fn plan_pages_with_graph(
             },
             priority: 2,
             merged_module_ids: vec![],
+            topic_kind: None,
+            topic_key: None,
+            topic_summary: None,
         });
+        workflow_page_id = Some(workflow_id);
     }
 
     // 第一遍：决定哪些模块生成独立页面，哪些被合并。
@@ -288,6 +317,9 @@ pub fn plan_pages_with_graph(
             generation_mode: format!("deterministic:{summary_hint}"),
             priority: 10 + index,
             merged_module_ids: vec![],
+            topic_kind: None,
+            topic_key: None,
+            topic_summary: None,
         });
     }
 
@@ -315,7 +347,170 @@ pub fn plan_pages_with_graph(
         }
     }
 
+    let topic_candidates = topic_candidates(
+        repo_context,
+        module_contexts,
+        module_tree,
+        &has_page,
+        &architecture_id,
+        workflow_page_id.as_deref(),
+    );
+    for (index, topic) in topic_candidates.into_iter().enumerate() {
+        pages.push(build_topic_page(topic, 100 + index));
+    }
+
     pages
+}
+
+fn topic_candidates(
+    repo_context: &RepoContext,
+    module_contexts: &[ModuleContext],
+    module_tree: &ModuleTree,
+    has_module_page: &BTreeSet<String>,
+    architecture_page_id: &str,
+    workflow_page_id: Option<&str>,
+) -> Vec<TopicCandidate> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for seed in &repo_context.root_topics {
+        if !should_keep_root_topic(seed) {
+            continue;
+        }
+        let dedupe_key = format!("architecture:{}:{}", seed.topic_kind, seed.topic_key);
+        if !seen.insert(dedupe_key) {
+            continue;
+        }
+        candidates.push(TopicCandidate {
+            seed: seed.clone(),
+            parent_page_id: architecture_page_id.to_string(),
+            parent_scope: "architecture".to_string(),
+            scope: topic_scope(seed),
+            priority: 3,
+        });
+    }
+
+    if let Some(workflow_page_id) = workflow_page_id {
+        let total_process_topics = repo_context.process_topics.len();
+        for seed in &repo_context.process_topics {
+            if !should_keep_process_topic(seed, total_process_topics) {
+                continue;
+            }
+            let dedupe_key = format!("workflow:{}:{}", seed.topic_kind, seed.topic_key);
+            if !seen.insert(dedupe_key) {
+                continue;
+            }
+            candidates.push(TopicCandidate {
+                seed: seed.clone(),
+                parent_page_id: workflow_page_id.to_string(),
+                parent_scope: "workflow".to_string(),
+                scope: topic_scope(seed),
+                priority: 4,
+            });
+        }
+    }
+
+    for context in module_contexts {
+        if !has_module_page.contains(&context.module_id) {
+            continue;
+        }
+        let Some(module) = module_tree.module_by_id(&context.module_id) else {
+            continue;
+        };
+
+        for seed in &context.capability_topics {
+            if !should_keep_module_topic(seed, module) {
+                continue;
+            }
+            let dedupe_key = format!("module:{}:{}", context.module_id, seed.topic_key);
+            if !seen.insert(dedupe_key) {
+                continue;
+            }
+            candidates.push(TopicCandidate {
+                seed: seed.clone(),
+                parent_page_id: module_page_id(module),
+                parent_scope: format!("module:{}", context.module_id),
+                scope: topic_scope(seed),
+                priority: 20,
+            });
+        }
+    }
+
+    candidates.sort_by(|left, right| {
+        left.priority.cmp(&right.priority).then_with(|| {
+            left.seed
+                .title
+                .cmp(&right.seed.title)
+                .then(left.seed.topic_key.cmp(&right.seed.topic_key))
+        })
+    });
+    candidates
+}
+
+fn should_keep_root_topic(seed: &TopicSeed) -> bool {
+    seed.source_ids.len() >= 3 || seed.source_paths.len() >= 3
+}
+
+fn should_keep_process_topic(seed: &TopicSeed, process_topic_count: usize) -> bool {
+    process_topic_count > 1 || count_process_steps(&seed.summary) >= 4
+}
+
+fn should_keep_module_topic(seed: &TopicSeed, module: &ModuleNode) -> bool {
+    if seed.source_ids.len() < 2 || module.source_ids.len() < 4 {
+        return false;
+    }
+
+    let coverage = seed.source_ids.len() as f32 / module.source_ids.len().max(1) as f32;
+    coverage < 0.8
+}
+
+fn count_process_steps(summary: &str) -> usize {
+    summary
+        .split(':')
+        .nth(1)
+        .map(|trace| trace.split("->").count())
+        .unwrap_or(0)
+}
+
+fn topic_scope(seed: &TopicSeed) -> String {
+    format!("topic:{}:{}", seed.topic_kind, seed.topic_key)
+}
+
+fn topic_page_id(seed: &TopicSeed, parent_scope: &str) -> String {
+    stable_id(
+        "page",
+        &format!(
+            "topic:{}:{}:{}",
+            parent_scope, seed.topic_kind, seed.topic_key
+        ),
+    )
+}
+
+fn topic_page_path(seed: &TopicSeed) -> String {
+    let kind = slugify_segment(&seed.topic_kind);
+    let key = slugify_segment(&seed.topic_key);
+    let title = slugify_segment(&seed.title);
+    format!("专题/{kind}/{key}-{title}.md")
+}
+
+fn build_topic_page(topic: TopicCandidate, priority: usize) -> PlannedPage {
+    PlannedPage {
+        id: topic_page_id(&topic.seed, &topic.parent_scope),
+        title: topic.seed.title.clone(),
+        relative_path: topic_page_path(&topic.seed),
+        page_type: "topic".to_string(),
+        parent_id: Some(topic.parent_page_id),
+        scope: topic.scope,
+        source_ids: topic.seed.source_ids.clone(),
+        module_ids: topic.seed.module_ids.clone(),
+        relation_ids: topic.seed.relation_ids.clone(),
+        generation_mode: format!("deterministic:topic:{}", topic.seed.topic_kind),
+        priority,
+        merged_module_ids: Vec::new(),
+        topic_kind: Some(topic.seed.topic_kind.clone()),
+        topic_key: Some(topic.seed.topic_key.clone()),
+        topic_summary: Some(topic.seed.summary.clone()),
+    }
 }
 
 /// 决定哪些模块应该被合并（不生成独立页面）。

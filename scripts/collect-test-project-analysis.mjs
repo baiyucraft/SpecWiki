@@ -37,6 +37,9 @@ const CORE_PAGE_TITLES = {
 };
 const GRAPH_FACT_LINE_PATTERN =
   /(关系：|跨模块关系|流程：|检测到流程|社区：|循环：|循环依赖：|循环提示|图热点：)/;
+const EVIDENCE_HEADING_PATTERN = /\*\*[^*\n]*(来源|证据)[^*\n]*\*\*/g;
+const TOPIC_PAGE_PATTERN =
+  /(专题\/|主题：|流程主题|机制|能力|routing|extract|response|middleware|handler|router)/i;
 
 /**
  * 读取 sqlite 单值查询结果。
@@ -150,6 +153,7 @@ function readWikiPages(wikiDir) {
     let headingLines = 0;
     let markerLines = 0;
     let mermaidBlocks = 0;
+    let evidenceBlocks = 0;
     let nonEmptyLines = 0;
     let inCodeFence = false;
 
@@ -188,6 +192,8 @@ function readWikiPages(wikiDir) {
       }
     }
 
+    evidenceBlocks = [...content.matchAll(EVIDENCE_HEADING_PATTERN)].length;
+
     return {
       title,
       relativePath,
@@ -197,7 +203,9 @@ function readWikiPages(wikiDir) {
       headingLines,
       markerLines,
       mermaidBlocks,
+      evidenceBlocks,
       nonEmptyLines,
+      isTopicPage: TOPIC_PAGE_PATTERN.test(`${relativePath} ${title}`),
     };
   });
 }
@@ -217,7 +225,11 @@ function buildPageMetrics(wikiDir) {
   const totalProseLines = pages.reduce((sum, page) => sum + page.proseLines, 0);
   const totalGraphFactLines = pages.reduce((sum, page) => sum + page.graphFactLines, 0);
   const totalMermaidBlocks = pages.reduce((sum, page) => sum + page.mermaidBlocks, 0);
+  const totalEvidenceBlocks = pages.reduce((sum, page) => sum + page.evidenceBlocks, 0);
   const graphLandingPages = pages.filter((page) => page.graphFactLines > 0).length;
+  const topicPages = pages.filter((page) => page.isTopicPage).length;
+  const evidenceLandingPages = pages.filter((page) => page.evidenceBlocks > 0).length;
+  const mermaidLandingPages = pages.filter((page) => page.mermaidBlocks > 0).length;
   const densestPage = pages.reduce(
     (best, page) => (page.nonEmptyLines > best.nonEmptyLines ? page : best),
     pages[0] ?? {
@@ -239,7 +251,11 @@ function buildPageMetrics(wikiDir) {
     totalProseLines,
     totalGraphFactLines,
     totalMermaidBlocks,
+    totalEvidenceBlocks,
     graphLandingPages,
+    topicPages,
+    evidenceLandingPages,
+    mermaidLandingPages,
     avgNonEmptyLinesPerPage: round(totalNonEmptyLines / Math.max(pages.length, 1)),
     avgBulletLinesPerPage: round(totalBulletLines / Math.max(pages.length, 1)),
     avgProseLinesPerPage: round(totalProseLines / Math.max(pages.length, 1)),
@@ -285,8 +301,13 @@ function describeReferenceDelta(result) {
 
 function describeEnhancementObservation(result) {
   const { pageMetrics } = result;
-  if (pageMetrics.totalMermaidBlocks > 0 || pageMetrics.avgProseLinesPerPage >= 6) {
-    return "项目集页面已经出现段落化增强或 Mermaid，说明增强内容进入了正式产物。";
+  if (
+    pageMetrics.totalMermaidBlocks > 0
+    || pageMetrics.totalEvidenceBlocks > 0
+    || pageMetrics.topicPages > 0
+    || pageMetrics.avgProseLinesPerPage >= 6
+  ) {
+    return "项目集页面已经出现专题页、evidence block 或 Mermaid，说明 9.1 的结构增强进入了正式产物。";
   }
 
   return [
@@ -541,8 +562,8 @@ function toMarkdown(results) {
     "",
     "## 总览",
     "",
-    "| Project | Pages | Avg lines/page | Avg prose/page | Graph pages | Mermaid | Reference delta |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
+    "| Project | Pages | Avg lines/page | Avg prose/page | Topic pages | Evidence pages | Graph pages | Mermaid | Reference delta |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
   ];
 
   for (const result of results) {
@@ -550,7 +571,7 @@ function toMarkdown(results) {
       ? `${result.pageCount - result.reference.pageCount >= 0 ? "+" : ""}${result.pageCount - result.reference.pageCount}`
       : "n/a";
     lines.push(
-      `| ${result.project} | ${result.pageCount} | ${result.pageMetrics.avgNonEmptyLinesPerPage} | ${result.pageMetrics.avgProseLinesPerPage} | ${result.pageMetrics.graphLandingPages}/${result.pageCount} | ${result.pageMetrics.totalMermaidBlocks} | ${referenceDelta} |`,
+      `| ${result.project} | ${result.pageCount} | ${result.pageMetrics.avgNonEmptyLinesPerPage} | ${result.pageMetrics.avgProseLinesPerPage} | ${result.pageMetrics.topicPages} | ${result.pageMetrics.evidenceLandingPages} | ${result.pageMetrics.graphLandingPages}/${result.pageCount} | ${result.pageMetrics.totalMermaidBlocks} | ${referenceDelta} |`,
     );
   }
 
@@ -568,7 +589,10 @@ function toMarkdown(results) {
       `- 页面密度：${result.pageCount} 页，平均 ${result.pageMetrics.avgNonEmptyLinesPerPage} 行/页（密度${density}），其中段落 ${result.pageMetrics.avgProseLinesPerPage} 行/页、列表 ${result.pageMetrics.avgBulletLinesPerPage} 行/页；最长页面是 \`${result.pageMetrics.densestPage.title}\`（${result.pageMetrics.densestPage.nonEmptyLines} 行）。`,
     );
     lines.push(
-      `- 图事实落页：${result.pageMetrics.graphLandingPages}/${result.pageCount} 页面包含 graph facts，总计 ${result.pageMetrics.totalGraphFactLines} 行；概述=${overviewPage?.graphFactLines ?? 0}、架构=${architecturePage?.graphFactLines ?? 0}、工作流=${workflowPage?.graphFactLines ?? 0}，Mermaid ${result.pageMetrics.totalMermaidBlocks} 个。`,
+      `- 主题与 evidence：专题页 ${result.pageMetrics.topicPages} 个，evidence 落页 ${result.pageMetrics.evidenceLandingPages} 页/${result.pageCount} 页，总计 ${result.pageMetrics.totalEvidenceBlocks} 个 evidence block。`,
+    );
+    lines.push(
+      `- 图事实落页：${result.pageMetrics.graphLandingPages}/${result.pageCount} 页面包含 graph facts，总计 ${result.pageMetrics.totalGraphFactLines} 行；概述=${overviewPage?.graphFactLines ?? 0}、架构=${architecturePage?.graphFactLines ?? 0}、工作流=${workflowPage?.graphFactLines ?? 0}，Mermaid ${result.pageMetrics.totalMermaidBlocks} 个，落在 ${result.pageMetrics.mermaidLandingPages} 页。`,
     );
     lines.push(`- Query/图验证：${formatQuerySummary(result)}`);
     lines.push(`- Reference 对照：${describeReferenceDelta(result)}`);

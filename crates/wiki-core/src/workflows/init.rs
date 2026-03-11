@@ -6,6 +6,7 @@ use std::io;
 use std::path::Path;
 use std::time::SystemTime;
 
+use crate::debug_trace;
 use crate::domain::context::PageContext;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
 use crate::domain::state::{assemble_state, PageBuildResult};
@@ -95,6 +96,7 @@ pub fn run_init_with_progress_and_llm_as(
     // 按 deterministic pipeline 的顺序串起整条生成链。
     let steering = load_steering_config(repo_root);
     remove_runtime(repo_root)?;
+    debug_trace::begin_session(action, repo_root, &steering.debug)?;
     let mut llm_runtime = LlmRuntime::new(repo_root, &steering.llm, _llm_service);
     let (ignore_paths, include_paths) = steering.scan_boundary();
     if llm_runtime.service_available() {
@@ -317,6 +319,15 @@ pub(crate) fn page_provenance(
 
     if page.page_type == "overview" {
         provenance.insert("scope:repository".to_string(), ());
+    }
+
+    if page.page_type == "topic" {
+        if let Some(topic_kind) = &page.topic_kind {
+            provenance.insert(format!("topic:{topic_kind}"), ());
+        }
+        if let Some(topic_key) = &page.topic_key {
+            provenance.insert(format!("topic-key:{topic_key}"), ());
+        }
     }
 
     provenance.into_keys().collect()

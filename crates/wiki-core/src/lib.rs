@@ -1,6 +1,7 @@
 //! `wiki-core` 是 Repo Wiki 的核心引擎。
 //! 它负责仓库扫描、模块拆分、页面生成、运行时状态维护，以及对外 JSON 协议分发。
 
+pub mod debug_trace;
 pub mod domain;
 pub mod generation;
 pub mod llm;

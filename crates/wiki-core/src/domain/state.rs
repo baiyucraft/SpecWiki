@@ -319,6 +319,9 @@ pub fn compute_page_input_hash(
         generation_mode: &'a str,
         parent_id: &'a Option<String>,
         scope: &'a str,
+        topic_kind: &'a Option<String>,
+        topic_key: &'a Option<String>,
+        topic_summary: &'a Option<String>,
         source_ids: &'a [String],
         module_ids: &'a [String],
         relation_ids: &'a [String],
@@ -326,6 +329,8 @@ pub fn compute_page_input_hash(
         summary_inputs: &'a [String],
         hints: &'a [String],
         child_summaries: &'a [String],
+        evidence_groups: &'a [crate::domain::context::PageEvidenceGroup],
+        diagram_inputs: &'a [crate::domain::context::PageDiagramInput],
         source_fingerprints: Vec<(&'a str, &'a str)>,
     }
 
@@ -352,6 +357,9 @@ pub fn compute_page_input_hash(
         generation_mode: &page.generation_mode,
         parent_id: &page.parent_id,
         scope: &page.scope,
+        topic_kind: &page.topic_kind,
+        topic_key: &page.topic_key,
+        topic_summary: &page.topic_summary,
         source_ids: &context.source_ids,
         module_ids: &page.module_ids,
         relation_ids: &page.relation_ids,
@@ -359,6 +367,8 @@ pub fn compute_page_input_hash(
         summary_inputs: &context.summary_inputs,
         hints: &context.hints,
         child_summaries: &context.child_summaries,
+        evidence_groups: &context.evidence_groups,
+        diagram_inputs: &context.diagram_inputs,
         source_fingerprints,
     };
 

@@ -4,7 +4,33 @@ use std::io::{self, BufRead};
 /// 1. `--json`：走 JSON IPC，给 Agent 调用。
 /// 2. 默认模式：输出工作区名称，主要用于简单检查二进制是否可运行。
 fn main() {
-    if std::env::args().any(|arg| arg == "--json") {
+    let mut json_mode = false;
+    let mut debug_trace = wiki_core::debug_trace::StartupDebugTraceOptions::default();
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--json" => json_mode = true,
+            "--debug-trace" => {
+                debug_trace.enabled = true;
+            }
+            "--debug-trace-dir" => {
+                debug_trace.enabled = true;
+                let Some(value) = args.next() else {
+                    eprintln!("missing value for --debug-trace-dir");
+                    std::process::exit(2);
+                };
+                debug_trace.trace_dir = Some(value.into());
+            }
+            "--debug-trace-console" => {
+                debug_trace.enabled = true;
+                debug_trace.echo_to_stderr = true;
+            }
+            _ => {}
+        }
+    }
+    wiki_core::debug_trace::set_startup_options(debug_trace);
+
+    if json_mode {
         let stdin = io::stdin();
         let mut reader = io::BufReader::new(stdin.lock());
         let mut input = String::new();

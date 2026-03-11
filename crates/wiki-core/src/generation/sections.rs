@@ -39,6 +39,7 @@ pub fn section_titles_for_page_type(page_type: &str) -> Vec<&'static str> {
         "architecture" => vec!["架构概览", "模块结构", "跨模块关系", "架构提示"],
         "module" => vec!["模块说明", "关键源码", "依赖关系", "模块事实", "子模块概述"],
         "workflow" => vec!["工作流概述", "构建流程", "CI/CD 配置", "容器化"],
+        "topic" => vec!["主题说明", "关键证据", "结构图", "关联模块"],
         _ => vec!["简介"],
     }
 }
@@ -78,6 +79,7 @@ pub fn build_section_drafts_with_enrichment(
         "architecture" => architecture_section_templates(context),
         "module" => module_section_templates(context),
         "workflow" => workflow_section_templates(context),
+        "topic" => topic_section_templates(context),
         _ => vec![(
             "简介".to_string(),
             "由 codebuddy-wiki 自动生成。".to_string(),
@@ -86,13 +88,16 @@ pub fn build_section_drafts_with_enrichment(
 
     templates
         .into_iter()
-        .map(|(title, content)| SectionDraft {
-            section_id: section_id_for_title(&page.id, &title),
-            content: merged_section_content(&title, &content, enrichment),
-            title,
-            managed: true,
-            source_ids: context.source_ids.clone(),
-            relation_ids: context.relation_ids.clone(),
+        .map(|(title, content)| {
+            let content = merged_section_content(&title, &content, enrichment);
+            SectionDraft {
+                section_id: section_id_for_title(&page.id, &title),
+                content: append_supporting_blocks(&title, &content, context),
+                title,
+                managed: true,
+                source_ids: context.source_ids.clone(),
+                relation_ids: context.relation_ids.clone(),
+            }
         })
         .collect()
 }
@@ -144,6 +149,15 @@ fn workflow_section_templates(context: &PageContext) -> Vec<(String, String)> {
             "容器化".to_string(),
             prefixed_bullets(&context.facts, "容器", "当前未检测到容器化配置。"),
         ),
+    ]
+}
+
+fn topic_section_templates(context: &PageContext) -> Vec<(String, String)> {
+    vec![
+        ("主题说明".to_string(), topic_intro(context)),
+        ("关键证据".to_string(), topic_evidence_section(context)),
+        ("结构图".to_string(), topic_diagram_section(context)),
+        ("关联模块".to_string(), topic_related_section(context)),
     ]
 }
 
@@ -438,6 +452,55 @@ fn workflow_overview(context: &PageContext) -> String {
     paragraph_lines(&sentences, "该页面描述仓库的构建、CI/CD 和部署配置。")
 }
 
+fn topic_intro(context: &PageContext) -> String {
+    let topic_title = fact_value(&context.facts, "主题标题").unwrap_or("当前主题");
+    let topic_kind = fact_value(&context.facts, "主题类别").unwrap_or("topic");
+    let source_count = fact_value(&context.facts, "关联源码数").unwrap_or("0");
+    let topic_summary = prefixed_values(&context.summary_inputs, "主题摘要");
+
+    let mut sentences = vec![format!(
+        "`{topic_title}` 页面聚焦一个 {topic_kind} 类型的稳定专题。"
+    )];
+    if let Some(summary) = topic_summary.first() {
+        sentences.push(summary.clone());
+    }
+    sentences.push(format!(
+        "当前主题直接关联 {source_count} 份源码或配置线索。"
+    ));
+
+    paragraph_lines(&sentences, "该页面用于解释一个稳定专题。")
+}
+
+fn topic_evidence_section(context: &PageContext) -> String {
+    let source_paths = prefixed_values(&context.summary_inputs, "关键源码");
+    if source_paths.is_empty() {
+        "当前主题还没有额外的关键源码摘要。".to_string()
+    } else {
+        grouped_bullet_block("关键源码", &source_paths).unwrap_or_else(|| "- 无".to_string())
+    }
+}
+
+fn topic_diagram_section(context: &PageContext) -> String {
+    if context
+        .diagram_inputs
+        .iter()
+        .any(|diagram| diagram.section_title == "结构图")
+    {
+        "当前专题页包含 deterministic 结构图，用于解释主题内部的关系。".to_string()
+    } else {
+        "当前事实不足以生成稳定结构图。".to_string()
+    }
+}
+
+fn topic_related_section(context: &PageContext) -> String {
+    let related_modules = prefixed_values(&context.summary_inputs, "关联模块");
+    if related_modules.is_empty() {
+        "当前专题页没有额外的关联模块线索。".to_string()
+    } else {
+        grouped_bullet_block("关联模块", &related_modules).unwrap_or_else(|| "- 无".to_string())
+    }
+}
+
 fn render_module_tree_markdown(lines: &[String]) -> String {
     lines
         .iter()
@@ -481,4 +544,97 @@ fn merged_section_content(
     } else {
         content
     }
+}
+
+fn append_supporting_blocks(title: &str, content: &str, context: &PageContext) -> String {
+    let evidence_blocks = context
+        .evidence_groups
+        .iter()
+        .filter(|group| group.section_title == title)
+        .filter_map(render_evidence_group)
+        .collect::<Vec<_>>();
+    let diagram_blocks = context
+        .diagram_inputs
+        .iter()
+        .filter(|diagram| diagram.section_title == title)
+        .filter_map(render_diagram_block)
+        .collect::<Vec<_>>();
+
+    let mut blocks = Vec::new();
+    if !content.trim().is_empty() {
+        blocks.push(content.trim().to_string());
+    }
+    blocks.extend(evidence_blocks);
+    blocks.extend(diagram_blocks);
+
+    if blocks.is_empty() {
+        content.to_string()
+    } else {
+        blocks.join("\n\n")
+    }
+}
+
+fn render_evidence_group(group: &crate::domain::context::PageEvidenceGroup) -> Option<String> {
+    if group.items.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec![format!("**{}**", group.title)];
+    if !group.summary.trim().is_empty() {
+        lines.push(group.summary.trim().to_string());
+    }
+    lines.extend(group.items.iter().take(8).map(|item| {
+        if item.note.trim().is_empty() {
+            format!("- `{}`", item.path)
+        } else {
+            format!("- `{}`: {}", item.path, item.note.trim())
+        }
+    }));
+
+    Some(lines.join("\n"))
+}
+
+fn render_diagram_block(diagram: &crate::domain::context::PageDiagramInput) -> Option<String> {
+    if diagram.nodes.is_empty() || diagram.edges.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec![format!("**{}**", diagram.title)];
+    if !diagram.summary.trim().is_empty() {
+        lines.push(diagram.summary.trim().to_string());
+    }
+    lines.push("```mermaid".to_string());
+    lines.push(match diagram.diagram_type.as_str() {
+        "flow" => "flowchart LR".to_string(),
+        _ => "graph LR".to_string(),
+    });
+    lines.extend(diagram.nodes.iter().map(|node| {
+        format!(
+            "    {}[\"{}\"]",
+            sanitize_mermaid_id(&node.node_id),
+            node.label
+        )
+    }));
+    lines.extend(diagram.edges.iter().map(|edge| {
+        let source = sanitize_mermaid_id(&edge.source);
+        let target = sanitize_mermaid_id(&edge.target);
+        if let Some(label) = &edge.label {
+            format!("    {source} -->|{}| {target}", label)
+        } else {
+            format!("    {source} --> {target}")
+        }
+    }));
+    lines.push("```".to_string());
+
+    Some(lines.join("\n"))
+}
+
+fn sanitize_mermaid_id(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| match character {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => character,
+            _ => '_',
+        })
+        .collect()
 }

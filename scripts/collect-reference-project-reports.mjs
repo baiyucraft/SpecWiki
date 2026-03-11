@@ -4,8 +4,9 @@
  * 做逐项目、逐文件的结构化对比，输出到当前 OpenSpec change 目录。
  *
  * 默认输出：
- * - openspec/changes/iteration-9-llm-enhanced-content-generation/reference-project-reports/*.md
- * - openspec/changes/iteration-9-llm-enhanced-content-generation/reference-project-reports/_summary.md
+ * - openspec/changes/iteration-9-1-topic-page-planner-and-evidence-layer/reference-project-reports/*.md
+ * - openspec/changes/iteration-9-1-topic-page-planner-and-evidence-layer/reference-project-reports/_summary.md
+ * - openspec/changes/iteration-9-1-topic-page-planner-and-evidence-layer/reference-project-reports/_optimization-notes.md
  *
  * 用法：
  *   node scripts/collect-reference-project-reports.mjs
@@ -46,10 +47,11 @@ const CHANGE_DIR = path.join(
   ROOT_DIR,
   "openspec",
   "changes",
-  "iteration-9-llm-enhanced-content-generation",
+  "iteration-9-1-topic-page-planner-and-evidence-layer",
 );
 const REPORT_DIR = path.join(CHANGE_DIR, "reference-project-reports");
 const SUMMARY_PATH = path.join(REPORT_DIR, "_summary.md");
+const OPTIMIZATION_NOTES_PATH = path.join(REPORT_DIR, "_optimization-notes.md");
 const ROOT_DEV_CONFIG_PATH = path.join(ROOT_DIR, "wiki.dev.yaml");
 const REAL_REPO_MAP = {
   aLocal: "E:\\project\\aLocal",
@@ -58,6 +60,9 @@ const REAL_REPO_MAP = {
 const FILE_MENTION_PATTERN =
   /[A-Za-z0-9_./-]+\.(?:go|rs|ts|tsx|js|jsx|py|java|kt|php|swift|md|toml|json|ya?ml|conf|ini|sql)/g;
 const ASCII_TOKEN_PATTERN = /[A-Za-z_][A-Za-z0-9_/-]*/g;
+const EVIDENCE_HEADING_PATTERN = /\*\*[^*\n]*(来源|证据)[^*\n]*\*\*/g;
+const TOPIC_KEYWORD_PATTERN =
+  /(主题|机制|能力|专题|流程主题|routing|extract|extractor|response|middleware|handler|router)/i;
 
 function resolveBinaryPath() {
   if (process.env.WIKI_CORE_BINARY) {
@@ -261,6 +266,9 @@ function readPage(baseDir, relativePath) {
   const citations = [...content.matchAll(/\(file:\/\/([^)]+)\)/g)].map((match) => match[1]);
   const fileMentions = extractFileMentions(content);
   const tokens = extractAsciiTokens(`${relativePath}\n${title}\n${content}`);
+  const evidenceBlocks = [...content.matchAll(EVIDENCE_HEADING_PATTERN)].length;
+  const category = pageCategory({ relativePath, title, content });
+  const topicLabel = inferTopicLabel({ relativePath, title, sectionTitles, fileMentions });
 
   return {
     title,
@@ -271,9 +279,12 @@ function readPage(baseDir, relativePath) {
     proseLines,
     bulletLines,
     mermaidBlocks,
+    evidenceBlocks,
     citations,
     fileMentions,
     tokens,
+    category,
+    topicLabel,
   };
 }
 
@@ -315,10 +326,49 @@ function pageCategory(page) {
   if (combined.includes("工作流") || combined.includes("部署")) {
     return "workflow";
   }
-  if (combined.includes("模块") || combined.includes("component") || combined.includes("middleware")) {
+  if (page.relativePath.startsWith("专题/") || combined.includes("主题：") || combined.includes("流程主题")) {
+    return "topic";
+  }
+  if (combined.includes("模块") || combined.includes("component")) {
     return "module";
   }
+  if (TOPIC_KEYWORD_PATTERN.test(`${page.relativePath} ${page.title}`)) {
+    return "topic";
+  }
   return "other";
+}
+
+function inferTopicLabel(page) {
+  const relativePath = page.relativePath.toLowerCase();
+  const title = page.title.toLowerCase();
+  const content = `${page.sectionTitles?.join(" ")} ${page.fileMentions.join(" ")}`.toLowerCase();
+  const combined = `${relativePath} ${title} ${content}`;
+
+  if (combined.includes("flow") || combined.includes("流程")) {
+    return "流程主题";
+  }
+  if (combined.includes("middleware")) {
+    return "中间件主题";
+  }
+  if (combined.includes("router") || combined.includes("routing")) {
+    return "路由主题";
+  }
+  if (combined.includes("extract")) {
+    return "提取器主题";
+  }
+  if (combined.includes("response")) {
+    return "响应主题";
+  }
+  if (combined.includes("handler")) {
+    return "处理器主题";
+  }
+  if (combined.includes("context") || combined.includes("chain") || combined.includes("tree")) {
+    return "核心机制主题";
+  }
+  if (page.category === "topic") {
+    return "专题页";
+  }
+  return null;
 }
 
 function scorePageMatch(referencePage, generatedPage) {
@@ -402,8 +452,14 @@ function comparePagePair(referencePage, generatedPage, score) {
   if (referencePage.mermaidBlocks > generatedPage.mermaidBlocks) {
     notes.push("图表少于 reference");
   }
+  if (referencePage.evidenceBlocks > generatedPage.evidenceBlocks) {
+    notes.push("evidence block 少于 reference");
+  }
   if (referencePage.citations.length > 0 && generatedPage.citations.length === 0) {
     notes.push("缺少引用/出处块");
+  }
+  if (referencePage.category === "topic" && generatedPage.category !== "topic") {
+    notes.push("reference 专题被折叠进非专题页");
   }
   if (missingBasenames.length > 0) {
     notes.push(`缺少关键文件提及：${missingBasenames.join("、")}`);
@@ -419,6 +475,12 @@ function comparePagePair(referencePage, generatedPage, score) {
     generatedProse: generatedPage.proseLines,
     referenceMermaid: referencePage.mermaidBlocks,
     generatedMermaid: generatedPage.mermaidBlocks,
+    referenceEvidence: referencePage.evidenceBlocks,
+    generatedEvidence: generatedPage.evidenceBlocks,
+    referenceCategory: referencePage.category,
+    generatedCategory: generatedPage.category,
+    referenceTopicLabel: referencePage.topicLabel,
+    generatedTopicLabel: generatedPage.topicLabel,
     overlappingFiles,
     overlappingBasenames,
     missingBasenames,
@@ -529,7 +591,8 @@ function collectProject(project) {
   const matchedCount = comparisons.filter((item) => item.matched).length;
   const missingCount = comparisons.length - matchedCount;
   const reusedGeneratedPages = countReusedGeneratedPages(comparisons);
-  const commonGaps = summarizeProjectGaps(comparisons, generatedPages, referencePages);
+  const coverage = summarizeCoverage(comparisons, generatedPages, referencePages);
+  const commonGaps = summarizeProjectGaps(comparisons, generatedPages, referencePages, coverage);
 
   return {
     project,
@@ -540,6 +603,7 @@ function collectProject(project) {
     extraGeneratedPages,
     comparisons,
     reusedGeneratedPages,
+    coverage,
     commonGaps,
   };
 }
@@ -560,7 +624,53 @@ function countReusedGeneratedPages(comparisons) {
     .map(([generatedPath, count]) => ({ generatedPath, count }));
 }
 
-function summarizeProjectGaps(comparisons, generatedPages, referencePages) {
+function summarizeCoverage(comparisons, generatedPages, referencePages) {
+  const matched = comparisons.filter((item) => item.matched);
+  const generatedTopicPages = generatedPages.filter((page) => page.category === "topic");
+  const referenceTopicPages = referencePages.filter((page) => page.category === "topic");
+  const generatedEvidencePages = generatedPages.filter((page) => page.evidenceBlocks > 0);
+  const referenceEvidencePages = referencePages.filter((page) => page.evidenceBlocks > 0 || page.citations.length > 0);
+  const generatedDiagramPages = generatedPages.filter((page) => page.mermaidBlocks > 0);
+  const referenceDiagramPages = referencePages.filter((page) => page.mermaidBlocks > 0);
+  const topicLabelCounts = new Map();
+
+  for (const page of generatedTopicPages) {
+    const label = page.topicLabel ?? "专题页";
+    topicLabelCounts.set(label, (topicLabelCounts.get(label) ?? 0) + 1);
+  }
+
+  const missingTopicLabels = new Map();
+  for (const comparison of comparisons) {
+    if (!comparison.matched && comparison.referenceTopicLabel) {
+      missingTopicLabels.set(
+        comparison.referenceTopicLabel,
+        (missingTopicLabels.get(comparison.referenceTopicLabel) ?? 0) + 1,
+      );
+      continue;
+    }
+    if (comparison.notes?.includes("reference 专题被折叠进非专题页") && comparison.referenceTopicLabel) {
+      missingTopicLabels.set(
+        comparison.referenceTopicLabel,
+        (missingTopicLabels.get(comparison.referenceTopicLabel) ?? 0) + 1,
+      );
+    }
+  }
+
+  return {
+    generatedTopicPages: generatedTopicPages.length,
+    referenceTopicPages: referenceTopicPages.length,
+    generatedEvidencePages: generatedEvidencePages.length,
+    referenceEvidencePages: referenceEvidencePages.length,
+    generatedDiagramPages: generatedDiagramPages.length,
+    referenceDiagramPages: referenceDiagramPages.length,
+    matchedEvidenceShortfall: matched.filter((item) => item.generatedEvidence < item.referenceEvidence).length,
+    matchedDiagramShortfall: matched.filter((item) => item.generatedMermaid < item.referenceMermaid).length,
+    topicLabels: [...topicLabelCounts.entries()].sort((left, right) => right[1] - left[1]),
+    missingTopicLabels: [...missingTopicLabels.entries()].sort((left, right) => right[1] - left[1]),
+  };
+}
+
+function summarizeProjectGaps(comparisons, generatedPages, referencePages, coverage) {
   const gaps = [];
   const matched = comparisons.filter((item) => item.matched);
 
@@ -570,17 +680,32 @@ function summarizeProjectGaps(comparisons, generatedPages, referencePages) {
   if (comparisons.some((item) => !item.matched)) {
     gaps.push("存在大量 reference 页面没有对应生成页，说明页面粒度和主题拆分不足");
   }
+  if (
+    coverage.referenceTopicPages > 0
+    && coverage.generatedTopicPages < Math.max(1, Math.floor(coverage.referenceTopicPages * 0.4))
+  ) {
+    gaps.push("专题页覆盖仍明显不足，很多 reference 主题还没有被 planner 单独承载");
+  }
   if (matched.some((item) => item.notes.includes("缺少引用/出处块"))) {
     gaps.push("生成页普遍缺少 reference 那种源码引用/出处层");
   }
+  if (matched.some((item) => item.notes.includes("evidence block 少于 reference"))) {
+    gaps.push("evidence block 已进入页面，但覆盖率和密度仍低于 reference");
+  }
   if (matched.some((item) => item.notes.includes("图表少于 reference"))) {
     gaps.push("Mermaid/结构图表达仍然不足");
+  }
+  if (coverage.matchedDiagramShortfall > 0 && coverage.generatedDiagramPages === 0) {
+    gaps.push("facts-driven 图输入尚未稳定覆盖到代表性页面");
   }
   if (matched.some((item) => item.notes.includes("章节拆分比 reference 粗"))) {
     gaps.push("单页章节拆分比 reference 粗，主题混杂在同一页里");
   }
   if (matched.some((item) => item.notes.includes("解释性段落明显不足"))) {
     gaps.push("解释层正文密度仍低于 reference");
+  }
+  if (coverage.missingTopicLabels.length > 0) {
+    gaps.push(`高频缺失专题集中在：${coverage.missingTopicLabels.slice(0, 4).map(([label]) => label).join("、")}`);
   }
 
   return gaps;
@@ -594,6 +719,14 @@ function renderProjectReport(result) {
     `reference 页面：${result.referencePageCount} 页`,
     `命中对比：${result.matchedCount} 页`,
     `缺失对比：${result.missingCount} 页`,
+    "",
+    "## 覆盖统计",
+    "",
+    `- 专题页覆盖：generated ${result.coverage.generatedTopicPages} / reference ${result.coverage.referenceTopicPages}`,
+    `- evidence 落页：generated ${result.coverage.generatedEvidencePages} / reference ${result.coverage.referenceEvidencePages}`,
+    `- 图表达覆盖：generated ${result.coverage.generatedDiagramPages} / reference ${result.coverage.referenceDiagramPages}`,
+    `- 已规划专题类型：${result.coverage.topicLabels.slice(0, 6).map(([label, count]) => `${label}(${count})`).join("、") || "无"}`,
+    `- 高频缺失专题：${result.coverage.missingTopicLabels.slice(0, 6).map(([label, count]) => `${label}(${count})`).join("、") || "无"}`,
     "",
     "## 项目结论",
     "",
@@ -627,20 +760,20 @@ function renderProjectReport(result) {
   lines.push("");
   lines.push("## 逐文件对比");
   lines.push("");
-  lines.push("| Reference | 生成页 | 行数(ref/gen) | 段落(ref/gen) | Mermaid(ref/gen) | 主要结论 |");
-  lines.push("| --- | --- | ---: | ---: | ---: | --- |");
+  lines.push("| Reference | 生成页 | 行数(ref/gen) | 段落(ref/gen) | Evidence(ref/gen) | Mermaid(ref/gen) | 主要结论 |");
+  lines.push("| --- | --- | ---: | ---: | ---: | ---: | --- |");
 
   for (const comparison of result.comparisons) {
     if (!comparison.matched) {
       lines.push(
-        `| ${comparison.referencePath} | 缺失 | - | - | - | ${comparison.notes.join("；")} |`,
+        `| ${comparison.referencePath} | 缺失 | - | - | - | - | ${comparison.notes.join("；")} |`,
       );
       continue;
     }
 
     const note = comparison.notes.length > 0 ? comparison.notes.join("；") : "基本可对应";
     lines.push(
-      `| ${comparison.referencePath} | ${comparison.generatedPath} | ${comparison.referenceLines}/${comparison.generatedLines} | ${comparison.referenceProse}/${comparison.generatedProse} | ${comparison.referenceMermaid}/${comparison.generatedMermaid} | ${note} |`,
+      `| ${comparison.referencePath} | ${comparison.generatedPath} | ${comparison.referenceLines}/${comparison.generatedLines} | ${comparison.referenceProse}/${comparison.generatedProse} | ${comparison.referenceEvidence}/${comparison.generatedEvidence} | ${comparison.referenceMermaid}/${comparison.generatedMermaid} | ${note} |`,
     );
   }
 
@@ -661,8 +794,10 @@ function renderProjectReport(result) {
 
     lines.push(`- 生成页：${comparison.generatedPath}（${comparison.generatedTitle}）`);
     lines.push(`- 匹配分数：${comparison.score}`);
+    lines.push(`- 页面类型：${comparison.referenceCategory} / ${comparison.generatedCategory}`);
     lines.push(`- 行数：${comparison.referenceLines} / ${comparison.generatedLines}`);
     lines.push(`- 段落行数：${comparison.referenceProse} / ${comparison.generatedProse}`);
+    lines.push(`- Evidence：${comparison.referenceEvidence} / ${comparison.generatedEvidence}`);
     lines.push(`- Mermaid：${comparison.referenceMermaid} / ${comparison.generatedMermaid}`);
     lines.push(
       `- 文件提及重合：${comparison.overlappingBasenames.slice(0, 12).join("、") || "无"}`,
@@ -683,13 +818,13 @@ function renderSummary(results) {
     "",
     `生成时间：${new Date().toISOString()}`,
     "",
-    "| Project | generated | reference | matched | missing | extra generated |",
-    "| --- | ---: | ---: | ---: | ---: | ---: |",
+    "| Project | generated | reference | matched | missing | topic(gen/ref) | evidence(gen/ref) | diagram(gen/ref) | extra generated |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
   ];
 
   for (const result of results) {
     lines.push(
-      `| ${result.project} | ${result.generatedPageCount} | ${result.referencePageCount} | ${result.matchedCount} | ${result.missingCount} | ${result.extraGeneratedPages.length} |`,
+      `| ${result.project} | ${result.generatedPageCount} | ${result.referencePageCount} | ${result.matchedCount} | ${result.missingCount} | ${result.coverage.generatedTopicPages}/${result.coverage.referenceTopicPages} | ${result.coverage.generatedEvidencePages}/${result.coverage.referenceEvidencePages} | ${result.coverage.generatedDiagramPages}/${result.coverage.referenceDiagramPages} | ${result.extraGeneratedPages.length} |`,
     );
   }
 
@@ -710,12 +845,52 @@ function renderSummary(results) {
   return `${lines.join("\n")}\n`;
 }
 
+function renderOptimizationNotes(results) {
+  const lines = [
+    "# Reference 对比后的优化收敛",
+    "",
+    "## 当前收敛",
+    "",
+    "这轮 9.1 已经把专题页、evidence layer 和 deterministic Mermaid 接入主链，但 reference 项目集仍然能看出剩余差距主要集中在 coverage 阈值和页面粒度，而不是简单的正文措辞。",
+    "",
+    "## 高频观察",
+    "",
+  ];
+
+  const topTopicGaps = new Map();
+  for (const result of results) {
+    for (const [label, count] of result.coverage.missingTopicLabels.slice(0, 4)) {
+      topTopicGaps.set(label, (topTopicGaps.get(label) ?? 0) + count);
+    }
+  }
+
+  const projectsWithTopicPages = results.filter((result) => result.coverage.generatedTopicPages > 0).length;
+  const projectsWithEvidence = results.filter((result) => result.coverage.generatedEvidencePages > 0).length;
+  const projectsWithDiagrams = results.filter((result) => result.coverage.generatedDiagramPages > 0).length;
+
+  lines.push(`- 已生成专题页的项目：${projectsWithTopicPages}/${results.length}`);
+  lines.push(`- 已落 evidence block 的项目：${projectsWithEvidence}/${results.length}`);
+  lines.push(`- 已落 Mermaid 图的项目：${projectsWithDiagrams}/${results.length}`);
+  lines.push(
+    `- 高频缺失专题：${[...topTopicGaps.entries()].sort((left, right) => right[1] - left[1]).slice(0, 6).map(([label, count]) => `${label}(${count})`).join("、") || "无"}`,
+  );
+  lines.push("");
+  lines.push("## 下一步建议");
+  lines.push("");
+  lines.push("- 优先继续调 planner 阈值和 topic seed 规则，让根级机制页、流程主题页和模块能力页覆盖更多 reference 高频主题。");
+  lines.push("- evidence layer 下一步应补“证据分组更细”和“模块页/专题页的 section 内证据密度”，而不是回退到全文文件清单。");
+  lines.push("- Mermaid 已进入主链，下一步重点是让更多页面拥有 diagram inputs，而不是放宽 LLM 自由生成结构图。");
+
+  return `${lines.join("\n")}\n`;
+}
+
 function writeReports(results) {
   ensureDir(REPORT_DIR);
   for (const result of results) {
     writeFileSync(path.join(REPORT_DIR, `${result.project}.md`), renderProjectReport(result));
   }
   writeFileSync(SUMMARY_PATH, renderSummary(results));
+  writeFileSync(OPTIMIZATION_NOTES_PATH, renderOptimizationNotes(results));
 }
 
 function parseCliArgs(argv) {
@@ -757,6 +932,7 @@ async function main(argv) {
   process.stdout.write(`${JSON.stringify({
     reportDir: REPORT_DIR,
     summaryPath: SUMMARY_PATH,
+    optimizationNotesPath: OPTIMIZATION_NOTES_PATH,
     jobs,
     projects: results.map((result) => ({
       project: result.project,
@@ -764,6 +940,9 @@ async function main(argv) {
       referencePageCount: result.referencePageCount,
       matchedCount: result.matchedCount,
       missingCount: result.missingCount,
+      generatedTopicPages: result.coverage.generatedTopicPages,
+      generatedEvidencePages: result.coverage.generatedEvidencePages,
+      generatedDiagramPages: result.coverage.generatedDiagramPages,
     })),
   }, null, 2)}\n`);
 }

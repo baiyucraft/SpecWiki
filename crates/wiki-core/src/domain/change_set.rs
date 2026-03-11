@@ -541,6 +541,8 @@ fn build_affected_set(
         }
     }
 
+    expand_affected_page_ancestors(&previous_pages, &current_pages, &mut affected_page_ids);
+
     let mut affected_section_ids_by_page = BTreeMap::new();
     for page_id in &affected_page_ids {
         if let Some(page) = previous_pages.get(page_id) {
@@ -733,4 +735,28 @@ fn predicted_section_ids_for_page(page: &PlannedPage) -> Vec<String> {
         .into_iter()
         .map(|title| section_id_for_title(&page.id, title))
         .collect()
+}
+
+fn expand_affected_page_ancestors(
+    previous_pages: &BTreeMap<String, &WikiPageState>,
+    current_pages: &BTreeMap<String, &PlannedPage>,
+    affected_page_ids: &mut BTreeSet<String>,
+) {
+    let mut queue = affected_page_ids.iter().cloned().collect::<Vec<_>>();
+    while let Some(page_id) = queue.pop() {
+        let parent_id = current_pages
+            .get(&page_id)
+            .and_then(|page| page.parent_id.clone())
+            .or_else(|| {
+                previous_pages
+                    .get(&page_id)
+                    .and_then(|page| page.parent_id.clone())
+            });
+        let Some(parent_id) = parent_id else {
+            continue;
+        };
+        if affected_page_ids.insert(parent_id.clone()) {
+            queue.push(parent_id);
+        }
+    }
 }

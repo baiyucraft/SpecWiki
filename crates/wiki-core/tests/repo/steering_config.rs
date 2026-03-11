@@ -35,6 +35,9 @@ fn missing_file_returns_defaults() {
     assert!(config.scan.include.is_empty());
     assert!(config.modules.promote.is_empty());
     assert!(config.modules.demote.is_empty());
+    assert!(!config.debug.enabled);
+    assert!(config.debug.trace_dir.is_empty());
+    assert!(!config.debug.echo_to_stderr);
     assert!(config.llm.providers.is_empty());
     assert_eq!(config.llm.parallel_requests, 3);
 }
@@ -185,6 +188,9 @@ fn default_config_is_sane() {
     assert!(config.modules.demote.is_empty());
     assert!(config.pages.priority.is_empty());
     assert!(config.pages.hints.is_empty());
+    assert!(!config.debug.enabled);
+    assert!(config.debug.trace_dir.is_empty());
+    assert!(!config.debug.echo_to_stderr);
     assert!(config.llm.providers.is_empty());
     assert_eq!(config.llm.parallel_requests, 3);
 }
@@ -293,6 +299,34 @@ llm:
     let config = load_steering_config(repo.path());
 
     assert_eq!(config.llm.parallel_requests, 3);
+}
+
+#[test]
+fn dev_config_can_enable_debug_trace() {
+    let repo = make_repo();
+    write_steering(
+        &repo,
+        r#"
+debug:
+  enabled: false
+  trace_dir: ".debug/shared"
+"#,
+    );
+    write_dev_config(
+        &repo,
+        r#"
+debug:
+  enabled: true
+  trace_dir: "logs/wiki-core"
+  echo_to_stderr: true
+"#,
+    );
+
+    let config = load_steering_config(repo.path());
+
+    assert!(config.debug.enabled);
+    assert_eq!(config.debug.trace_dir, "logs/wiki-core");
+    assert!(config.debug.echo_to_stderr);
 }
 
 fn sorted(mut values: Vec<String>) -> Vec<String> {

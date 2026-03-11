@@ -189,6 +189,10 @@ function printProjectResult(result, index, total) {
   console.log(`[${index + 1}/${total}] ${result.proj}  FAIL ${result.error}`);
 }
 
+function printProjectStart(proj, index, total) {
+  console.log(`[${index + 1}/${total}] ${proj}  START`);
+}
+
 async function runProjectInChild(proj) {
   const child = await runCommandCapture(
     process.execPath,
@@ -215,11 +219,13 @@ export async function runTestProjects(names, options = {}) {
 
   const results = useParallel
     ? await runTaskPool(projects, jobs, async (proj, index) => {
+      printProjectStart(proj, index, total);
       const result = await runProjectInChild(proj);
       printProjectResult(result, index, total);
       return result;
     })
     : projects.map((proj, index) => {
+      printProjectStart(proj, index, total);
       const result = runSingleProject(proj);
       printProjectResult(result, index, total);
       return result;

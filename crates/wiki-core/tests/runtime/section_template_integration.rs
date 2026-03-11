@@ -97,6 +97,65 @@ fn make_repo_with_process_only() -> TempDir {
     dir
 }
 
+fn make_repo_with_topics_and_edges() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("package.json"),
+        r#"{"name":"topic-edge-demo","private":true,"workspaces":["packages/*"]}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("router.ts"),
+        "export function router() { return true; }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("handler.ts"),
+        "export function handleRoot() { return router(); }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("middleware.ts"),
+        "import { handleRoot } from \"./handler\";\nexport function middleware() { return handleRoot(); }\n",
+    )
+    .unwrap();
+
+    fs::create_dir_all(dir.path().join("packages/app/src")).unwrap();
+    fs::create_dir_all(dir.path().join("packages/shared/src")).unwrap();
+    fs::write(
+        dir.path().join("packages/app/package.json"),
+        r#"{"name":"app","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("packages/shared/package.json"),
+        r#"{"name":"shared","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("packages/shared/src/util.ts"),
+        "export function util() { return true; }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("packages/app/src/index.ts"),
+        "import { util } from \"../../shared/src/util\";\nexport function run() { return util(); }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("packages/app/src/handler_a.ts"),
+        "export function handleA() { return true; }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("packages/app/src/handler_b.ts"),
+        "export function handleB() { return true; }\n",
+    )
+    .unwrap();
+
+    dir
+}
+
 #[test]
 fn overview_page_contains_tech_stack_section() {
     let repo = make_repo_with_ci();
@@ -283,4 +342,50 @@ fn module_page_has_expanded_sections() {
             "module fallback should no longer use the old boilerplate"
         );
     }
+}
+
+#[test]
+fn architecture_page_renders_evidence_block_and_mermaid() {
+    let repo = make_repo_with_topics_and_edges();
+    let steering = SteeringConfig::default();
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let pages = plan_pages(&report, &tree, &repo_ctx, &mod_ctxs, &steering);
+
+    let arch = pages
+        .iter()
+        .find(|page| page.page_type == "architecture")
+        .unwrap();
+    let ctx = build_page_context(arch, &report, &tree, &repo_ctx, &mod_ctxs);
+    let rendered = render_page_bundle(arch, &ctx);
+
+    assert!(rendered.content.contains("**架构关键来源**"));
+    assert!(rendered.content.contains("```mermaid"));
+    assert!(rendered.content.contains("graph LR"));
+}
+
+#[test]
+fn topic_page_renders_stable_evidence_block() {
+    let repo = make_repo_with_topics_and_edges();
+    let steering = SteeringConfig::default();
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let pages = plan_pages(&report, &tree, &repo_ctx, &mod_ctxs, &steering);
+
+    let topic_page = pages
+        .iter()
+        .find(|page| {
+            page.page_type == "topic" && page.topic_kind.as_deref() == Some("root-mechanism")
+        })
+        .unwrap();
+    let ctx = build_page_context(topic_page, &report, &tree, &repo_ctx, &mod_ctxs);
+    let rendered = render_page_bundle(topic_page, &ctx);
+
+    assert!(rendered.content.contains("关键证据"));
+    assert!(rendered.content.contains("**关键来源**"));
+    assert!(rendered.content.contains("router.ts"));
 }

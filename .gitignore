@@ -6,6 +6,7 @@ docs/
 openspec/changes/archive/
 .worktrees/
 .wiki/
+wiki.dev.yaml
 
 参考/
 DESIGN*.md

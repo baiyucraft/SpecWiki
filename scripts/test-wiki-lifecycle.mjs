@@ -620,17 +620,29 @@ function printLifecycleProjectResult(result, index, total, phase) {
 }
 
 async function runLifecycleProjectInChild(proj, phase) {
-  const child = await runCommandCapture(
-    process.execPath,
-    [SCRIPT_PATH, "--child-json", "--phase", phase, "--no-build", proj],
-    { cwd: ROOT_DIR },
-  );
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const child = await runCommandCapture(
+      process.execPath,
+      [SCRIPT_PATH, "--child-json", "--phase", phase, "--no-build", proj],
+      { cwd: ROOT_DIR },
+    );
 
-  if (!child.stdout.trim()) {
+    if (child.stdout.trim()) {
+      return JSON.parse(child.stdout.trim());
+    }
+
+    if (
+      attempt < 2
+      && /EBUSY|EPERM|ENOTEMPTY/.test(child.stderr || "")
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
+      continue;
+    }
+
     throw new Error(child.stderr || `child worker for ${proj} produced empty stdout`);
   }
 
-  return JSON.parse(child.stdout.trim());
+  throw new Error(`child worker for ${proj} exhausted retry budget`);
 }
 
 export async function runLifecycleTests(names, options = {}) {

@@ -42,6 +42,8 @@ fn sample_page_input() -> PageEnrichmentInput {
         summary_inputs: vec!["源码：src/index.ts".to_string()],
         hints: vec!["重点说明入口职责".to_string()],
         child_summaries: vec!["child summary".to_string()],
+        evidence_groups: vec![],
+        diagram_inputs: vec![],
         allow_mermaid: true,
     }
 }
@@ -640,8 +642,7 @@ fn init_with_llm_enrichment_writes_enhanced_module_sections() {
     let content = fs::read_to_string(repo_root.join(module_page)).unwrap();
 
     assert!(content.contains("这是增强后的模块说明。"));
-    assert!(content.contains("```mermaid"));
-    assert!(content.contains("graph TD"));
+    assert!(!content.contains("```mermaid"));
     assert!(llm_service.calls > 0);
 }
 
@@ -702,7 +703,6 @@ fn init_uses_wiki_dev_yaml_provider_without_agent_bridge() {
     let content = fs::read_to_string(repo_root.join(module_page)).unwrap();
 
     assert!(content.contains("通过 wiki.dev.yaml 走 provider。"));
-    assert!(content.contains("```mermaid"));
     assert!(server.calls() > 0);
 }
 

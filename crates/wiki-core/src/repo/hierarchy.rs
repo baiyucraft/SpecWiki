@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::domain::context::TopicSeed;
 use crate::domain::module_tree::{ModuleNode, ModuleTree, RelationEdge};
 use crate::domain::stable_id::stable_id;
 use crate::llm::{
@@ -87,6 +88,62 @@ pub fn build_module_tree_with_graph_and_llm(
         cross_module_edges,
         architecture_hints,
     }
+}
+
+/// 为 planner 提供根级高信号文件簇主题线索。
+/// 这些线索不会改写模块树，只用于后续 topic page 规划。
+pub fn discover_root_topic_seeds(
+    report: &ScanReport,
+    graph_summary: &GraphSummary,
+) -> Vec<TopicSeed> {
+    let mut root_sources = report
+        .files
+        .iter()
+        .filter(|file| !file.path.contains('/'))
+        .filter(|file| file.is_substantive_source())
+        .filter(|file| file.purpose.signal_weight() >= 25)
+        .collect::<Vec<_>>();
+
+    root_sources.sort_by(|left, right| {
+        right
+            .purpose
+            .signal_weight()
+            .cmp(&left.purpose.signal_weight())
+            .then(left.path.len().cmp(&right.path.len()))
+            .then(left.path.cmp(&right.path))
+    });
+
+    if root_sources.len() < 3 {
+        return Vec::new();
+    }
+
+    let selected = root_sources.into_iter().take(6).collect::<Vec<_>>();
+    let hotspot_summary = graph_summary
+        .module_call_hotspots
+        .get(".")
+        .filter(|items| !items.is_empty())
+        .map(|items| {
+            format!(
+                "图热点集中在 {}",
+                items.iter().take(3).cloned().collect::<Vec<_>>().join("、")
+            )
+        })
+        .unwrap_or_else(|| "这些文件共同承载仓库根级的核心机制".to_string());
+
+    vec![TopicSeed {
+        topic_kind: "root-mechanism".to_string(),
+        topic_key: "root-core".to_string(),
+        title: "根级核心机制".to_string(),
+        summary: format!(
+            "根目录检测到 {} 个高信号源码文件，{}。",
+            selected.len(),
+            hotspot_summary
+        ),
+        source_ids: selected.iter().map(|file| file.id.clone()).collect(),
+        source_paths: selected.iter().map(|file| file.path.clone()).collect(),
+        module_ids: Vec::new(),
+        relation_ids: Vec::new(),
+    }]
 }
 
 /// 发现所有显式模块根路径，并补齐递归层级需要的祖先节点。

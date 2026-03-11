@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use serde::Serialize;
 
+use crate::debug_trace;
 use crate::domain::change_set::{plan_runtime_changes, ChangePlan, FallbackMode};
 use crate::domain::metadata::DirtyState;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
@@ -101,6 +102,8 @@ pub fn run_update_with_progress_and_llm_as(
     llm_service: Option<&mut dyn LlmService>,
 ) -> io::Result<UpdateReport> {
     let started_at = Instant::now();
+    let steering = load_steering_config(repo_root);
+    debug_trace::begin_session(action, repo_root, &steering.debug)?;
     WorkflowReporter::from_started_at(action, progress_sink, started_at)
         .phase("plan_changes", "规划增量变更");
     let plan = plan_runtime_changes(repo_root)?;

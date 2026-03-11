@@ -2,6 +2,9 @@ use std::cell::RefCell;
 use std::io::{self, BufRead, Write};
 use std::rc::Rc;
 
+use serde_json::json;
+
+use crate::debug_trace;
 use crate::llm::{LlmCompletion, LlmPromptRequest, LlmService};
 use crate::transport::dto::CoreSessionInput;
 use crate::transport::dto::{CoreCommand, CoreEvent, CoreResponse};
@@ -131,6 +134,7 @@ where
     }
 
     fn write_event(&mut self, event: CoreEvent) -> io::Result<()> {
+        debug_trace::record_core_event(&event);
         let mut writer = self.writer.borrow_mut();
         serde_json::to_writer(&mut **writer, &event)
             .map_err(|error| io::Error::other(error.to_string()))?;
@@ -182,6 +186,12 @@ where
     }
 
     fn write_request(&mut self, request: LlmPromptRequest) -> io::Result<()> {
+        debug_trace::record_json(
+            "agent_llm_request",
+            &json!({
+                "request": request.clone(),
+            }),
+        );
         let event = CoreEvent::llm_request(request);
         let mut writer = self.writer.borrow_mut();
         serde_json::to_writer(&mut **writer, &event)
@@ -220,10 +230,26 @@ where
                 CoreSessionInput::LlmResponse {
                     request_id,
                     response,
-                } if request_id == request.request_id => return Ok(response),
+                } if request_id == request.request_id => {
+                    debug_trace::record_json(
+                        "agent_llm_response",
+                        &json!({
+                            "request_id": &request_id,
+                            "response": response.clone(),
+                        }),
+                    );
+                    return Ok(response);
+                }
                 CoreSessionInput::LlmUnavailable { request_id, reason }
                     if request_id == request.request_id =>
                 {
+                    debug_trace::record_json(
+                        "agent_llm_unavailable",
+                        &json!({
+                            "request_id": &request_id,
+                            "reason": &reason,
+                        }),
+                    );
                     return Err(io::Error::other(format!("llm unavailable: {reason}")))
                 }
                 CoreSessionInput::LlmResponse { .. } | CoreSessionInput::LlmUnavailable { .. } => {

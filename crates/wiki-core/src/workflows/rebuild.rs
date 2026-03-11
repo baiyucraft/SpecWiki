@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 
+use crate::debug_trace;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
 use crate::domain::state::{assemble_state, PageBuildResult};
 use crate::domain::steering::load_steering_config;
@@ -93,6 +94,7 @@ pub fn run_rebuild_with_progress_and_llm_as(
     // 清理旧 runtime
     reporter.phase("clear_runtime", "清理旧运行时");
     crate::storage::wiki_fs::remove_runtime(repo_root)?;
+    debug_trace::begin_session(action, repo_root, &steering.debug)?;
 
     // 全量 pipeline
     let mut llm_runtime = LlmRuntime::new(repo_root, &steering.llm, _llm_service);

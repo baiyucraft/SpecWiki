@@ -5,10 +5,60 @@ use std::fs;
 use std::path::Path;
 
 use tempfile::tempdir;
+use wiki_core::llm::{LlmCompletion, LlmPromptRequest, LlmService};
 use wiki_core::storage::metadata_store::read_metadata;
 use wiki_core::storage::sqlite_store;
 use wiki_core::storage::state_store::read_state;
-use wiki_core::workflows::{init::run_init, status::run_status, update::run_update};
+use wiki_core::workflows::progress::NoopProgressSink;
+use wiki_core::workflows::{
+    init::{run_init, run_init_with_progress_and_llm_as},
+    status::run_status,
+    update::run_update,
+};
+
+struct StatusStabilityLlmService;
+
+impl LlmService for StatusStabilityLlmService {
+    fn request(&mut self, request: &LlmPromptRequest) -> std::io::Result<LlmCompletion> {
+        let output = match request.prompt_type.as_str() {
+            "file_purpose" => {
+                let items = request
+                    .input
+                    .get("items")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                serde_json::json!({
+                    "items": items.into_iter().filter_map(|item| {
+                        let path = item.get("path")?.as_str()?;
+                        let purpose = if path.ends_with("mux.ts") {
+                            "router"
+                        } else if path.ends_with("Makefile") || path.ends_with("wiki.dev.yaml") {
+                            "config"
+                        } else {
+                            "utility"
+                        };
+                        Some(serde_json::json!({
+                            "path": path,
+                            "purpose": purpose,
+                        }))
+                    }).collect::<Vec<_>>()
+                })
+            }
+            "page_enrichment" => serde_json::json!({
+                "summary": "增强摘要",
+                "section_overrides": {},
+                "mermaid_blocks": {}
+            }),
+            _ => serde_json::json!({}),
+        };
+
+        Ok(LlmCompletion {
+            output,
+            model: Some("status-stability-model".to_string()),
+        })
+    }
+}
 
 /// 场景：正式索引还没建立时，status 必须明确返回 `missing`。
 #[test]
@@ -213,6 +263,117 @@ fn update_adds_and_removes_pages_after_structural_changes() {
         .wiki_items
         .iter()
         .any(|item| item.path.ends_with("核心模块/packages/shared.md")));
+}
+
+#[test]
+fn update_rebuilds_topic_page_and_parent_pages_when_topic_sources_change() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    write_file(
+        repo_root.join("package.json").as_path(),
+        r#"{"name":"topic-update-demo"}"#,
+    );
+    write_file(
+        repo_root.join("router.ts").as_path(),
+        "export function router() { return true; }",
+    );
+    write_file(
+        repo_root.join("handler.ts").as_path(),
+        "export function handleRoot() { return router(); }",
+    );
+    write_file(
+        repo_root.join("middleware.ts").as_path(),
+        "export function middleware() { return handleRoot(); }",
+    );
+
+    run_init(repo_root).unwrap();
+
+    let initial_state = read_state(repo_root).unwrap();
+    let topic_page = initial_state
+        .pages
+        .iter()
+        .find(|page| page.page_type == "topic")
+        .expect("topic page should exist after init");
+    let architecture_page = initial_state
+        .pages
+        .iter()
+        .find(|page| page.page_type == "architecture")
+        .unwrap();
+
+    write_file(
+        repo_root.join("router.ts").as_path(),
+        "export function router() { return false; }",
+    );
+
+    let status = run_status(repo_root).unwrap();
+    assert_eq!(status.state, "stale");
+    assert!(status
+        .dirty_pages
+        .iter()
+        .any(|path| path == &topic_page.path));
+    assert!(status
+        .dirty_pages
+        .iter()
+        .any(|path| path == &architecture_page.path));
+
+    let update = run_update(repo_root).unwrap();
+    assert_eq!(update.state, "fresh");
+    assert!(update
+        .updated_pages
+        .iter()
+        .any(|path| path == &topic_page.path));
+    assert!(update
+        .updated_pages
+        .iter()
+        .any(|path| path == &architecture_page.path));
+}
+
+#[test]
+fn status_stays_fresh_after_llm_init_when_only_structural_sets_would_drift() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    write_file(
+        repo_root.join("wiki.dev.yaml").as_path(),
+        concat!(
+            "llm:\n",
+            "  enabled: true\n",
+            "  model: bridge/mock-model\n",
+            "  max_calls: 8\n",
+            "  parallel_requests: 2\n",
+            "  cache_ttl_seconds: 3600\n",
+            "  allow_mermaid: true\n",
+        ),
+    );
+    write_file(
+        repo_root.join("package.json").as_path(),
+        r#"{"name":"status-llm-demo"}"#,
+    );
+    write_file(
+        repo_root.join("app.ts").as_path(),
+        "export const app = () => true;\n",
+    );
+    write_file(
+        repo_root.join("mux.ts").as_path(),
+        "export const mux = () => app();\n",
+    );
+    write_file(
+        repo_root.join("Makefile").as_path(),
+        "build:\n\tpnpm test\n",
+    );
+
+    let mut sink = NoopProgressSink;
+    let mut llm_service = StatusStabilityLlmService;
+    let init =
+        run_init_with_progress_and_llm_as("init", repo_root, &mut sink, Some(&mut llm_service))
+            .unwrap();
+    assert_eq!(init.state, "fresh");
+
+    let status = run_status(repo_root).unwrap();
+    assert_eq!(status.state, "fresh");
+    assert!(status.dirty_sources.is_empty());
+    assert!(status.dirty_pages.is_empty());
 }
 
 fn create_workspace_repo(repo_root: &Path) {

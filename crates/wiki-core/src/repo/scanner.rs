@@ -257,14 +257,16 @@ pub fn scan_repo_with_boundary_and_llm(
         .iter()
         .map(|file| file.path.clone())
         .collect::<Vec<_>>();
+    // `config_files / entry_points` 会进入 status/update 的结构漂移判断，
+    // 这里必须坚持 deterministic 规则，不能被 LLM purpose 覆盖污染。
     let config_files = files
         .iter()
-        .filter(|file| file.is_config_like())
+        .filter(|file| is_structural_config_file(&file.path, &file.kind))
         .map(|file| file.path.clone())
         .collect::<Vec<_>>();
     let entry_points = files
         .iter()
-        .filter(|file| file.is_entry_like() && !file.is_test_like())
+        .filter(|file| is_structural_entry_point(&file.path, &file.kind))
         .map(|file| file.path.clone())
         .collect::<Vec<_>>();
     let mut tech_hints = detect_tech_hints(&paths)
@@ -955,6 +957,49 @@ fn classify_file_purpose(path: &str, kind: &str) -> FilePurpose {
     }
 
     FilePurpose::Utility
+}
+
+fn is_structural_config_file(path: &str, kind: &str) -> bool {
+    matches!(classify_structural_purpose(path, kind), FilePurpose::Config)
+}
+
+fn is_structural_entry_point(path: &str, kind: &str) -> bool {
+    let purpose = classify_structural_purpose(path, kind);
+    !matches!(purpose, FilePurpose::Test)
+        && (matches!(purpose, FilePurpose::Entry | FilePurpose::Router)
+            || detect_tags(path, purpose)
+                .iter()
+                .any(|tag| tag == "entry-point"))
+}
+
+fn classify_structural_purpose(path: &str, kind: &str) -> FilePurpose {
+    if is_structural_config_path(path) {
+        return FilePurpose::Config;
+    }
+
+    classify_file_purpose(path, kind)
+}
+
+fn is_structural_config_path(path: &str) -> bool {
+    matches!(
+        Path::new(path).file_name().and_then(|name| name.to_str()),
+        Some(
+            ".gitignore"
+                | ".editorconfig"
+                | "Makefile"
+                | "go.mod"
+                | "go.sum"
+                | "Cargo.lock"
+                | "package-lock.json"
+                | "pnpm-lock.yaml"
+                | "yarn.lock"
+                | "bun.lockb"
+                | "docker-compose.yml"
+                | "docker-compose.yaml"
+                | "wiki.dev.yaml"
+                | "wiki.yaml"
+        )
+    )
 }
 
 /// 语言识别目前是轻量启发式。

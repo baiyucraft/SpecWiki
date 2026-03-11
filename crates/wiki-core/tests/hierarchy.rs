@@ -13,3 +13,5 @@ mod page_identity_stability;
 mod page_topology_integration;
 #[path = "hierarchy/planner_merge_strategy.rs"]
 mod planner_merge_strategy;
+#[path = "hierarchy/topic_page_planning.rs"]
+mod topic_page_planning;

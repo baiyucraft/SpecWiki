@@ -151,4 +151,6 @@ pnpm run test
 
 - [ ] 这个wiki是给agent用的 reference是不是应该更方便引用
 
+- [ ] 包的体积小一点
+
   

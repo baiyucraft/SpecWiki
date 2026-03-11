@@ -163,6 +163,8 @@ fn make_test_data() -> (ScanReport, ModuleTree, RepoContext, Vec<ModuleContext>)
         detected_processes: vec![],
         community_labels: vec![],
         cycle_warnings: vec![],
+        root_topics: vec![],
+        process_topics: vec![],
     };
 
     let module_contexts = vec![
@@ -176,6 +178,7 @@ fn make_test_data() -> (ScanReport, ModuleTree, RepoContext, Vec<ModuleContext>)
             graph_hotspots: vec![],
             communities: vec![],
             cycle_warnings: vec![],
+            capability_topics: vec![],
         },
         ModuleContext {
             module_id: small_id,
@@ -187,6 +190,7 @@ fn make_test_data() -> (ScanReport, ModuleTree, RepoContext, Vec<ModuleContext>)
             graph_hotspots: vec![],
             communities: vec![],
             cycle_warnings: vec![],
+            capability_topics: vec![],
         },
         ModuleContext {
             module_id: group_id,
@@ -198,6 +202,7 @@ fn make_test_data() -> (ScanReport, ModuleTree, RepoContext, Vec<ModuleContext>)
             graph_hotspots: vec![],
             communities: vec![],
             cycle_warnings: vec![],
+            capability_topics: vec![],
         },
         ModuleContext {
             module_id: child_a_id,
@@ -209,6 +214,7 @@ fn make_test_data() -> (ScanReport, ModuleTree, RepoContext, Vec<ModuleContext>)
             graph_hotspots: vec![],
             communities: vec![],
             cycle_warnings: vec![],
+            capability_topics: vec![],
         },
         ModuleContext {
             module_id: child_b_id,
@@ -220,6 +226,7 @@ fn make_test_data() -> (ScanReport, ModuleTree, RepoContext, Vec<ModuleContext>)
             graph_hotspots: vec![],
             communities: vec![],
             cycle_warnings: vec![],
+            capability_topics: vec![],
         },
     ];
 
