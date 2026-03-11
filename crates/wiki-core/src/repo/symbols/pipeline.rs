@@ -1,7 +1,7 @@
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -16,9 +16,7 @@ use super::models::{
     ParsedFileSymbols, ParsedSymbolsSnapshot, RawCallCapture, RawHeritageCapture, RawImportCapture,
     SymbolNode, SymbolParseDiagnostic, SymbolTable,
 };
-use super::registry::{
-    resolve_embedded_language, resolve_symbol_language, ResolvedSymbolLanguage,
-};
+use super::registry::{resolve_embedded_language, resolve_symbol_language, ResolvedSymbolLanguage};
 
 /// 单批解析预算。当前只用它约束顺序处理的分块边界。
 pub const CHUNK_BYTE_BUDGET: usize = 20 * 1024 * 1024;
@@ -93,7 +91,9 @@ where
     for chunk in chunk_parse_candidates(&candidates) {
         for parsed in parse_file_chunk(repo_root, &chunk) {
             processed += 1;
-            snapshot.diagnostics.extend(parsed.diagnostics.iter().cloned());
+            snapshot
+                .diagnostics
+                .extend(parsed.diagnostics.iter().cloned());
             snapshot.symbols.extend(parsed.symbols.iter().cloned());
             snapshot.files.insert(parsed.file_path.clone(), parsed);
             on_progress(processed, total);
@@ -122,12 +122,8 @@ fn collect_parse_candidates<'a>(
     scan_report: &'a ScanReport,
     target_paths: &[String],
 ) -> Vec<&'a ScannedFile> {
-    let target_set = (!target_paths.is_empty()).then(|| {
-        target_paths
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>()
-    });
+    let target_set =
+        (!target_paths.is_empty()).then(|| target_paths.iter().cloned().collect::<BTreeSet<_>>());
     let mut candidates = scan_report
         .files
         .iter()
@@ -178,7 +174,9 @@ fn parse_file_chunk(repo_root: &Path, files: &[&ScannedFile]) -> Vec<ParsedFileS
     }
 
     let next_index = AtomicUsize::new(0);
-    let results = Mutex::new(Vec::<(usize, ParsedFileSymbols)>::with_capacity(files.len()));
+    let results = Mutex::new(Vec::<(usize, ParsedFileSymbols)>::with_capacity(
+        files.len(),
+    ));
 
     thread::scope(|scope| {
         for _ in 0..worker_count {
@@ -391,7 +389,11 @@ fn build_wrapper_parse_units(source: &str) -> Vec<ParseUnit> {
                 .count();
             let requested_language = lang_regex
                 .captures(attrs)
-                .and_then(|match_| match_.name("lang").map(|lang| lang.as_str().to_ascii_lowercase()))
+                .and_then(|match_| {
+                    match_
+                        .name("lang")
+                        .map(|lang| lang.as_str().to_ascii_lowercase())
+                })
                 .unwrap_or_else(|| "javascript".to_string());
             let effective_language = match requested_language.as_str() {
                 "ts" | "typescript" | "tsx" => "typescript",
@@ -510,8 +512,9 @@ impl ParseWorkerContext {
 
 fn wrapper_script_regex() -> &'static Regex {
     static SCRIPT_REGEX: OnceLock<Regex> = OnceLock::new();
-    SCRIPT_REGEX
-        .get_or_init(|| Regex::new(r#"(?is)<script(?P<attrs>[^>]*)>(?P<body>.*?)</script>"#).unwrap())
+    SCRIPT_REGEX.get_or_init(|| {
+        Regex::new(r#"(?is)<script(?P<attrs>[^>]*)>(?P<body>.*?)</script>"#).unwrap()
+    })
 }
 
 fn wrapper_lang_regex() -> &'static Regex {
@@ -561,7 +564,11 @@ fn collect_raw_captures(
     query: &Query,
     line_offset: usize,
     symbols: &[SymbolNode],
-) -> (Vec<RawImportCapture>, Vec<RawCallCapture>, Vec<RawHeritageCapture>) {
+) -> (
+    Vec<RawImportCapture>,
+    Vec<RawCallCapture>,
+    Vec<RawHeritageCapture>,
+) {
     let mut imports = Vec::new();
     let mut calls = Vec::new();
     let mut heritage = Vec::new();
@@ -794,9 +801,7 @@ fn find_symbol_id_by_name_and_line(
 ) -> Option<String> {
     symbols
         .iter()
-        .find(|symbol| {
-            symbol.name == name && symbol.start_line <= line && line <= symbol.end_line
-        })
+        .find(|symbol| symbol.name == name && symbol.start_line <= line && line <= symbol.end_line)
         .map(|symbol| symbol.symbol_id.clone())
         .or_else(|| {
             symbols

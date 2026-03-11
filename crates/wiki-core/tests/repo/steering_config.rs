@@ -20,6 +20,10 @@ fn write_steering(repo: &TempDir, content: &str) {
     .unwrap();
 }
 
+fn write_dev_config(repo: &TempDir, content: &str) {
+    fs::write(repo.path().join("wiki.dev.yaml"), content).unwrap();
+}
+
 #[test]
 fn missing_file_returns_defaults() {
     let repo = make_repo();
@@ -31,6 +35,8 @@ fn missing_file_returns_defaults() {
     assert!(config.scan.include.is_empty());
     assert!(config.modules.promote.is_empty());
     assert!(config.modules.demote.is_empty());
+    assert!(config.llm.providers.is_empty());
+    assert_eq!(config.llm.parallel_requests, 3);
 }
 
 #[test]
@@ -179,6 +185,114 @@ fn default_config_is_sane() {
     assert!(config.modules.demote.is_empty());
     assert!(config.pages.priority.is_empty());
     assert!(config.pages.hints.is_empty());
+    assert!(config.llm.providers.is_empty());
+    assert_eq!(config.llm.parallel_requests, 3);
+}
+
+#[test]
+fn dev_config_overrides_shared_llm_provider_fields() {
+    let repo = make_repo();
+    write_steering(
+        &repo,
+        r#"
+llm:
+  enabled: false
+  model: "shared/shared-model"
+  max_calls: 9
+  parallel_requests: 2
+  allow_mermaid: false
+  providers:
+    shared:
+      api_base: "https://shared.example/v1"
+      timeout_seconds: 30
+      models:
+        shared-model:
+          model_id: "gpt-shared"
+"#,
+    );
+    write_dev_config(
+        &repo,
+        r#"
+llm:
+  enabled: true
+  model: "dev/dev-model"
+  parallel_requests: 5
+  providers:
+    dev:
+      api_base: "https://dev.example/v1/"
+      api_key_env: "DEV_PROVIDER_KEY"
+      timeout_seconds: 45
+      models:
+        dev-model:
+          model_id: "gpt-dev"
+"#,
+    );
+
+    let config = load_steering_config(repo.path());
+    let selected = config.llm.resolve_selected_model().unwrap();
+
+    assert!(config.llm.enabled);
+    assert_eq!(config.llm.model, "dev/dev-model");
+    assert_eq!(config.llm.max_calls, 9);
+    assert_eq!(config.llm.parallel_requests, 5);
+    assert!(!config.llm.allow_mermaid);
+    assert_eq!(selected.provider_name, "dev");
+    assert_eq!(selected.model_name, "dev-model");
+    assert_eq!(selected.provider.api_base, "https://dev.example/v1/");
+    assert_eq!(selected.provider.api_key_env, "DEV_PROVIDER_KEY");
+    assert_eq!(selected.provider.timeout_seconds, 45);
+    assert_eq!(
+        selected.model.resolved_model_id(selected.model_name),
+        "gpt-dev"
+    );
+}
+
+#[test]
+fn missing_dev_config_keeps_shared_llm_provider_fields() {
+    let repo = make_repo();
+    write_steering(
+        &repo,
+        r#"
+llm:
+  enabled: true
+  model: "shared/shared-model"
+  providers:
+    shared:
+      api_base: "https://shared.example/v1"
+      api_key: "shared-key"
+      models:
+        shared-model: {}
+"#,
+    );
+
+    let config = load_steering_config(repo.path());
+    let selected = config.llm.resolve_selected_model().unwrap();
+
+    assert!(config.llm.enabled);
+    assert_eq!(config.llm.model, "shared/shared-model");
+    assert_eq!(selected.provider.api_base, "https://shared.example/v1");
+    assert_eq!(selected.provider.api_key, "shared-key");
+    assert_eq!(
+        selected.model.resolved_model_id(selected.model_name),
+        "shared-model"
+    );
+}
+
+#[test]
+fn zero_parallel_requests_falls_back_to_default() {
+    let repo = make_repo();
+    write_steering(
+        &repo,
+        r#"
+llm:
+  enabled: true
+  parallel_requests: 0
+"#,
+    );
+
+    let config = load_steering_config(repo.path());
+
+    assert_eq!(config.llm.parallel_requests, 3);
 }
 
 fn sorted(mut values: Vec<String>) -> Vec<String> {

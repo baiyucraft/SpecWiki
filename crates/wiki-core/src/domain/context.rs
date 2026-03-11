@@ -41,12 +41,26 @@ pub struct ModuleContext {
 /// 到这一层以后，页面生成只需要关心“如何表达”，不用再重新做结构分析。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PageContext {
+    /// 当前页面的稳定 ID。
     pub page_id: String,
+    /// 当前页面类型，例如 `overview / module`。
     pub page_type: String,
+    /// 页面作用域标签。
     pub scope: String,
+    /// 页面直接依赖的源码 ID。
     pub source_ids: Vec<String>,
+    /// 页面直接映射到的模块 ID。
     pub module_ids: Vec<String>,
+    /// 页面直接依赖的关系 ID。
     pub relation_ids: Vec<String>,
+    /// 页面必须稳定落盘的事实输入。
     pub facts: Vec<String>,
+    /// 页面用来组织正文的补充说明输入。
     pub summary_inputs: Vec<String>,
+    /// 来自 steering 的页面提示。
+    #[serde(default)]
+    pub hints: Vec<String>,
+    /// 叶子优先增强阶段从子页汇总出的摘要。
+    #[serde(default)]
+    pub child_summaries: Vec<String>,
 }

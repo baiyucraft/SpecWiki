@@ -23,6 +23,25 @@ export type CoreProgressEvent = {
   total: number | null;
 };
 
+/** 长流程事件流里的 LLM 请求事件。 */
+export type CoreLlmRequest = {
+  request_id: string;
+  prompt_type: string;
+  prompt_version: string;
+  input_hash: string;
+  model?: string | null;
+  system: string;
+  instruction: string;
+  input: unknown;
+  response_schema: unknown;
+};
+
+/** 长流程事件流里的 `llm_request` 事件。 */
+export type CoreLlmRequestEvent = {
+  type: "llm_request";
+  request: CoreLlmRequest;
+};
+
 /** 长流程事件流里的成功终态事件。 */
 export type CoreResultEvent = {
   type: "result";
@@ -36,7 +55,11 @@ export type CoreErrorEvent = {
 };
 
 /** `wiki-core` 长流程允许输出的完整事件集合。 */
-export type CoreStreamEvent = CoreProgressEvent | CoreResultEvent | CoreErrorEvent;
+export type CoreStreamEvent =
+  | CoreProgressEvent
+  | CoreLlmRequestEvent
+  | CoreResultEvent
+  | CoreErrorEvent;
 
 function parseCoreResponse(value: unknown): CoreResponse {
   const parsed = value as Partial<CoreResponse>;
@@ -68,6 +91,7 @@ export function parseResult(stdout: string): CoreResponse {
 export function parseEventLine(line: string): CoreStreamEvent {
   const parsed = JSON.parse(line) as Partial<CoreStreamEvent> & {
     response?: unknown;
+    request?: unknown;
   };
 
   if (parsed.type === "progress") {
@@ -90,6 +114,39 @@ export function parseEventLine(line: string): CoreStreamEvent {
       elapsed_ms: parsed.elapsed_ms,
       processed: parsed.processed ?? null,
       total: parsed.total ?? null,
+    };
+  }
+
+  if (parsed.type === "llm_request") {
+    const request = parsed.request as Partial<CoreLlmRequest> | undefined;
+
+    if (
+      typeof request !== "object" ||
+      request === null ||
+      typeof request.request_id !== "string" ||
+      typeof request.prompt_type !== "string" ||
+      typeof request.prompt_version !== "string" ||
+      typeof request.input_hash !== "string" ||
+      typeof request.system !== "string" ||
+      typeof request.instruction !== "string"
+    ) {
+      throw new Error("invalid wiki-core llm_request event");
+    }
+
+    return {
+      type: "llm_request",
+      request: {
+        request_id: request.request_id,
+        prompt_type: request.prompt_type,
+        prompt_version: request.prompt_version,
+        input_hash: request.input_hash,
+        model:
+          typeof request.model === "string" || request.model == null ? request.model : null,
+        system: request.system,
+        instruction: request.instruction,
+        input: request.input,
+        response_schema: request.response_schema,
+      },
     };
   }
 

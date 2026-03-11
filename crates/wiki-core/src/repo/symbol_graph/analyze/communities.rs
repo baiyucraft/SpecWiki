@@ -140,12 +140,14 @@ fn label_propagation_groups(
                 .cloned()
                 .unwrap_or_else(|| node_id.clone());
             let current_weight = label_weights.get(&current_label).copied().unwrap_or(0.0);
-            let Some((best_label, best_weight)) = label_weights.into_iter().max_by(|left, right| {
-                left.1
-                    .partial_cmp(&right.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| right.0.cmp(&left.0))
-            }) else {
+            let Some((best_label, best_weight)) =
+                label_weights.into_iter().max_by(|left, right| {
+                    left.1
+                        .partial_cmp(&right.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| right.0.cmp(&left.0))
+                })
+            else {
                 continue;
             };
 

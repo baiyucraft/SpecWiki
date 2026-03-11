@@ -31,7 +31,14 @@ pub fn build_repo_context_with_graph(
             format!("仓库根路径：{}", report.root),
             format!("技术栈：{}", join_or_default(&report.tech_hints, "未识别")),
             format!("文件数量：{}", report.files.len()),
-            format!("模块数量：{}", module_tree.modules.len()),
+            format!(
+                "模块数量：{}",
+                module_tree
+                    .modules
+                    .iter()
+                    .filter(|module| module.parent_id.is_some())
+                    .count()
+            ),
         ],
         top_modules: top_modules(module_tree)
             .into_iter()
@@ -107,7 +114,11 @@ pub fn build_module_contexts_with_graph(
                 .into_iter()
                 .collect::<Vec<_>>();
             let key_sources = select_key_sources(report, module);
-            let module_root = module.root_paths.first().cloned().unwrap_or_else(|| ".".to_string());
+            let module_root = module
+                .root_paths
+                .first()
+                .cloned()
+                .unwrap_or_else(|| ".".to_string());
 
             ModuleContext {
                 module_id: module.id.clone(),
@@ -374,10 +385,32 @@ fn is_test_source_path(path: &str) -> bool {
 /// - 返回可直接交给渲染器使用的页面上下文。
 pub fn build_page_context(
     page: &PlannedPage,
+    report: &ScanReport,
+    module_tree: &ModuleTree,
+    repo_context: &RepoContext,
+    module_contexts: &[ModuleContext],
+) -> PageContext {
+    build_page_context_with_inputs(
+        page,
+        report,
+        module_tree,
+        repo_context,
+        module_contexts,
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+/// 构建带页面 hints 和 child summaries 的页面上下文。
+/// 这条路径服务迭代 9 的页面增强输入，但 deterministic 渲染仍然只消费稳定 facts。
+pub fn build_page_context_with_inputs(
+    page: &PlannedPage,
     _report: &ScanReport,
     module_tree: &ModuleTree,
     repo_context: &RepoContext,
     module_contexts: &[ModuleContext],
+    hints: Vec<String>,
+    child_summaries: Vec<String>,
 ) -> PageContext {
     let module_context_index = module_contexts
         .iter()
@@ -406,20 +439,23 @@ pub fn build_page_context(
             for tech in &repo_context.tech_stack {
                 facts.push(format!("技术栈：{tech}"));
             }
-            for hotspot in &repo_context.graph_hotspots {
+            for source in select_repo_core_sources(_report) {
+                summary_inputs.push(format!("核心源码：{source}"));
+            }
+            for hotspot in repo_context.graph_hotspots.iter().take(8) {
                 summary_inputs.push(format!("图热点：{hotspot}"));
             }
-            for process in &repo_context.detected_processes {
+            for process in repo_context.detected_processes.iter().take(6) {
                 summary_inputs.push(format!("流程：{process}"));
             }
-            for community in &repo_context.community_labels {
+            for community in repo_context.community_labels.iter().take(8) {
                 summary_inputs.push(format!("社区：{community}"));
             }
-            for warning in &repo_context.cycle_warnings {
+            for warning in repo_context.cycle_warnings.iter().take(6) {
                 summary_inputs.push(format!("循环：{warning}"));
             }
             // 入口与构建事实（供"入口与构建" section 消费）
-            for entry in &repo_context.key_entry_points {
+            for entry in select_display_paths(&repo_context.key_entry_points, 10) {
                 summary_inputs.push(format!("入口：{entry}"));
             }
             // 构建命令线索
@@ -429,19 +465,13 @@ pub fn build_page_context(
                     summary_inputs.push(format!("入口：构建工具 {name}"));
                 }
             }
-            summary_inputs.extend(
-                repo_context
-                    .key_entry_points
-                    .iter()
-                    .map(|entry| format!("入口：{entry}")),
-            );
         }
         "architecture" => {
             facts.extend(module_tree.architecture_hints.clone());
             facts.extend(render_module_tree_lines(
                 module_tree,
                 0,
-                &module_tree.root_modules,
+                &top_level_module_ids(module_tree),
             ));
             // 跨模块关系（供"跨模块关系" section 消费）
             for edge in &module_tree.cross_module_edges {
@@ -490,13 +520,13 @@ pub fn build_page_context(
                             summary_inputs
                                 .push(format!("依赖：← {}", module_name(module_tree, dep)));
                         }
-                        for hotspot in &context.graph_hotspots {
+                        for hotspot in context.graph_hotspots.iter().take(6) {
                             summary_inputs.push(format!("图热点：{hotspot}"));
                         }
-                        for community in &context.communities {
+                        for community in context.communities.iter().take(6) {
                             summary_inputs.push(format!("社区：{community}"));
                         }
-                        for warning in &context.cycle_warnings {
+                        for warning in context.cycle_warnings.iter().take(6) {
                             summary_inputs.push(format!("循环：{warning}"));
                         }
                     }
@@ -551,6 +581,8 @@ pub fn build_page_context(
     if summary_inputs.is_empty() {
         summary_inputs.push("由 codebuddy-wiki 自动生成。".to_string());
     }
+    facts = dedupe_lines(facts);
+    summary_inputs = dedupe_lines(summary_inputs);
 
     PageContext {
         page_id: page.id.clone(),
@@ -561,6 +593,8 @@ pub fn build_page_context(
         relation_ids: page.relation_ids.clone(),
         facts,
         summary_inputs,
+        hints,
+        child_summaries,
     }
 }
 
@@ -597,6 +631,15 @@ fn module_name(module_tree: &ModuleTree, module_id: &str) -> String {
         .unwrap_or_else(|| module_id.to_string())
 }
 
+fn top_level_module_ids(module_tree: &ModuleTree) -> Vec<String> {
+    module_tree
+        .root_modules
+        .iter()
+        .filter_map(|module_id| module_tree.module_by_id(module_id))
+        .flat_map(|module| module.child_ids.iter().cloned())
+        .collect()
+}
+
 /// 把模块树递归展开成可写入 Markdown 的缩进列表。
 ///
 /// # 参数
@@ -615,8 +658,7 @@ fn render_module_tree_lines(
 
     for module_id in module_ids {
         if let Some(module) = module_tree.module_by_id(module_id) {
-            let indent = "  ".repeat(depth);
-            lines.push(format!("{indent}- {}", module.name));
+            lines.push(format!("模块树：{depth}:{}", module.name));
             lines.extend(render_module_tree_lines(
                 module_tree,
                 depth + 1,
@@ -642,4 +684,91 @@ fn join_or_default(values: &[String], fallback: &str) -> String {
     } else {
         values.join("、")
     }
+}
+
+fn dedupe_lines(lines: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut deduped = Vec::new();
+
+    for line in lines {
+        let normalized = line.trim().to_string();
+        if normalized.is_empty() || !seen.insert(normalized.clone()) {
+            continue;
+        }
+        deduped.push(normalized);
+    }
+
+    deduped
+}
+
+fn select_display_paths(paths: &[String], limit: usize) -> Vec<String> {
+    let mut primary = Vec::new();
+    let mut secondary = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for path in paths {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+
+        let file_name = Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let is_primary = matches!(
+            file_name,
+            "main.rs"
+                | "main.go"
+                | "main.py"
+                | "main.ts"
+                | "main.js"
+                | "main.kt"
+                | "main.swift"
+                | "Program.cs"
+                | "Main.java"
+                | "__main__.py"
+                | "package.json"
+                | "Cargo.toml"
+                | "pyproject.toml"
+                | "go.mod"
+        );
+
+        if is_primary {
+            primary.push(path.clone());
+        } else {
+            secondary.push(path.clone());
+        }
+    }
+
+    primary.into_iter().chain(secondary).take(limit).collect()
+}
+
+fn select_repo_core_sources(report: &ScanReport) -> Vec<String> {
+    let mut candidates = report
+        .files
+        .iter()
+        .filter(|file| !file.path.contains('/'))
+        .filter(|file| file.is_substantive_source())
+        .map(|file| {
+            (
+                file.purpose.signal_weight(),
+                file.path.len(),
+                file.path.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+
+    candidates
+        .into_iter()
+        .map(|(_, _, path)| path)
+        .take(8)
+        .collect()
 }

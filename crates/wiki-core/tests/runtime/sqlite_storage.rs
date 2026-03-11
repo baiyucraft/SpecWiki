@@ -361,7 +361,9 @@ fn symbol_graph_roundtrip_persists_edges_communities_and_processes() {
 
     let members = sqlite_store::list_community_members(repo.path()).unwrap();
     assert_eq!(members.len(), 2);
-    assert!(members.iter().any(|member| member.symbol_id == "symbol-service"));
+    assert!(members
+        .iter()
+        .any(|member| member.symbol_id == "symbol-service"));
 
     let processes = sqlite_store::list_processes(repo.path()).unwrap();
     assert_eq!(processes.len(), 1);

@@ -39,7 +39,16 @@ pub fn detect_processes(
     let mut entry_candidates = indegree
         .keys()
         .filter_map(|symbol_id| symbols_by_id.get(symbol_id).copied())
-        .map(|symbol| (entry_score(symbol, indegree.get(&symbol.symbol_id).copied().unwrap_or(0), outgoing.get(&symbol.symbol_id).map(Vec::len).unwrap_or(0)), symbol))
+        .map(|symbol| {
+            (
+                entry_score(
+                    symbol,
+                    indegree.get(&symbol.symbol_id).copied().unwrap_or(0),
+                    outgoing.get(&symbol.symbol_id).map(Vec::len).unwrap_or(0),
+                ),
+                symbol,
+            )
+        })
         .filter(|(score, _)| *score > 0)
         .collect::<Vec<_>>();
     entry_candidates.sort_by(|left, right| {
@@ -86,11 +95,16 @@ pub fn detect_processes(
             entry_point_id: Some(entry_symbol.symbol_id.clone()),
             terminal_id: endpoint.clone(),
         });
-        steps.extend(trace.into_iter().enumerate().map(|(index, symbol_id)| ProcessStep {
-            process_id: process_id.clone(),
-            symbol_id,
-            step_order: index,
-        }));
+        steps.extend(
+            trace
+                .into_iter()
+                .enumerate()
+                .map(|(index, symbol_id)| ProcessStep {
+                    process_id: process_id.clone(),
+                    symbol_id,
+                    step_order: index,
+                }),
+        );
     }
 
     processes.sort_by(|left, right| left.process_id.cmp(&right.process_id));
@@ -160,7 +174,10 @@ fn entry_score(symbol: &SymbolNode, indegree: usize, outgoing_count: usize) -> u
     if matches!(symbol.label.as_str(), "function" | "method") {
         score += 2;
     }
-    if matches_name_pattern(&symbol.name, &["handle", "main", "run", "serve", "start", "sync"]) {
+    if matches_name_pattern(
+        &symbol.name,
+        &["handle", "main", "run", "serve", "start", "sync"],
+    ) {
         score += 3;
     }
     score

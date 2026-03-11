@@ -9,6 +9,8 @@ use rusqlite::{
     params, params_from_iter, types::Value, Connection, OpenFlags, OptionalExtension, ToSql,
     Transaction,
 };
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use crate::domain::metadata::DirtyState;
 use crate::domain::module_tree::ModuleNode;
@@ -71,6 +73,25 @@ pub struct GraphTraceEdgeHit {
     pub confidence: f64,
     /// resolve 阶段留下的原因文本。
     pub reason: String,
+}
+
+/// `LlmCacheEntry` 是 prompt 级缓存记录。
+#[derive(Debug, Clone)]
+pub struct LlmCacheEntry {
+    /// 归一化后的 prompt 输入哈希。
+    pub input_hash: String,
+    /// prompt 类型。
+    pub prompt_type: String,
+    /// prompt 版本。
+    pub prompt_version: String,
+    /// 结构化 JSON 响应文本。
+    pub response: String,
+    /// 实际使用的模型标识。
+    pub model: Option<String>,
+    /// 写入时间戳。
+    pub created_at: String,
+    /// TTL（秒）。
+    pub ttl_seconds: i64,
 }
 
 /// 返回 DB 文件路径。
@@ -275,9 +296,10 @@ fn init_runtime_tables(conn: &Connection) -> io::Result<()> {
         CREATE TABLE IF NOT EXISTS llm_cache (
             input_hash   TEXT PRIMARY KEY,
             prompt_type  TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
             response     TEXT NOT NULL,
             model        TEXT,
-            created_at   TEXT DEFAULT (datetime('now')),
+            created_at   TEXT NOT NULL,
             ttl_seconds  INTEGER DEFAULT 604800
         );
 
@@ -357,7 +379,9 @@ fn init_runtime_tables(conn: &Connection) -> io::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_symbols_label ON symbols(label);
         CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
         CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
-        CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type);",
+        CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type);
+        CREATE INDEX IF NOT EXISTS idx_llm_cache_lookup
+            ON llm_cache(prompt_type, prompt_version, model);",
     )
     .map_err(|e| io::Error::other(format!("runtime schema init: {e}")))?;
     Ok(())
@@ -670,10 +694,7 @@ fn insert_graph_analysis_rows_tx(
             ],
         )
         .map_err(|e| {
-            io::Error::other(format!(
-                "insert community {}: {e}",
-                community.community_id
-            ))
+            io::Error::other(format!("insert community {}: {e}", community.community_id))
         })?;
     }
 
@@ -1344,7 +1365,10 @@ fn list_symbols_in_conn(conn: &Connection) -> io::Result<Vec<SymbolNode>> {
 }
 
 /// 按文件路径集合读取 symbol rows，供 update 局部工作集组装使用。
-pub fn list_symbols_for_files(repo_root: &Path, file_paths: &[String]) -> io::Result<Vec<SymbolNode>> {
+pub fn list_symbols_for_files(
+    repo_root: &Path,
+    file_paths: &[String],
+) -> io::Result<Vec<SymbolNode>> {
     if file_paths.is_empty() || !db_exists(repo_root) {
         return Ok(Vec::new());
     }
@@ -1527,7 +1551,9 @@ fn list_adjacent_symbol_files_in_conn(
         .prepare(&sql)
         .map_err(|e| io::Error::other(format!("prepare list adjacent symbol files: {e}")))?;
     let rows = stmt
-        .query_map(rusqlite::params_from_iter(param_refs), |row| row.get::<_, String>(0))
+        .query_map(rusqlite::params_from_iter(param_refs), |row| {
+            row.get::<_, String>(0)
+        })
         .map_err(|e| io::Error::other(format!("query adjacent symbol files: {e}")))?;
 
     rows.collect::<Result<Vec<_>, _>>()
@@ -2144,4 +2170,117 @@ pub fn remove_page_all(conn: &Connection, page_id: &str) -> io::Result<()> {
     )
     .map_err(|e| io::Error::other(format!("remove page fts {page_id}: {e}")))?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// llm_cache CRUD
+// ---------------------------------------------------------------------------
+
+/// 写入 prompt 级 LLM 缓存。
+pub fn write_llm_cache(repo_root: &Path, entry: &LlmCacheEntry) -> io::Result<()> {
+    let conn = open_db(repo_root)?;
+    write_llm_cache_in_conn(&conn, entry)
+}
+
+fn write_llm_cache_in_conn(conn: &Connection, entry: &LlmCacheEntry) -> io::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO llm_cache
+         (input_hash, prompt_type, prompt_version, response, model, created_at, ttl_seconds)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            entry.input_hash,
+            entry.prompt_type,
+            entry.prompt_version,
+            entry.response,
+            entry.model,
+            entry.created_at,
+            entry.ttl_seconds
+        ],
+    )
+    .map_err(|e| io::Error::other(format!("write_llm_cache({}): {e}", entry.input_hash)))?;
+    Ok(())
+}
+
+/// 读取仍然有效的 prompt 级 LLM 缓存。
+pub fn read_llm_cache(
+    repo_root: &Path,
+    input_hash: &str,
+    prompt_type: &str,
+    prompt_version: &str,
+    model: Option<&str>,
+) -> io::Result<Option<LlmCacheEntry>> {
+    if !db_exists(repo_root) {
+        return Ok(None);
+    }
+
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(None),
+    };
+
+    read_llm_cache_in_conn(&conn, input_hash, prompt_type, prompt_version, model)
+}
+
+fn read_llm_cache_in_conn(
+    conn: &Connection,
+    input_hash: &str,
+    prompt_type: &str,
+    prompt_version: &str,
+    model: Option<&str>,
+) -> io::Result<Option<LlmCacheEntry>> {
+    if !table_exists(conn, "llm_cache")? {
+        return Ok(None);
+    }
+
+    let model = model.unwrap_or_default();
+    let entry = conn
+        .query_row(
+        "SELECT input_hash, prompt_type, prompt_version, response, model, created_at, ttl_seconds
+         FROM llm_cache
+         WHERE input_hash = ?1
+           AND prompt_type = ?2
+           AND prompt_version = ?3
+           AND (?4 = '' OR COALESCE(model, '') = ?4)",
+        params![input_hash, prompt_type, prompt_version, model],
+        |row| {
+            Ok(LlmCacheEntry {
+                input_hash: row.get(0)?,
+                prompt_type: row.get(1)?,
+                prompt_version: row.get(2)?,
+                response: row.get(3)?,
+                model: row.get(4)?,
+                created_at: row.get(5)?,
+                ttl_seconds: row.get(6)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| io::Error::other(format!("read_llm_cache({input_hash}): {e}")))?;
+
+    Ok(entry.filter(is_llm_cache_entry_fresh))
+}
+
+fn is_llm_cache_entry_fresh(entry: &LlmCacheEntry) -> bool {
+    if entry.ttl_seconds <= 0 {
+        return false;
+    }
+
+    let Some(created_at) = parse_llm_cache_timestamp(&entry.created_at) else {
+        return false;
+    };
+
+    let expires_at = created_at + time::Duration::seconds(entry.ttl_seconds);
+    expires_at >= OffsetDateTime::now_utc()
+}
+
+fn parse_llm_cache_timestamp(value: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(value, &Rfc3339).ok().or_else(|| {
+        let normalized = value.trim().replace(' ', "T");
+        let normalized = if normalized.ends_with('Z') {
+            normalized
+        } else {
+            format!("{normalized}Z")
+        };
+        OffsetDateTime::parse(&normalized, &Rfc3339).ok()
+    })
 }

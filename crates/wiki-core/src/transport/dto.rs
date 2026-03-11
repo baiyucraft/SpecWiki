@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::llm::{LlmBridgeConfig, LlmCompletion, LlmPromptRequest};
 use crate::workflows::progress::WorkflowProgressEvent;
 
 /// `CoreCommand` 是 Agent -> core 的最小命令协议。
 /// `streamProgress` 保留为协议字段，但长流程现在统一按事件流输出。
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CoreCommand {
     pub action: String,
     #[serde(rename = "repoRoot")]
@@ -13,6 +14,8 @@ pub struct CoreCommand {
     pub term: Option<String>,
     #[serde(rename = "streamProgress", default)]
     pub stream_progress: bool,
+    #[serde(rename = "llmBridge", default)]
+    pub llm_bridge: Option<LlmBridgeConfig>,
 }
 
 /// `CoreResponse` 是 core -> Agent 的统一响应协议。
@@ -60,6 +63,7 @@ impl CoreResponse {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CoreEvent {
     Progress(WorkflowProgressEvent),
+    LlmRequest { request: LlmPromptRequest },
     Result { response: CoreResponse },
     Error { response: CoreResponse },
 }
@@ -76,6 +80,11 @@ impl CoreEvent {
         Self::Progress(event)
     }
 
+    /// 构造 LLM 请求事件。
+    pub fn llm_request(request: LlmPromptRequest) -> Self {
+        Self::LlmRequest { request }
+    }
+
     /// 构造唯一终态事件。
     ///
     /// # 参数
@@ -90,4 +99,20 @@ impl CoreEvent {
             Self::Error { response }
         }
     }
+}
+
+/// `CoreSessionInput` 是 Agent -> core 的会话内事件。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CoreSessionInput {
+    LlmResponse {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        response: LlmCompletion,
+    },
+    LlmUnavailable {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        reason: String,
+    },
 }

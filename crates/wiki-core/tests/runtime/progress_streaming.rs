@@ -63,7 +63,10 @@ fn json_rpc_streams_init_progress_with_single_terminal_event() {
         .filter(|event| !matches!(event, CoreEvent::Progress(_)))
         .collect::<Vec<_>>();
 
-    assert!(!phases.is_empty(), "expected progress events, got {events:#?}");
+    assert!(
+        !phases.is_empty(),
+        "expected progress events, got {events:#?}"
+    );
     assert_eq!(terminals.len(), 1, "expected a single terminal event");
     assert!(matches!(events.last(), Some(CoreEvent::Result { .. })));
 
@@ -89,7 +92,9 @@ fn json_rpc_streams_init_progress_with_single_terminal_event() {
     .collect::<Vec<_>>();
 
     assert!(
-        first_occurrence.windows(2).all(|window| window[0] < window[1]),
+        first_occurrence
+            .windows(2)
+            .all(|window| window[0] < window[1]),
         "unexpected phase order: {phases:?}"
     );
 }
@@ -97,7 +102,11 @@ fn json_rpc_streams_init_progress_with_single_terminal_event() {
 #[test]
 fn json_rpc_streams_terminal_error_once_for_invalid_repo() {
     let mut output = Vec::new();
-    handle_json_stream(r#"{"action":"init","repoRoot":"E:/missing-repo"}"#, &mut output).unwrap();
+    handle_json_stream(
+        r#"{"action":"init","repoRoot":"E:/missing-repo"}"#,
+        &mut output,
+    )
+    .unwrap();
 
     let text = String::from_utf8(output).unwrap();
     let events = text
@@ -111,9 +120,15 @@ fn json_rpc_streams_terminal_error_once_for_invalid_repo() {
 
 #[test]
 fn should_stream_treats_long_running_actions_as_ndjson_by_default() {
-    assert!(should_stream(r#"{"action":"init","repoRoot":"tmp/test/demo"}"#));
-    assert!(should_stream(r#"{"action":"update","repoRoot":"tmp/test/demo"}"#));
-    assert!(should_stream(r#"{"action":"rebuild","repoRoot":"tmp/test/demo"}"#));
+    assert!(should_stream(
+        r#"{"action":"init","repoRoot":"tmp/test/demo"}"#
+    ));
+    assert!(should_stream(
+        r#"{"action":"update","repoRoot":"tmp/test/demo"}"#
+    ));
+    assert!(should_stream(
+        r#"{"action":"rebuild","repoRoot":"tmp/test/demo"}"#
+    ));
     assert!(!should_stream(
         r#"{"action":"query","repoRoot":"tmp/test/demo","term":"demo"}"#
     ));

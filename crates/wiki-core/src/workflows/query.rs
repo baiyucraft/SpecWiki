@@ -662,7 +662,11 @@ fn graph_expansion_seed_ids(
     candidates.sort_by(|left, right| {
         left.0
             .cmp(&right.0)
-            .then_with(|| left.1.partial_cmp(&right.1).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| {
+                left.1
+                    .partial_cmp(&right.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .then(left.2.cmp(&right.2))
             .then(left.3.cmp(&right.3))
     });
@@ -704,7 +708,8 @@ fn collect_graph_matches(
     let direct_matched_symbol_ids = symbol_matches.keys().cloned().collect::<BTreeSet<_>>();
     let graph_seed_symbol_ids = graph_expansion_seed_ids(needle, symbol_matches);
     let traced_call_edges =
-        sqlite_store::trace_call_edges(repo_root, &graph_seed_symbol_ids, 3, 48).unwrap_or_default();
+        sqlite_store::trace_call_edges(repo_root, &graph_seed_symbol_ids, 3, 48)
+            .unwrap_or_default();
     let mut expanded_symbol_ids = direct_matched_symbol_ids.clone();
 
     collect_graph_edge_matches(
@@ -1001,12 +1006,13 @@ fn collect_process_graph_matches(
         Ok(process_steps) => process_steps,
         Err(_) => return,
     };
-    let steps_by_process = process_steps
-        .iter()
-        .fold(BTreeMap::<String, Vec<_>>::new(), |mut acc, step| {
-            acc.entry(step.process_id.clone()).or_default().push(step);
-            acc
-        });
+    let steps_by_process =
+        process_steps
+            .iter()
+            .fold(BTreeMap::<String, Vec<_>>::new(), |mut acc, step| {
+                acc.entry(step.process_id.clone()).or_default().push(step);
+                acc
+            });
 
     for process in processes {
         let steps = steps_by_process
@@ -1065,7 +1071,9 @@ fn collect_process_graph_matches(
                 process_type: process.process_type.clone(),
                 ..ProcessMatchState::default()
             });
-        state.steps.extend(step_symbols.iter().map(|symbol| symbol.name.clone()));
+        state
+            .steps
+            .extend(step_symbols.iter().map(|symbol| symbol.name.clone()));
         state.matched_symbol_ids.extend(expanded_hits);
         state
             .reasons
@@ -1114,14 +1122,15 @@ fn collect_community_graph_matches(
         Ok(community_members) => community_members,
         Err(_) => return,
     };
-    let members_by_community = community_members
-        .iter()
-        .fold(BTreeMap::<String, Vec<String>>::new(), |mut acc, member| {
-            acc.entry(member.community_id.clone())
-                .or_default()
-                .push(member.symbol_id.clone());
-            acc
-        });
+    let members_by_community =
+        community_members
+            .iter()
+            .fold(BTreeMap::<String, Vec<String>>::new(), |mut acc, member| {
+                acc.entry(member.community_id.clone())
+                    .or_default()
+                    .push(member.symbol_id.clone());
+                acc
+            });
 
     for community in communities {
         let member_ids = members_by_community
@@ -1722,7 +1731,12 @@ fn finalize_page_matches(
                 provenance: match_state.provenance.iter().cloned().collect(),
                 summary: reasons.join("、"),
                 match_mode: match_state.match_mode.clone(),
-                context_pack: build_context_pack(page, state, module_index, matched_symbols_by_file),
+                context_pack: build_context_pack(
+                    page,
+                    state,
+                    module_index,
+                    matched_symbols_by_file,
+                ),
             })
         })
         .collect::<Vec<_>>();
@@ -1931,7 +1945,10 @@ fn build_symbols_by_file(symbol_matches: &[QuerySymbolMatch]) -> BTreeMap<String
         symbols_by_file
             .entry(symbol.file_path.clone())
             .or_default()
-            .push(format!("{} {} ({})", symbol.label, symbol.name, symbol.language));
+            .push(format!(
+                "{} {} ({})",
+                symbol.label, symbol.name, symbol.language
+            ));
     }
 
     for items in symbols_by_file.values_mut() {

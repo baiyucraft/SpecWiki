@@ -7,10 +7,10 @@ mod legacy_page_migration;
 mod managed_section_kernel;
 #[path = "runtime/metadata_roundtrip.rs"]
 mod metadata_roundtrip;
-#[path = "runtime/query_sync_rebuild.rs"]
-mod query_sync_rebuild;
 #[path = "runtime/progress_streaming.rs"]
 mod progress_streaming;
+#[path = "runtime/query_sync_rebuild.rs"]
+mod query_sync_rebuild;
 #[path = "runtime/section_template_integration.rs"]
 mod section_template_integration;
 #[path = "runtime/sqlite_lifecycle.rs"]

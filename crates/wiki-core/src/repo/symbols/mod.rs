@@ -7,12 +7,10 @@ mod queries;
 mod registry;
 
 pub use models::{
-    ParsedFileSymbols, ParsedSymbolsSnapshot, RawCallCapture, RawHeritageCapture,
-    RawImportCapture, SymbolNode, SymbolParseDiagnostic, SymbolTable,
+    ParsedFileSymbols, ParsedSymbolsSnapshot, RawCallCapture, RawHeritageCapture, RawImportCapture,
+    SymbolNode, SymbolParseDiagnostic, SymbolTable,
 };
-pub use pipeline::{
-    parse_symbols, parse_symbols_for_paths, CHUNK_BYTE_BUDGET, MAX_FILE_BYTES,
-};
+pub use pipeline::{parse_symbols, parse_symbols_for_paths, CHUNK_BYTE_BUDGET, MAX_FILE_BYTES};
 pub(crate) use pipeline::{
     parse_symbols_for_paths_with_progress, parse_symbols_with_progress, symbol_parse_file_count,
 };

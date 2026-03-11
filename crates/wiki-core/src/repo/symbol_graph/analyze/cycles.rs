@@ -111,11 +111,7 @@ struct TarjanState {
     components: Vec<Vec<String>>,
 }
 
-fn strong_connect(
-    node: &str,
-    adjacency: &BTreeMap<String, Vec<String>>,
-    state: &mut TarjanState,
-) {
+fn strong_connect(node: &str, adjacency: &BTreeMap<String, Vec<String>>, state: &mut TarjanState) {
     state.indices.insert(node.to_string(), state.index);
     state.lowlinks.insert(node.to_string(), state.index);
     state.index += 1;
@@ -173,7 +169,8 @@ fn condensed_topo_order(
         indegree.entry(node.clone()).or_default();
         if let Some(targets) = adjacency.get(node) {
             for target in targets {
-                if component.contains(target) && !break_pairs.contains(&(node.clone(), target.clone()))
+                if component.contains(target)
+                    && !break_pairs.contains(&(node.clone(), target.clone()))
                 {
                     local_adjacency
                         .entry(node.clone())

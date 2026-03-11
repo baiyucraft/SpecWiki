@@ -261,25 +261,26 @@ fn query_returns_graph_context_for_symbol_hits() {
         query
             .matched_symbol_edges
             .iter()
-            .any(|edge| edge.edge_type == "CALLS" && edge.provenance.iter().any(|item| item.starts_with("graph-direct:"))),
+            .any(|edge| edge.edge_type == "CALLS"
+                && edge
+                    .provenance
+                    .iter()
+                    .any(|item| item.starts_with("graph-direct:"))),
         "expected graph CALLS edges, got {:#?}",
         query.matched_symbol_edges
     );
     assert!(
-        query
-            .matched_symbol_edges
-            .iter()
-            .any(|edge| {
-                edge.hop_distance >= 2
-                    && edge
-                        .traversal_modes
-                        .iter()
-                        .any(|mode| mode == "call-chain-outbound")
-                    && edge
-                        .provenance
-                        .iter()
-                        .any(|item| item.starts_with("graph-cte:outbound:"))
-            }),
+        query.matched_symbol_edges.iter().any(|edge| {
+            edge.hop_distance >= 2
+                && edge
+                    .traversal_modes
+                    .iter()
+                    .any(|mode| mode == "call-chain-outbound")
+                && edge
+                    .provenance
+                    .iter()
+                    .any(|item| item.starts_with("graph-cte:outbound:"))
+        }),
         "expected multi-hop outbound call-chain expansion, got {:#?}",
         query.matched_symbol_edges
     );
@@ -312,31 +313,25 @@ fn query_expands_inbound_impact_range_for_terminal_symbol() {
 
     let query = run_query(repo_root, "finalizePayment").unwrap();
     assert!(
-        query
-            .matched_symbol_edges
-            .iter()
-            .any(|edge| {
-                edge.hop_distance >= 2
-                    && edge
-                        .traversal_modes
-                        .iter()
-                        .any(|mode| mode == "impact-inbound")
-                    && edge
-                        .provenance
-                        .iter()
-                        .any(|item| item.starts_with("graph-cte:inbound:"))
-            }),
+        query.matched_symbol_edges.iter().any(|edge| {
+            edge.hop_distance >= 2
+                && edge
+                    .traversal_modes
+                    .iter()
+                    .any(|mode| mode == "impact-inbound")
+                && edge
+                    .provenance
+                    .iter()
+                    .any(|item| item.starts_with("graph-cte:inbound:"))
+        }),
         "expected inbound impact expansion for finalizePayment, got {:#?}",
         query.matched_symbol_edges
     );
     assert!(
-        query
-            .matched_processes
-            .iter()
-            .any(|process| {
-                process.steps.iter().any(|step| step == "handleCheckout")
-                    && process.steps.iter().any(|step| step == "runPayment")
-            }),
+        query.matched_processes.iter().any(|process| {
+            process.steps.iter().any(|step| step == "handleCheckout")
+                && process.steps.iter().any(|step| step == "runPayment")
+        }),
         "expected inbound impact query to surface upstream process steps, got {:#?}",
         query.matched_processes
     );

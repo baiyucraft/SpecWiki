@@ -164,7 +164,7 @@ fn sync_detects_managed_drift() {
     // 修改 managed section 的正文（不删除 marker）
     let overview_path = repo_root.join(".wiki/项目概述.md");
     let content = fs::read_to_string(&overview_path).unwrap();
-    let modified = content.replace("自动生成的仓库概览", "我手工改了这段内容");
+    let modified = content.replace("## 简介\n\n", "## 简介\n\n我手工改了这段内容\n\n");
     fs::write(&overview_path, &modified).unwrap();
 
     let sync_result = run_sync(repo_root).unwrap();

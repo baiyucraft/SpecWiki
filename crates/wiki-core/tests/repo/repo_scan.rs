@@ -1,7 +1,47 @@
+use std::io;
 use std::path::PathBuf;
 
 use tempfile::tempdir;
-use wiki_core::repo::scanner::{scan_repo, FilePurpose};
+use wiki_core::llm::{LlmCompletion, LlmPromptRequest, LlmRuntime, LlmService};
+use wiki_core::repo::scanner::{scan_repo, scan_repo_with_boundary_and_llm, FilePurpose};
+
+#[derive(Default)]
+struct ScanBatchFilePurposeService {
+    calls: usize,
+}
+
+impl LlmService for ScanBatchFilePurposeService {
+    fn request(&mut self, request: &LlmPromptRequest) -> io::Result<LlmCompletion> {
+        self.calls += 1;
+        let items = request
+            .input
+            .get("items")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let output = serde_json::json!({
+            "items": items.into_iter().filter_map(|item| {
+                let path = item.get("path")?.as_str()?;
+                let purpose = if path.contains("middleware") {
+                    "实现 HTTP 请求处理链的中间件"
+                } else if path.contains("helper") {
+                    "提供字符串处理辅助函数"
+                } else {
+                    "提供通用工具函数"
+                };
+                Some(serde_json::json!({
+                    "path": path,
+                    "purpose": purpose,
+                }))
+            }).collect::<Vec<_>>()
+        });
+
+        Ok(LlmCompletion {
+            output,
+            model: Some("scan-batch-model".to_string()),
+        })
+    }
+}
 
 #[test]
 fn scan_repo_discovers_files_and_detected_stack() {
@@ -230,4 +270,85 @@ fn scan_repo_classifies_file_purpose_deterministically() {
         by_path.get("migrations/001_init.sql"),
         Some(&FilePurpose::Migration)
     );
+}
+
+#[test]
+fn scan_repo_batches_utility_file_purpose_candidates() {
+    let fixture = tempdir().unwrap();
+    let root = fixture.path();
+
+    std::fs::write(root.join("go.mod"), "module example.com/demo\n\ngo 1.23\n").unwrap();
+    std::fs::create_dir_all(root.join("src/middleware")).unwrap();
+    std::fs::create_dir_all(root.join("src/helper")).unwrap();
+    std::fs::write(
+        root.join("src/middleware/logger.go"),
+        "package middleware\nfunc Logger(next Handler) {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/middleware/auth.go"),
+        "package middleware\nfunc RequireAuth(next Handler) {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/helper/strings.go"),
+        "package helper\nfunc Join(parts []string) string {}\n",
+    )
+    .unwrap();
+
+    let config = wiki_core::domain::steering::LlmConfig {
+        enabled: true,
+        model: "bridge/mock-model".to_string(),
+        max_calls: 8,
+        parallel_requests: 3,
+        cache_ttl_seconds: 60 * 60,
+        allow_mermaid: true,
+        providers: std::collections::BTreeMap::new(),
+    };
+    let mut service = ScanBatchFilePurposeService::default();
+    let mut runtime = LlmRuntime::new(root, &config, Some(&mut service));
+    let report = scan_repo_with_boundary_and_llm(root, &[], &[], Some(&mut runtime)).unwrap();
+
+    let by_path = report
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.purpose))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    assert_eq!(service.calls, 1);
+    assert_eq!(
+        by_path.get("src/middleware/logger.go"),
+        Some(&FilePurpose::Middleware)
+    );
+    assert_eq!(
+        by_path.get("src/middleware/auth.go"),
+        Some(&FilePurpose::Middleware)
+    );
+    assert_eq!(
+        by_path.get("src/helper/strings.go"),
+        Some(&FilePurpose::Helper)
+    );
+}
+
+#[test]
+fn scan_repo_detects_go_stack_from_go_mod_and_source_files() {
+    let fixture = tempdir().unwrap();
+    let root = fixture.path();
+
+    std::fs::write(root.join("go.mod"), "module example.com/demo\n\ngo 1.23\n").unwrap();
+    std::fs::write(
+        root.join("main.go"),
+        concat!(
+            "package main\n\n",
+            "func main() {\n",
+            "  println(\"demo\")\n",
+            "}\n",
+        ),
+    )
+    .unwrap();
+
+    let report = scan_repo(root, &[]).unwrap();
+
+    assert!(report.tech_hints.iter().any(|topic| topic == "backend"));
+    assert!(report.tech_hints.iter().any(|topic| topic == "go"));
 }

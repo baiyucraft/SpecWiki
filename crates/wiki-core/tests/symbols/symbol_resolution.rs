@@ -129,12 +129,7 @@ fn resolve_imports_supports_swift_target_directories() {
     write_repo_file(
         repo_root,
         "Sources/App/main.swift",
-        concat!(
-            "import SharedCore\n",
-            "\n",
-            "public func run() {\n",
-            "}\n",
-        ),
+        concat!("import SharedCore\n", "\n", "public func run() {\n", "}\n",),
     );
     write_repo_file(
         repo_root,
@@ -341,7 +336,10 @@ fn update_removes_edges_for_deleted_source_files() {
     run_update(repo_root).unwrap();
 
     let edges = sqlite_store::list_edges(repo_root).unwrap();
-    assert!(edges.is_empty(), "unexpected edges after delete: {edges:#?}");
+    assert!(
+        edges.is_empty(),
+        "unexpected edges after delete: {edges:#?}"
+    );
     let symbols = sqlite_store::list_symbols(repo_root).unwrap();
     assert!(symbols.iter().any(|symbol| symbol.name == "settlePayment"));
 }

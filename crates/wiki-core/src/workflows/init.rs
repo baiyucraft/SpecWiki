@@ -10,16 +10,13 @@ use crate::domain::context::PageContext;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
 use crate::domain::state::{assemble_state, PageBuildResult};
 use crate::domain::steering::load_steering_config;
-use crate::generation::context::{
-    build_module_contexts_with_graph, build_repo_context_with_graph,
-};
+use crate::generation::context::{build_module_contexts_with_graph, build_repo_context_with_graph};
 use crate::generation::planner::plan_pages_with_graph;
+use crate::llm::{LlmRuntime, LlmService};
 use crate::repo::git::{current_branch, current_commit};
-use crate::repo::hierarchy::build_module_tree_with_graph;
-use crate::repo::scanner::scan_repo_with_boundary;
-use crate::repo::symbol_graph::{
-    analyze_symbol_graph, build_graph_summary, resolve_symbol_graph,
-};
+use crate::repo::hierarchy::build_module_tree_with_graph_and_llm;
+use crate::repo::scanner::scan_repo_with_boundary_and_llm;
+use crate::repo::symbol_graph::{analyze_symbol_graph, build_graph_summary, resolve_symbol_graph};
 use crate::storage::cache_store::{
     ensure_cache_dir, ensure_page_cache_dirs, write_module_tree_cache, write_page_context_cache,
     write_page_generation_cache, write_scan_cache, PageContextCacheEntry, PageGenerationCacheEntry,
@@ -27,7 +24,7 @@ use crate::storage::cache_store::{
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::state_store::write_state_with_symbol_graph;
 use crate::storage::wiki_fs::{remove_runtime, write_page};
-use crate::workflows::page_render::prepare_page_artifacts;
+use crate::workflows::page_render::prepare_page_artifacts_with_llm;
 use crate::workflows::progress::{NoopProgressSink, ProgressSink, WorkflowReporter};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -67,6 +64,25 @@ pub fn run_init_with_progress_as(
     repo_root: &Path,
     progress_sink: &mut dyn ProgressSink,
 ) -> io::Result<InitReport> {
+    run_init_with_progress_and_llm_as(action, repo_root, progress_sink, None)
+}
+
+/// 在保留旧进度接口的同时，允许 transport 注入可选 LLM 桥接。
+///
+/// # 参数
+/// - `action`：当前 workflow 的对外动作名。
+/// - `repo_root`：待生成 Wiki 的仓库根目录。
+/// - `progress_sink`：接收阶段进度的下游。
+/// - `_llm_service`：可选的 LLM 桥接服务；不可用时自动回退 deterministic。
+///
+/// # 返回
+/// - 成功时返回 init 报告。
+pub fn run_init_with_progress_and_llm_as(
+    action: &'static str,
+    repo_root: &Path,
+    progress_sink: &mut dyn ProgressSink,
+    _llm_service: Option<&mut dyn LlmService>,
+) -> io::Result<InitReport> {
     if !repo_root.exists() || !repo_root.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -76,24 +92,35 @@ pub fn run_init_with_progress_as(
 
     let mut reporter = WorkflowReporter::new(action, progress_sink);
 
-    remove_runtime(repo_root)?;
-
     // 按 deterministic pipeline 的顺序串起整条生成链。
     let steering = load_steering_config(repo_root);
+    remove_runtime(repo_root)?;
+    let mut llm_runtime = LlmRuntime::new(repo_root, &steering.llm, _llm_service);
     let (ignore_paths, include_paths) = steering.scan_boundary();
+    if llm_runtime.service_available() {
+        reporter.phase("llm_uncertainty_gate", "执行 LLM 不确定性判断");
+    }
     reporter.phase("scan", "扫描仓库源码");
-    let scan_report = scan_repo_with_boundary(repo_root, ignore_paths, include_paths)?;
+    let scan_report = scan_repo_with_boundary_and_llm(
+        repo_root,
+        ignore_paths,
+        include_paths,
+        Some(&mut llm_runtime),
+    )?;
     let symbol_total = crate::repo::symbols::symbol_parse_file_count(&scan_report, &[]);
     reporter.counted("parse_symbols", "解析源码符号", 0, symbol_total);
-    let symbol_snapshot =
-        crate::repo::symbols::parse_symbols_with_progress(repo_root, &scan_report, &mut |processed, total| {
+    let symbol_snapshot = crate::repo::symbols::parse_symbols_with_progress(
+        repo_root,
+        &scan_report,
+        &mut |processed, total| {
             reporter.counted(
                 "parse_symbols",
                 format!("解析源码符号 {processed}/{total}"),
                 processed,
                 total,
             );
-        })?;
+        },
+    )?;
     reporter.phase("resolve_symbol_graph", "解析符号关系");
     let resolved_graph = resolve_symbol_graph(repo_root, &scan_report, &symbol_snapshot)?;
     reporter.phase("analyze_symbol_graph", "分析符号图");
@@ -101,7 +128,8 @@ pub fn run_init_with_progress_as(
     let graph_summary =
         build_graph_summary(&scan_report, &symbol_snapshot, &resolved_graph, &analysis);
     reporter.phase("build_module_tree", "构建模块树");
-    let module_tree = build_module_tree_with_graph(&scan_report, &graph_summary);
+    let module_tree =
+        build_module_tree_with_graph_and_llm(&scan_report, &graph_summary, Some(&mut llm_runtime));
     reporter.phase("build_contexts", "构建页面上下文");
     let repo_context = build_repo_context_with_graph(&scan_report, &module_tree, &graph_summary);
     let module_contexts =
@@ -124,12 +152,27 @@ pub fn run_init_with_progress_as(
     let page_total = pages.len();
 
     reporter.counted("render_pages", "渲染页面", 0, page_total);
-    let prepared_pages = prepare_page_artifacts(
+    let llm_enrichment_enabled = llm_runtime.enrichment_enabled();
+    if llm_enrichment_enabled {
+        reporter.phase("llm_enrichment", "生成页面增强内容");
+    }
+    let mut llm_progress = |processed: usize, total: usize| {
+        reporter.counted(
+            "llm_enrichment",
+            format!("生成页面增强内容 {processed}/{total}"),
+            processed,
+            total,
+        );
+    };
+    let prepared_pages = prepare_page_artifacts_with_llm(
         &pages,
         &scan_report,
         &module_tree,
         &repo_context,
         &module_contexts,
+        &steering,
+        Some(&mut llm_runtime),
+        llm_enrichment_enabled.then_some(&mut llm_progress as &mut dyn FnMut(usize, usize)),
     );
 
     let mut page_results = Vec::new();
@@ -171,6 +214,7 @@ pub fn run_init_with_progress_as(
         page_results.push(PageBuildResult {
             page: artifact.page.clone(),
             context: artifact.page_context.clone(),
+            summary: artifact.page_summary.clone(),
             input_hash: artifact.input_hash,
             content_hash,
             source_paths: source_paths_for_page(&scan_report, &artifact.page_context),

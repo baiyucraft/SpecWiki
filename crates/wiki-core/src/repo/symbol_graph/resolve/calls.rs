@@ -34,7 +34,8 @@ pub fn resolve_calls(
                 continue;
             }
 
-            let Some(source_symbol) = capture_source_symbol(capture, &symbols_by_id, &symbols_by_file)
+            let Some(source_symbol) =
+                capture_source_symbol(capture, &symbols_by_id, &symbols_by_file)
             else {
                 diagnostics.push(call_diagnostic(
                     capture,
@@ -44,12 +45,8 @@ pub fn resolve_calls(
                 continue;
             };
 
-            let (targets, confidence, reason) = resolve_call_targets(
-                capture,
-                snapshot,
-                &symbols_by_id,
-                &imported_symbols,
-            );
+            let (targets, confidence, reason) =
+                resolve_call_targets(capture, snapshot, &symbols_by_id, &imported_symbols);
             if targets.is_empty() {
                 diagnostics.push(call_diagnostic(
                     capture,
@@ -64,7 +61,10 @@ pub fn resolve_calls(
                     "edge",
                     format!(
                         "CALLS:{}:{}:{}:{}",
-                        source_symbol.symbol_id, target.symbol_id, capture.line, capture.called_name
+                        source_symbol.symbol_id,
+                        target.symbol_id,
+                        capture.line,
+                        capture.called_name
                     ),
                 );
                 if seen.insert(edge_id.clone()) {
@@ -249,10 +249,16 @@ fn is_builtin_or_noise(capture: &RawCallCapture) -> bool {
     ];
     const NOISE_RECEIVERS: &[&str] = &["console", "logger", "log", "tracing"];
 
-    BUILTIN_NAMES.iter().any(|name| *name == capture.called_name)
+    BUILTIN_NAMES
+        .iter()
+        .any(|name| *name == capture.called_name)
         || capture
             .receiver_text
             .as_deref()
-            .map(|receiver| NOISE_RECEIVERS.iter().any(|candidate| *candidate == receiver))
+            .map(|receiver| {
+                NOISE_RECEIVERS
+                    .iter()
+                    .any(|candidate| *candidate == receiver)
+            })
             .unwrap_or(false)
 }

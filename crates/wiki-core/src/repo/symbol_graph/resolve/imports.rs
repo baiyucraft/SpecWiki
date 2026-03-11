@@ -32,7 +32,11 @@ impl SuffixIndex {
 
             for offset in 0..parts.len() {
                 let suffix = parts[offset..].join("/");
-                index.exact.entry(suffix.clone()).or_default().push(file_path.clone());
+                index
+                    .exact
+                    .entry(suffix.clone())
+                    .or_default()
+                    .push(file_path.clone());
                 index
                     .insensitive
                     .entry(suffix.to_ascii_lowercase())
@@ -166,7 +170,10 @@ pub fn build_import_resolution_context(
 
     Ok(ImportResolutionContext {
         all_source_paths: source_paths.iter().cloned().collect(),
-        normalized_file_list: source_paths.iter().map(|path| normalize_repo_path(path)).collect(),
+        normalized_file_list: source_paths
+            .iter()
+            .map(|path| normalize_repo_path(path))
+            .collect(),
         suffix_index: SuffixIndex::build(&source_paths),
         resolve_cache: RefCell::new(BTreeMap::new()),
         import_aliases: manifest_analysis.import_aliases,
@@ -216,8 +223,12 @@ pub fn resolve_imports(
 
     for parsed_file in snapshot.files.values() {
         for capture in &parsed_file.imports {
-            let source_symbols =
-                import_source_symbols(capture, &symbols_by_id, &symbols_by_file, &snapshot.symbol_table);
+            let source_symbols = import_source_symbols(
+                capture,
+                &symbols_by_id,
+                &symbols_by_file,
+                &snapshot.symbol_table,
+            );
             if source_symbols.is_empty() {
                 diagnostics.push(unresolved_import_diagnostic(
                     capture,
@@ -257,13 +268,19 @@ pub fn resolve_imports(
                     let reason = if capture.source_symbol_id.is_some() {
                         format!("resolved-import:{}:{}", capture.raw_path, target_file)
                     } else {
-                        format!("resolved-import:file-owner:{}:{}", capture.raw_path, target_file)
+                        format!(
+                            "resolved-import:file-owner:{}:{}",
+                            capture.raw_path, target_file
+                        )
                     };
                     let edge_id = stable_id(
                         "edge",
                         format!(
                             "IMPORTS:{}:{}:{}:{}",
-                            source_symbol.symbol_id, target_symbol.symbol_id, capture.line, capture.raw_path
+                            source_symbol.symbol_id,
+                            target_symbol.symbol_id,
+                            capture.line,
+                            capture.raw_path
                         ),
                     );
                     if seen.insert(edge_id.clone()) {
@@ -417,7 +434,10 @@ fn resolve_import_capture(
     if candidates.is_empty()
         && (capture.raw_path.starts_with("./") || capture.raw_path.starts_with("../"))
     {
-        candidates.push(resolve_relative_repo_path(&capture.file_path, &capture.raw_path));
+        candidates.push(resolve_relative_repo_path(
+            &capture.file_path,
+            &capture.raw_path,
+        ));
     }
 
     let mut resolved = Vec::new();
@@ -516,7 +536,10 @@ fn rewrite_php_psr4_import(context: &ImportResolutionContext, raw_path: &str) ->
         })
 }
 
-fn rewrite_swift_target_import(context: &ImportResolutionContext, raw_path: &str) -> Option<String> {
+fn rewrite_swift_target_import(
+    context: &ImportResolutionContext,
+    raw_path: &str,
+) -> Option<String> {
     context.swift_targets.get(raw_path).cloned()
 }
 
@@ -647,7 +670,10 @@ fn load_tsconfig_paths(repo_root: &Path) -> io::Result<TsconfigPaths> {
         let Some(compiler_options) = compiler_options else {
             continue;
         };
-        let Some(paths) = compiler_options.get("paths").and_then(|value| value.as_object()) else {
+        let Some(paths) = compiler_options
+            .get("paths")
+            .and_then(|value| value.as_object())
+        else {
             continue;
         };
 
@@ -683,7 +709,10 @@ fn load_go_module_path(repo_root: &Path) -> io::Result<Option<String>> {
     let content = fs::read_to_string(path)?;
     Ok(content
         .lines()
-        .find_map(|line| line.strip_prefix("module ").map(|value| value.trim().to_string()))
+        .find_map(|line| {
+            line.strip_prefix("module ")
+                .map(|value| value.trim().to_string())
+        })
         .filter(|value| !value.is_empty()))
 }
 
@@ -736,7 +765,11 @@ fn load_swift_targets(repo_root: &Path) -> io::Result<BTreeMap<String, String>> 
                 let target_name = entry.file_name().to_string_lossy().to_string();
                 targets.insert(
                     target_name,
-                    normalize_repo_path(&PathBuf::from(source_dir).join(entry.file_name()).to_string_lossy()),
+                    normalize_repo_path(
+                        &PathBuf::from(source_dir)
+                            .join(entry.file_name())
+                            .to_string_lossy(),
+                    ),
                 );
             }
         }

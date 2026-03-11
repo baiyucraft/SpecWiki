@@ -3,6 +3,9 @@ use std::path::Path;
 
 use crate::domain::module_tree::{ModuleNode, ModuleTree, RelationEdge};
 use crate::domain::stable_id::stable_id;
+use crate::llm::{
+    DependencyAssistInput, LlmRuntime, ModuleKindAssistInput, TopLevelPromotionAssistInput,
+};
 use crate::repo::detectors::detect_tech_hints;
 use crate::repo::scanner::{DependencyHint, ScanReport, ScannedFile};
 use crate::repo::symbol_graph::GraphSummary;
@@ -29,10 +32,23 @@ pub fn build_module_tree(report: &ScanReport) -> ModuleTree {
 }
 
 /// 基于扫描结果和 graph summary 构建模块树。
-pub fn build_module_tree_with_graph(report: &ScanReport, graph_summary: &GraphSummary) -> ModuleTree {
+pub fn build_module_tree_with_graph(
+    report: &ScanReport,
+    graph_summary: &GraphSummary,
+) -> ModuleTree {
+    build_module_tree_with_graph_and_llm(report, graph_summary, None)
+}
+
+/// 基于扫描结果、graph summary 和可选 LLM runtime 构建模块树。
+pub fn build_module_tree_with_graph_and_llm(
+    report: &ScanReport,
+    graph_summary: &GraphSummary,
+    llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
+) -> ModuleTree {
     let root_name = repo_name_from_root(&report.root);
     let root_id = stable_id("module", &report.root);
-    let discovery = discover_module_roots(report);
+    let mut llm_runtime = llm_runtime;
+    let discovery = discover_module_roots(report, llm_runtime.as_deref_mut());
 
     let root_module = ModuleNode {
         id: root_id.clone(),
@@ -56,10 +72,12 @@ pub fn build_module_tree_with_graph(report: &ScanReport, graph_summary: &GraphSu
             &discovery.explicit_roots,
             &discovery.parent_by_root,
             &discovery.child_roots_by_parent,
+            llm_runtime.as_deref_mut(),
         ));
     }
 
-    let cross_module_edges = build_cross_module_edges(report, &modules, graph_summary);
+    let cross_module_edges =
+        build_cross_module_edges(report, &modules, graph_summary, llm_runtime.as_deref_mut());
     let architecture_hints =
         build_architecture_hints(report, &modules, &cross_module_edges, graph_summary);
 
@@ -73,8 +91,11 @@ pub fn build_module_tree_with_graph(report: &ScanReport, graph_summary: &GraphSu
 
 /// 发现所有显式模块根路径，并补齐递归层级需要的祖先节点。
 /// 这样像 `packages/domain/auth` 这类路径会自然形成 `packages -> packages/domain -> packages/domain/auth`。
-fn discover_module_roots(report: &ScanReport) -> ModuleRootDiscovery {
-    let explicit_roots = discover_explicit_module_roots(report);
+fn discover_module_roots(
+    report: &ScanReport,
+    llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
+) -> ModuleRootDiscovery {
+    let explicit_roots = discover_explicit_module_roots(report, llm_runtime);
     let mut all_roots = explicit_roots.clone();
 
     for root_path in &explicit_roots {
@@ -112,7 +133,10 @@ fn discover_module_roots(report: &ScanReport) -> ModuleRootDiscovery {
 }
 
 /// 显式模块根路径来自 workspace/member、固定边界和混合仓库的顶层目录识别。
-fn discover_explicit_module_roots(report: &ScanReport) -> BTreeSet<String> {
+fn discover_explicit_module_roots(
+    report: &ScanReport,
+    llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
+) -> BTreeSet<String> {
     let mut roots = BTreeSet::new();
 
     for workspace_root in &report.workspace_roots {
@@ -128,7 +152,7 @@ fn discover_explicit_module_roots(report: &ScanReport) -> BTreeSet<String> {
         }
     }
 
-    for candidate in discover_meaningful_top_level_roots(report) {
+    for candidate in discover_meaningful_top_level_roots(report, llm_runtime) {
         if candidate != "." {
             roots.insert(candidate);
         }
@@ -186,6 +210,7 @@ fn build_module_node(
     explicit_roots: &BTreeSet<String>,
     parent_by_root: &BTreeMap<String, String>,
     child_roots_by_parent: &BTreeMap<String, Vec<String>>,
+    llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
 ) -> ModuleNode {
     let module_name = module_name_from_root(root_path);
     let module_id = stable_id("module", root_path);
@@ -211,6 +236,7 @@ fn build_module_node(
             explicit_roots.contains(root_path),
             has_children,
             &source_files,
+            llm_runtime,
         ),
         root_paths: vec![root_path.to_string()],
         source_ids: source_files.iter().map(|file| file.id.clone()).collect(),
@@ -275,7 +301,10 @@ struct TopLevelRootStats {
 
 /// 兜底识别"看起来就是一个独立子系统"的顶层目录。
 /// 这一步专门解决混合仓库场景：目录没有出现在固定白名单里，但明明是独立模块。
-fn discover_meaningful_top_level_roots(report: &ScanReport) -> Vec<String> {
+fn discover_meaningful_top_level_roots(
+    report: &ScanReport,
+    mut llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
+) -> Vec<String> {
     let mut stats_by_root = BTreeMap::new();
 
     for file in &report.files {
@@ -300,7 +329,32 @@ fn discover_meaningful_top_level_roots(report: &ScanReport) -> Vec<String> {
             if stats.total_files <= 1 && !stats.has_subdirs {
                 return None;
             }
-            stats.should_promote().then_some(root_path)
+            if stats.should_promote() {
+                return Some(root_path);
+            }
+            if !stats.should_consult_llm() {
+                return None;
+            }
+
+            llm_runtime
+                .as_deref_mut()
+                .and_then(|llm_runtime| {
+                    llm_runtime
+                        .decide_top_level_promotion(&TopLevelPromotionAssistInput {
+                            root_path: root_path.clone(),
+                            score: stats.promotion_score(),
+                            total_files: stats.total_files,
+                            source_files: stats.source_files,
+                            config_files: stats.config_files,
+                            entry_points: stats.entry_points,
+                            has_subdirs: stats.has_subdirs,
+                            languages: stats.languages.iter().cloned().collect(),
+                            tags: stats.tags.iter().cloned().collect(),
+                        })
+                        .ok()
+                        .flatten()
+                })
+                .and_then(|promote| promote.then_some(root_path))
         })
         .collect()
 }
@@ -390,7 +444,7 @@ fn observe_top_level_file(stats: &mut TopLevelRootStats, file: &ScannedFile) {
 impl TopLevelRootStats {
     /// 模块晋升评分是刻意保守的。
     /// test-file 标记的文件在评分中被降权，避免测试产物主导模块提升。
-    fn should_promote(&self) -> bool {
+    fn promotion_score(&self) -> usize {
         let mut score = 0;
 
         if self.entry_points > 0 {
@@ -421,7 +475,15 @@ impl TopLevelRootStats {
             score += 1;
         }
 
-        score >= 3
+        score
+    }
+
+    fn should_promote(&self) -> bool {
+        self.promotion_score() >= 3
+    }
+
+    fn should_consult_llm(&self) -> bool {
+        self.promotion_score() == 2 && (self.has_subdirs || self.source_files > 0)
     }
 }
 
@@ -507,6 +569,7 @@ fn module_kind(
     is_explicit_root: bool,
     has_children: bool,
     source_files: &[&ScannedFile],
+    llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
 ) -> String {
     if root_path == "." {
         return "application".to_string();
@@ -612,15 +675,41 @@ fn module_kind(
         return "module".to_string();
     }
 
-    if report
+    let fallback = if report
         .workspace_roots
         .iter()
         .any(|workspace_root| workspace_root == root_path)
     {
-        return "workspace-member".to_string();
+        "workspace-member".to_string()
+    } else {
+        "module".to_string()
+    };
+
+    if let Some(llm_runtime) = llm_runtime {
+        if (tags.is_empty()
+            || tags.iter().any(|tag| tag == "frontend") && tags.iter().any(|tag| tag == "backend"))
+            || fallback == "workspace-member"
+        {
+            if let Some(classified) = llm_runtime
+                .classify_module_kind(&ModuleKindAssistInput {
+                    root_path: root_path.to_string(),
+                    tags: tags.to_vec(),
+                    explicit_root: is_explicit_root,
+                    has_children,
+                    has_main_entry,
+                    has_app_source,
+                    has_infra_files,
+                    workspace_member: fallback == "workspace-member",
+                })
+                .ok()
+                .flatten()
+            {
+                return classified;
+            }
+        }
     }
 
-    "module".to_string()
+    fallback
 }
 
 /// manifest 信号聚合，用于 module kind 多维判断。
@@ -777,11 +866,14 @@ fn build_cross_module_edges(
     report: &ScanReport,
     modules: &[ModuleNode],
     graph_summary: &GraphSummary,
+    mut llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
 ) -> Vec<RelationEdge> {
     let mut edges: BTreeMap<String, RelationEdge> = BTreeMap::new();
 
     for dependency in &report.dependency_hints {
-        if let Some(edge) = map_dependency_to_module_edge(dependency, modules) {
+        if let Some(edge) =
+            map_dependency_to_module_edge(dependency, modules, llm_runtime.as_deref_mut())
+        {
             match edges.get_mut(&edge.id) {
                 Some(existing) => {
                     for evidence in edge.evidence {
@@ -823,6 +915,7 @@ fn build_cross_module_edges(
 fn map_dependency_to_module_edge(
     dependency: &DependencyHint,
     modules: &[ModuleNode],
+    llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
 ) -> Option<RelationEdge> {
     let source_module = find_best_module_for_path(&dependency.from, modules)?;
     let target_module = find_best_module_for_path(&dependency.to, modules)?;
@@ -833,6 +926,27 @@ fn map_dependency_to_module_edge(
 
     if source_module.parent_id.is_none() || target_module.parent_id.is_none() {
         return None;
+    }
+
+    if dependency.confidence == "heuristic" {
+        let should_keep = llm_runtime
+            .and_then(|llm_runtime| {
+                llm_runtime
+                    .keep_dependency_edge(&DependencyAssistInput {
+                        relation_type: dependency.kind.clone(),
+                        source_path: dependency.from.clone(),
+                        target_path: dependency.to.clone(),
+                        source_module: source_module.name.clone(),
+                        target_module: target_module.name.clone(),
+                        confidence: dependency.confidence.clone(),
+                    })
+                    .ok()
+                    .flatten()
+            })
+            .unwrap_or(true);
+        if !should_keep {
+            return None;
+        }
     }
 
     let edge_seed = format!(
@@ -867,7 +981,10 @@ fn map_graph_roots_to_module_edge(
         source: source_module.id.clone(),
         target: target_module.id.clone(),
         relation_type: "GRAPH_DEPENDS_ON".to_string(),
-        evidence: vec![format!("graph:{source_root}"), format!("graph:{target_root}")],
+        evidence: vec![
+            format!("graph:{source_root}"),
+            format!("graph:{target_root}"),
+        ],
     })
 }
 
@@ -924,9 +1041,10 @@ fn build_architecture_hints(
     ));
 
     if !report.entry_points.is_empty() {
+        let display_entries = select_display_paths(&report.entry_points, 8);
         hints.push(format!(
             "关键入口：{}",
-            join_or_default(&report.entry_points, "无")
+            join_or_default(&display_entries, "无")
         ));
     }
 
@@ -978,4 +1096,46 @@ fn join_or_default(values: &[String], fallback: &str) -> String {
     } else {
         values.join("、")
     }
+}
+
+fn select_display_paths(paths: &[String], limit: usize) -> Vec<String> {
+    let mut primary = Vec::new();
+    let mut secondary = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for path in paths {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+
+        let file_name = Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let is_primary = matches!(
+            file_name,
+            "main.rs"
+                | "main.go"
+                | "main.py"
+                | "main.ts"
+                | "main.js"
+                | "main.kt"
+                | "main.swift"
+                | "Program.cs"
+                | "Main.java"
+                | "__main__.py"
+                | "package.json"
+                | "Cargo.toml"
+                | "pyproject.toml"
+                | "go.mod"
+        );
+
+        if is_primary {
+            primary.push(path.clone());
+        } else {
+            secondary.push(path.clone());
+        }
+    }
+
+    primary.into_iter().chain(secondary).take(limit).collect()
 }

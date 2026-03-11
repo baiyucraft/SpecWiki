@@ -122,10 +122,7 @@ pub fn build_graph_summary(
             module_call_hotspots
                 .entry(source_root)
                 .or_default()
-                .insert(format!(
-                    "{} -> {}",
-                    source_symbol.name, target_symbol.name
-                ));
+                .insert(format!("{} -> {}", source_symbol.name, target_symbol.name));
         }
     }
 
@@ -155,7 +152,11 @@ pub fn build_graph_summary(
         module_dependency_hints: to_sorted_map(module_dependency_hints),
         module_call_hotspots: to_sorted_map(module_call_hotspots),
         communities_by_module: to_sorted_map(communities_by_module),
-        detected_processes: summarize_processes(&analysis.processes, &analysis.process_steps, &symbols_by_id),
+        detected_processes: summarize_processes(
+            &analysis.processes,
+            &analysis.process_steps,
+            &symbols_by_id,
+        ),
         cycle_warnings: analysis
             .cycles
             .iter()

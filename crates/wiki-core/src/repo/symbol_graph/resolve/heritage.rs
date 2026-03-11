@@ -181,11 +181,7 @@ fn imported_symbols_by_file<'a>(
     imported
 }
 
-fn heritage_diagnostic(
-    capture: &RawHeritageCapture,
-    kind: &str,
-    message: &str,
-) -> GraphDiagnostic {
+fn heritage_diagnostic(capture: &RawHeritageCapture, kind: &str, message: &str) -> GraphDiagnostic {
     GraphDiagnostic {
         stage: "resolve_heritage".to_string(),
         kind: kind.to_string(),

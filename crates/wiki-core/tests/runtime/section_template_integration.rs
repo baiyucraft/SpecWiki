@@ -126,6 +126,12 @@ fn overview_page_contains_tech_stack_section() {
         rendered.content.contains("技术栈"),
         "rendered overview should contain 技术栈 section"
     );
+    assert!(
+        !rendered
+            .content
+            .contains("由 codebuddy-wiki 自动生成的仓库概览。"),
+        "overview fallback should be narrative instead of boilerplate"
+    );
 }
 
 #[test]
@@ -222,7 +228,10 @@ fn workflow_page_generated_from_detected_process_without_ci() {
     run_init(repo.path()).unwrap();
 
     let workflow_path = repo.path().join(".wiki/工作流与部署.md");
-    assert!(workflow_path.exists(), "expected workflow page to be generated");
+    assert!(
+        workflow_path.exists(),
+        "expected workflow page to be generated"
+    );
 
     let workflow = fs::read_to_string(workflow_path).unwrap();
     assert!(
@@ -266,6 +275,12 @@ fn module_page_has_expanded_sections() {
         assert!(
             rendered.content.contains("模块事实"),
             "module page should contain 模块事实"
+        );
+        assert!(
+            !rendered
+                .content
+                .contains("该页面围绕单个模块整理其边界、入口和依赖。"),
+            "module fallback should no longer use the old boilerplate"
         );
     }
 }

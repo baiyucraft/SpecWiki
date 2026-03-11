@@ -6,6 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::stable_id::stable_id;
+use crate::llm::{FilePurposeAssistInput, LlmRuntime};
 use crate::repo::detectors::detect_tech_hints;
 use crate::repo::fingerprint::fingerprint_bytes;
 use crate::repo::parsers::{
@@ -125,6 +126,12 @@ pub struct ScannedFile {
     pub tags: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct PendingFilePurposeCandidate {
+    index: usize,
+    input: FilePurposeAssistInput,
+}
+
 impl ScannedFile {
     /// 兼容旧粗分类的配置文件判断。
     pub fn is_config_like(&self) -> bool {
@@ -210,19 +217,37 @@ pub fn scan_repo_with_boundary(
     extra_ignore_paths: &[String],
     extra_include_paths: &[String],
 ) -> io::Result<ScanReport> {
+    scan_repo_with_boundary_and_llm(root, extra_ignore_paths, extra_include_paths, None)
+}
+
+/// 带可选 LLM Uncertainty Gate 的扫描入口。
+pub fn scan_repo_with_boundary_and_llm(
+    root: &Path,
+    extra_ignore_paths: &[String],
+    extra_include_paths: &[String],
+    llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
+) -> io::Result<ScanReport> {
     let mut files = Vec::new();
+    let mut pending_file_purposes = Vec::new();
     // 先做一次快速扫描，收集根目录下的 manifest 文件，
     // 用于判断仓库类型（如 Go 仓库）和 workspace 成员白名单。
     let root_manifests = discover_root_manifests(root);
     let is_go_repo = root_manifests.iter().any(|m| m == "go.mod");
+    let mut llm_runtime = llm_runtime;
     visit_dir(
         root,
         root,
         &mut files,
+        &mut pending_file_purposes,
         &root_manifests,
         is_go_repo,
         extra_ignore_paths,
         extra_include_paths,
+    )?;
+    apply_llm_file_purpose_overrides(
+        &mut files,
+        pending_file_purposes,
+        llm_runtime.as_deref_mut(),
     )?;
     let manifest_analysis = analyze_manifests(root, &files);
 
@@ -239,7 +264,7 @@ pub fn scan_repo_with_boundary(
         .collect::<Vec<_>>();
     let entry_points = files
         .iter()
-        .filter(|file| file.is_entry_like())
+        .filter(|file| file.is_entry_like() && !file.is_test_like())
         .map(|file| file.path.clone())
         .collect::<Vec<_>>();
     let mut tech_hints = detect_tech_hints(&paths)
@@ -292,6 +317,7 @@ fn visit_dir(
     root: &Path,
     dir: &Path,
     files: &mut Vec<ScannedFile>,
+    pending_file_purposes: &mut Vec<PendingFilePurposeCandidate>,
     root_manifests: &[String],
     is_go_repo: bool,
     extra_ignore_paths: &[String],
@@ -340,6 +366,7 @@ fn visit_dir(
                 root,
                 &path,
                 files,
+                pending_file_purposes,
                 root_manifests,
                 is_go_repo,
                 extra_ignore_paths,
@@ -361,8 +388,24 @@ fn visit_dir(
         }
         let bytes = fs::read(&path)?;
         let kind = classify_file_kind(&relative);
-        let purpose = classify_file_purpose(&relative, &kind);
         let language = detect_language(&relative);
+        let purpose = classify_file_purpose(&relative, &kind);
+        if purpose == FilePurpose::Utility {
+            let preview = build_file_purpose_preview(&bytes);
+            if !preview.is_empty() {
+                pending_file_purposes.push(PendingFilePurposeCandidate {
+                    index: files.len(),
+                    input: FilePurposeAssistInput {
+                        path: relative.clone(),
+                        kind: kind.clone(),
+                        language: language.clone(),
+                        file_size: bytes.len(),
+                        deterministic: "utility".to_string(),
+                        preview,
+                    },
+                });
+            }
+        }
         let tags = detect_tags(&relative, purpose);
 
         files.push(ScannedFile {
@@ -375,6 +418,48 @@ fn visit_dir(
             size: bytes.len(),
             tags,
         });
+    }
+
+    Ok(())
+}
+
+fn build_file_purpose_preview(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .take(24)
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn apply_llm_file_purpose_overrides(
+    files: &mut [ScannedFile],
+    pending_file_purposes: Vec<PendingFilePurposeCandidate>,
+    llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
+) -> io::Result<()> {
+    let Some(llm_runtime) = llm_runtime else {
+        return Ok(());
+    };
+    if pending_file_purposes.is_empty() {
+        return Ok(());
+    }
+
+    let inputs = pending_file_purposes
+        .iter()
+        .map(|candidate| candidate.input.clone())
+        .collect::<Vec<_>>();
+    let resolved = llm_runtime.classify_file_purposes(&inputs)?;
+
+    for (candidate, purpose) in pending_file_purposes.into_iter().zip(resolved.into_iter()) {
+        let Some(purpose) = purpose else {
+            continue;
+        };
+        let Some(file) = files.get_mut(candidate.index) else {
+            continue;
+        };
+        file.purpose = purpose;
+        file.tags = detect_tags(&file.path, purpose);
     }
 
     Ok(())

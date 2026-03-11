@@ -1,5 +1,9 @@
-use std::io::{self, Write};
+use std::cell::RefCell;
+use std::io::{self, BufRead, Write};
+use std::rc::Rc;
 
+use crate::llm::{LlmCompletion, LlmPromptRequest, LlmService};
+use crate::transport::dto::CoreSessionInput;
 use crate::transport::dto::{CoreCommand, CoreEvent, CoreResponse};
 use crate::workflows::progress::{ProgressSink, WorkflowProgressEvent};
 
@@ -31,13 +35,18 @@ pub fn handle_json(input: &str) -> Result<CoreResponse, serde_json::Error> {
     Ok(handle(command))
 }
 
+/// 判断已经解析好的命令是否属于长流程事件流。
+pub fn should_stream_command(command: &CoreCommand) -> bool {
+    matches!(command.action.as_str(), "init" | "update" | "rebuild")
+}
+
 /// 判断原始 JSON 输入是否属于长流程事件流。
 pub fn should_stream(input: &str) -> bool {
     let Ok(command) = serde_json::from_str::<CoreCommand>(input) else {
         return false;
     };
 
-    matches!(command.action.as_str(), "init" | "update" | "rebuild")
+    should_stream_command(&command)
 }
 
 /// 处理长流程 JSON IPC 请求，并把 stdout 编码成 NDJSON 事件流。
@@ -60,12 +69,40 @@ where
     sink.finish(response)
 }
 
+/// 在长流程下处理可选的双向 LLM 会话。
+pub fn handle_stream_session<R, W>(
+    command: CoreCommand,
+    reader: &mut R,
+    writer: &mut W,
+) -> io::Result<()>
+where
+    R: BufRead,
+    W: Write,
+{
+    let shared_writer = Rc::new(RefCell::new(writer));
+    let shared_error = Rc::new(RefCell::new(None::<String>));
+    let mut sink = NdjsonProgressSink::shared(shared_writer.clone(), shared_error.clone());
+    let response = if command
+        .llm_bridge
+        .as_ref()
+        .is_some_and(|bridge| bridge.supports_session())
+    {
+        let shared_reader = Rc::new(RefCell::new(reader));
+        let mut llm_service =
+            SessionLlmService::new(shared_reader, shared_writer.clone(), shared_error.clone());
+        crate::transport::cli::dispatch_with_runtime(command, &mut sink, Some(&mut llm_service))
+    } else {
+        crate::transport::cli::dispatch_with_runtime(command, &mut sink, None)
+    };
+    sink.finish(response)
+}
+
 struct NdjsonProgressSink<'a, W>
 where
     W: Write,
 {
-    writer: &'a mut W,
-    write_error: Option<io::Error>,
+    writer: Rc<RefCell<&'a mut W>>,
+    write_error: Rc<RefCell<Option<String>>>,
 }
 
 impl<'a, W> NdjsonProgressSink<'a, W>
@@ -74,23 +111,31 @@ where
 {
     fn new(writer: &'a mut W) -> Self {
         Self {
+            writer: Rc::new(RefCell::new(writer)),
+            write_error: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    fn shared(writer: Rc<RefCell<&'a mut W>>, write_error: Rc<RefCell<Option<String>>>) -> Self {
+        Self {
             writer,
-            write_error: None,
+            write_error,
         }
     }
 
     fn finish(mut self, response: CoreResponse) -> io::Result<()> {
-        if let Some(error) = self.write_error.take() {
-            return Err(error);
+        if let Some(error) = self.write_error.borrow_mut().take() {
+            return Err(io::Error::other(error));
         }
         self.write_event(CoreEvent::terminal(response))
     }
 
     fn write_event(&mut self, event: CoreEvent) -> io::Result<()> {
-        serde_json::to_writer(&mut self.writer, &event)
+        let mut writer = self.writer.borrow_mut();
+        serde_json::to_writer(&mut **writer, &event)
             .map_err(|error| io::Error::other(error.to_string()))?;
-        self.writer.write_all(b"\n")?;
-        self.writer.flush()
+        writer.write_all(b"\n")?;
+        writer.flush()
     }
 }
 
@@ -99,12 +144,94 @@ where
     W: Write,
 {
     fn report(&mut self, event: WorkflowProgressEvent) {
-        if self.write_error.is_some() {
+        if self.write_error.borrow().is_some() {
             return;
         }
 
         if let Err(error) = self.write_event(CoreEvent::progress(event)) {
-            self.write_error = Some(error);
+            *self.write_error.borrow_mut() = Some(error.to_string());
+        }
+    }
+}
+
+struct SessionLlmService<'a, R, W>
+where
+    R: BufRead,
+    W: Write,
+{
+    reader: Rc<RefCell<&'a mut R>>,
+    writer: Rc<RefCell<&'a mut W>>,
+    write_error: Rc<RefCell<Option<String>>>,
+}
+
+impl<'a, R, W> SessionLlmService<'a, R, W>
+where
+    R: BufRead,
+    W: Write,
+{
+    fn new(
+        reader: Rc<RefCell<&'a mut R>>,
+        writer: Rc<RefCell<&'a mut W>>,
+        write_error: Rc<RefCell<Option<String>>>,
+    ) -> Self {
+        Self {
+            reader,
+            writer,
+            write_error,
+        }
+    }
+
+    fn write_request(&mut self, request: LlmPromptRequest) -> io::Result<()> {
+        let event = CoreEvent::llm_request(request);
+        let mut writer = self.writer.borrow_mut();
+        serde_json::to_writer(&mut **writer, &event)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        writer.write_all(b"\n")?;
+        writer.flush()
+    }
+}
+
+impl<R, W> LlmService for SessionLlmService<'_, R, W>
+where
+    R: BufRead,
+    W: Write,
+{
+    fn request(&mut self, request: &LlmPromptRequest) -> io::Result<LlmCompletion> {
+        if let Some(error) = self.write_error.borrow().clone() {
+            return Err(io::Error::other(error));
+        }
+
+        self.write_request(request.clone())?;
+
+        loop {
+            let mut line = String::new();
+            let read = self.reader.borrow_mut().read_line(&mut line)?;
+            if read == 0 {
+                return Err(io::Error::other("llm session closed before response"));
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let event: CoreSessionInput = serde_json::from_str(trimmed)
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            match event {
+                CoreSessionInput::LlmResponse {
+                    request_id,
+                    response,
+                } if request_id == request.request_id => return Ok(response),
+                CoreSessionInput::LlmUnavailable { request_id, reason }
+                    if request_id == request.request_id =>
+                {
+                    return Err(io::Error::other(format!("llm unavailable: {reason}")))
+                }
+                CoreSessionInput::LlmResponse { .. } | CoreSessionInput::LlmUnavailable { .. } => {
+                    return Err(io::Error::other(
+                        "received out-of-order llm session event from agent",
+                    ))
+                }
+            }
         }
     }
 }

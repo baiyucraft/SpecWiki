@@ -6,7 +6,8 @@ use crate::generation::managed_sections::{
     render_page_with_markers, ManagedSectionBlock, PageBlock, PageMergePlan,
 };
 use crate::generation::planner::PlannedPage;
-use crate::generation::sections::{build_section_drafts, SectionDraft};
+use crate::generation::sections::{build_section_drafts_with_enrichment, SectionDraft};
+use crate::llm::PageEnrichmentResult;
 
 /// `RenderedPage` 是页面渲染层的标准输出。
 /// 它同时返回 section 草稿和最终 Markdown，供缓存和状态层复用。
@@ -40,7 +41,16 @@ pub fn render_page(page: &PlannedPage, context: &PageContext) -> String {
 /// # 返回
 /// - 返回同时包含 section 草稿和整页 Markdown 的渲染结果。
 pub fn render_page_bundle(page: &PlannedPage, context: &PageContext) -> RenderedPage {
-    let sections = build_section_drafts(page, context);
+    render_page_bundle_with_enrichment(page, context, None)
+}
+
+/// 生成带可选增强正文的页面级 section 草稿并组装成最终 Markdown。
+pub fn render_page_bundle_with_enrichment(
+    page: &PlannedPage,
+    context: &PageContext,
+    enrichment: Option<&PageEnrichmentResult>,
+) -> RenderedPage {
+    let sections = build_section_drafts_with_enrichment(page, context, enrichment);
     let content = assemble_page(page, &sections);
 
     RenderedPage { sections, content }

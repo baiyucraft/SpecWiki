@@ -1,13 +1,14 @@
 use std::path::PathBuf;
 
+use crate::llm::LlmService;
 use crate::transport::dto::{CoreCommand, CoreResponse};
-use crate::workflows::init::run_init_with_progress_as;
-use crate::workflows::query::run_query;
+use crate::workflows::init::run_init_with_progress_and_llm_as;
 use crate::workflows::progress::{NoopProgressSink, ProgressSink};
-use crate::workflows::rebuild::run_rebuild_with_progress_as;
+use crate::workflows::query::run_query;
+use crate::workflows::rebuild::run_rebuild_with_progress_and_llm_as;
 use crate::workflows::status::run_status;
 use crate::workflows::sync::run_sync;
-use crate::workflows::update::run_update_with_progress_as;
+use crate::workflows::update::run_update_with_progress_and_llm_as;
 
 /// 按 `action` 分发到具体 workflow。
 /// transport 层不直接做业务判断，它只负责把协议转成 workflow 调用。
@@ -19,13 +20,22 @@ use crate::workflows::update::run_update_with_progress_as;
 /// - 返回统一编码后的 `CoreResponse`。
 pub fn dispatch(command: CoreCommand) -> CoreResponse {
     let mut sink = NoopProgressSink;
-    dispatch_with_progress(command, &mut sink)
+    dispatch_with_runtime(command, &mut sink, None)
 }
 
 /// 在 transport 已经决定启用流式协议时，允许 workflow 上报阶段进度。
 pub fn dispatch_with_progress(
     command: CoreCommand,
     progress_sink: &mut dyn ProgressSink,
+) -> CoreResponse {
+    dispatch_with_runtime(command, progress_sink, None)
+}
+
+/// 在 transport 层同时具备进度上报和可选 LLM 桥接时的统一分发入口。
+pub fn dispatch_with_runtime(
+    command: CoreCommand,
+    progress_sink: &mut dyn ProgressSink,
+    mut llm_service: Option<&mut dyn LlmService>,
 ) -> CoreResponse {
     let repo_root = command
         .repo_root
@@ -34,17 +44,37 @@ pub fn dispatch_with_progress(
 
     // `query` 是唯一依赖 `term` 的动作；其他动作只需要 repo_root。
     match command.action.as_str() {
-        "init" => encode_result(run_init_with_progress_as("init", &repo_root, progress_sink).and_then(as_json)),
+        "init" => encode_result(
+            run_init_with_progress_and_llm_as(
+                "init",
+                &repo_root,
+                progress_sink,
+                llm_service.take(),
+            )
+            .and_then(as_json),
+        ),
         "status" => encode_result(run_status(&repo_root).and_then(as_json)),
         "update" => encode_result(
-            run_update_with_progress_as("update", &repo_root, progress_sink).and_then(as_json),
+            run_update_with_progress_and_llm_as(
+                "update",
+                &repo_root,
+                progress_sink,
+                llm_service.take(),
+            )
+            .and_then(as_json),
         ),
         "query" => encode_result(
             run_query(&repo_root, command.term.as_deref().unwrap_or("")).and_then(as_json),
         ),
         "sync" => encode_result(run_sync(&repo_root).and_then(as_json)),
         "rebuild" => encode_result(
-            run_rebuild_with_progress_as("rebuild", &repo_root, progress_sink).and_then(as_json),
+            run_rebuild_with_progress_and_llm_as(
+                "rebuild",
+                &repo_root,
+                progress_sink,
+                llm_service.take(),
+            )
+            .and_then(as_json),
         ),
         other => CoreResponse::error(format!("unsupported_action:{other}")),
     }

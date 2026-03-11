@@ -168,9 +168,7 @@ fn parse_symbols_keeps_raw_import_call_and_heritage_metadata() {
             && capture.source_text.contains("helper")
     }));
     assert!(parsed.imports.iter().any(|capture| {
-        capture.raw_path == "./base"
-            && capture.line == 2
-            && capture.source_symbol_id.is_none()
+        capture.raw_path == "./base" && capture.line == 2 && capture.source_symbol_id.is_none()
     }));
 
     let helper_call = parsed

@@ -130,6 +130,8 @@ pub struct PageBuildResult {
     pub page: PlannedPage,
     /// 当前页面的上下文输入。
     pub context: PageContext,
+    /// 当前页面对外暴露的摘要文本。
+    pub summary: String,
     /// 当前页面输入事实的稳定摘要。
     pub input_hash: String,
     /// 当前页面最终 Markdown 的内容摘要。
@@ -314,6 +316,7 @@ pub fn compute_page_input_hash(
         title: &'a str,
         relative_path: &'a str,
         page_type: &'a str,
+        generation_mode: &'a str,
         parent_id: &'a Option<String>,
         scope: &'a str,
         source_ids: &'a [String],
@@ -321,6 +324,8 @@ pub fn compute_page_input_hash(
         relation_ids: &'a [String],
         facts: &'a [String],
         summary_inputs: &'a [String],
+        hints: &'a [String],
+        child_summaries: &'a [String],
         source_fingerprints: Vec<(&'a str, &'a str)>,
     }
 
@@ -344,6 +349,7 @@ pub fn compute_page_input_hash(
         title: &page.title,
         relative_path: &page.relative_path,
         page_type: &page.page_type,
+        generation_mode: &page.generation_mode,
         parent_id: &page.parent_id,
         scope: &page.scope,
         source_ids: &context.source_ids,
@@ -351,6 +357,8 @@ pub fn compute_page_input_hash(
         relation_ids: &page.relation_ids,
         facts: &context.facts,
         summary_inputs: &context.summary_inputs,
+        hints: &context.hints,
+        child_summaries: &context.child_summaries,
         source_fingerprints,
     };
 
@@ -403,7 +411,7 @@ pub fn build_page_state(result: &PageBuildResult) -> WikiPageState {
         source_ids: result.context.source_ids.clone(),
         source_paths: result.source_paths.clone(),
         module_ids: result.page.module_ids.clone(),
-        summary: result.context.summary_inputs.join("；"),
+        summary: result.summary.clone(),
         provenance: result.provenance.clone(),
         section_anchors,
         sections,

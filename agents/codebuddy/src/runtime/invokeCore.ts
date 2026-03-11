@@ -8,6 +8,8 @@ import {
   parseEventLine,
   parseResult,
   responseFromTerminalEvent,
+  type CoreLlmRequest,
+  type CoreLlmRequestEvent,
   type CoreProgressEvent,
   type CoreResponse,
   type CoreResultEvent,
@@ -24,12 +26,28 @@ export type CoreCommand = {
   term?: string;
   /** 长流程协议提示；当前由 invokeCore 内部自动打开。 */
   streamProgress?: boolean;
+  /** Agent 若支持双向 LLM 桥接，会在这里显式协商协议。 */
+  llmBridge?: {
+    protocol: "ndjson_session_v1";
+  };
+};
+
+/** 单次 LLM 请求的宿主处理结果。 */
+export type LlmBridgeResponse = {
+  /** 宿主返回给 core 的结构化输出。 */
+  output: unknown;
+  /** 宿主实际使用的模型标识。 */
+  model?: string | null;
 };
 
 /** `invokeCore` 的附加运行选项。 */
 export type InvokeCoreOptions = {
   /** 宿主若需要进度感知，可在这里消费阶段事件。 */
   onProgress?: (event: CoreProgressEvent) => void;
+  /** 宿主若具备 LLM provider，可在这里桥接 `llm_request`。 */
+  llmBridge?: {
+    request: (request: CoreLlmRequest) => Promise<LlmBridgeResponse | null | undefined>;
+  };
 };
 
 const STREAMING_ACTIONS = new Set(["init", "update", "rebuild"]);
@@ -47,8 +65,15 @@ export async function invokeCore(
 ): Promise<CoreResponse> {
   const binary = resolveBinary();
   const streamOutput = STREAMING_ACTIONS.has(command.action);
+  const llmBridgeEnabled = streamOutput && Boolean(options.llmBridge);
   const payload = streamOutput
-    ? { ...command, streamProgress: true }
+    ? {
+        ...command,
+        streamProgress: true,
+        ...(llmBridgeEnabled
+          ? { llmBridge: { protocol: "ndjson_session_v1" as const } }
+          : {}),
+      }
     : command;
 
   return new Promise((resolve, reject) => {
@@ -62,6 +87,7 @@ export async function invokeCore(
     let stdoutBuffer = "";
     let terminal: CoreResponse | null = null;
     let streamError: Error | null = null;
+    let pendingEventWork = Promise.resolve();
 
     child.stdout.on("data", (chunk) => {
       const text = chunk.toString();
@@ -87,34 +113,36 @@ export async function invokeCore(
         drainEventBuffer(true);
       }
 
-      if (code !== 0) {
-        reject(new Error(stderr || `wiki-core exited with code ${code}`));
-        return;
-      }
-
-      if (streamError) {
-        reject(streamError);
-        return;
-      }
-
-      try {
-        if (streamOutput) {
-          if (!terminal) {
-            throw new Error("wiki-core stream ended without terminal event");
+      void pendingEventWork
+        .then(() => {
+          if (code !== 0) {
+            throw new Error(stderr || `wiki-core exited with code ${code}`);
           }
-          resolve(terminal);
-          return;
-        }
 
-        // 返回结果的协议校验单独放在 `parseResult`，让这里保持单一职责。
-        resolve(parseResult(stdout.trim()));
-      } catch (error) {
-        reject(error);
-      }
+          if (streamError) {
+            throw streamError;
+          }
+
+          if (streamOutput) {
+            if (!terminal) {
+              throw new Error("wiki-core stream ended without terminal event");
+            }
+            resolve(terminal);
+            return;
+          }
+
+          // 返回结果的协议校验单独放在 `parseResult`，让这里保持单一职责。
+          resolve(parseResult(stdout.trim()));
+        })
+        .catch((error) => {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        });
     });
 
-    child.stdin.write(JSON.stringify(payload));
-    child.stdin.end();
+    child.stdin.write(streamOutput ? `${JSON.stringify(payload)}\n` : JSON.stringify(payload));
+    if (!llmBridgeEnabled) {
+      child.stdin.end();
+    }
 
     function drainEventBuffer(flushRemainder: boolean) {
       while (true) {
@@ -128,16 +156,17 @@ export async function invokeCore(
         if (line.length === 0) {
           continue;
         }
-        consumeEventLine(line);
+        pendingEventWork = pendingEventWork.then(() => consumeEventLine(line));
       }
 
       if (flushRemainder && stdoutBuffer.trim().length > 0) {
-        consumeEventLine(stdoutBuffer.trim());
+        const finalLine = stdoutBuffer.trim();
+        pendingEventWork = pendingEventWork.then(() => consumeEventLine(finalLine));
         stdoutBuffer = "";
       }
     }
 
-    function consumeEventLine(line: string) {
+    async function consumeEventLine(line: string) {
       if (streamError) {
         return;
       }
@@ -152,6 +181,14 @@ export async function invokeCore(
           return;
         }
 
+        if (event.type === "llm_request") {
+          if (terminal) {
+            throw new Error("received llm_request after terminal event");
+          }
+          await handleLlmRequest(event);
+          return;
+        }
+
         if (terminal) {
           throw new Error("received multiple terminal events from wiki-core");
         }
@@ -160,6 +197,54 @@ export async function invokeCore(
       } catch (error) {
         streamError =
           error instanceof Error ? error : new Error(String(error));
+      }
+    }
+
+    async function handleLlmRequest(event: CoreLlmRequestEvent) {
+      const requestId = event.request.request_id;
+
+      if (!options.llmBridge) {
+        child.stdin.write(
+          `${JSON.stringify({
+            type: "llm_unavailable",
+            requestId,
+            reason: "agent_llm_bridge_unavailable",
+          })}\n`,
+        );
+        return;
+      }
+
+      try {
+        const response = await options.llmBridge.request(event.request);
+        if (!response) {
+          child.stdin.write(
+            `${JSON.stringify({
+              type: "llm_unavailable",
+              requestId,
+              reason: "agent_llm_bridge_returned_empty",
+            })}\n`,
+          );
+          return;
+        }
+
+        child.stdin.write(
+          `${JSON.stringify({
+            type: "llm_response",
+            requestId,
+            response: {
+              output: response.output,
+              model: response.model ?? null,
+            },
+          })}\n`,
+        );
+      } catch (error) {
+        child.stdin.write(
+          `${JSON.stringify({
+            type: "llm_unavailable",
+            requestId,
+            reason: error instanceof Error ? error.message : String(error),
+          })}\n`,
+        );
       }
     }
   });

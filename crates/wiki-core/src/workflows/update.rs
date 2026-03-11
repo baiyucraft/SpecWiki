@@ -12,24 +12,22 @@ use serde::Serialize;
 use crate::domain::change_set::{plan_runtime_changes, ChangePlan, FallbackMode};
 use crate::domain::metadata::DirtyState;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
+use crate::domain::state::{assemble_state_from_pages, build_page_state, PageBuildResult};
 use crate::domain::steering::load_steering_config;
-use crate::domain::state::{
-    assemble_state_from_pages, build_page_state, compute_page_input_hash, PageBuildResult,
-};
-use crate::generation::context::{
-    build_module_contexts_with_graph, build_page_context, build_repo_context_with_graph,
-};
+use crate::generation::context::{build_module_contexts_with_graph, build_repo_context_with_graph};
 use crate::generation::managed_sections::{merge_sections, parse_wiki_page, ManagedSectionBlock};
-use crate::generation::renderer::{assemble_page_from_merge, render_page_bundle};
+use crate::generation::renderer::assemble_page_from_merge;
 use crate::generation::sections::section_titles_for_page_type;
+use crate::llm::{LlmRuntime, LlmService};
 use crate::repo::fingerprint::fingerprint_bytes;
 use crate::repo::git::{current_branch, current_commit};
-use crate::repo::hierarchy::build_module_tree_with_graph;
-use crate::repo::symbol_graph::{
-    analyze_symbol_graph, build_graph_summary, resolve_symbol_graph, ResolvedGraphSnapshot,
-};
+use crate::repo::hierarchy::build_module_tree_with_graph_and_llm;
+use crate::repo::scanner::scan_repo_with_boundary_and_llm;
 use crate::repo::symbol_graph::resolve::{
     build_import_resolution_context, collect_import_target_files,
+};
+use crate::repo::symbol_graph::{
+    analyze_symbol_graph, build_graph_summary, resolve_symbol_graph, ResolvedGraphSnapshot,
 };
 use crate::repo::symbols::{ParsedSymbolsSnapshot, SymbolTable};
 use crate::storage::cache_store::{
@@ -41,11 +39,12 @@ use crate::storage::sqlite_store;
 use crate::storage::state_store::write_state_with_symbol_graph_for_files;
 use crate::storage::wiki_fs::{resolve_page_path, write_page};
 use crate::workflows::init::{
-    ancestor_ids_for_page, current_timestamp, page_provenance, run_init_with_progress_as,
+    ancestor_ids_for_page, current_timestamp, page_provenance, run_init_with_progress_and_llm_as,
     source_paths_for_page,
 };
+use crate::workflows::page_render::prepare_page_artifacts_with_llm;
 use crate::workflows::progress::{NoopProgressSink, ProgressSink, WorkflowReporter};
-use crate::workflows::rebuild::run_rebuild_with_progress_as;
+use crate::workflows::rebuild::run_rebuild_with_progress_and_llm_as;
 
 const LOCAL_UPDATE_MAX_FILES: usize = 32;
 
@@ -82,6 +81,25 @@ pub fn run_update_with_progress_as(
     repo_root: &Path,
     progress_sink: &mut dyn ProgressSink,
 ) -> io::Result<UpdateReport> {
+    run_update_with_progress_and_llm_as(action, repo_root, progress_sink, None)
+}
+
+/// 在保留旧进度接口的同时，允许 transport 注入可选 LLM 桥接。
+///
+/// # 参数
+/// - `action`：当前 workflow 的对外动作名。
+/// - `repo_root`：待更新 Wiki 的仓库根目录。
+/// - `progress_sink`：接收阶段进度的下游。
+/// - `llm_service`：可选的 LLM 桥接服务；不可用时自动回退 deterministic。
+///
+/// # 返回
+/// - 成功时返回 update 报告。
+pub fn run_update_with_progress_and_llm_as(
+    action: &'static str,
+    repo_root: &Path,
+    progress_sink: &mut dyn ProgressSink,
+    llm_service: Option<&mut dyn LlmService>,
+) -> io::Result<UpdateReport> {
     let started_at = Instant::now();
     WorkflowReporter::from_started_at(action, progress_sink, started_at)
         .phase("plan_changes", "规划增量变更");
@@ -92,7 +110,8 @@ pub fn run_update_with_progress_as(
         FallbackMode::Init => {
             WorkflowReporter::from_started_at(action, progress_sink, started_at)
                 .phase("plan_changes", "runtime 缺失，回退到 init");
-            let init = run_init_with_progress_as(action, repo_root, progress_sink)?;
+            let init =
+                run_init_with_progress_and_llm_as(action, repo_root, progress_sink, llm_service)?;
             return Ok(UpdateReport {
                 previous_state,
                 state: init.state,
@@ -102,7 +121,12 @@ pub fn run_update_with_progress_as(
         FallbackMode::Rebuild => {
             WorkflowReporter::from_started_at(action, progress_sink, started_at)
                 .phase("plan_changes", "runtime 缺失或损坏，回退到 rebuild");
-            let rebuild = run_rebuild_with_progress_as(action, repo_root, progress_sink)?;
+            let rebuild = run_rebuild_with_progress_and_llm_as(
+                action,
+                repo_root,
+                progress_sink,
+                llm_service,
+            )?;
             return Ok(UpdateReport {
                 previous_state,
                 state: rebuild.state,
@@ -122,7 +146,7 @@ pub fn run_update_with_progress_as(
 
     let mut reporter = WorkflowReporter::from_started_at(action, progress_sink, started_at);
     reporter.phase("plan_changes", "应用增量变更");
-    let updated_pages = apply_incremental_update(repo_root, &plan, &mut reporter)?;
+    let updated_pages = apply_incremental_update(repo_root, &plan, &mut reporter, llm_service)?;
 
     Ok(UpdateReport {
         previous_state,
@@ -135,17 +159,25 @@ fn apply_incremental_update(
     repo_root: &Path,
     plan: &ChangePlan,
     reporter: &mut WorkflowReporter<'_>,
+    llm_service: Option<&mut dyn LlmService>,
 ) -> io::Result<Vec<String>> {
     // 增量路径保持 symbols/edges 按文件刷新，但 graph-derived 视图整体重算。
     let previous_state = plan
         .previous_state
         .as_ref()
         .ok_or_else(|| io::Error::other("incremental update requires previous wiki state"))?;
-    let scan_report = plan
-        .scan_report
-        .as_ref()
-        .ok_or_else(|| io::Error::other("incremental update requires current scan report"))?;
     let steering = load_steering_config(repo_root);
+    let mut llm_runtime = LlmRuntime::new(repo_root, &steering.llm, llm_service);
+    if llm_runtime.service_available() {
+        reporter.phase("llm_uncertainty_gate", "执行 LLM 不确定性判断");
+    }
+    let (ignore_paths, include_paths) = steering.scan_boundary();
+    let scan_report = scan_repo_with_boundary_and_llm(
+        repo_root,
+        ignore_paths,
+        include_paths,
+        Some(&mut llm_runtime),
+    )?;
     let changed_symbol_paths = plan.affected_set.graph_refresh_sources.clone();
     let dirty_symbol_paths = plan
         .affected_set
@@ -157,14 +189,14 @@ fn apply_incremental_update(
         .into_iter()
         .collect::<Vec<_>>();
     let parse_total =
-        crate::repo::symbols::symbol_parse_file_count(scan_report, &changed_symbol_paths);
+        crate::repo::symbols::symbol_parse_file_count(&scan_report, &changed_symbol_paths);
     reporter.counted("parse_symbols", "解析受影响源码符号", 0, parse_total);
     let changed_symbol_snapshot = if changed_symbol_paths.is_empty() {
         ParsedSymbolsSnapshot::default()
     } else {
         crate::repo::symbols::parse_symbols_for_paths_with_progress(
             repo_root,
-            scan_report,
+            &scan_report,
             &changed_symbol_paths,
             &mut |processed, total| {
                 reporter.counted(
@@ -178,7 +210,7 @@ fn apply_incremental_update(
     };
     let working_set = load_incremental_working_set(
         repo_root,
-        scan_report,
+        &scan_report,
         plan,
         &changed_symbol_snapshot,
         &dirty_symbol_paths,
@@ -197,7 +229,7 @@ fn apply_incremental_update(
     let changed_resolved_graph = if changed_symbol_paths.is_empty() {
         ResolvedGraphSnapshot::default()
     } else {
-        resolve_symbol_graph(repo_root, scan_report, &resolution_snapshot)?
+        resolve_symbol_graph(repo_root, &scan_report, &resolution_snapshot)?
     };
     let full_resolved_graph = merge_resolved_graphs(
         &persisted_symbols,
@@ -207,17 +239,22 @@ fn apply_incremental_update(
     );
     reporter.phase("analyze_symbol_graph", "分析符号图");
     let analysis = analyze_symbol_graph(&full_symbol_snapshot, &full_resolved_graph);
-    let graph_summary =
-        build_graph_summary(scan_report, &full_symbol_snapshot, &full_resolved_graph, &analysis);
+    let graph_summary = build_graph_summary(
+        &scan_report,
+        &full_symbol_snapshot,
+        &full_resolved_graph,
+        &analysis,
+    );
     reporter.phase("build_module_tree", "构建模块树");
-    let module_tree = build_module_tree_with_graph(scan_report, &graph_summary);
+    let module_tree =
+        build_module_tree_with_graph_and_llm(&scan_report, &graph_summary, Some(&mut llm_runtime));
     reporter.phase("build_contexts", "构建页面上下文");
-    let repo_context = build_repo_context_with_graph(scan_report, &module_tree, &graph_summary);
+    let repo_context = build_repo_context_with_graph(&scan_report, &module_tree, &graph_summary);
     let module_contexts =
-        build_module_contexts_with_graph(scan_report, &module_tree, &graph_summary);
+        build_module_contexts_with_graph(&scan_report, &module_tree, &graph_summary);
     reporter.phase("plan_pages", "规划 Wiki 页面");
     let pages = crate::generation::planner::plan_pages_with_graph(
-        scan_report,
+        &scan_report,
         &module_tree,
         &repo_context,
         &module_contexts,
@@ -241,9 +278,31 @@ fn apply_incremental_update(
         .iter()
         .map(|page| (page.page_id.clone(), page))
         .collect::<BTreeMap<_, _>>();
-    let current_page_ids = pages
+    let llm_enrichment_enabled = llm_runtime.enrichment_enabled();
+    if llm_enrichment_enabled {
+        reporter.phase("llm_enrichment", "生成页面增强内容");
+    }
+    let mut llm_progress = |processed: usize, total: usize| {
+        reporter.counted(
+            "llm_enrichment",
+            format!("生成页面增强内容 {processed}/{total}"),
+            processed,
+            total,
+        );
+    };
+    let prepared_pages = prepare_page_artifacts_with_llm(
+        &pages,
+        &scan_report,
+        &module_tree,
+        &repo_context,
+        &module_contexts,
+        &steering,
+        Some(&mut llm_runtime),
+        llm_enrichment_enabled.then_some(&mut llm_progress as &mut dyn FnMut(usize, usize)),
+    );
+    let current_page_ids = prepared_pages
         .iter()
-        .map(|page| page.id.clone())
+        .map(|artifact| artifact.page.id.clone())
         .collect::<BTreeSet<_>>();
     let removed_page_ids = previous_pages
         .keys()
@@ -253,28 +312,21 @@ fn apply_incremental_update(
     let mut ancestor_ids_by_page = BTreeMap::new();
     let mut next_pages = Vec::new();
     let mut touched_paths = BTreeSet::new();
-    let page_total = pages.len();
+    let page_total = prepared_pages.len();
 
     reporter.counted("render_pages", "渲染页面", 0, page_total);
 
-    for (index, planned_page) in pages.iter().enumerate() {
+    for (index, artifact) in prepared_pages.iter().enumerate() {
+        let planned_page = &artifact.page;
         let ancestor_ids = ancestor_ids_for_page(planned_page, &ancestor_ids_by_page);
         ancestor_ids_by_page.insert(planned_page.id.clone(), ancestor_ids.clone());
         let current_page_path = format!(".wiki/{}", planned_page.relative_path);
-        let page_context = build_page_context(
-            planned_page,
-            scan_report,
-            &module_tree,
-            &repo_context,
-            &module_contexts,
-        );
-        let input_hash = compute_page_input_hash(planned_page, &page_context, scan_report);
         let previous_page = previous_pages.get(&planned_page.id).copied();
         let should_rerender = match previous_page {
             Some(previous_page)
                 if !explicit_affected_page_ids.contains(&planned_page.id)
                     && !explicit_removed_page_ids.contains(&planned_page.id)
-                    && previous_page.input_hash == input_hash
+                    && previous_page.input_hash == artifact.input_hash
                     && previous_page.path == current_page_path =>
             {
                 false
@@ -289,15 +341,13 @@ fn apply_incremental_update(
             }
         }
 
-        let rendered_page = render_page_bundle(planned_page, &page_context);
-
         // 尝试从磁盘读取旧页面，解析出 user sections 并 merge 回新页面
         let final_content = merge_user_sections_into_page(
             repo_root,
             previous_page.map(|page| page.path.as_str()),
             planned_page,
-            &rendered_page.sections,
-            &rendered_page.content,
+            &artifact.rendered_page.sections,
+            &artifact.rendered_page.content,
         );
 
         let content_hash = fingerprint_bytes(final_content.as_bytes());
@@ -316,29 +366,30 @@ fn apply_incremental_update(
             repo_root,
             &PageContextCacheEntry {
                 page_id: planned_page.id.clone(),
-                input_hash: input_hash.clone(),
-                context: page_context.clone(),
+                input_hash: artifact.input_hash.clone(),
+                context: artifact.page_context.clone(),
             },
         )?;
         write_page_generation_cache(
             repo_root,
             &PageGenerationCacheEntry {
                 page_id: planned_page.id.clone(),
-                input_hash: input_hash.clone(),
+                input_hash: artifact.input_hash.clone(),
                 content_hash: content_hash.clone(),
-                sections: rendered_page.sections.clone(),
+                sections: artifact.rendered_page.sections.clone(),
             },
         )?;
 
         next_pages.push(build_page_state(&PageBuildResult {
             page: planned_page.clone(),
-            context: page_context.clone(),
-            input_hash,
+            context: artifact.page_context.clone(),
+            summary: artifact.page_summary.clone(),
+            input_hash: artifact.input_hash.clone(),
             content_hash,
-            source_paths: source_paths_for_page(scan_report, &page_context),
+            source_paths: source_paths_for_page(&scan_report, &artifact.page_context),
             ancestor_ids,
-            provenance: page_provenance(planned_page, &page_context, scan_report),
-            sections: rendered_page.sections,
+            provenance: page_provenance(planned_page, &artifact.page_context, &scan_report),
+            sections: artifact.rendered_page.sections.clone(),
         }));
         touched_paths.insert(current_page_path);
         reporter.counted(
@@ -363,13 +414,13 @@ fn apply_incremental_update(
     let generated_at = current_timestamp();
     let next_state = assemble_state_from_pages(
         &next_pages,
-        scan_report,
+        &scan_report,
         &module_tree,
         &generated_at,
         DirtyState::fresh(),
     );
 
-    write_scan_cache(repo_root, scan_report)?;
+    write_scan_cache(repo_root, &scan_report)?;
     write_module_tree_cache(repo_root, &module_tree)?;
     reporter.phase("write_state", "写入运行时状态");
     write_state_with_symbol_graph_for_files(
@@ -540,10 +591,7 @@ fn load_incremental_working_set(
     dirty_symbol_paths: &[String],
 ) -> io::Result<IncrementalWorkingSet> {
     let total_symbol_files = sqlite_store::count_symbol_files(repo_root)?;
-    let mut workset_paths = dirty_symbol_paths
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
+    let mut workset_paths = dirty_symbol_paths.iter().cloned().collect::<BTreeSet<_>>();
     workset_paths.extend(plan.affected_set.graph_refresh_sources.iter().cloned());
 
     if !changed_symbol_snapshot.files.is_empty() {
@@ -557,7 +605,10 @@ fn load_incremental_working_set(
     }
 
     let seed_paths = workset_paths.iter().cloned().collect::<Vec<_>>();
-    workset_paths.extend(sqlite_store::list_adjacent_symbol_files(repo_root, &seed_paths)?);
+    workset_paths.extend(sqlite_store::list_adjacent_symbol_files(
+        repo_root,
+        &seed_paths,
+    )?);
 
     if total_symbol_files > 0
         && workset_paths.len() <= LOCAL_UPDATE_MAX_FILES
@@ -567,7 +618,10 @@ fn load_incremental_working_set(
         return Ok(IncrementalWorkingSet {
             persisted_symbols: sqlite_store::list_symbols_for_files(repo_root, &scoped_paths)?,
             persisted_edges: sqlite_store::list_edges_for_files(repo_root, &scoped_paths)?,
-            note: format!("使用局部 symbol/edge 工作集（{} 个文件）", scoped_paths.len()),
+            note: format!(
+                "使用局部 symbol/edge 工作集（{} 个文件）",
+                scoped_paths.len()
+            ),
         });
     }
 

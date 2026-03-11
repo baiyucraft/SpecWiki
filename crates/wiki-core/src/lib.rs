@@ -3,6 +3,7 @@
 
 pub mod domain;
 pub mod generation;
+pub mod llm;
 pub mod repo;
 pub mod storage;
 pub mod transport;

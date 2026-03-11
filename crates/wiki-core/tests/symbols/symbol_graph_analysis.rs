@@ -105,7 +105,9 @@ fn analyze_symbol_graph_detects_communities_processes_cycles_and_persists_them()
     run_init(repo_root).unwrap();
 
     assert!(
-        !sqlite_store::list_communities(repo_root).unwrap().is_empty(),
+        !sqlite_store::list_communities(repo_root)
+            .unwrap()
+            .is_empty(),
         "expected persisted communities"
     );
     assert!(
@@ -113,7 +115,9 @@ fn analyze_symbol_graph_detects_communities_processes_cycles_and_persists_them()
         "expected persisted processes"
     );
     assert!(
-        !sqlite_store::list_process_steps(repo_root).unwrap().is_empty(),
+        !sqlite_store::list_process_steps(repo_root)
+            .unwrap()
+            .is_empty(),
         "expected persisted process steps"
     );
 }

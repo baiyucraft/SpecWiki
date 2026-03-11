@@ -33,6 +33,8 @@ pub fn detect_tech_hints(paths: &[String]) -> Vec<String> {
             || normalized.ends_with("requirements.txt")
             || normalized.ends_with("app.py")
             || normalized.ends_with(".py")
+            || normalized.ends_with("go.mod")
+            || normalized.ends_with(".go")
             || normalized.ends_with(".rs")
             || normalized.ends_with(".java")
             || normalized.ends_with(".kt")
@@ -41,6 +43,10 @@ pub fn detect_tech_hints(paths: &[String]) -> Vec<String> {
             || normalized.ends_with(".swift")
         {
             topics.insert("backend".to_string());
+        }
+
+        if normalized.ends_with("go.mod") || normalized.ends_with(".go") {
+            topics.insert("go".to_string());
         }
 
         if normalized.ends_with("nginx.conf") || normalized.contains("/conf/") {
