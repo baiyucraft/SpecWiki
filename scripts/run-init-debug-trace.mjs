@@ -1,11 +1,13 @@
 /**
  * 运行单个仓库的 `init`，并把进度与 `wiki-core` debug trace 一起落盘。
- * 默认目标是 `tmp/test/storybook`，日志固定输出到当前 9.1 change 目录下。
+ * 默认目标是 `tmp/test/storybook`，日志默认输出到 `tmp/debug-init-traces/`。
  *
  * 用法：
  *   node scripts/run-init-debug-trace.mjs
  *   node scripts/run-init-debug-trace.mjs storybook
  *   node scripts/run-init-debug-trace.mjs --repo tmp/test/chi
+ *   node scripts/run-init-debug-trace.mjs storybook --change iteration-9-3-targeted-dossier-and-research-driven-pages
+ *   node scripts/run-init-debug-trace.mjs storybook --log-dir tmp/debug/storybook
  */
 
 import { spawn } from "node:child_process";
@@ -13,6 +15,7 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   statSync,
   unlinkSync,
@@ -27,14 +30,8 @@ const __filename = fileURLToPath(import.meta.url);
 const BINARY_NAME = process.platform === "win32" ? "wiki-core.exe" : "wiki-core";
 const DEBUG_BINARY = path.join(ROOT_DIR, "target", "debug", BINARY_NAME);
 const RELEASE_BINARY = path.join(ROOT_DIR, "target", "release", BINARY_NAME);
-const CHANGE_DIR = path.join(
-  ROOT_DIR,
-  "openspec",
-  "changes",
-  "iteration-9-1-topic-page-planner-and-evidence-layer",
-);
-const LOG_ROOT_DIR = path.join(CHANGE_DIR, "debug-init-traces");
 const ROOT_DEV_CONFIG_PATH = path.join(ROOT_DIR, "wiki.dev.yaml");
+const DEFAULT_LOG_ROOT_DIR = path.join(ROOT_DIR, "tmp", "debug-init-traces");
 
 function resolveBinaryPath() {
   if (!existsSync(DEBUG_BINARY) && !existsSync(RELEASE_BINARY)) {
@@ -55,6 +52,8 @@ function resolveBinaryPath() {
 function parseCliArgs(argv) {
   let project = "storybook";
   let repoRoot = null;
+  let changeName = null;
+  let logDir = null;
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -63,10 +62,20 @@ function parseCliArgs(argv) {
       index++;
       continue;
     }
+    if (arg === "--change") {
+      changeName = argv[index + 1];
+      index++;
+      continue;
+    }
+    if (arg === "--log-dir") {
+      logDir = argv[index + 1];
+      index++;
+      continue;
+    }
     project = arg;
   }
 
-  return { project, repoRoot };
+  return { project, repoRoot, changeName, logDir };
 }
 
 function resolveRepo(args) {
@@ -87,6 +96,47 @@ function resolveRepo(args) {
     repoRoot,
     commandRepoRoot: `tmp/test/${args.project}`,
   };
+}
+
+function resolveLogRootDir(args) {
+  if (args.logDir) {
+    return path.isAbsolute(args.logDir)
+      ? args.logDir
+      : path.join(ROOT_DIR, args.logDir);
+  }
+
+  if (args.changeName) {
+    const activeDir = path.join(ROOT_DIR, "openspec", "changes", args.changeName);
+    if (existsSync(activeDir)) {
+      return path.join(activeDir, "debug-init-traces");
+    }
+
+    const archiveRoot = path.join(ROOT_DIR, "openspec", "changes", "archive");
+    const archivedMatches = existsSync(archiveRoot)
+      ? readdirEntries(archiveRoot).filter((name) =>
+          name.endsWith(`-${args.changeName}`),
+        )
+      : [];
+    if (archivedMatches.length === 1) {
+      return path.join(archiveRoot, archivedMatches[0], "debug-init-traces");
+    }
+    if (archivedMatches.length > 1) {
+      throw new Error(
+        `change 对应多个 archive 目录，请改用 --log-dir 显式指定：${archivedMatches.join(", ")}`,
+      );
+    }
+    throw new Error(`找不到 change 目录：${args.changeName}`);
+  }
+
+  return DEFAULT_LOG_ROOT_DIR;
+}
+
+function readdirEntries(dir) {
+  return existsSync(dir)
+    ? readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    : [];
 }
 
 function formatElapsed(elapsedMs) {
@@ -183,9 +233,9 @@ async function withTemporaryDevConfig(repoRoot, callback) {
   }
 }
 
-async function runInitTrace(target) {
+async function runInitTrace(target, logRootDir) {
   const binary = resolveBinaryPath();
-  const runDir = path.join(LOG_ROOT_DIR, `${target.label}-${timestampSlug()}`);
+  const runDir = path.join(logRootDir, `${target.label}-${timestampSlug()}`);
   const sessionLogPath = path.join(runDir, "session.log");
   const ipcLogPath = path.join(runDir, "ipc.ndjson");
   const tracePath = path.join(runDir, "trace.ndjson");
@@ -348,11 +398,12 @@ async function runInitTrace(target) {
 async function main(argv) {
   const args = parseCliArgs(argv);
   const target = resolveRepo(args);
+  const logRootDir = resolveLogRootDir(args);
   if (!existsSync(target.repoRoot)) {
     throw new Error(`目标仓库不存在: ${target.repoRoot}`);
   }
 
-  const result = await runInitTrace(target);
+  const result = await runInitTrace(target, logRootDir);
   process.stdout.write(
     `${JSON.stringify(
       {
