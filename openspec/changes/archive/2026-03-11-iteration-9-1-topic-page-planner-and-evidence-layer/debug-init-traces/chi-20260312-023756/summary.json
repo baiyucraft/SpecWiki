@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "repoRoot": "E:\\project\\!byAI\\spec-wiki\\tmp\\test\\chi",
+  "runDir": "E:\\project\\!byAI\\spec-wiki\\openspec\\changes\\iteration-9-1-topic-page-planner-and-evidence-layer\\debug-init-traces\\chi-20260312-023756",
+  "sessionLogPath": "E:\\project\\!byAI\\spec-wiki\\openspec\\changes\\iteration-9-1-topic-page-planner-and-evidence-layer\\debug-init-traces\\chi-20260312-023756\\session.log",
+  "ipcLogPath": "E:\\project\\!byAI\\spec-wiki\\openspec\\changes\\iteration-9-1-topic-page-planner-and-evidence-layer\\debug-init-traces\\chi-20260312-023756\\ipc.ndjson",
+  "tracePath": "E:\\project\\!byAI\\spec-wiki\\openspec\\changes\\iteration-9-1-topic-page-planner-and-evidence-layer\\debug-init-traces\\chi-20260312-023756\\trace.ndjson",
+  "tracePrettyPath": "E:\\project\\!byAI\\spec-wiki\\openspec\\changes\\iteration-9-1-topic-page-planner-and-evidence-layer\\debug-init-traces\\chi-20260312-023756\\trace.pretty.log"
+}

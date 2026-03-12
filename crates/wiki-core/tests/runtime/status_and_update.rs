@@ -56,6 +56,7 @@ impl LlmService for StatusStabilityLlmService {
         Ok(LlmCompletion {
             output,
             model: Some("status-stability-model".to_string()),
+            usage: None,
         })
     }
 }

@@ -4,9 +4,9 @@
  * 做逐项目、逐文件的结构化对比，输出到当前 OpenSpec change 目录。
  *
  * 默认输出：
- * - openspec/changes/iteration-9-1-topic-page-planner-and-evidence-layer/reference-project-reports/*.md
- * - openspec/changes/iteration-9-1-topic-page-planner-and-evidence-layer/reference-project-reports/_summary.md
- * - openspec/changes/iteration-9-1-topic-page-planner-and-evidence-layer/reference-project-reports/_optimization-notes.md
+ * - openspec/changes/iteration-9-2-dossier-session-and-llm-budget-controls/reference-project-reports/*.md
+ * - openspec/changes/iteration-9-2-dossier-session-and-llm-budget-controls/reference-project-reports/_summary.md
+ * - openspec/changes/iteration-9-2-dossier-session-and-llm-budget-controls/reference-project-reports/_optimization-notes.md
  *
  * 用法：
  *   node scripts/collect-reference-project-reports.mjs
@@ -14,7 +14,7 @@
  *   node scripts/collect-reference-project-reports.mjs chi axum
  */
 
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -22,37 +22,33 @@ import {
   readFileSync,
   readdirSync,
   statSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
+  callCoreStreaming,
+  formatUsageSnapshot,
   ROOT_DIR,
   TEST_DIR,
   TMP_DIR,
   removePathWithRetry,
   resolveProjectJobs,
   runTaskPool,
+  withTemporaryDevConfig,
 } from "./testing/helpers.mjs";
-
-const BINARY_NAME = process.platform === "win32" ? "wiki-core.exe" : "wiki-core";
-const DEBUG_BINARY = path.join(ROOT_DIR, "target", "debug", BINARY_NAME);
-const RELEASE_BINARY = path.join(ROOT_DIR, "target", "release", BINARY_NAME);
-const BINARY_PATH = resolveBinaryPath();
 
 const REFERENCE_DIR = path.join(TMP_DIR, "reference");
 const CHANGE_DIR = path.join(
   ROOT_DIR,
   "openspec",
   "changes",
-  "iteration-9-1-topic-page-planner-and-evidence-layer",
+  "iteration-9-2-dossier-session-and-llm-budget-controls",
 );
 const REPORT_DIR = path.join(CHANGE_DIR, "reference-project-reports");
 const SUMMARY_PATH = path.join(REPORT_DIR, "_summary.md");
 const OPTIMIZATION_NOTES_PATH = path.join(REPORT_DIR, "_optimization-notes.md");
-const ROOT_DEV_CONFIG_PATH = path.join(ROOT_DIR, "wiki.dev.yaml");
 const REAL_REPO_MAP = {
   aLocal: "E:\\project\\aLocal",
 };
@@ -63,25 +59,6 @@ const ASCII_TOKEN_PATTERN = /[A-Za-z_][A-Za-z0-9_/-]*/g;
 const EVIDENCE_HEADING_PATTERN = /\*\*[^*\n]*(来源|证据)[^*\n]*\*\*/g;
 const TOPIC_KEYWORD_PATTERN =
   /(主题|机制|能力|专题|流程主题|routing|extract|extractor|response|middleware|handler|router)/i;
-
-function resolveBinaryPath() {
-  if (process.env.WIKI_CORE_BINARY) {
-    return process.env.WIKI_CORE_BINARY;
-  }
-  if (!existsSync(DEBUG_BINARY) && !existsSync(RELEASE_BINARY)) {
-    throw new Error(`缺少 wiki-core binary: ${DEBUG_BINARY} / ${RELEASE_BINARY}`);
-  }
-  if (!existsSync(DEBUG_BINARY)) {
-    return RELEASE_BINARY;
-  }
-  if (!existsSync(RELEASE_BINARY)) {
-    return DEBUG_BINARY;
-  }
-
-  const debugMtime = statSync(DEBUG_BINARY).mtimeMs;
-  const releaseMtime = statSync(RELEASE_BINARY).mtimeMs;
-  return releaseMtime >= debugMtime ? RELEASE_BINARY : DEBUG_BINARY;
-}
 
 function discoverProjects() {
   if (!existsSync(REFERENCE_DIR)) {
@@ -116,87 +93,11 @@ function listMarkdownFiles(dir) {
   return files.sort();
 }
 
-async function callCoreStreaming(command, options = {}) {
-  const timeoutMs = options.timeoutMs ?? 90 * 60 * 1000;
-
-  return await new Promise((resolve, reject) => {
-    const child = spawn(BINARY_PATH, ["--json"], {
-      cwd: ROOT_DIR,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    let stdoutBuffer = "";
-    let stderr = "";
-    let terminal = null;
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, timeoutMs);
-
-    child.stdout.on("data", (chunk) => {
-      stdoutBuffer += chunk.toString();
-      drainOutput(false);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      drainOutput(true);
-
-      if (timedOut) {
-        reject(new Error(`wiki-core init timed out after ${timeoutMs}ms`));
-        return;
-      }
-      if (code !== 0) {
-        reject(new Error(stderr || `wiki-core exited with code ${code}`));
-        return;
-      }
-      if (!terminal) {
-        reject(new Error("wiki-core 输出中缺少终态响应"));
-        return;
-      }
-      resolve(terminal);
-    });
-
-    child.stdin.end(`${JSON.stringify({ ...command, streamProgress: true })}\n`);
-
-    function drainOutput(flushRemainder) {
-      while (true) {
-        const newlineIndex = stdoutBuffer.indexOf("\n");
-        if (newlineIndex < 0) {
-          break;
-        }
-        const line = stdoutBuffer.slice(0, newlineIndex).trim();
-        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
-        if (!line) {
-          continue;
-        }
-        consumeEventLine(line);
-      }
-
-      if (flushRemainder && stdoutBuffer.trim()) {
-        consumeEventLine(stdoutBuffer.trim());
-        stdoutBuffer = "";
-      }
-    }
-
-    function consumeEventLine(line) {
-      const event = JSON.parse(line);
-      if (event.type === "progress") {
-        options.onProgress?.(event);
-        return;
-      }
-      if ((event.type === "result" || event.type === "error") && event.response) {
-        terminal = event.response;
-      }
-    }
-  });
+function resolveRunMode(runMode) {
+  if (runMode === "warm") {
+    return { label: "warm", cacheMode: "preserve" };
+  }
+  return { label: "cold", cacheMode: "clear" };
 }
 
 function formatElapsed(elapsedMs) {
@@ -206,16 +107,25 @@ function formatElapsed(elapsedMs) {
   return `${(elapsedMs / 1_000).toFixed(elapsedMs >= 10_000 ? 0 : 1)}s`;
 }
 
-function createProjectProgressPrinter(project) {
+function createProjectProgressPrinter(project, runLabel) {
   const countedPercents = new Map();
   const phaseMessages = new Map();
+  let lastUsageTotal = -1;
 
   return {
     info(message) {
-      console.log(`[${project}] ${message}`);
+      console.log(`[${project}/${runLabel}] ${message}`);
     },
     onProgress(event) {
-      const prefix = `[${project}] ${formatElapsed(event.elapsed_ms)} ${event.phase}`;
+      const prefix = `[${project}/${runLabel}] ${formatElapsed(event.elapsed_ms)} ${event.phase}`;
+      if (event.phase === "llm_usage" && event.usage) {
+        if (event.usage.total_tokens === lastUsageTotal) {
+          return;
+        }
+        lastUsageTotal = event.usage.total_tokens;
+        console.log(`${prefix} ${formatUsageSnapshot(event.usage)}`);
+        return;
+      }
       if (event.processed != null && event.total != null && event.total > 0) {
         const percent = Math.floor((event.processed / event.total) * 100);
         const lastPercent = countedPercents.get(event.phase) ?? -1;
@@ -488,64 +398,75 @@ function comparePagePair(referencePage, generatedPage, score) {
   };
 }
 
-async function withTemporaryDevConfig(repoRoot, callback) {
-  const targetPath = path.join(repoRoot, "wiki.dev.yaml");
-  const rootConfig = readFileSync(ROOT_DEV_CONFIG_PATH, "utf-8");
-  const previous = existsSync(targetPath) ? readFileSync(targetPath, "utf-8") : null;
-
-  writeFileSync(targetPath, rootConfig);
-  try {
-    return await callback();
-  } finally {
-    if (previous === null) {
-      unlinkSync(targetPath);
-    } else {
-      writeFileSync(targetPath, previous);
-    }
-  }
-}
-
-async function runInitForProject(project, progressPrinter) {
+async function runInitForProject(project, progressPrinter, runMode) {
+  const { cacheMode, label } = resolveRunMode(runMode);
   const projectRoot = path.join(TEST_DIR, project);
   const wikiDir = path.join(projectRoot, ".wiki");
-  removePathWithRetry(wikiDir);
-  progressPrinter.info("start init");
+  progressPrinter.info(`start init cache_mode=${cacheMode}`);
 
   if (REAL_REPO_MAP[project]) {
     const realRepoRoot = REAL_REPO_MAP[project];
     const realWikiDir = path.join(realRepoRoot, ".wiki");
-    removePathWithRetry(realWikiDir);
 
-    const result = await withTemporaryDevConfig(realRepoRoot, () =>
-      callCoreStreaming(
-        { action: "init", repoRoot: realRepoRoot },
-        { onProgress: (event) => progressPrinter.onProgress(event) },
-      ),
+    const result = await withTemporaryDevConfig(
+      realRepoRoot,
+      () =>
+        callCoreStreaming(
+          { action: "init", repoRoot: realRepoRoot },
+          { onProgress: (event) => progressPrinter.onProgress(event) },
+        ),
+      { cacheMode },
     );
-    if (!result.ok) {
-      throw new Error(result.error || `${project} init failed`);
+    if (!result.response.ok) {
+      throw new Error(result.response.error || `${project} init failed`);
     }
 
     removePathWithRetry(wikiDir);
     cpSync(realWikiDir, wikiDir, { recursive: true });
     removePathWithRetry(realWikiDir);
     progressPrinter.info("init done");
-    return;
+    return {
+      label,
+      cacheMode,
+      usage: summarizeUsage(result.progressEvents),
+    };
   }
 
-  const result = await withTemporaryDevConfig(projectRoot, () =>
-    callCoreStreaming(
-      { action: "init", repoRoot: `tmp/test/${project}` },
-      { onProgress: (event) => progressPrinter.onProgress(event) },
-    ),
+  const result = await withTemporaryDevConfig(
+    projectRoot,
+    () =>
+      callCoreStreaming(
+        { action: "init", repoRoot: `tmp/test/${project}` },
+        { onProgress: (event) => progressPrinter.onProgress(event) },
+      ),
+    { cacheMode },
   );
-  if (!result.ok) {
-    throw new Error(result.error || `${project} init failed`);
+  if (!result.response.ok) {
+    throw new Error(result.response.error || `${project} init failed`);
   }
   progressPrinter.info("init done");
+  return {
+    label,
+    cacheMode,
+    usage: summarizeUsage(result.progressEvents),
+  };
 }
 
-function collectProject(project) {
+function summarizeUsage(progressEvents) {
+  for (let index = progressEvents.length - 1; index >= 0; index--) {
+    const event = progressEvents[index];
+    if (event.phase === "llm_usage" && event.usage) {
+      return event.usage;
+    }
+  }
+  return null;
+}
+
+function promptCount(usage, promptType) {
+  return usage?.by_prompt_type?.find((bucket) => bucket.key === promptType)?.request_count ?? 0;
+}
+
+function collectProject(project, run) {
   const projectRoot = path.join(TEST_DIR, project);
   const generatedWikiDir = path.join(projectRoot, ".wiki");
   const referenceWikiDir = path.join(REFERENCE_DIR, project, "content");
@@ -596,6 +517,9 @@ function collectProject(project) {
 
   return {
     project,
+    runLabel: run.label,
+    cacheMode: run.cacheMode,
+    usage: run.usage,
     generatedPageCount: generatedPages.length,
     referencePageCount: referencePages.length,
     matchedCount,
@@ -719,12 +643,16 @@ function renderProjectReport(result) {
     `reference 页面：${result.referencePageCount} 页`,
     `命中对比：${result.matchedCount} 页`,
     `缺失对比：${result.missingCount} 页`,
+    `运行模式：${result.runLabel} (cache_mode=${result.cacheMode})`,
+    `LLM usage：requests=${result.usage?.request_count ?? 0}, total_tokens=${result.usage?.total_tokens ?? 0}, page_research=${promptCount(result.usage, "page_research")}, page_enrichment=${promptCount(result.usage, "page_enrichment")}`,
     "",
     "## 覆盖统计",
     "",
     `- 专题页覆盖：generated ${result.coverage.generatedTopicPages} / reference ${result.coverage.referenceTopicPages}`,
     `- evidence 落页：generated ${result.coverage.generatedEvidencePages} / reference ${result.coverage.referenceEvidencePages}`,
     `- 图表达覆盖：generated ${result.coverage.generatedDiagramPages} / reference ${result.coverage.referenceDiagramPages}`,
+    `- page research 请求：${promptCount(result.usage, "page_research")}`,
+    `- page enrichment 请求：${promptCount(result.usage, "page_enrichment")}`,
     `- 已规划专题类型：${result.coverage.topicLabels.slice(0, 6).map(([label, count]) => `${label}(${count})`).join("、") || "无"}`,
     `- 高频缺失专题：${result.coverage.missingTopicLabels.slice(0, 6).map(([label, count]) => `${label}(${count})`).join("、") || "无"}`,
     "",
@@ -824,7 +752,7 @@ function renderSummary(results) {
 
   for (const result of results) {
     lines.push(
-      `| ${result.project} | ${result.generatedPageCount} | ${result.referencePageCount} | ${result.matchedCount} | ${result.missingCount} | ${result.coverage.generatedTopicPages}/${result.coverage.referenceTopicPages} | ${result.coverage.generatedEvidencePages}/${result.coverage.referenceEvidencePages} | ${result.coverage.generatedDiagramPages}/${result.coverage.referenceDiagramPages} | ${result.extraGeneratedPages.length} |`,
+    `| ${result.project} | ${result.generatedPageCount} | ${result.referencePageCount} | ${result.matchedCount} | ${result.missingCount} | ${result.coverage.generatedTopicPages}/${result.coverage.referenceTopicPages} | ${result.coverage.generatedEvidencePages}/${result.coverage.referenceEvidencePages} | ${result.coverage.generatedDiagramPages}/${result.coverage.referenceDiagramPages} | ${result.extraGeneratedPages.length} |`,
     );
   }
 
@@ -896,6 +824,7 @@ function writeReports(results) {
 function parseCliArgs(argv) {
   const names = [];
   let jobs;
+  let runMode = "cold";
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -904,26 +833,27 @@ function parseCliArgs(argv) {
       index++;
       continue;
     }
+    if (arg === "--run-mode") {
+      runMode = argv[index + 1] || runMode;
+      index++;
+      continue;
+    }
     names.push(arg);
   }
 
-  return { jobs, names };
+  return { jobs, names, runMode };
 }
 
 async function main(argv) {
-  if (!existsSync(ROOT_DEV_CONFIG_PATH)) {
-    throw new Error(`缺少 root wiki.dev.yaml: ${ROOT_DEV_CONFIG_PATH}`);
-  }
-
   const projects = argv.names.length > 0 ? argv.names : discoverProjects();
   const jobs = argv.jobs == null ? 1 : resolveProjectJobs(argv.jobs, projects.length);
   const results = await runTaskPool(projects, jobs, async (project, index) => {
-    const progressPrinter = createProjectProgressPrinter(project);
+    const progressPrinter = createProjectProgressPrinter(project, argv.runMode);
     progressPrinter.info(`queue ${index + 1}/${projects.length}`);
-    await runInitForProject(project, progressPrinter);
-    const result = collectProject(project);
+    const run = await runInitForProject(project, progressPrinter, argv.runMode);
+    const result = collectProject(project, run);
     progressPrinter.info(
-      `report ready: generated=${result.generatedPageCount}, reference=${result.referencePageCount}, matched=${result.matchedCount}, missing=${result.missingCount}`,
+      `report ready: generated=${result.generatedPageCount}, reference=${result.referencePageCount}, matched=${result.matchedCount}, missing=${result.missingCount}, total_tokens=${run.usage?.total_tokens ?? 0}`,
     );
     return result;
   });
@@ -934,8 +864,10 @@ async function main(argv) {
     summaryPath: SUMMARY_PATH,
     optimizationNotesPath: OPTIMIZATION_NOTES_PATH,
     jobs,
+    runMode: argv.runMode,
     projects: results.map((result) => ({
       project: result.project,
+      runMode: result.runLabel,
       generatedPageCount: result.generatedPageCount,
       referencePageCount: result.referencePageCount,
       matchedCount: result.matchedCount,
@@ -943,6 +875,8 @@ async function main(argv) {
       generatedTopicPages: result.coverage.generatedTopicPages,
       generatedEvidencePages: result.coverage.generatedEvidencePages,
       generatedDiagramPages: result.coverage.generatedDiagramPages,
+      totalTokens: result.usage?.total_tokens ?? 0,
+      pageResearchRequests: promptCount(result.usage, "page_research"),
     })),
   }, null, 2)}\n`);
 }

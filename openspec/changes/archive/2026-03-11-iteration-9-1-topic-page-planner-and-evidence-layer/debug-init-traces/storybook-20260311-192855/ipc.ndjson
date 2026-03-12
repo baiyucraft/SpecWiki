@@ -1,0 +1,17 @@
+{"type":"progress","action":"init","phase":"llm_uncertainty_gate","message":"执行 LLM 不确定性判断","elapsed_ms":7,"processed":null,"total":null}
+{"type":"progress","action":"init","phase":"scan","message":"扫描仓库源码","elapsed_ms":7,"processed":null,"total":null}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号","elapsed_ms":390204,"processed":0,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 1/3321","elapsed_ms":395809,"processed":1,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 2/3321","elapsed_ms":395809,"processed":2,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 3/3321","elapsed_ms":395809,"processed":3,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 4/3321","elapsed_ms":395810,"processed":4,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 5/3321","elapsed_ms":395810,"processed":5,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 6/3321","elapsed_ms":395810,"processed":6,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 7/3321","elapsed_ms":395810,"processed":7,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 8/3321","elapsed_ms":395811,"processed":8,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 9/3321","elapsed_ms":395811,"processed":9,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 10/3321","elapsed_ms":395811,"processed":10,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 11/3321","elapsed_ms":395812,"processed":11,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 12/3321","elapsed_ms":395812,"processed":12,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 13/3321","elapsed_ms":395812,"processed":13,"total":3321}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 14/3321","elapsed_ms":395813,"processed":14,"total":3321}

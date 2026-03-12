@@ -2,20 +2,24 @@
 //! 它只产出内存中的 page artifacts；最终写盘、cache 和状态收口仍由 workflow 串行完成。
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
 use std::thread;
 
-use crate::domain::context::{ModuleContext, PageContext, RepoContext};
+use crate::debug_trace;
+use crate::domain::context::{
+    ChildPageRollup, ModuleContext, PageContext, PageResearchDiagramRollup,
+    PageResearchEvidenceGroup, PageResearchEvidenceItem, RepoContext,
+};
 use crate::domain::module_tree::ModuleTree;
 use crate::domain::state::compute_page_input_hash;
 use crate::domain::steering::SteeringConfig;
-use crate::generation::context::{build_page_context, build_page_context_with_inputs};
+use crate::generation::context::build_page_context_with_inputs;
 use crate::generation::planner::PlannedPage;
 use crate::generation::renderer::{
     render_page_bundle, render_page_bundle_with_enrichment, RenderedPage,
 };
-use crate::llm::{LlmRuntime, PageEnrichmentInput};
+use crate::llm::{
+    LlmRuntime, PageEnrichmentInput, PageResearchInput, PageResearchRuntimeContext,
+};
 use crate::repo::scanner::ScanReport;
 
 /// `PreparedPageArtifact` 是页面预渲染阶段的稳定输出。
@@ -40,7 +44,7 @@ struct PendingLlmPageArtifact {
     page: PlannedPage,
     page_context: PageContext,
     input_hash: String,
-    enrichment_input: PageEnrichmentInput,
+    enrichment_input: Option<PageEnrichmentInput>,
 }
 
 /// 并行预渲染页面 artifacts，并按 planner 顺序返回稳定结果。
@@ -124,6 +128,7 @@ pub fn prepare_page_artifacts_with_llm(
     }
 
     let mut summaries = BTreeMap::<String, String>::new();
+    let mut rollups = BTreeMap::<String, ChildPageRollup>::new();
     let mut artifacts = Vec::<(usize, PreparedPageArtifact)>::with_capacity(pages.len());
     let mut llm_processed = 0;
 
@@ -138,7 +143,13 @@ pub fn prepare_page_artifacts_with_llm(
                 .flat_map(|child_ids| child_ids.iter())
                 .filter_map(|child_id| summaries.get(child_id).cloned())
                 .collect::<Vec<_>>();
-            let page_context = build_page_context_with_inputs(
+            let child_rollups = children_by_parent
+                .get(&page.id)
+                .into_iter()
+                .flat_map(|child_ids| child_ids.iter())
+                .filter_map(|child_id| rollups.get(child_id).cloned())
+                .collect::<Vec<_>>();
+            let mut page_context = build_page_context_with_inputs(
                 page,
                 scan_report,
                 module_tree,
@@ -146,10 +157,44 @@ pub fn prepare_page_artifacts_with_llm(
                 module_contexts,
                 hints,
                 child_summaries,
+                child_rollups,
             );
+            if llm_runtime.session_enabled() && matches!(page.page_type.as_str(), "module" | "topic")
+            {
+                let research_input = PageResearchInput::from_page(page, &page_context);
+                let research_runtime = PageResearchRuntimeContext {
+                    page,
+                    page_context: &page_context,
+                    scan_report,
+                    module_tree,
+                    repo_context,
+                    module_contexts,
+                };
+                match llm_runtime.research_page(&research_input, &research_runtime) {
+                    Ok(Some(output)) => {
+                        page_context.research_result = Some(output.result);
+                        page_context.research_session = Some(output.session);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        debug_trace::record_json(
+                            "llm_research_error",
+                            &serde_json::json!({
+                                "page_id": page.id,
+                                "page_type": page.page_type,
+                                "title": page.title,
+                                "error": error.to_string(),
+                            }),
+                        );
+                    }
+                }
+            }
             let input_hash = compute_page_input_hash(page, &page_context, scan_report);
-            let enrichment_input =
-                PageEnrichmentInput::from_page(page, &page_context, steering.llm.allow_mermaid);
+            let enrichment_input = (!matches!(page.page_type.as_str(), "module" | "topic")
+                || page_context.research_result.is_none())
+                .then(|| {
+                    PageEnrichmentInput::from_page(page, &page_context, steering.llm.allow_mermaid)
+                });
             pending_group.push(PendingLlmPageArtifact {
                 index,
                 page: page.clone(),
@@ -161,14 +206,28 @@ pub fn prepare_page_artifacts_with_llm(
 
         let group_inputs = pending_group
             .iter()
-            .map(|task| task.enrichment_input.clone())
+            .filter_map(|task| task.enrichment_input.clone())
             .collect::<Vec<_>>();
         let enrichments = llm_runtime
             .enrich_pages(&group_inputs)
-            .unwrap_or_else(|_| vec![None; pending_group.len()]);
+            .unwrap_or_else(|_| vec![None; group_inputs.len()]);
+        let mut enrichments_iter = enrichments.into_iter();
 
-        for (task, enrichment) in pending_group.into_iter().zip(enrichments.into_iter()) {
+        for task in pending_group.into_iter() {
+            let enrichment = if task.enrichment_input.is_some() {
+                enrichments_iter.next().unwrap_or(None)
+            } else {
+                None
+            };
             let page_summary = if let Some(summary) = enrichment
+                .as_ref()
+                .map(|result| result.summary.trim())
+                .filter(|summary| !summary.is_empty())
+            {
+                summary.to_string()
+            } else if let Some(summary) = task
+                .page_context
+                .research_result
                 .as_ref()
                 .map(|result| result.summary.trim())
                 .filter(|summary| !summary.is_empty())
@@ -184,6 +243,10 @@ pub fn prepare_page_artifacts_with_llm(
             );
 
             summaries.insert(task.page.id.clone(), page_summary.clone());
+            rollups.insert(
+                task.page.id.clone(),
+                build_child_page_rollup(&task.page, &task.page_context, &page_summary),
+            );
             artifacts.push((
                 task.index,
                 PreparedPageArtifact {
@@ -214,51 +277,63 @@ fn prepare_page_artifacts_with_workers(
     module_tree: &ModuleTree,
     repo_context: &RepoContext,
     module_contexts: &[ModuleContext],
-    worker_count: usize,
+    _worker_count: usize,
 ) -> Vec<PreparedPageArtifact> {
-    if worker_count <= 1 || pages.len() <= 1 {
-        return pages
-            .iter()
-            .map(|page| {
-                build_page_artifact(
-                    page,
-                    scan_report,
-                    module_tree,
-                    repo_context,
-                    module_contexts,
-                )
-            })
-            .collect();
+    let children_by_parent = page_children_index(pages);
+    let index_by_page_id = pages
+        .iter()
+        .enumerate()
+        .map(|(index, page)| (page.id.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let depths = page_depth_index(pages);
+    let mut page_order = pages
+        .iter()
+        .map(|page| {
+            (
+                depths.get(&page.id).copied().unwrap_or_default(),
+                index_by_page_id.get(&page.id).copied().unwrap_or_default(),
+                page,
+            )
+        })
+        .collect::<Vec<_>>();
+    page_order.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+
+    let mut summaries = BTreeMap::<String, String>::new();
+    let mut rollups = BTreeMap::<String, ChildPageRollup>::new();
+    let mut artifacts = Vec::<(usize, PreparedPageArtifact)>::with_capacity(pages.len());
+
+    for (_, index, page) in page_order {
+        let child_summaries = children_by_parent
+            .get(&page.id)
+            .into_iter()
+            .flat_map(|child_ids| child_ids.iter())
+            .filter_map(|child_id| summaries.get(child_id).cloned())
+            .collect::<Vec<_>>();
+        let child_rollups = children_by_parent
+            .get(&page.id)
+            .into_iter()
+            .flat_map(|child_ids| child_ids.iter())
+            .filter_map(|child_id| rollups.get(child_id).cloned())
+            .collect::<Vec<_>>();
+        let artifact = build_page_artifact(
+            page,
+            scan_report,
+            module_tree,
+            repo_context,
+            module_contexts,
+            child_summaries,
+            child_rollups,
+        );
+        summaries.insert(artifact.page.id.clone(), artifact.page_summary.clone());
+        rollups.insert(
+            artifact.page.id.clone(),
+            build_child_page_rollup(&artifact.page, &artifact.page_context, &artifact.page_summary),
+        );
+        artifacts.push((index, artifact));
     }
 
-    let next_index = AtomicUsize::new(0);
-    let results = Mutex::new(Vec::<(usize, PreparedPageArtifact)>::with_capacity(
-        pages.len(),
-    ));
-
-    thread::scope(|scope| {
-        for _ in 0..worker_count {
-            scope.spawn(|| loop {
-                let index = next_index.fetch_add(1, Ordering::Relaxed);
-                if index >= pages.len() {
-                    break;
-                }
-
-                let artifact = build_page_artifact(
-                    &pages[index],
-                    scan_report,
-                    module_tree,
-                    repo_context,
-                    module_contexts,
-                );
-                results.lock().unwrap().push((index, artifact));
-            });
-        }
-    });
-
-    let mut results = results.into_inner().unwrap();
-    results.sort_by_key(|(index, _)| *index);
-    results.into_iter().map(|(_, artifact)| artifact).collect()
+    artifacts.sort_by_key(|(index, _)| *index);
+    artifacts.into_iter().map(|(_, artifact)| artifact).collect()
 }
 
 fn configured_page_worker_count(page_count: usize) -> usize {
@@ -280,13 +355,18 @@ fn build_page_artifact(
     module_tree: &ModuleTree,
     repo_context: &RepoContext,
     module_contexts: &[ModuleContext],
+    child_summaries: Vec<String>,
+    child_rollups: Vec<ChildPageRollup>,
 ) -> PreparedPageArtifact {
-    let page_context = build_page_context(
+    let page_context = build_page_context_with_inputs(
         page,
         scan_report,
         module_tree,
         repo_context,
         module_contexts,
+        Vec::new(),
+        child_summaries,
+        child_rollups,
     );
     let input_hash = compute_page_input_hash(page, &page_context, scan_report);
     let page_summary = page_context.summary_inputs.join("；");
@@ -298,6 +378,81 @@ fn build_page_artifact(
         input_hash,
         page_summary,
         rendered_page,
+    }
+}
+
+fn build_child_page_rollup(
+    page: &PlannedPage,
+    page_context: &PageContext,
+    page_summary: &str,
+) -> ChildPageRollup {
+    let evidence_rollup = page_context
+        .research_result
+        .as_ref()
+        .map(|result| result.evidence_rollup.clone())
+        .unwrap_or_else(|| {
+            page_context
+                .evidence_groups
+                .iter()
+                .map(|group| PageResearchEvidenceGroup {
+                    group_key: group.group_id.clone(),
+                    title: group.title.clone(),
+                    items: group
+                        .items
+                        .iter()
+                        .map(|item| PageResearchEvidenceItem {
+                            source_id: item.source_id.clone(),
+                            path: item.path.clone(),
+                            start_line: 0,
+                            end_line: 0,
+                            note: item.note.clone(),
+                        })
+                        .collect(),
+                })
+                .collect()
+        });
+    let diagram_rollup = page_context
+        .research_result
+        .as_ref()
+        .map(|result| result.diagram_rollup.clone())
+        .unwrap_or_else(|| {
+            page_context
+                .diagram_inputs
+                .iter()
+                .map(|diagram| PageResearchDiagramRollup {
+                    diagram_key: diagram.diagram_id.clone(),
+                    diagram_type: diagram.diagram_type.clone(),
+                    title: diagram.title.clone(),
+                    summary: diagram.summary.clone(),
+                })
+                .collect()
+        });
+    let key_sources_rollup = page_context
+        .module_dossiers
+        .iter()
+        .flat_map(|dossier| dossier.key_sources.iter().cloned())
+        .chain(
+            page_context
+                .topic_dossier
+                .iter()
+                .flat_map(|dossier| dossier.key_sources.iter().cloned()),
+        )
+        .collect::<Vec<_>>();
+    let open_questions = page_context
+        .research_result
+        .as_ref()
+        .map(|result| result.open_questions.clone())
+        .unwrap_or_default();
+
+    ChildPageRollup {
+        page_id: page.id.clone(),
+        title: page.title.clone(),
+        page_type: page.page_type.clone(),
+        summary: page_summary.to_string(),
+        key_sources_rollup,
+        evidence_rollup,
+        diagram_rollup,
+        open_questions,
     }
 }
 

@@ -2,7 +2,6 @@
 
 ## Purpose
 定义 Repo Wiki workflow 的验证面，确保主链行为、graph 能力、progress 协议和热路径优化都能被自动化测试覆盖。
-
 ## Requirements
 ### Requirement: 系统必须提供端到端验证适配层到 Wiki 产物的主链路
 系统 MUST 提供自动化测试，验证适配层调用 Rust core 后能够在目标仓库完成 Wiki 初始化、手工编辑同步、增量更新、强制重建并执行查询，且生成的 `.wiki/` 产物与返回结果符合预期。针对迭代 7 收口，验证 MUST 继续覆盖 page identity 稳定性（增删少量源文件后核心页面 `page_id` 不变）、steering 配置生效（忽略路径、模块提升/降级、合并阈值）、页面合并/拆分正确性、父子关系按模块树层级分配、扩展 section 模板的内容密度，并新增覆盖多语言 symbol parsing 质量、`symbols` / `symbols_fts` 写盘、一致性的增量重解析、symbol BM25 query 和解析失败隔离。验证脚本还 MUST 使用与当前源码一致的 release binary，并允许对 `init / update / rebuild` 这类重 workflow 使用更长超时，避免把大型 monorepo 的正常初始化误判为失败。每轮与迭代 7 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init` 分析；如果目标仓库存在 reference，则必须对照 `.wiki/*.md` 与 `wiki.metadata.json`。项目集分析报告 MUST 按项目逐个输出，而不是只给总表或总括结论。
@@ -220,3 +219,30 @@
 - **WHEN** 测试脚本对比 generated 页面和 reference 页面
 - **THEN** 报告 MUST 说明关键 evidence 是否进入正文
 - **THEN** 报告 MUST 说明 Mermaid 或等价图表达的覆盖情况
+
+### Requirement: 验证必须覆盖 dossier、provider research session 与 cold/warm 对照
+系统 MUST 提供自动化测试和项目集验证，覆盖 dossier/child rollup 稳定性、provider bounded research session、tool schema、phase budget 裁剪和 cold/warm run 差异。测试报告 MUST 明确区分 cold run 与 warm run，而不是把两者混在同一结论里。CodeBuddy Agent 侧验证不属于 9.2 的必做范围。
+
+#### Scenario: 测试区分 cold run 与 warm run
+- **WHEN** 验证脚本对同一项目执行两轮启用 LLM 的 workflow
+- **THEN** 报告 MUST 明确标记哪一轮是 cold run、哪一轮是 warm run
+- **THEN** 报告 MUST 能说明 cache mode 与真实请求数的差异
+
+#### Scenario: 验证 provider bounded research session 与 tool schema
+- **WHEN** 测试通过 provider-tools 执行 `module` / `topic` 页 research session
+- **THEN** 测试 MUST 观察到 session 事件、tool 调用和结构化 `PageResearchResult`
+- **THEN** 测试 MUST 观察到最终页面仍由 deterministic renderer 落盘
+
+### Requirement: 验证必须覆盖实时 usage 输出与同类型 gate 批量化
+系统 MUST 在自动化测试和项目报告中覆盖实时 usage 输出、phase budget 生效和同类型 uncertainty gate 批量化行为。普通模式下的 usage 输出 MUST 可被脚本直接消费，不得要求人工去 debug trace 中核对。
+
+#### Scenario: progress/event stream 可观测实时 usage
+- **WHEN** 测试脚本执行启用 LLM 的长流程 workflow
+- **THEN** 脚本 MUST 观察到 workflow 进行中持续刷新的 usage snapshot
+- **THEN** 不得只有 workflow 结束后才一次性看到成本汇总
+
+#### Scenario: file_purpose 等同类型 gate 以批量方式执行
+- **WHEN** 测试在存在多条 `file_purpose` 候选的项目上执行 workflow
+- **THEN** 报告 MUST 能区分批量 gate 请求与逐条请求
+- **THEN** 测试 MUST 继续验证批量化后单条 fallback 和 cache 粒度未被破坏
+

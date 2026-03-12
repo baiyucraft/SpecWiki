@@ -2,9 +2,7 @@
 
 ## Purpose
 定义 Repo Wiki 页面运行时、页面状态、managed section 与 steering 配置消费的持久化约束。
-
 ## Requirements
-
 ### Requirement: 正式 Wiki 页面必须稳定映射到模块结构
 系统 MUST 让正式 Wiki 页面与模块结构保持稳定映射，以便后续 `query`、`sync`、`update` 和 `rebuild` 可以围绕层级化页面工作。模块页的关键源码表达 MUST 优先选择入口、依赖证据和核心实现文件，并抑制日志、锁文件、纯文档和低价值配置噪声。模块页的页面标识或路径必须由模块 root_path 稳定导出，并记录基础 provenance。页面状态还 MUST 记录稳定 section 标识、section 级 generated/observed hash，以及 user section 的锚点信息，使 runtime 能在保留人工内容的同时局部重组页面。页面的父子关系 MUST 按模块树层级分配。被合并的小模块 MUST 作为父模块页面的子模块概述 section 出现，而不是生成独立页面。steering 配置 MUST 作为 runtime 的一部分被读取和消费。
 
@@ -89,3 +87,30 @@
 - **WHEN** repo 根配置显式开启 debug trace
 - **THEN** `init/update/rebuild` MUST 为本次 workflow 写出调试 trace
 - **THEN** debug trace 关闭时系统不得额外写出调试产物
+
+### Requirement: runtime 必须持久化 dossier、child rollup 与 session 摘要缓存
+系统 MUST 在现有 runtime/state/cache 主链内持久化 dossier、child rollup 和 research session 摘要缓存，而不是新增 `.wiki/` 之外的 sidecar 层。相关 identity/hash MUST 可被 `update`、`rebuild` 和 cache 命中逻辑复用。
+
+#### Scenario: dossier 与 child rollup 进入现有 cache/state
+- **WHEN** workflow 完成某个页面的 dossier 组装或 child rollup 计算
+- **THEN** 系统 MUST 把对应 identity、input hash 和必要摘要写入现有 runtime/cache 主链
+- **THEN** 后续 `update` MUST 能基于这些缓存判断是否需要重建父页
+
+#### Scenario: session 摘要缓存复用现有 runtime contract
+- **WHEN** research session 生成 `session_summary`、`recent_turns` 或 `tool_artifact_refs`
+- **THEN** 系统 MUST 在现有 cache/state contract 内持久化可复用摘要
+- **THEN** 系统不得为此新增独立正式 runtime 目录
+
+### Requirement: LLM cache 生命周期必须与 runtime 清理解耦
+系统 MUST 让 LLM cache 生命周期独立于普通 runtime 清理。`init`、`rebuild` 默认不得隐式清空 LLM cache；当用户显式要求 cold-start 或 cache mode 为 `clear`/`refresh` 时，系统才 MAY 清空或失效对应缓存。
+
+#### Scenario: runtime 清理不隐式删除 LLM cache
+- **WHEN** 系统为 `init` 或 `rebuild` 清理旧 runtime 产物
+- **THEN** 普通模式下 LLM cache MUST 保持可复用
+- **THEN** 同仓库重复运行不得因为 runtime 清理而总是冷启动
+
+#### Scenario: cache mode 控制 cache 失效方式
+- **WHEN** 当前 workflow 显式设置 `cache_mode = clear` 或 `refresh`
+- **THEN** 系统 MUST 按配置清空或强制刷新相应缓存
+- **THEN** 失效行为 MUST 能被 trace、progress 或 summary 识别
+

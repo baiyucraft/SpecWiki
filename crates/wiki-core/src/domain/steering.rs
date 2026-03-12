@@ -3,10 +3,13 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::io;
 use std::path::Path;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use time::format_description::well_known::Rfc3339;
+use time::{Duration as TimeDuration, OffsetDateTime};
 
 /// Steering 配置根结构。
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -118,14 +121,60 @@ pub struct LlmConfig {
     pub model: String,
     /// 单次 workflow 允许的真实调用上限。
     pub max_calls: usize,
+    /// 是否允许 `uncertainty_gate` 路径发起 LLM 请求。
+    pub uncertainty_gate_enabled: bool,
+    /// 是否允许 `content_enrichment` 路径发起 LLM 请求。
+    pub content_enrichment_enabled: bool,
+    /// 是否允许 `module/topic` 页进入 bounded research session。
+    pub session_enabled: bool,
+    /// `uncertainty_gate` 的单请求输入上限。
+    pub uncertainty_gate_max_input_tokens: usize,
+    /// `page_enrichment` 的单请求输入上限。
+    pub page_enrichment_max_input_tokens: usize,
+    /// bounded research session 的上下文上限。
+    pub session_max_context_tokens: usize,
+    /// bounded research session 保留的最近轮次窗口。
+    pub session_max_recent_turns: usize,
+    /// `uncertainty_gate` 的安全并行度。
+    pub uncertainty_gate_parallel_requests: usize,
     /// provider 直连路径下允许的页面增强请求并行度。
-    pub parallel_requests: usize,
+    pub page_enrichment_parallel_requests: usize,
     /// prompt 级缓存 TTL（秒）。
     pub cache_ttl_seconds: u64,
+    /// LLM cache 生命周期模式。
+    pub cache_mode: LlmCacheMode,
     /// 是否允许写出 Mermaid fenced block。
     pub allow_mermaid: bool,
     /// 可选 provider registry。
     pub providers: BTreeMap<String, LlmProviderConfig>,
+}
+
+/// `LlmCacheMode` 控制 workflow 对 LLM cache 的处理方式。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmCacheMode {
+    /// 默认保留并复用已有缓存。
+    #[default]
+    Preserve,
+    /// 显式清空相关缓存后再运行。
+    Clear,
+    /// 保留现有缓存，但本轮强制刷新读取结果。
+    Refresh,
+}
+
+/// `LlmToolsMode` 表示 provider tool-calling 的能力模式。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmToolsMode {
+    /// 自动探测并允许 learned state 生效。
+    #[default]
+    Auto,
+    /// 直接使用 provider 原生 tools。
+    NativeTools,
+    /// 通过消息内协议模拟 tools。
+    EmulatedTools,
+    /// 不走 tool-calling。
+    NoTools,
 }
 
 /// LLM provider 直连配置。
@@ -144,8 +193,29 @@ pub struct LlmProviderConfig {
     /// provider HTTP 请求超时（秒）。
     #[serde(alias = "timeoutSeconds")]
     pub timeout_seconds: u64,
+    /// provider 瞬时失败时的总尝试次数，包含首次请求。
+    #[serde(alias = "maxRetries")]
+    pub max_retries: usize,
+    /// provider 级默认模型名；当顶层 `llm.model` 为空时可作为回退。
+    #[serde(alias = "defaultModel")]
+    pub default_model: String,
+    /// provider 能力声明。
+    #[serde(default)]
+    pub capabilities: LlmProviderCapabilitiesConfig,
     /// 当前 provider 下可选的模型 registry。
     pub models: BTreeMap<String, LlmProviderModelConfig>,
+}
+
+/// provider 能力声明。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LlmProviderCapabilitiesConfig {
+    /// tool-calling 能力模式。
+    #[serde(alias = "toolsMode")]
+    pub tools_mode: LlmToolsMode,
+    /// 是否默认发送顶层 `response_format`。
+    #[serde(alias = "responseFormat")]
+    pub response_format: bool,
 }
 
 /// provider 下的单个模型配置。
@@ -168,6 +238,48 @@ pub struct ResolvedLlmModel<'a> {
     pub provider: &'a LlmProviderConfig,
     /// 命中的模型配置。
     pub model: &'a LlmProviderModelConfig,
+}
+
+/// `LearnedStateFile` 保存用户级 learned capability 结果。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LearnedStateFile {
+    pub version: u32,
+    pub learned: LearnedProvidersState,
+}
+
+/// learned providers 根对象。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LearnedProvidersState {
+    pub providers: BTreeMap<String, LearnedProviderState>,
+}
+
+/// 单个 provider 的 learned 结果。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LearnedProviderState {
+    pub models: BTreeMap<String, LearnedProviderModelState>,
+}
+
+/// 单个 provider/model 的 learned capability 结果。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LearnedProviderModelState {
+    pub api_base: String,
+    pub tools_mode: LlmToolsMode,
+    pub detected_at: String,
+    pub reason: String,
+    pub ttl_hours: u64,
+}
+
+impl Default for LearnedStateFile {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            learned: LearnedProvidersState::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -214,8 +326,18 @@ struct RawLlmConfig {
     enabled: Option<bool>,
     model: Option<String>,
     max_calls: Option<usize>,
-    parallel_requests: Option<usize>,
+    uncertainty_gate_enabled: Option<bool>,
+    content_enrichment_enabled: Option<bool>,
+    session_enabled: Option<bool>,
+    uncertainty_gate_max_input_tokens: Option<usize>,
+    page_enrichment_max_input_tokens: Option<usize>,
+    session_max_context_tokens: Option<usize>,
+    session_max_recent_turns: Option<usize>,
+    uncertainty_gate_parallel_requests: Option<usize>,
+    #[serde(alias = "parallel_requests")]
+    page_enrichment_parallel_requests: Option<usize>,
     cache_ttl_seconds: Option<u64>,
+    cache_mode: Option<LlmCacheMode>,
     allow_mermaid: Option<bool>,
     providers: Option<BTreeMap<String, RawLlmProviderConfig>>,
 }
@@ -231,7 +353,21 @@ struct RawLlmProviderConfig {
     api_key_env: Option<String>,
     #[serde(alias = "timeoutSeconds")]
     timeout_seconds: Option<u64>,
+    #[serde(alias = "maxRetries")]
+    max_retries: Option<usize>,
+    #[serde(alias = "defaultModel")]
+    default_model: Option<String>,
+    capabilities: Option<RawLlmProviderCapabilitiesConfig>,
     models: Option<BTreeMap<String, RawLlmProviderModelConfig>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct RawLlmProviderCapabilitiesConfig {
+    #[serde(alias = "toolsMode")]
+    tools_mode: Option<LlmToolsMode>,
+    #[serde(alias = "responseFormat")]
+    response_format: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -265,8 +401,17 @@ impl Default for LlmConfig {
             enabled: false,
             model: String::new(),
             max_calls: 24,
-            parallel_requests: 3,
+            uncertainty_gate_enabled: true,
+            content_enrichment_enabled: true,
+            session_enabled: true,
+            uncertainty_gate_max_input_tokens: 12_000,
+            page_enrichment_max_input_tokens: 8_000,
+            session_max_context_tokens: 16_000,
+            session_max_recent_turns: 6,
+            uncertainty_gate_parallel_requests: 3,
+            page_enrichment_parallel_requests: 3,
             cache_ttl_seconds: 60 * 60 * 24 * 7,
+            cache_mode: LlmCacheMode::Preserve,
             allow_mermaid: true,
             providers: BTreeMap::new(),
         }
@@ -280,7 +425,19 @@ impl Default for LlmProviderConfig {
             api_key: String::new(),
             api_key_env: String::new(),
             timeout_seconds: 90,
+            max_retries: 3,
+            default_model: String::new(),
+            capabilities: LlmProviderCapabilitiesConfig::default(),
             models: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for LlmProviderCapabilitiesConfig {
+    fn default() -> Self {
+        Self {
+            tools_mode: LlmToolsMode::Auto,
+            response_format: true,
         }
     }
 }
@@ -355,9 +512,16 @@ impl LlmConfig {
     /// 解析顶层 `llm.model = provider/model` 到实际 provider/model 配置。
     pub fn resolve_selected_model(&self) -> Option<ResolvedLlmModel<'_>> {
         let selection = self.model.trim();
-        let (provider_name, model_name) = selection.split_once('/')?;
-        let provider_name = provider_name.trim();
-        let model_name = model_name.trim();
+        let (provider_name, model_name) = if selection.is_empty() {
+            let (provider_name, provider) = self
+                .providers
+                .iter()
+                .find(|(_, provider)| !provider.default_model.trim().is_empty())?;
+            (provider_name.as_str(), provider.default_model.trim())
+        } else {
+            let (provider_name, model_name) = selection.split_once('/')?;
+            (provider_name.trim(), model_name.trim())
+        };
         if provider_name.is_empty() || model_name.is_empty() {
             return None;
         }
@@ -374,7 +538,22 @@ impl LlmConfig {
 
     /// 返回 provider 直连路径可用的安全并行度。
     pub fn provider_parallel_requests(&self) -> usize {
-        self.parallel_requests.max(1)
+        self.page_enrichment_parallel_requests.max(1)
+    }
+
+    /// 返回 `uncertainty_gate` 是否可用。
+    pub fn uncertainty_gate_enabled(&self) -> bool {
+        self.enabled && self.uncertainty_gate_enabled
+    }
+
+    /// 返回 `content_enrichment` 是否可用。
+    pub fn content_enrichment_enabled(&self) -> bool {
+        self.enabled && self.content_enrichment_enabled
+    }
+
+    /// 返回 bounded research session 是否可用。
+    pub fn session_enabled(&self) -> bool {
+        self.enabled && self.session_enabled
     }
 }
 
@@ -407,6 +586,13 @@ impl LlmProviderConfig {
     }
 }
 
+impl LlmProviderCapabilitiesConfig {
+    /// 解析当前 provider 的显式工具模式。
+    pub fn tools_mode(&self) -> LlmToolsMode {
+        self.tools_mode
+    }
+}
+
 impl LlmProviderModelConfig {
     /// 返回最终发给 provider API 的模型标识。
     pub fn resolved_model_id<'a>(&'a self, fallback: &'a str) -> &'a str {
@@ -423,8 +609,19 @@ impl LlmProviderModelConfig {
 pub fn load_steering_config(repo_root: &Path) -> SteeringConfig {
     let shared_path = repo_root.join(".wiki").join("wiki.steering.yaml");
     let dev_path = repo_root.join("wiki.dev.yaml");
+    let user_config_path = spec_wiki_user_config_path();
 
     let mut config = SteeringConfig::default();
+    if let Some(path) = user_config_path.as_deref() {
+        if let Some(raw) = read_yaml_file::<RawDevConfig>(path, "ignoring user config") {
+            if let Some(raw_debug) = raw.debug {
+                apply_raw_debug_config(&mut config.debug, raw_debug);
+            }
+            if let Some(raw_llm) = raw.llm {
+                apply_raw_llm_config(&mut config.llm, raw_llm);
+            }
+        }
+    }
     if let Some(raw) = read_yaml_file::<RawSteeringConfig>(&shared_path, "using defaults") {
         apply_raw_steering_config(&mut config, raw);
     }
@@ -493,11 +690,38 @@ fn apply_raw_llm_config(config: &mut LlmConfig, raw: RawLlmConfig) {
     if let Some(max_calls) = raw.max_calls {
         config.max_calls = max_calls;
     }
-    if let Some(parallel_requests) = raw.parallel_requests {
-        config.parallel_requests = parallel_requests;
+    if let Some(enabled) = raw.uncertainty_gate_enabled {
+        config.uncertainty_gate_enabled = enabled;
+    }
+    if let Some(enabled) = raw.content_enrichment_enabled {
+        config.content_enrichment_enabled = enabled;
+    }
+    if let Some(enabled) = raw.session_enabled {
+        config.session_enabled = enabled;
+    }
+    if let Some(limit) = raw.uncertainty_gate_max_input_tokens {
+        config.uncertainty_gate_max_input_tokens = limit;
+    }
+    if let Some(limit) = raw.page_enrichment_max_input_tokens {
+        config.page_enrichment_max_input_tokens = limit;
+    }
+    if let Some(limit) = raw.session_max_context_tokens {
+        config.session_max_context_tokens = limit;
+    }
+    if let Some(limit) = raw.session_max_recent_turns {
+        config.session_max_recent_turns = limit;
+    }
+    if let Some(parallel_requests) = raw.uncertainty_gate_parallel_requests {
+        config.uncertainty_gate_parallel_requests = parallel_requests;
+    }
+    if let Some(parallel_requests) = raw.page_enrichment_parallel_requests {
+        config.page_enrichment_parallel_requests = parallel_requests;
     }
     if let Some(cache_ttl_seconds) = raw.cache_ttl_seconds {
         config.cache_ttl_seconds = cache_ttl_seconds;
+    }
+    if let Some(cache_mode) = raw.cache_mode {
+        config.cache_mode = cache_mode;
     }
     if let Some(allow_mermaid) = raw.allow_mermaid {
         config.allow_mermaid = allow_mermaid;
@@ -523,11 +747,32 @@ fn apply_raw_llm_provider_config(config: &mut LlmProviderConfig, raw: RawLlmProv
     if let Some(timeout_seconds) = raw.timeout_seconds {
         config.timeout_seconds = timeout_seconds;
     }
+    if let Some(max_retries) = raw.max_retries {
+        config.max_retries = max_retries;
+    }
+    if let Some(default_model) = raw.default_model {
+        config.default_model = default_model;
+    }
+    if let Some(raw_capabilities) = raw.capabilities {
+        apply_raw_llm_provider_capabilities_config(&mut config.capabilities, raw_capabilities);
+    }
     if let Some(raw_models) = raw.models {
         for (model_name, raw_model) in raw_models {
             let model = config.models.entry(model_name).or_default();
             apply_raw_llm_provider_model_config(model, raw_model);
         }
+    }
+}
+
+fn apply_raw_llm_provider_capabilities_config(
+    config: &mut LlmProviderCapabilitiesConfig,
+    raw: RawLlmProviderCapabilitiesConfig,
+) {
+    if let Some(tools_mode) = raw.tools_mode {
+        config.tools_mode = tools_mode;
+    }
+    if let Some(response_format) = raw.response_format {
+        config.response_format = response_format;
     }
 }
 
@@ -605,8 +850,27 @@ fn normalize_debug_config(config: &mut DebugConfig) {
 
 fn normalize_llm_config(config: &mut LlmConfig) {
     config.model = config.model.trim().to_string();
-    if config.parallel_requests == 0 {
-        config.parallel_requests = LlmConfig::default().parallel_requests;
+    if config.uncertainty_gate_max_input_tokens == 0 {
+        config.uncertainty_gate_max_input_tokens =
+            LlmConfig::default().uncertainty_gate_max_input_tokens;
+    }
+    if config.page_enrichment_max_input_tokens == 0 {
+        config.page_enrichment_max_input_tokens =
+            LlmConfig::default().page_enrichment_max_input_tokens;
+    }
+    if config.session_max_context_tokens == 0 {
+        config.session_max_context_tokens = LlmConfig::default().session_max_context_tokens;
+    }
+    if config.session_max_recent_turns == 0 {
+        config.session_max_recent_turns = LlmConfig::default().session_max_recent_turns;
+    }
+    if config.uncertainty_gate_parallel_requests == 0 {
+        config.uncertainty_gate_parallel_requests =
+            LlmConfig::default().uncertainty_gate_parallel_requests;
+    }
+    if config.page_enrichment_parallel_requests == 0 {
+        config.page_enrichment_parallel_requests =
+            LlmConfig::default().page_enrichment_parallel_requests;
     }
 
     let mut normalized_providers = BTreeMap::new();
@@ -619,8 +883,12 @@ fn normalize_llm_config(config: &mut LlmConfig) {
         provider.api_base = provider.api_base.trim().to_string();
         provider.api_key = provider.api_key.trim().to_string();
         provider.api_key_env = provider.api_key_env.trim().to_string();
+        provider.default_model = provider.default_model.trim().to_string();
         if provider.timeout_seconds == 0 {
             provider.timeout_seconds = LlmProviderConfig::default().timeout_seconds;
+        }
+        if provider.max_retries == 0 {
+            provider.max_retries = LlmProviderConfig::default().max_retries;
         }
 
         let mut normalized_models = BTreeMap::new();
@@ -637,6 +905,112 @@ fn normalize_llm_config(config: &mut LlmConfig) {
         normalized_providers.insert(normalized_provider_name, provider);
     }
     config.providers = normalized_providers;
+}
+
+/// 返回 `~/.spec-wiki/` 目录。
+pub fn spec_wiki_home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from))
+        .map(|home| home.join(".spec-wiki"))
+}
+
+/// 返回用户级配置文件路径。
+pub fn spec_wiki_user_config_path() -> Option<std::path::PathBuf> {
+    spec_wiki_home_dir().map(|dir| dir.join("config.yaml"))
+}
+
+/// 返回用户级 learned state 路径。
+pub fn spec_wiki_user_state_path() -> Option<std::path::PathBuf> {
+    spec_wiki_home_dir().map(|dir| dir.join("state.yaml"))
+}
+
+/// 读取用户级 learned state。
+pub fn load_spec_wiki_state() -> LearnedStateFile {
+    let Some(path) = spec_wiki_user_state_path() else {
+        return LearnedStateFile::default();
+    };
+
+    read_yaml_file::<LearnedStateFile>(&path, "ignoring learned state").unwrap_or_default()
+}
+
+/// 解析当前 provider/model 命中的 learned tools mode。
+pub fn resolve_learned_tools_mode(
+    provider_name: &str,
+    provider: &LlmProviderConfig,
+    model_name: &str,
+) -> Option<LlmToolsMode> {
+    let state = load_spec_wiki_state();
+    let learned = state
+        .learned
+        .providers
+        .get(provider_name)?
+        .models
+        .get(model_name)?;
+    if learned.tools_mode == LlmToolsMode::Auto
+        || learned.api_base.trim() != provider.api_base.trim()
+        || learned_state_expired(learned)
+    {
+        return None;
+    }
+
+    Some(learned.tools_mode)
+}
+
+/// 以原子写入方式回写 learned tools mode。
+pub fn persist_learned_tools_mode(
+    provider_name: &str,
+    model_name: &str,
+    provider: &LlmProviderConfig,
+    tools_mode: LlmToolsMode,
+    reason: &str,
+    ttl_hours: u64,
+) -> io::Result<()> {
+    let Some(path) = spec_wiki_user_state_path() else {
+        return Ok(());
+    };
+    let mut state = load_spec_wiki_state();
+    state.version = 1;
+    state
+        .learned
+        .providers
+        .entry(provider_name.to_string())
+        .or_default()
+        .models
+        .insert(
+            model_name.to_string(),
+            LearnedProviderModelState {
+                api_base: provider.api_base.trim().to_string(),
+                tools_mode,
+                detected_at: OffsetDateTime::now_utc()
+                    .format(&Rfc3339)
+                    .unwrap_or_else(|_| String::new()),
+                reason: reason.trim().to_string(),
+                ttl_hours: ttl_hours.max(1),
+            },
+        );
+    write_yaml_atomically(&path, &state)
+}
+
+fn learned_state_expired(entry: &LearnedProviderModelState) -> bool {
+    let Ok(detected_at) = OffsetDateTime::parse(&entry.detected_at, &Rfc3339) else {
+        return true;
+    };
+    let ttl = TimeDuration::hours(entry.ttl_hours.max(1) as i64);
+    OffsetDateTime::now_utc() > detected_at + ttl
+}
+
+fn write_yaml_atomically<T>(path: &Path, value: &T) -> io::Result<()>
+where
+    T: Serialize,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let content = serde_yaml::to_string(value).map_err(|error| io::Error::other(error.to_string()))?;
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, content)?;
+    fs::rename(tmp_path, path)
 }
 
 fn read_yaml_file<T>(path: &Path, fallback_label: &str) -> Option<T>

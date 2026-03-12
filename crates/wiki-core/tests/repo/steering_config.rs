@@ -39,7 +39,7 @@ fn missing_file_returns_defaults() {
     assert!(config.debug.trace_dir.is_empty());
     assert!(!config.debug.echo_to_stderr);
     assert!(config.llm.providers.is_empty());
-    assert_eq!(config.llm.parallel_requests, 3);
+    assert_eq!(config.llm.page_enrichment_parallel_requests, 3);
 }
 
 #[test]
@@ -192,7 +192,7 @@ fn default_config_is_sane() {
     assert!(config.debug.trace_dir.is_empty());
     assert!(!config.debug.echo_to_stderr);
     assert!(config.llm.providers.is_empty());
-    assert_eq!(config.llm.parallel_requests, 3);
+    assert_eq!(config.llm.page_enrichment_parallel_requests, 3);
 }
 
 #[test]
@@ -240,13 +240,14 @@ llm:
     assert!(config.llm.enabled);
     assert_eq!(config.llm.model, "dev/dev-model");
     assert_eq!(config.llm.max_calls, 9);
-    assert_eq!(config.llm.parallel_requests, 5);
+    assert_eq!(config.llm.page_enrichment_parallel_requests, 5);
     assert!(!config.llm.allow_mermaid);
     assert_eq!(selected.provider_name, "dev");
     assert_eq!(selected.model_name, "dev-model");
     assert_eq!(selected.provider.api_base, "https://dev.example/v1/");
     assert_eq!(selected.provider.api_key_env, "DEV_PROVIDER_KEY");
     assert_eq!(selected.provider.timeout_seconds, 45);
+    assert_eq!(selected.provider.max_retries, 3);
     assert_eq!(
         selected.model.resolved_model_id(selected.model_name),
         "gpt-dev"
@@ -298,7 +299,40 @@ llm:
 
     let config = load_steering_config(repo.path());
 
-    assert_eq!(config.llm.parallel_requests, 3);
+    assert_eq!(config.llm.page_enrichment_parallel_requests, 3);
+}
+
+#[test]
+fn provider_max_retries_can_be_configured_and_zero_falls_back_to_default() {
+    let repo = make_repo();
+    write_steering(
+        &repo,
+        r#"
+llm:
+  enabled: true
+  model: "shared/shared-model"
+  providers:
+    shared:
+      api_base: "https://shared.example/v1"
+      max_retries: 0
+      models:
+        shared-model: {}
+"#,
+    );
+    write_dev_config(
+        &repo,
+        r#"
+llm:
+  providers:
+    shared:
+      max_retries: 5
+"#,
+    );
+
+    let config = load_steering_config(repo.path());
+    let selected = config.llm.resolve_selected_model().unwrap();
+
+    assert_eq!(selected.provider.max_retries, 5);
 }
 
 #[test]

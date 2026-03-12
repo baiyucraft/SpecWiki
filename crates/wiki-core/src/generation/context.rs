@@ -1,9 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::Path;
 
 use crate::domain::context::{
-    ModuleContext, PageContext, PageDiagramEdge, PageDiagramInput, PageDiagramNode,
-    PageEvidenceGroup, PageEvidenceItem, RepoContext, TopicSeed,
+    ChildPageRollup, ModuleContext, ModuleDossier, PageContext, PageDiagramEdge,
+    PageDiagramInput, PageDiagramNode, PageEvidenceGroup, PageEvidenceItem,
+    PageResearchDiagramRollup, PageResearchEvidenceGroup, PageResearchEvidenceItem,
+    RepoContext, SourceSnippet, TopicDossier, TopicSeed,
 };
 use crate::domain::module_tree::{ModuleNode, ModuleTree};
 use crate::domain::stable_id::stable_id;
@@ -527,6 +530,7 @@ pub fn build_page_context(
         module_contexts,
         Vec::new(),
         Vec::new(),
+        Vec::new(),
     )
 }
 
@@ -540,6 +544,7 @@ pub fn build_page_context_with_inputs(
     module_contexts: &[ModuleContext],
     hints: Vec<String>,
     child_summaries: Vec<String>,
+    child_rollups: Vec<ChildPageRollup>,
 ) -> PageContext {
     let module_context_index = module_contexts
         .iter()
@@ -900,6 +905,24 @@ pub fn build_page_context_with_inputs(
     }
     facts = dedupe_lines(facts);
     summary_inputs = dedupe_lines(summary_inputs);
+    let module_dossiers = build_module_dossiers(
+        page,
+        report,
+        module_tree,
+        &module_context_index,
+        &child_rollups,
+        &evidence_groups,
+        &diagram_inputs,
+    );
+    let topic_dossier = build_topic_dossier(
+        page,
+        report,
+        repo_context,
+        module_contexts,
+        &child_rollups,
+        &evidence_groups,
+        &diagram_inputs,
+    );
 
     PageContext {
         page_id: page.id.clone(),
@@ -912,9 +935,169 @@ pub fn build_page_context_with_inputs(
         summary_inputs,
         hints,
         child_summaries,
+        child_rollups,
         evidence_groups,
         diagram_inputs,
+        module_dossiers,
+        topic_dossier,
+        research_result: None,
+        research_session: None,
     }
+}
+
+fn build_module_dossiers(
+    page: &PlannedPage,
+    report: &ScanReport,
+    module_tree: &ModuleTree,
+    module_context_index: &BTreeMap<String, &ModuleContext>,
+    child_rollups: &[ChildPageRollup],
+    evidence_groups: &[PageEvidenceGroup],
+    diagram_inputs: &[PageDiagramInput],
+) -> Vec<ModuleDossier> {
+    page.module_ids
+        .iter()
+        .filter_map(|module_id| {
+            let module = module_tree.module_by_id(module_id)?;
+            let context = module_context_index.get(module_id)?;
+            let key_sources = context.key_sources.clone();
+            let title = format!("{} 研究包", module.name);
+
+            Some(ModuleDossier {
+                dossier_id: stable_id("module-dossier", module_id),
+                module_id: module_id.clone(),
+                title,
+                key_sources: key_sources.clone(),
+                key_symbols: Vec::new(),
+                source_snippets: key_sources
+                    .iter()
+                    .filter_map(|path| read_source_snippet(report, path))
+                    .collect(),
+                cross_module_edges: context
+                    .dependencies
+                    .iter()
+                    .map(|dep| format!("依赖 -> {}", module_name(module_tree, dep)))
+                    .chain(
+                        context
+                            .dependents
+                            .iter()
+                            .map(|dep| format!("被依赖 <- {}", module_name(module_tree, dep))),
+                    )
+                    .collect(),
+                process_candidates: context
+                    .graph_hotspots
+                    .iter()
+                    .take(4)
+                    .cloned()
+                    .collect(),
+                evidence_rollup: evidence_groups_to_research_rollup(evidence_groups),
+                diagram_rollup: diagram_inputs_to_research_rollup(diagram_inputs),
+                child_page_rollup: child_rollups.to_vec(),
+            })
+        })
+        .collect()
+}
+
+fn build_topic_dossier(
+    page: &PlannedPage,
+    report: &ScanReport,
+    repo_context: &RepoContext,
+    module_contexts: &[ModuleContext],
+    child_rollups: &[ChildPageRollup],
+    evidence_groups: &[PageEvidenceGroup],
+    diagram_inputs: &[PageDiagramInput],
+) -> Option<TopicDossier> {
+    if page.page_type != "topic" {
+        return None;
+    }
+
+    let seed = lookup_topic_seed(page, repo_context, module_contexts)?;
+    let key_sources = seed.source_paths.clone();
+    Some(TopicDossier {
+        dossier_id: stable_id("topic-dossier", &seed.topic_key),
+        topic_key: seed.topic_key.clone(),
+        topic_kind: seed.topic_kind.clone(),
+        title: seed.title.clone(),
+        summary: seed.summary.clone(),
+        key_sources: key_sources.clone(),
+        key_symbols: Vec::new(),
+        source_snippets: key_sources
+            .iter()
+            .filter_map(|path| read_source_snippet(report, path))
+            .collect(),
+        evidence_rollup: evidence_groups_to_research_rollup(evidence_groups),
+        diagram_rollup: diagram_inputs_to_research_rollup(diagram_inputs),
+        child_page_rollup: child_rollups.to_vec(),
+    })
+}
+
+fn evidence_groups_to_research_rollup(
+    evidence_groups: &[PageEvidenceGroup],
+) -> Vec<PageResearchEvidenceGroup> {
+    evidence_groups
+        .iter()
+        .map(|group| PageResearchEvidenceGroup {
+            group_key: group.group_id.clone(),
+            title: group.title.clone(),
+            items: group
+                .items
+                .iter()
+                .map(|item| PageResearchEvidenceItem {
+                    source_id: item.source_id.clone(),
+                    path: item.path.clone(),
+                    start_line: 0,
+                    end_line: 0,
+                    note: item.note.clone(),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn diagram_inputs_to_research_rollup(
+    diagram_inputs: &[PageDiagramInput],
+) -> Vec<PageResearchDiagramRollup> {
+    diagram_inputs
+        .iter()
+        .map(|diagram| PageResearchDiagramRollup {
+            diagram_key: diagram.diagram_id.clone(),
+            diagram_type: normalize_diagram_type(&diagram.diagram_type),
+            title: diagram.title.clone(),
+            summary: diagram.summary.clone(),
+        })
+        .collect()
+}
+
+fn normalize_diagram_type(diagram_type: &str) -> String {
+    match diagram_type {
+        "dependency" => "module_dependency".to_string(),
+        "structure" => "hierarchy".to_string(),
+        "flow" => "process".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn read_source_snippet(report: &ScanReport, path: &str) -> Option<SourceSnippet> {
+    let source_id = source_id_for_path(report, path);
+    let absolute_path = Path::new(&report.root).join(path);
+    let content = fs::read_to_string(&absolute_path).ok()?;
+    let lines = content.lines().collect::<Vec<_>>();
+    let snippet_lines = lines
+        .iter()
+        .take(24)
+        .map(|line| line.trim_end().to_string())
+        .collect::<Vec<_>>();
+    let content = snippet_lines.join("\n").trim().to_string();
+    if content.is_empty() {
+        return None;
+    }
+
+    Some(SourceSnippet {
+        source_id,
+        path: path.to_string(),
+        start_line: 1,
+        end_line: snippet_lines.len(),
+        content,
+    })
 }
 
 fn lookup_topic_seed(

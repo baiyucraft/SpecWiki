@@ -329,8 +329,13 @@ pub fn compute_page_input_hash(
         summary_inputs: &'a [String],
         hints: &'a [String],
         child_summaries: &'a [String],
+        child_rollups: &'a [crate::domain::context::ChildPageRollup],
         evidence_groups: &'a [crate::domain::context::PageEvidenceGroup],
         diagram_inputs: &'a [crate::domain::context::PageDiagramInput],
+        module_dossiers: &'a [crate::domain::context::ModuleDossier],
+        topic_dossier: &'a Option<crate::domain::context::TopicDossier>,
+        research_result: &'a Option<crate::domain::context::PageResearchResult>,
+        research_session: &'a Option<crate::domain::context::PageResearchSessionState>,
         source_fingerprints: Vec<(&'a str, &'a str)>,
     }
 
@@ -367,8 +372,13 @@ pub fn compute_page_input_hash(
         summary_inputs: &context.summary_inputs,
         hints: &context.hints,
         child_summaries: &context.child_summaries,
+        child_rollups: &context.child_rollups,
         evidence_groups: &context.evidence_groups,
         diagram_inputs: &context.diagram_inputs,
+        module_dossiers: &context.module_dossiers,
+        topic_dossier: &context.topic_dossier,
+        research_result: &context.research_result,
+        research_session: &context.research_session,
         source_fingerprints,
     };
 

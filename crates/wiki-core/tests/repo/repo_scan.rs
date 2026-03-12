@@ -5,6 +5,14 @@ use tempfile::tempdir;
 use wiki_core::llm::{LlmCompletion, LlmPromptRequest, LlmRuntime, LlmService};
 use wiki_core::repo::scanner::{scan_repo, scan_repo_with_boundary_and_llm, FilePurpose};
 
+fn mock_completion(output: serde_json::Value, model: &str) -> LlmCompletion {
+    LlmCompletion {
+        output,
+        model: Some(model.to_string()),
+        usage: None,
+    }
+}
+
 #[derive(Default)]
 struct ScanBatchFilePurposeService {
     calls: usize,
@@ -36,10 +44,7 @@ impl LlmService for ScanBatchFilePurposeService {
             }).collect::<Vec<_>>()
         });
 
-        Ok(LlmCompletion {
-            output,
-            model: Some("scan-batch-model".to_string()),
-        })
+        Ok(mock_completion(output, "scan-batch-model"))
     }
 }
 
@@ -76,10 +81,7 @@ impl LlmService for StructuralOverrideService {
             _ => serde_json::json!({}),
         };
 
-        Ok(LlmCompletion {
-            output,
-            model: Some("structural-override-model".to_string()),
-        })
+        Ok(mock_completion(output, "structural-override-model"))
     }
 }
 
@@ -340,14 +342,16 @@ fn scan_repo_batches_utility_file_purpose_candidates() {
         enabled: true,
         model: "bridge/mock-model".to_string(),
         max_calls: 8,
-        parallel_requests: 3,
+        page_enrichment_parallel_requests: 3,
         cache_ttl_seconds: 60 * 60,
         allow_mermaid: true,
         providers: std::collections::BTreeMap::new(),
+        ..wiki_core::domain::steering::LlmConfig::default()
     };
     let mut service = ScanBatchFilePurposeService::default();
     let mut runtime = LlmRuntime::new(root, &config, Some(&mut service));
     let report = scan_repo_with_boundary_and_llm(root, &[], &[], Some(&mut runtime)).unwrap();
+    drop(runtime);
 
     let by_path = report
         .files
@@ -409,14 +413,16 @@ fn llm_file_purpose_override_does_not_change_structural_sets() {
         enabled: true,
         model: "bridge/mock-model".to_string(),
         max_calls: 8,
-        parallel_requests: 3,
+        page_enrichment_parallel_requests: 3,
         cache_ttl_seconds: 60 * 60,
         allow_mermaid: true,
         providers: std::collections::BTreeMap::new(),
+        ..wiki_core::domain::steering::LlmConfig::default()
     };
     let mut service = StructuralOverrideService;
     let mut runtime = LlmRuntime::new(root, &config, Some(&mut service));
     let llm_report = scan_repo_with_boundary_and_llm(root, &[], &[], Some(&mut runtime)).unwrap();
+    drop(runtime);
 
     let by_path = llm_report
         .files

@@ -32,10 +32,10 @@ pub fn dispatch_with_progress(
 }
 
 /// 在 transport 层同时具备进度上报和可选 LLM 桥接时的统一分发入口。
-pub fn dispatch_with_runtime(
+pub fn dispatch_with_runtime<'a>(
     command: CoreCommand,
-    progress_sink: &mut dyn ProgressSink,
-    mut llm_service: Option<&mut dyn LlmService>,
+    progress_sink: &'a mut dyn ProgressSink,
+    mut llm_service: Option<&'a mut dyn LlmService>,
 ) -> CoreResponse {
     let repo_root = command
         .repo_root

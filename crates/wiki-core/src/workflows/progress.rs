@@ -1,6 +1,10 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
+
+use crate::llm::LlmUsageSnapshot;
 
 /// `WorkflowProgressEvent` 是 workflow 对外可观测的最小进度事实。
 /// transport 只负责把它编码成协议，不在这里附带宿主语义。
@@ -18,6 +22,9 @@ pub struct WorkflowProgressEvent {
     pub processed: Option<usize>,
     /// 当前阶段总工作量；未知时显式为 `None`。
     pub total: Option<usize>,
+    /// 当前累计的 LLM usage 快照。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<LlmUsageSnapshot>,
 }
 
 /// workflow 只依赖 `ProgressSink` 这层抽象，不直接触碰 stdout。
@@ -31,6 +38,23 @@ pub struct NoopProgressSink;
 
 impl ProgressSink for NoopProgressSink {
     fn report(&mut self, _event: WorkflowProgressEvent) {}
+}
+
+/// `SharedProgressSink` 让同一条 workflow 能把普通阶段和实时 usage 事件写到同一个下游。
+pub struct SharedProgressSink<'a> {
+    inner: Rc<RefCell<&'a mut dyn ProgressSink>>,
+}
+
+impl<'a> SharedProgressSink<'a> {
+    pub fn new(inner: Rc<RefCell<&'a mut dyn ProgressSink>>) -> Self {
+        Self { inner }
+    }
+}
+
+impl ProgressSink for SharedProgressSink<'_> {
+    fn report(&mut self, event: WorkflowProgressEvent) {
+        self.inner.borrow_mut().report(event);
+    }
 }
 
 /// `WorkflowReporter` 统一负责稳定阶段命名和耗时计算。
@@ -84,7 +108,7 @@ impl<'a> WorkflowReporter<'a> {
     /// - `phase`：稳定阶段名。
     /// - `message`：当前阶段的简洁说明。
     pub fn phase(&mut self, phase: &str, message: impl Into<String>) {
-        self.emit(phase, message.into(), None, None);
+        self.emit(phase, message.into(), None, None, None);
     }
 
     /// 在可计数阶段上报当前完成度。
@@ -101,7 +125,17 @@ impl<'a> WorkflowReporter<'a> {
         processed: usize,
         total: usize,
     ) {
-        self.emit(phase, message.into(), Some(processed), Some(total));
+        self.emit(phase, message.into(), Some(processed), Some(total), None);
+    }
+
+    /// 输出带 usage 快照的进度事件。
+    pub fn usage(
+        &mut self,
+        phase: &str,
+        message: impl Into<String>,
+        usage: LlmUsageSnapshot,
+    ) {
+        self.emit(phase, message.into(), None, None, Some(usage));
     }
 
     fn emit(
@@ -110,6 +144,7 @@ impl<'a> WorkflowReporter<'a> {
         message: String,
         processed: Option<usize>,
         total: Option<usize>,
+        usage: Option<LlmUsageSnapshot>,
     ) {
         self.sink.report(WorkflowProgressEvent {
             action: self.action.to_string(),
@@ -118,6 +153,7 @@ impl<'a> WorkflowReporter<'a> {
             elapsed_ms: self.started_at.elapsed().as_millis() as u64,
             processed,
             total,
+            usage,
         });
     }
 }

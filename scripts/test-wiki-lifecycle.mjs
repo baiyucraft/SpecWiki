@@ -25,7 +25,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   callCore,
+  callCoreStreaming,
   ensureBinary,
+  formatUsageSnapshot,
   ROOT_DIR,
   removePathWithRetry,
   resolveProjectJobs,
@@ -33,6 +35,7 @@ import {
   runTaskPool,
   TEST_DIR,
   TestRunner,
+  withTemporaryDevConfig,
 } from "./testing/helpers.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -50,19 +53,147 @@ export const LIFECYCLE_PHASES = {
   rebuild: "重建链路：init → rebuild → status",
 };
 
-function initViaRealRepo(proj, realRepo) {
+function resolveRunModes(runMode) {
+  if (runMode === "both") {
+    return [
+      { label: "cold", cacheMode: "clear" },
+      { label: "warm", cacheMode: "preserve" },
+    ];
+  }
+  if (runMode === "warm") {
+    return [{ label: "warm", cacheMode: "preserve" }];
+  }
+  return [{ label: "cold", cacheMode: "clear" }];
+}
+
+function formatElapsed(elapsedMs) {
+  if (elapsedMs < 1_000) {
+    return `${elapsedMs}ms`;
+  }
+  return `${(elapsedMs / 1_000).toFixed(elapsedMs >= 10_000 ? 0 : 1)}s`;
+}
+
+function promptCount(usage, promptType) {
+  return usage?.by_prompt_type?.find((bucket) => bucket.key === promptType)?.request_count ?? 0;
+}
+
+function summarizeProgressUsage(progressEvents) {
+  for (let index = progressEvents.length - 1; index >= 0; index--) {
+    const event = progressEvents[index];
+    if (event.phase === "llm_usage" && event.usage) {
+      return event.usage;
+    }
+  }
+  return null;
+}
+
+function createEmptyUsageSnapshot() {
+  return {
+    request_count: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    by_prompt_type: [],
+    by_provider_model: [],
+  };
+}
+
+function mergeUsageBuckets(targetBuckets, sourceBuckets) {
+  const bucketMap = new Map(targetBuckets.map((bucket) => [bucket.key, { ...bucket }]));
+  for (const bucket of sourceBuckets ?? []) {
+    const current = bucketMap.get(bucket.key) ?? {
+      key: bucket.key,
+      request_count: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      provider: bucket.provider ?? null,
+      model: bucket.model ?? null,
+    };
+    current.request_count += bucket.request_count ?? 0;
+    current.input_tokens += bucket.input_tokens ?? 0;
+    current.output_tokens += bucket.output_tokens ?? 0;
+    current.total_tokens += bucket.total_tokens ?? 0;
+    current.provider ??= bucket.provider ?? null;
+    current.model ??= bucket.model ?? null;
+    bucketMap.set(bucket.key, current);
+  }
+  return [...bucketMap.values()].sort((left, right) => left.key.localeCompare(right.key));
+}
+
+function mergeUsageSnapshot(target, usage) {
+  if (!usage) {
+    return target;
+  }
+
+  target.request_count += usage.request_count ?? 0;
+  target.input_tokens += usage.input_tokens ?? 0;
+  target.output_tokens += usage.output_tokens ?? 0;
+  target.total_tokens += usage.total_tokens ?? 0;
+  target.by_prompt_type = mergeUsageBuckets(target.by_prompt_type, usage.by_prompt_type);
+  target.by_provider_model = mergeUsageBuckets(target.by_provider_model, usage.by_provider_model);
+  return target;
+}
+
+function createLifecycleProgressLogger(project, runLabel) {
+  const countedPercents = new Map();
+  const phaseMessages = new Map();
+  let lastUsageTotal = -1;
+
+  return {
+    info(message) {
+      console.log(`[${project}/${runLabel}] ${message}`);
+    },
+    onProgress(event) {
+      const prefix = `[${project}/${runLabel}] ${formatElapsed(event.elapsed_ms)} ${event.phase}`;
+      if (event.phase === "llm_usage" && event.usage) {
+        if (event.usage.total_tokens === lastUsageTotal) {
+          return;
+        }
+        lastUsageTotal = event.usage.total_tokens;
+        console.log(`${prefix} ${formatUsageSnapshot(event.usage)}`);
+        return;
+      }
+
+      if (event.processed != null && event.total != null && event.total > 0) {
+        const percent = Math.floor((event.processed / event.total) * 100);
+        const lastPercent = countedPercents.get(event.phase) ?? -1;
+        const shouldPrint =
+          event.processed === 0
+          || event.processed === event.total
+          || percent >= lastPercent + 10;
+        if (!shouldPrint) {
+          return;
+        }
+        countedPercents.set(event.phase, percent);
+        console.log(`${prefix} ${event.processed}/${event.total} ${event.message}`);
+        return;
+      }
+
+      if (phaseMessages.get(event.phase) === event.message) {
+        return;
+      }
+      phaseMessages.set(event.phase, event.message);
+      console.log(`${prefix} ${event.message}`);
+    },
+  };
+}
+
+async function initViaRealRepo(proj, realRepo, ctx) {
   const projDir = path.join(TEST_DIR, proj);
   const wikiInReal = path.join(realRepo, ".wiki");
-
-  removePathWithRetry(wikiInReal);
-
-  callCore({ action: "init", repoRoot: realRepo });
+  const result = await callCoreStreaming(
+    { action: "init", repoRoot: realRepo },
+    { onProgress: (event) => ctx.progressLogger?.onProgress(event) },
+  );
+  if (!result.response.ok) {
+    throw new Error(result.response.error || `${proj} init failed`);
+  }
 
   const wikiDest = path.join(projDir, ".wiki");
   removePathWithRetry(wikiDest);
   cpSync(wikiInReal, wikiDest, { recursive: true });
-
-  removePathWithRetry(wikiInReal);
+  return result;
 }
 
 function discoverProjects() {
@@ -390,18 +521,58 @@ function findTrackedSourceFile(ctx) {
   return findSourceFile(ctx.projDir);
 }
 
-function initProject(ctx, t) {
+async function runStreamingCommand(ctx, command, usageLabel) {
+  const result = await callCoreStreaming(command, {
+    onProgress: (event) => ctx.progressLogger?.onProgress(event),
+  });
+
+  const usage = summarizeProgressUsage(result.progressEvents);
+  if (usage) {
+    mergeUsageSnapshot(ctx.usageSummary, usage);
+    console.log(
+      `  [usage/${ctx.runLabel}/${usageLabel}] ${formatUsageSnapshot(usage)} page_research=${promptCount(usage, "page_research")} page_enrichment=${promptCount(usage, "page_enrichment")}`,
+    );
+  }
+
+  return result.response;
+}
+
+function syncRealRepoWikiSnapshot(ctx) {
+  if (!ctx.isRealRepo) {
+    return;
+  }
+
+  const realWikiDir = path.join(REAL_REPO_MAP[ctx.proj], ".wiki");
+  if (!existsSync(realWikiDir)) {
+    return;
+  }
+
+  removePathWithRetry(ctx.wikiDir);
+  cpSync(realWikiDir, ctx.wikiDir, { recursive: true });
+}
+
+async function initProject(ctx, t) {
   const { proj, projDir, wikiDir, repoArg, isRealRepo } = ctx;
 
-  console.log("  [init]");
-  removePathWithRetry(wikiDir);
+  console.log(`  [init/${ctx.runLabel}] cache_mode=${ctx.cacheMode}`);
 
   try {
     if (isRealRepo) {
-      initViaRealRepo(proj, REAL_REPO_MAP[proj]);
+      const result = await initViaRealRepo(proj, REAL_REPO_MAP[proj], ctx);
+      const usage = summarizeProgressUsage(result.progressEvents);
+      if (usage) {
+        mergeUsageSnapshot(ctx.usageSummary, usage);
+        console.log(
+          `  [usage/${ctx.runLabel}/init] ${formatUsageSnapshot(usage)} page_research=${promptCount(usage, "page_research")} page_enrichment=${promptCount(usage, "page_enrichment")}`,
+        );
+      }
       t.assertFileExists(".wiki directory created", wikiDir);
     } else {
-      const result = callCore({ action: "init", repoRoot: repoArg });
+      const result = await runStreamingCommand(
+        ctx,
+        { action: "init", repoRoot: repoArg },
+        "init",
+      );
       t.assertOk("init returns ok", result);
       t.assertFileExists(".wiki directory created", wikiDir);
     }
@@ -448,9 +619,14 @@ function runQuery(ctx, t) {
   assertGraphQuery(ctx, t, ctx.graphProbe || captureGraphProbe(ctx, t, "query"), "steady");
 }
 
-function runUpdateNoop(ctx, t) {
-  console.log("  [update no-op]");
-  const updateNoop = callCore({ action: "update", repoRoot: ctx.repoArg });
+async function runUpdateNoop(ctx, t) {
+  console.log(`  [update no-op/${ctx.runLabel}]`);
+  const updateNoop = await runStreamingCommand(
+    ctx,
+    { action: "update", repoRoot: ctx.repoArg },
+    "update-noop",
+  );
+  syncRealRepoWikiSnapshot(ctx);
   t.assertOk("update returns ok", updateNoop);
   t.assertContains("state is fresh", updateNoop.data, "state", "fresh");
   assertSymbolSnapshot(ctx, t, "after no-op update", ctx.initialSymbolCount);
@@ -459,8 +635,8 @@ function runUpdateNoop(ctx, t) {
   assertGraphQuery(ctx, t, ctx.graphProbe, "after no-op update");
 }
 
-function runMutation(ctx, t) {
-  console.log("  [simulate source change]");
+async function runMutation(ctx, t) {
+  console.log(`  [simulate source change/${ctx.runLabel}]`);
   if (ctx.isRealRepo) {
     t.skip("simulate source change skipped (real-repo project)");
     return;
@@ -480,7 +656,11 @@ function runMutation(ctx, t) {
     t.assertOk("status after touch returns ok", statusTouch);
     t.assertContains("state is stale after touch", statusTouch.data, "state", "stale");
 
-    const updateTouch = callCore({ action: "update", repoRoot: ctx.repoArg });
+    const updateTouch = await runStreamingCommand(
+      ctx,
+      { action: "update", repoRoot: ctx.repoArg },
+      "update-touch",
+    );
     t.assertOk("update after touch returns ok", updateTouch);
     t.assertContains("state is fresh after touch update", updateTouch.data, "state", "fresh");
     assertSymbolSnapshot(ctx, t, "after touch update", ctx.initialSymbolCount);
@@ -492,9 +672,14 @@ function runMutation(ctx, t) {
   }
 }
 
-function runRebuild(ctx, t) {
-  console.log("  [rebuild]");
-  const rebuildResult = callCore({ action: "rebuild", repoRoot: ctx.repoArg });
+async function runRebuild(ctx, t) {
+  console.log(`  [rebuild/${ctx.runLabel}]`);
+  const rebuildResult = await runStreamingCommand(
+    ctx,
+    { action: "rebuild", repoRoot: ctx.repoArg },
+    "rebuild",
+  );
+  syncRealRepoWikiSnapshot(ctx);
   t.assertOk("rebuild returns ok", rebuildResult);
   t.assertContains("rebuild state is fresh", rebuildResult.data, "state", "fresh");
   t.assertMarkerCoverage("markers preserved after rebuild", ctx.wikiDir);
@@ -511,8 +696,8 @@ function runStatusAfterRebuild(ctx, t) {
   t.assertContains("state is fresh", statusFinal.data, "state", "fresh");
 }
 
-function runProjectPhase(ctx, phase, t) {
-  const initialized = initProject(ctx, t);
+async function runProjectPhase(ctx, phase, t) {
+  const initialized = await initProject(ctx, t);
   if (!initialized) {
     console.log("");
     return;
@@ -521,6 +706,9 @@ function runProjectPhase(ctx, phase, t) {
   if (phase === "bootstrap") {
     runStatusAfterInit(ctx, t);
     runSymbolSnapshotAfterInit(ctx, t);
+    console.log(
+      `  [usage-summary/${ctx.runLabel}] ${formatUsageSnapshot(ctx.usageSummary)} page_research=${promptCount(ctx.usageSummary, "page_research")} page_enrichment=${promptCount(ctx.usageSummary, "page_enrichment")}`,
+    );
     console.log("");
     return;
   }
@@ -529,22 +717,31 @@ function runProjectPhase(ctx, phase, t) {
     runSymbolSnapshotAfterInit(ctx, t);
     runSyncNoChange(ctx, t);
     runQuery(ctx, t);
-    runUpdateNoop(ctx, t);
+    await runUpdateNoop(ctx, t);
+    console.log(
+      `  [usage-summary/${ctx.runLabel}] ${formatUsageSnapshot(ctx.usageSummary)} page_research=${promptCount(ctx.usageSummary, "page_research")} page_enrichment=${promptCount(ctx.usageSummary, "page_enrichment")}`,
+    );
     console.log("");
     return;
   }
 
   if (phase === "mutation") {
     runSymbolSnapshotAfterInit(ctx, t);
-    runMutation(ctx, t);
+    await runMutation(ctx, t);
+    console.log(
+      `  [usage-summary/${ctx.runLabel}] ${formatUsageSnapshot(ctx.usageSummary)} page_research=${promptCount(ctx.usageSummary, "page_research")} page_enrichment=${promptCount(ctx.usageSummary, "page_enrichment")}`,
+    );
     console.log("");
     return;
   }
 
   if (phase === "rebuild") {
     runSymbolSnapshotAfterInit(ctx, t);
-    runRebuild(ctx, t);
+    await runRebuild(ctx, t);
     runStatusAfterRebuild(ctx, t);
+    console.log(
+      `  [usage-summary/${ctx.runLabel}] ${formatUsageSnapshot(ctx.usageSummary)} page_research=${promptCount(ctx.usageSummary, "page_research")} page_enrichment=${promptCount(ctx.usageSummary, "page_enrichment")}`,
+    );
     console.log("");
     return;
   }
@@ -553,14 +750,17 @@ function runProjectPhase(ctx, phase, t) {
   runSymbolSnapshotAfterInit(ctx, t);
   runSyncNoChange(ctx, t);
   runQuery(ctx, t);
-  runUpdateNoop(ctx, t);
-  runMutation(ctx, t);
-  runRebuild(ctx, t);
+  await runUpdateNoop(ctx, t);
+  await runMutation(ctx, t);
+  await runRebuild(ctx, t);
   runStatusAfterRebuild(ctx, t);
+  console.log(
+    `  [usage-summary/${ctx.runLabel}] ${formatUsageSnapshot(ctx.usageSummary)} page_research=${promptCount(ctx.usageSummary, "page_research")} page_enrichment=${promptCount(ctx.usageSummary, "page_enrichment")}`,
+  );
   console.log("");
 }
 
-function runLifecycleProject(proj, options = {}) {
+async function runLifecycleProject(proj, options = {}) {
   const phase = options.phase || "full";
   const projDir = path.join(TEST_DIR, proj);
   const wikiDir = path.join(projDir, ".wiki");
@@ -589,15 +789,47 @@ function runLifecycleProject(proj, options = {}) {
   }
 
   try {
-    const t = new TestRunner();
-    runProjectPhase({ isRealRepo, phase, proj, projDir, repoArg, wikiDir }, phase, t);
+    const runs = [];
+    for (const run of resolveRunModes(options.runMode || "cold")) {
+      const t = new TestRunner();
+      const ctx = {
+        isRealRepo,
+        phase,
+        proj,
+        projDir,
+        repoArg,
+        wikiDir,
+        cacheMode: run.cacheMode,
+        runLabel: run.label,
+        usageSummary: createEmptyUsageSnapshot(),
+        progressLogger: createLifecycleProgressLogger(proj, run.label),
+      };
+      const configRepoRoot = isRealRepo ? REAL_REPO_MAP[proj] : projDir;
+      await withTemporaryDevConfig(
+        configRepoRoot,
+        () => runProjectPhase(ctx, phase, t),
+        { cacheMode: ctx.cacheMode },
+      );
+      runs.push({
+        label: run.label,
+        cacheMode: run.cacheMode,
+        total: t.total,
+        passed: t.passed,
+        failed: t.failed,
+        usage: ctx.usageSummary,
+      });
+    }
+    if (isRealRepo) {
+      removePathWithRetry(path.join(REAL_REPO_MAP[proj], ".wiki"));
+    }
     return {
       proj,
-      ok: t.failed === 0,
+      ok: runs.every((run) => run.failed === 0),
       skipped: false,
-      total: t.total,
-      passed: t.passed,
-      failed: t.failed,
+      total: runs.reduce((sum, run) => sum + run.total, 0),
+      passed: runs.reduce((sum, run) => sum + run.passed, 0),
+      failed: runs.reduce((sum, run) => sum + run.failed, 0),
+      runs,
       logs,
     };
   } finally {
@@ -617,13 +849,18 @@ function printLifecycleProjectResult(result, index, total, phase) {
   for (const line of result.logs ?? []) {
     console.log(line);
   }
+  for (const run of result.runs ?? []) {
+    console.log(
+      `    summary ${run.label}: assertions=${run.total} passed=${run.passed} failed=${run.failed} ${formatUsageSnapshot(run.usage)} page_research=${promptCount(run.usage, "page_research")} page_enrichment=${promptCount(run.usage, "page_enrichment")}`,
+    );
+  }
 }
 
-async function runLifecycleProjectInChild(proj, phase) {
+async function runLifecycleProjectInChild(proj, phase, runMode) {
   for (let attempt = 0; attempt < 3; attempt++) {
     const child = await runCommandCapture(
       process.execPath,
-      [SCRIPT_PATH, "--child-json", "--phase", phase, "--no-build", proj],
+      [SCRIPT_PATH, "--child-json", "--phase", phase, "--run-mode", runMode, "--no-build", proj],
       { cwd: ROOT_DIR },
     );
 
@@ -663,15 +900,23 @@ export async function runLifecycleTests(names, options = {}) {
 
   const results = useParallel
     ? await runTaskPool(projects, jobs, async (proj, index) => {
-      const result = await runLifecycleProjectInChild(proj, phase);
+      const result = await runLifecycleProjectInChild(proj, phase, options.runMode || "cold");
       printLifecycleProjectResult(result, index, total, phase);
       return result;
     })
-    : projects.map((proj, index) => {
+    : await Promise.all(projects.map(async (proj, index) => {
       console.log(`[${index + 1}/${total}] ${proj} [phase=${phase}]`);
-      const result = runLifecycleProject(proj, { phase });
+      const result = await runLifecycleProject(proj, {
+        phase,
+        runMode: options.runMode || "cold",
+      });
+      for (const run of result.runs ?? []) {
+        console.log(
+          `    summary ${run.label}: assertions=${run.total} passed=${run.passed} failed=${run.failed} ${formatUsageSnapshot(run.usage)} page_research=${promptCount(run.usage, "page_research")} page_enrichment=${promptCount(run.usage, "page_enrichment")}`,
+        );
+      }
       return result;
-    });
+    }));
 
   for (const result of results) {
     assertionTotal += result.total ?? 0;
@@ -701,6 +946,7 @@ function parseCliArgs(argv) {
   let jobs;
   let childMode = false;
   let ensureFresh = true;
+  let runMode = "cold";
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -718,6 +964,11 @@ function parseCliArgs(argv) {
       listPhases = true;
       continue;
     }
+    if (arg === "--run-mode") {
+      runMode = argv[index + 1] || runMode;
+      index++;
+      continue;
+    }
     if (arg === "--child-json") {
       childMode = true;
       continue;
@@ -729,7 +980,7 @@ function parseCliArgs(argv) {
     names.push(arg);
   }
 
-  return { childMode, ensureFresh, jobs, listPhases, names, phase };
+  return { childMode, ensureFresh, jobs, listPhases, names, phase, runMode };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -744,8 +995,9 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     const result = runLifecycleProject(args.names[0], {
       captureLogs: true,
       phase: args.phase,
+      runMode: args.runMode,
     });
-    process.stdout.write(JSON.stringify(result));
+    process.stdout.write(JSON.stringify(await result));
     process.exit(0);
   }
 
@@ -753,6 +1005,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     ensureFresh: args.ensureFresh,
     jobs: args.jobs,
     phase: args.phase,
+    runMode: args.runMode,
   });
   if (!ok) process.exit(1);
 }

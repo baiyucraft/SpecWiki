@@ -2221,6 +2221,65 @@ pub fn read_llm_cache(
     read_llm_cache_in_conn(&conn, input_hash, prompt_type, prompt_version, model)
 }
 
+/// 清空 prompt 级 LLM 缓存。
+pub fn clear_llm_cache(repo_root: &Path) -> io::Result<()> {
+    let conn = open_db(repo_root)?;
+    if !table_exists(&conn, "llm_cache")? {
+        return Ok(());
+    }
+    conn.execute("DELETE FROM llm_cache", [])
+        .map_err(|error| io::Error::other(format!("clear_llm_cache: {error}")))?;
+    Ok(())
+}
+
+/// 读取全部 prompt 级 LLM 缓存，用于 runtime 清理前保留。
+pub fn load_all_llm_cache(repo_root: &Path) -> io::Result<Vec<LlmCacheEntry>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+    if !table_exists(&conn, "llm_cache")? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT input_hash, prompt_type, prompt_version, response, model, created_at, ttl_seconds
+             FROM llm_cache",
+        )
+        .map_err(|error| io::Error::other(format!("load_all_llm_cache prepare: {error}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(LlmCacheEntry {
+                input_hash: row.get(0)?,
+                prompt_type: row.get(1)?,
+                prompt_version: row.get(2)?,
+                response: row.get(3)?,
+                model: row.get(4)?,
+                created_at: row.get(5)?,
+                ttl_seconds: row.get(6)?,
+            })
+        })
+        .map_err(|error| io::Error::other(format!("load_all_llm_cache query: {error}")))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| io::Error::other(format!("load_all_llm_cache rows: {error}")))
+}
+
+/// 恢复一组 prompt 级 LLM 缓存。
+pub fn restore_llm_cache(repo_root: &Path, entries: &[LlmCacheEntry]) -> io::Result<()> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let conn = open_db(repo_root)?;
+    for entry in entries {
+        write_llm_cache_in_conn(&conn, entry)?;
+    }
+    Ok(())
+}
+
 fn read_llm_cache_in_conn(
     conn: &Connection,
     input_hash: &str,

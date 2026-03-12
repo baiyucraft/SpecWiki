@@ -64,6 +64,32 @@ impl CoreResponse {
 pub enum CoreEvent {
     Progress(WorkflowProgressEvent),
     LlmRequest { request: LlmPromptRequest },
+    AgentSessionStart { request: LlmPromptRequest },
+    AgentMessage {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        message: Value,
+    },
+    AgentToolCall {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        message: Value,
+    },
+    AgentToolResult {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        message: Value,
+    },
+    AgentFinal {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        response: LlmCompletion,
+    },
+    AgentAbort {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        reason: String,
+    },
     Result { response: CoreResponse },
     Error { response: CoreResponse },
 }
@@ -83,6 +109,11 @@ impl CoreEvent {
     /// 构造 LLM 请求事件。
     pub fn llm_request(request: LlmPromptRequest) -> Self {
         Self::LlmRequest { request }
+    }
+
+    /// 构造 agent session 启动事件。
+    pub fn agent_session_start(request: LlmPromptRequest) -> Self {
+        Self::AgentSessionStart { request }
     }
 
     /// 构造唯一终态事件。
@@ -111,6 +142,26 @@ pub enum CoreSessionInput {
         response: LlmCompletion,
     },
     LlmUnavailable {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        reason: String,
+    },
+    AgentMessage {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        message: Value,
+    },
+    AgentToolResult {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        message: Value,
+    },
+    AgentFinal {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        response: LlmCompletion,
+    },
+    AgentAbort {
         #[serde(rename = "requestId")]
         request_id: String,
         reason: String,

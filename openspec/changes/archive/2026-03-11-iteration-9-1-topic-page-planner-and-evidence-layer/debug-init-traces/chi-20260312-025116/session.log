@@ -1,0 +1,53 @@
+repo=E:\project\!byAI\spec-wiki\tmp\test\chi
+binary=E:\project\!byAI\spec-wiki\target\release\wiki-core.exe
+run_dir=E:\project\!byAI\spec-wiki\openspec\changes\iteration-9-1-topic-page-planner-and-evidence-layer\debug-init-traces\chi-20260312-025116
+
+[4ms] llm_uncertainty_gate 执行 LLM 不确定性判断
+[6ms] scan 扫描仓库源码
+[11s] llm_usage LLM usage 已更新：1 requests / 2379 tokens
+[14s] llm_usage LLM usage 已更新：2 requests / 5968 tokens
+[15s] llm_usage LLM usage 已更新：3 requests / 8443 tokens
+[16s] llm_usage LLM usage 已更新：4 requests / 10121 tokens
+[17s] parse_symbols 0/74 解析源码符号
+[17s] parse_symbols 8/74 解析源码符号 8/74
+[17s] parse_symbols 15/74 解析源码符号 15/74
+[17s] parse_symbols 23/74 解析源码符号 23/74
+[17s] parse_symbols 31/74 解析源码符号 31/74
+[17s] parse_symbols 38/74 解析源码符号 38/74
+[17s] parse_symbols 46/74 解析源码符号 46/74
+[17s] parse_symbols 54/74 解析源码符号 54/74
+[17s] parse_symbols 61/74 解析源码符号 61/74
+[17s] parse_symbols 69/74 解析源码符号 69/74
+[17s] parse_symbols 74/74 解析源码符号 74/74
+[17s] resolve_symbol_graph 解析符号关系
+[17s] analyze_symbol_graph 分析符号图
+[17s] build_module_tree 构建模块树
+[17s] build_contexts 构建页面上下文
+[17s] plan_pages 规划 Wiki 页面
+[17s] render_pages 0/14 渲染页面
+[17s] llm_enrichment 生成页面增强内容
+[27s] llm_usage LLM usage 已更新：5 requests / 14154 tokens
+[51s] llm_usage LLM usage 已更新：6 requests / 20249 tokens
+[83s] llm_usage LLM usage 已更新：7 requests / 26759 tokens
+[89s] llm_usage LLM usage 已更新：8 requests / 31493 tokens
+[114s] llm_usage LLM usage 已更新：9 requests / 38502 tokens
+[120s] llm_usage LLM usage 已更新：10 requests / 43156 tokens
+[142s] llm_usage LLM usage 已更新：11 requests / 50008 tokens
+[151s] llm_usage LLM usage 已更新：12 requests / 55727 tokens
+[177s] llm_usage LLM usage 已更新：13 requests / 63674 tokens
+[186s] llm_usage LLM usage 已更新：14 requests / 68473 tokens
+[231s] llm_usage LLM usage 已更新：15 requests / 74637 tokens
+[299s] llm_usage LLM usage 已更新：16 requests / 80888 tokens
+[324s] llm_usage LLM usage 已更新：17 requests / 88801 tokens
+[325s] llm_enrichment 2/14 生成页面增强内容 2/14
+[325s] llm_enrichment 6/14 生成页面增强内容 6/14
+[325s] render_pages 2/14 渲染页面 2/14
+[326s] render_pages 4/14 渲染页面 4/14
+[327s] render_pages 6/14 渲染页面 6/14
+[327s] render_pages 8/14 渲染页面 8/14
+[328s] render_pages 10/14 渲染页面 10/14
+[329s] render_pages 12/14 渲染页面 12/14
+[330s] render_pages 14/14 渲染页面 14/14
+[330s] write_state 写入运行时状态
+[330s] write_metadata 写入元数据
+terminal={"ok":true,"error":null,"data":{"generated_pages":[".wiki/项目概述.md",".wiki/系统架构.md",".wiki/工作流与部署.md",".wiki/核心模块/_examples.md",".wiki/核心模块/middleware.md",".wiki/专题/root-mechanism/root-core-根级核心机制.md",".wiki/专题/process/process-handlefunc-flow-流程主题：HandleFunc-flow.md",".wiki/专题/process/process-handler-flow-流程主题：Handler-flow.md",".wiki/专题/process/process-handlerfunc-flow-流程主题：HandlerFunc-flow.md",".wiki/专题/process/process-listarticles-flow-流程主题：ListArticles-flow.md",".wiki/专题/process/process-testmuxhandlepatternvalidation-flow-流程主题：TestMuxHandlePatternValidation-flow.md",".wiki/专题/process/process-testsinglehandler-flow-流程主题：TestSingleHandler-flow.md",".wiki/专题/module-capability/module-90018151b0b9-entry-_examples能力：入口编排.md",".wiki/专题/module-capability/module-fb4109464cc5-middleware-middleware能力：中间件.md"],"initialized":true,"state":"fresh"}}

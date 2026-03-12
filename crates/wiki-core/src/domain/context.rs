@@ -104,6 +104,221 @@ pub struct PageDiagramInput {
     pub edges: Vec<PageDiagramEdge>,
 }
 
+/// `SourceSnippet` 是 dossier / tool 共享的受控源码片段。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SourceSnippet {
+    /// 对应源码稳定 ID。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    /// 对应源码路径。
+    pub path: String,
+    /// 片段起始行号。
+    pub start_line: usize,
+    /// 片段结束行号。
+    pub end_line: usize,
+    /// 片段内容。
+    #[serde(default)]
+    pub content: String,
+}
+
+/// `PageResearchEvidenceItem` 是 research 结果里的单条 evidence。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PageResearchEvidenceItem {
+    /// 对应源码稳定 ID。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    /// 对应源码路径。
+    pub path: String,
+    /// 起始行号。
+    #[serde(default)]
+    pub start_line: usize,
+    /// 结束行号。
+    #[serde(default)]
+    pub end_line: usize,
+    /// evidence 说明。
+    #[serde(default)]
+    pub note: String,
+}
+
+/// `PageResearchEvidenceGroup` 是 research 结果里的证据分组。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PageResearchEvidenceGroup {
+    /// 分组稳定键，默认对齐 `PageEvidenceGroup.group_id`。
+    pub group_key: String,
+    /// 分组展示标题。
+    pub title: String,
+    /// 分组中的 evidence 项。
+    #[serde(default)]
+    pub items: Vec<PageResearchEvidenceItem>,
+}
+
+/// `PageResearchDiagramRollup` 是 research 结果里的图摘要。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PageResearchDiagramRollup {
+    /// 图稳定键，默认对齐 `PageDiagramInput.diagram_id`。
+    pub diagram_key: String,
+    /// 图类别，例如 `module_dependency / hierarchy / process`。
+    pub diagram_type: String,
+    /// 图展示标题。
+    pub title: String,
+    /// 图的高密度摘要。
+    #[serde(default)]
+    pub summary: String,
+}
+
+/// `ChildPageRollup` 表示父页可复用的结构化子页结果。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ChildPageRollup {
+    /// 子页稳定 ID。
+    pub page_id: String,
+    /// 子页标题。
+    pub title: String,
+    /// 子页类型。
+    pub page_type: String,
+    /// 子页高密度摘要。
+    #[serde(default)]
+    pub summary: String,
+    /// 子页上卷后的关键源码路径。
+    #[serde(default)]
+    pub key_sources_rollup: Vec<String>,
+    /// 子页上卷后的证据分组。
+    #[serde(default)]
+    pub evidence_rollup: Vec<PageResearchEvidenceGroup>,
+    /// 子页上卷后的图摘要。
+    #[serde(default)]
+    pub diagram_rollup: Vec<PageResearchDiagramRollup>,
+    /// 子页尚未确认的开放问题。
+    #[serde(default)]
+    pub open_questions: Vec<String>,
+}
+
+/// `ModuleDossier` 是模块页 research 前的稳定研究包。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ModuleDossier {
+    /// dossier 稳定 ID。
+    pub dossier_id: String,
+    /// 对应模块 ID。
+    pub module_id: String,
+    /// dossier 展示标题。
+    pub title: String,
+    /// 当前模块的关键源码路径。
+    #[serde(default)]
+    pub key_sources: Vec<String>,
+    /// 当前模块的关键符号 ID。
+    #[serde(default)]
+    pub key_symbols: Vec<String>,
+    /// 当前模块的源码片段。
+    #[serde(default)]
+    pub source_snippets: Vec<SourceSnippet>,
+    /// 当前模块的跨模块关系摘要。
+    #[serde(default)]
+    pub cross_module_edges: Vec<String>,
+    /// 当前模块涉及的流程候选。
+    #[serde(default)]
+    pub process_candidates: Vec<String>,
+    /// 当前模块 evidence 上卷。
+    #[serde(default)]
+    pub evidence_rollup: Vec<PageResearchEvidenceGroup>,
+    /// 当前模块 diagram 上卷。
+    #[serde(default)]
+    pub diagram_rollup: Vec<PageResearchDiagramRollup>,
+    /// 当前模块消费的子页上卷。
+    #[serde(default)]
+    pub child_page_rollup: Vec<ChildPageRollup>,
+}
+
+/// `TopicDossier` 是专题页 research 前的稳定研究包。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TopicDossier {
+    /// dossier 稳定 ID。
+    pub dossier_id: String,
+    /// 对应主题稳定键。
+    pub topic_key: String,
+    /// 主题类别。
+    pub topic_kind: String,
+    /// dossier 展示标题。
+    pub title: String,
+    /// 主题摘要。
+    #[serde(default)]
+    pub summary: String,
+    /// 关键源码路径。
+    #[serde(default)]
+    pub key_sources: Vec<String>,
+    /// 关键符号 ID。
+    #[serde(default)]
+    pub key_symbols: Vec<String>,
+    /// 源码片段。
+    #[serde(default)]
+    pub source_snippets: Vec<SourceSnippet>,
+    /// evidence 上卷。
+    #[serde(default)]
+    pub evidence_rollup: Vec<PageResearchEvidenceGroup>,
+    /// diagram 上卷。
+    #[serde(default)]
+    pub diagram_rollup: Vec<PageResearchDiagramRollup>,
+    /// 子页上卷。
+    #[serde(default)]
+    pub child_page_rollup: Vec<ChildPageRollup>,
+}
+
+/// `PageResearchResult` 固定为结构化研究结果，不承载最终 Markdown。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PageResearchResult {
+    /// 页面高密度摘要。
+    #[serde(default)]
+    pub summary: String,
+    /// 关键要点。
+    #[serde(default)]
+    pub key_points: Vec<String>,
+    /// 证据上卷。
+    #[serde(default)]
+    pub evidence_rollup: Vec<PageResearchEvidenceGroup>,
+    /// 图摘要上卷。
+    #[serde(default)]
+    pub diagram_rollup: Vec<PageResearchDiagramRollup>,
+    /// 待确认点。
+    #[serde(default)]
+    pub open_questions: Vec<String>,
+}
+
+/// `PageResearchTurn` 是 session 最近轮次里的单条消息。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PageResearchTurn {
+    /// turn 角色，例如 `system / user / assistant / tool`。
+    pub role: String,
+    /// turn 摘要。
+    #[serde(default)]
+    pub content: String,
+}
+
+/// `PageToolArtifactRef` 是 session 工具结果的可复用引用。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PageToolArtifactRef {
+    /// 工具名。
+    pub tool_name: String,
+    /// artifact 稳定 ID。
+    pub artifact_id: String,
+    /// artifact 摘要。
+    #[serde(default)]
+    pub summary: String,
+}
+
+/// `PageResearchSessionState` 是 research session 的可复用压缩状态。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PageResearchSessionState {
+    /// 本次 research session 的稳定 ID。
+    pub session_id: String,
+    /// 历史会话压缩摘要。
+    #[serde(default)]
+    pub session_summary: String,
+    /// 最近窗口内保留的原始 turn。
+    #[serde(default)]
+    pub recent_turns: Vec<PageResearchTurn>,
+    /// 工具结果引用。
+    #[serde(default)]
+    pub tool_artifact_refs: Vec<PageToolArtifactRef>,
+}
+
 /// `RepoContext` 是仓库级页面生成的输入。
 /// 它把底层扫描/模块树结果压缩成“页面真正关心的信息”。
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -173,10 +388,25 @@ pub struct PageContext {
     /// 叶子优先增强阶段从子页汇总出的摘要。
     #[serde(default)]
     pub child_summaries: Vec<String>,
+    /// 供父页消费的结构化子页上卷。
+    #[serde(default)]
+    pub child_rollups: Vec<ChildPageRollup>,
     /// 页面稳定 evidence groups，供 renderer、LLM 和验证脚本共享。
     #[serde(default)]
     pub evidence_groups: Vec<PageEvidenceGroup>,
     /// 页面稳定图输入，供 renderer 直接构造 Mermaid。
     #[serde(default)]
     pub diagram_inputs: Vec<PageDiagramInput>,
+    /// 当前页面关联的模块级 dossier。
+    #[serde(default)]
+    pub module_dossiers: Vec<ModuleDossier>,
+    /// 当前页面关联的专题 dossier。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic_dossier: Option<TopicDossier>,
+    /// 当前页面 research session 的结构化结果。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_result: Option<PageResearchResult>,
+    /// 当前页面 research session 的压缩状态。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_session: Option<PageResearchSessionState>,
 }

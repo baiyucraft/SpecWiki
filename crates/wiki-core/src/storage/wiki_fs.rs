@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
+use crate::domain::steering::LlmCacheMode;
+
 /// 把页面内容写到 `.wiki/` 下的目标路径。
 /// 页面路径由 planner 决定，这里只负责落盘。
 ///
@@ -65,10 +67,26 @@ pub fn page_exists(repo_root: &Path, page_path: &str) -> bool {
 /// 在重新 init / rebuild 前清理整个 runtime。
 /// 这是当前全量重建策略的基础动作。
 pub fn remove_runtime(repo_root: &Path) -> io::Result<()> {
+    remove_runtime_with_cache_mode(repo_root, LlmCacheMode::Clear)
+}
+
+/// 在重新 init / rebuild 前清理 runtime，并按 cache mode 处理 LLM cache。
+pub fn remove_runtime_with_cache_mode(repo_root: &Path, cache_mode: LlmCacheMode) -> io::Result<()> {
     let wiki_root = wiki_root(repo_root);
+    let preserved_llm_cache = match cache_mode {
+        LlmCacheMode::Preserve | LlmCacheMode::Refresh => {
+            crate::storage::sqlite_store::load_all_llm_cache(repo_root)?
+        }
+        LlmCacheMode::Clear => Vec::new(),
+    };
 
     if wiki_root.exists() {
         remove_dir_all_with_retry(&wiki_root)?;
+    }
+
+    if !preserved_llm_cache.is_empty() {
+        crate::storage::cache_store::ensure_cache_dir(repo_root)?;
+        crate::storage::sqlite_store::restore_llm_cache(repo_root, &preserved_llm_cache)?;
     }
 
     Ok(())

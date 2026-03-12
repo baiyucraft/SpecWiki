@@ -363,6 +363,15 @@ fn architecture_hints_section(context: &PageContext) -> String {
 }
 
 fn module_intro(context: &PageContext) -> String {
+    if let Some(summary) = context
+        .research_result
+        .as_ref()
+        .map(|result| result.summary.trim())
+        .filter(|summary| !summary.is_empty())
+    {
+        return summary.to_string();
+    }
+
     let module_name = fact_value(&context.facts, "模块名称").unwrap_or("当前模块");
     let module_kind = fact_value(&context.facts, "模块类型").unwrap_or("module");
     let module_root = fact_value(&context.facts, "模块根路径").unwrap_or(".");
@@ -385,6 +394,30 @@ fn module_intro(context: &PageContext) -> String {
 }
 
 fn source_section(context: &PageContext) -> String {
+    if let Some(dossier) = context.module_dossiers.first() {
+        let mut blocks = Vec::new();
+        if !dossier.key_sources.is_empty() {
+            blocks.push(grouped_bullet_block("关键源码", &dossier.key_sources).unwrap());
+        }
+        let snippets = dossier
+            .source_snippets
+            .iter()
+            .take(3)
+            .map(|snippet| {
+                format!(
+                    "- `{}`:{}-{}",
+                    snippet.path, snippet.start_line, snippet.end_line
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(block) = grouped_bullet_block("源码片段", &snippets) {
+            blocks.push(block);
+        }
+        if !blocks.is_empty() {
+            return blocks.join("\n\n");
+        }
+    }
+
     prefixed_bullets(
         &context.summary_inputs,
         "源码",
@@ -393,6 +426,12 @@ fn source_section(context: &PageContext) -> String {
 }
 
 fn dependency_section(context: &PageContext) -> String {
+    if let Some(dossier) = context.module_dossiers.first() {
+        if !dossier.cross_module_edges.is_empty() {
+            return bullet_lines(&dossier.cross_module_edges);
+        }
+    }
+
     prefixed_bullets(
         &context.summary_inputs,
         "依赖",
@@ -402,6 +441,14 @@ fn dependency_section(context: &PageContext) -> String {
 
 fn module_fact_section(context: &PageContext) -> String {
     let mut blocks = vec![bullet_lines(&context.facts)];
+    if let Some(result) = &context.research_result {
+        if let Some(block) = grouped_bullet_block("关键要点", &result.key_points) {
+            blocks.push(block);
+        }
+        if let Some(block) = grouped_bullet_block("待确认点", &result.open_questions) {
+            blocks.push(block);
+        }
+    }
 
     if let Some(block) = grouped_bullet_block(
         "关键调用热点",
@@ -426,6 +473,21 @@ fn module_fact_section(context: &PageContext) -> String {
 }
 
 fn child_module_section(context: &PageContext) -> String {
+    if !context.child_rollups.is_empty() {
+        let lines = context
+            .child_rollups
+            .iter()
+            .map(|rollup| {
+                if rollup.summary.trim().is_empty() {
+                    format!("{}（{}）", rollup.title, rollup.page_type)
+                } else {
+                    format!("{}：{}", rollup.title, rollup.summary.trim())
+                }
+            })
+            .collect::<Vec<_>>();
+        return bullet_lines(&lines);
+    }
+
     prefixed_bullets(
         &context.summary_inputs,
         "子模块",
@@ -453,6 +515,15 @@ fn workflow_overview(context: &PageContext) -> String {
 }
 
 fn topic_intro(context: &PageContext) -> String {
+    if let Some(summary) = context
+        .research_result
+        .as_ref()
+        .map(|result| result.summary.trim())
+        .filter(|summary| !summary.is_empty())
+    {
+        return summary.to_string();
+    }
+
     let topic_title = fact_value(&context.facts, "主题标题").unwrap_or("当前主题");
     let topic_kind = fact_value(&context.facts, "主题类别").unwrap_or("topic");
     let source_count = fact_value(&context.facts, "关联源码数").unwrap_or("0");
@@ -472,6 +543,46 @@ fn topic_intro(context: &PageContext) -> String {
 }
 
 fn topic_evidence_section(context: &PageContext) -> String {
+    if let Some(result) = &context.research_result {
+        let lines = result
+            .evidence_rollup
+            .iter()
+            .map(|group| {
+                let items = group
+                    .items
+                    .iter()
+                    .take(4)
+                    .map(|item| item.path.clone())
+                    .collect::<Vec<_>>();
+                format!("{}：{}", group.title, items.join("、"))
+            })
+            .filter(|line| !line.ends_with('：'))
+            .collect::<Vec<_>>();
+        if !lines.is_empty() {
+            return bullet_lines(&lines);
+        }
+    }
+
+    if let Some(dossier) = &context.topic_dossier {
+        let lines = dossier
+            .evidence_rollup
+            .iter()
+            .map(|group| {
+                let items = group
+                    .items
+                    .iter()
+                    .take(4)
+                    .map(|item| item.path.clone())
+                    .collect::<Vec<_>>();
+                format!("{}：{}", group.title, items.join("、"))
+            })
+            .filter(|line| !line.ends_with('：'))
+            .collect::<Vec<_>>();
+        if !lines.is_empty() {
+            return bullet_lines(&lines);
+        }
+    }
+
     let source_paths = prefixed_values(&context.summary_inputs, "关键源码");
     if source_paths.is_empty() {
         "当前主题还没有额外的关键源码摘要。".to_string()
@@ -481,6 +592,23 @@ fn topic_evidence_section(context: &PageContext) -> String {
 }
 
 fn topic_diagram_section(context: &PageContext) -> String {
+    if let Some(result) = &context.research_result {
+        if !result.diagram_rollup.is_empty() {
+            let lines = result
+                .diagram_rollup
+                .iter()
+                .map(|diagram| {
+                    if diagram.summary.trim().is_empty() {
+                        format!("{}（{}）", diagram.title, diagram.diagram_type)
+                    } else {
+                        format!("{}：{}", diagram.title, diagram.summary.trim())
+                    }
+                })
+                .collect::<Vec<_>>();
+            return bullet_lines(&lines);
+        }
+    }
+
     if context
         .diagram_inputs
         .iter()
@@ -493,6 +621,23 @@ fn topic_diagram_section(context: &PageContext) -> String {
 }
 
 fn topic_related_section(context: &PageContext) -> String {
+    if let Some(dossier) = &context.topic_dossier {
+        if !dossier.child_page_rollup.is_empty() {
+            let lines = dossier
+                .child_page_rollup
+                .iter()
+                .map(|rollup| {
+                    if rollup.summary.trim().is_empty() {
+                        rollup.title.clone()
+                    } else {
+                        format!("{}：{}", rollup.title, rollup.summary.trim())
+                    }
+                })
+                .collect::<Vec<_>>();
+            return bullet_lines(&lines);
+        }
+    }
+
     let related_modules = prefixed_values(&context.summary_inputs, "关联模块");
     if related_modules.is_empty() {
         "当前专题页没有额外的关联模块线索。".to_string()

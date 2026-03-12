@@ -1,10 +1,12 @@
 //! update workflow 负责把 `stale` runtime 增量刷新回 `fresh`。
 //! 它优先局部重建受影响页面，并在必要时回退到 init 或 rebuild。
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::rc::Rc;
 use std::time::Instant;
 
 use serde::Serialize;
@@ -44,7 +46,9 @@ use crate::workflows::init::{
     source_paths_for_page,
 };
 use crate::workflows::page_render::prepare_page_artifacts_with_llm;
-use crate::workflows::progress::{NoopProgressSink, ProgressSink, WorkflowReporter};
+use crate::workflows::progress::{
+    NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
+};
 use crate::workflows::rebuild::run_rebuild_with_progress_and_llm_as;
 
 const LOCAL_UPDATE_MAX_FILES: usize = 32;
@@ -95,11 +99,11 @@ pub fn run_update_with_progress_as(
 ///
 /// # 返回
 /// - 成功时返回 update 报告。
-pub fn run_update_with_progress_and_llm_as(
+pub fn run_update_with_progress_and_llm_as<'a>(
     action: &'static str,
     repo_root: &Path,
-    progress_sink: &mut dyn ProgressSink,
-    llm_service: Option<&mut dyn LlmService>,
+    progress_sink: &'a mut dyn ProgressSink,
+    llm_service: Option<&'a mut dyn LlmService>,
 ) -> io::Result<UpdateReport> {
     let started_at = Instant::now();
     let steering = load_steering_config(repo_root);
@@ -147,9 +151,19 @@ pub fn run_update_with_progress_and_llm_as(
         });
     }
 
-    let mut reporter = WorkflowReporter::from_started_at(action, progress_sink, started_at);
+    let shared_sink = Rc::new(RefCell::new(progress_sink));
+    let mut reporter_sink = SharedProgressSink::new(shared_sink.clone());
+    let mut reporter = WorkflowReporter::from_started_at(action, &mut reporter_sink, started_at);
     reporter.phase("plan_changes", "应用增量变更");
-    let updated_pages = apply_incremental_update(repo_root, &plan, &mut reporter, llm_service)?;
+    let updated_pages = apply_incremental_update(
+        repo_root,
+        &plan,
+        &mut reporter,
+        llm_service,
+        action,
+        started_at,
+        shared_sink.clone(),
+    )?;
 
     Ok(UpdateReport {
         previous_state,
@@ -158,11 +172,14 @@ pub fn run_update_with_progress_and_llm_as(
     })
 }
 
-fn apply_incremental_update(
+fn apply_incremental_update<'a>(
     repo_root: &Path,
     plan: &ChangePlan,
     reporter: &mut WorkflowReporter<'_>,
-    llm_service: Option<&mut dyn LlmService>,
+    llm_service: Option<&'a mut dyn LlmService>,
+    action: &'static str,
+    started_at: Instant,
+    shared_sink: Rc<RefCell<&'a mut dyn ProgressSink>>,
 ) -> io::Result<Vec<String>> {
     // 增量路径保持 symbols/edges 按文件刷新，但 graph-derived 视图整体重算。
     let previous_state = plan
@@ -171,6 +188,21 @@ fn apply_incremental_update(
         .ok_or_else(|| io::Error::other("incremental update requires previous wiki state"))?;
     let steering = load_steering_config(repo_root);
     let mut llm_runtime = LlmRuntime::new(repo_root, &steering.llm, llm_service);
+    let usage_sink = shared_sink.clone();
+    llm_runtime.set_usage_reporter(Some(Box::new(move |usage| {
+        usage_sink.borrow_mut().report(WorkflowProgressEvent {
+            action: action.to_string(),
+            phase: "llm_usage".to_string(),
+            message: format!(
+                "LLM usage 已更新：{} requests / {} tokens",
+                usage.request_count, usage.total_tokens
+            ),
+            elapsed_ms: started_at.elapsed().as_millis() as u64,
+            processed: None,
+            total: None,
+            usage: Some(usage),
+        });
+    })));
     if llm_runtime.service_available() {
         reporter.phase("llm_uncertainty_gate", "执行 LLM 不确定性判断");
     }

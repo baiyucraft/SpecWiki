@@ -257,6 +257,14 @@ where
                         "received out-of-order llm session event from agent",
                     ))
                 }
+                CoreSessionInput::AgentMessage { .. }
+                | CoreSessionInput::AgentToolResult { .. }
+                | CoreSessionInput::AgentFinal { .. }
+                | CoreSessionInput::AgentAbort { .. } => {
+                    return Err(io::Error::other(
+                        "agent session events are not enabled in the current bridge path",
+                    ))
+                }
             }
         }
     }

@@ -18,14 +18,16 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
-  callCore,
+  callCoreStreaming,
   ensureBinary,
+  formatUsageSnapshot,
   ROOT_DIR,
   TEST_DIR,
   removePathWithRetry,
   resolveProjectJobs,
   runCommandCapture,
   runTaskPool,
+  withTemporaryDevConfig,
 } from "./testing/helpers.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -39,24 +41,111 @@ const REAL_REPO_MAP = {
   "spec-wiki": ROOT_DIR,
 };
 
-function initViaRealRepo(proj, realRepo) {
+function resolveRunModes(runMode) {
+  if (runMode === "both") {
+    return [
+      { label: "cold", cacheMode: "clear" },
+      { label: "warm", cacheMode: "preserve" },
+    ];
+  }
+  if (runMode === "warm") {
+    return [{ label: "warm", cacheMode: "preserve" }];
+  }
+  return [{ label: "cold", cacheMode: "clear" }];
+}
+
+function formatElapsed(elapsedMs) {
+  if (elapsedMs < 1_000) {
+    return `${elapsedMs}ms`;
+  }
+  return `${(elapsedMs / 1_000).toFixed(elapsedMs >= 10_000 ? 0 : 1)}s`;
+}
+
+function promptCount(usage, promptType) {
+  return (
+    usage?.by_prompt_type?.find((bucket) => bucket.key === promptType)?.request_count ?? 0
+  );
+}
+
+function summarizeProgressUsage(progressEvents) {
+  for (let index = progressEvents.length - 1; index >= 0; index--) {
+    const event = progressEvents[index];
+    if (event.phase === "llm_usage" && event.usage) {
+      return event.usage;
+    }
+  }
+  return null;
+}
+
+function createProjectProgressLogger(logs, project, runLabel) {
+  const countedPercents = new Map();
+  const phaseMessages = new Map();
+  let lastUsageTotal = -1;
+
+  return {
+    log(message) {
+      logs.push(`[${project}/${runLabel}] ${message}`);
+    },
+    onProgress(event) {
+      const prefix = `[${project}/${runLabel}] ${formatElapsed(event.elapsed_ms)} ${event.phase}`;
+      if (event.phase === "llm_usage" && event.usage) {
+        if (event.usage.total_tokens === lastUsageTotal) {
+          return;
+        }
+        lastUsageTotal = event.usage.total_tokens;
+        logs.push(`${prefix} ${formatUsageSnapshot(event.usage)}`);
+        return;
+      }
+
+      if (event.processed != null && event.total != null && event.total > 0) {
+        const percent = Math.floor((event.processed / event.total) * 100);
+        const lastPercent = countedPercents.get(event.phase) ?? -1;
+        const shouldPrint =
+          event.processed === 0
+          || event.processed === event.total
+          || percent >= lastPercent + 10;
+        if (!shouldPrint) {
+          return;
+        }
+        countedPercents.set(event.phase, percent);
+        logs.push(`${prefix} ${event.processed}/${event.total} ${event.message}`);
+        return;
+      }
+
+      if (phaseMessages.get(event.phase) === event.message) {
+        return;
+      }
+      phaseMessages.set(event.phase, event.message);
+      logs.push(`${prefix} ${event.message}`);
+    },
+  };
+}
+
+async function initViaRealRepo(proj, realRepo, options = {}) {
   const projDir = path.join(TEST_DIR, proj);
   const wikiInReal = path.join(realRepo, ".wiki");
 
-  // 清理真实仓库残留
-  removePathWithRetry(wikiInReal);
-
   // init on real repo
-  callCore({ action: "init", repoRoot: realRepo });
+  const { logger, cacheMode } = options;
+  const result = await withTemporaryDevConfig(
+    realRepo,
+    () =>
+      callCoreStreaming(
+        { action: "init", repoRoot: realRepo },
+        { onProgress: (event) => logger?.onProgress(event) },
+      ),
+    { cacheMode },
+  );
+  if (!result.response.ok) {
+    throw new Error(result.response.error || `${proj} init failed`);
+  }
 
   // 拷贝结果
   if (existsSync(path.join(projDir, ".wiki"))) {
     removePathWithRetry(path.join(projDir, ".wiki"));
   }
   cpSync(wikiInReal, path.join(projDir, ".wiki"), { recursive: true });
-
-  // 清理真实仓库
-  removePathWithRetry(wikiInReal);
+  return result.progressEvents;
 }
 
 // -------------------------------------------------------------------------
@@ -131,9 +220,10 @@ function readGraphCounts(wikiDir) {
   };
 }
 
-function runSingleProject(proj) {
+async function runSingleProject(proj, options = {}) {
   const projDir = path.join(TEST_DIR, proj);
   const wikiDir = path.join(projDir, ".wiki");
+  const logs = [];
 
   if (!existsSync(projDir)) {
     return {
@@ -141,27 +231,62 @@ function runSingleProject(proj) {
       skipped: true,
       ok: true,
       message: "SKIP (not found)",
+      logs,
     };
   }
 
-  removePathWithRetry(wikiDir);
-
   try {
+    const runs = [];
+    for (const run of resolveRunModes(options.runMode || "cold")) {
+      const logger = createProjectProgressLogger(logs, proj, run.label);
+      logger.log(`START cache_mode=${run.cacheMode}`);
+      let progressEvents;
+      if (REAL_REPO_MAP[proj]) {
+        progressEvents = await initViaRealRepo(proj, REAL_REPO_MAP[proj], {
+          cacheMode: run.cacheMode,
+          logger,
+        });
+      } else {
+        const stream = await withTemporaryDevConfig(
+          projDir,
+          () =>
+            callCoreStreaming(
+              { action: "init", repoRoot: `tmp/test/${proj}` },
+              { onProgress: (event) => logger.onProgress(event) },
+            ),
+          { cacheMode: run.cacheMode },
+        );
+        if (!stream.response.ok) {
+          throw new Error(stream.response.error || `${proj} init failed`);
+        }
+        progressEvents = stream.progressEvents;
+      }
+      const pages = countPages(wikiDir);
+      const graph = readGraphCounts(wikiDir);
+      const usage = summarizeProgressUsage(progressEvents);
+      runs.push({
+        label: run.label,
+        cacheMode: run.cacheMode,
+        pages,
+        graph,
+        usage,
+        pageResearchRequests: promptCount(usage, "page_research"),
+        pageEnrichmentRequests: promptCount(usage, "page_enrichment"),
+      });
+      logger.log(
+        `DONE pages=${pages} symbols=${graph.symbols} total_tokens=${usage?.total_tokens ?? 0}`,
+      );
+    }
     if (REAL_REPO_MAP[proj]) {
-      initViaRealRepo(proj, REAL_REPO_MAP[proj]);
-    } else {
-      const result = callCore({ action: "init", repoRoot: `tmp/test/${proj}` });
-      if (!result.ok) throw new Error(result.error || "init failed");
+      removePathWithRetry(path.join(REAL_REPO_MAP[proj], ".wiki"));
     }
 
-    const pages = countPages(wikiDir);
-    const graph = readGraphCounts(wikiDir);
     return {
       proj,
       ok: true,
       skipped: false,
-      pages,
-      graph,
+      runs,
+      logs,
     };
   } catch (error) {
     return {
@@ -169,6 +294,7 @@ function runSingleProject(proj) {
       ok: false,
       skipped: false,
       error: error instanceof Error ? error.message : String(error),
+      logs,
     };
   }
 }
@@ -180,12 +306,21 @@ function printProjectResult(result, index, total) {
   }
 
   if (result.ok) {
-    console.log(
-      `[${index + 1}/${total}] ${result.proj}  OK  ${result.pages} pages, ${result.graph.symbols} symbols, ${result.graph.edges} edges, ${result.graph.communities} communities, ${result.graph.processes} processes`,
-    );
+    for (const line of result.logs ?? []) {
+      console.log(line);
+    }
+    const summary = (result.runs ?? [])
+      .map((run) =>
+        `${run.label}:${run.pages} pages, ${run.graph.symbols} symbols, ${run.graph.edges} edges, tokens=${run.usage?.total_tokens ?? 0}, page_research=${run.pageResearchRequests}`,
+      )
+      .join(" | ");
+    console.log(`[${index + 1}/${total}] ${result.proj}  OK  ${summary}`);
     return;
   }
 
+  for (const line of result.logs ?? []) {
+    console.log(line);
+  }
   console.log(`[${index + 1}/${total}] ${result.proj}  FAIL ${result.error}`);
 }
 
@@ -193,18 +328,38 @@ function printProjectStart(proj, index, total) {
   console.log(`[${index + 1}/${total}] ${proj}  START`);
 }
 
-async function runProjectInChild(proj) {
-  const child = await runCommandCapture(
-    process.execPath,
-    [SCRIPT_PATH, "--child-json", "--no-build", proj],
-    { cwd: ROOT_DIR },
-  );
+function isTransientProjectError(message) {
+  return /EBUSY|EPERM|ENOTEMPTY|os error 32/.test(message || "");
+}
 
-  if (!child.stdout.trim()) {
-    throw new Error(child.stderr || `child worker for ${proj} produced empty stdout`);
+async function runProjectInChild(proj, runMode) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const child = await runCommandCapture(
+      process.execPath,
+      [SCRIPT_PATH, "--child-json", "--no-build", "--run-mode", runMode, proj],
+      { cwd: ROOT_DIR },
+    );
+
+    if (!child.stdout.trim()) {
+      if (attempt < 2 && isTransientProjectError(child.stderr)) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
+        continue;
+      }
+      throw new Error(child.stderr || `child worker for ${proj} produced empty stdout`);
+    }
+
+    const result = JSON.parse(child.stdout.trim());
+    if (result.ok || result.skipped || !isTransientProjectError(result.error || "")) {
+      return result;
+    }
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
+      continue;
+    }
+    return result;
   }
 
-  return JSON.parse(child.stdout.trim());
+  throw new Error(`child worker for ${proj} exhausted retry budget`);
 }
 
 export async function runTestProjects(names, options = {}) {
@@ -220,16 +375,16 @@ export async function runTestProjects(names, options = {}) {
   const results = useParallel
     ? await runTaskPool(projects, jobs, async (proj, index) => {
       printProjectStart(proj, index, total);
-      const result = await runProjectInChild(proj);
+      const result = await runProjectInChild(proj, options.runMode || "cold");
       printProjectResult(result, index, total);
       return result;
     })
-    : projects.map((proj, index) => {
+    : await Promise.all(projects.map(async (proj, index) => {
       printProjectStart(proj, index, total);
-      const result = runSingleProject(proj);
+      const result = await runSingleProject(proj, { runMode: options.runMode });
       printProjectResult(result, index, total);
       return result;
-    });
+    }));
 
   for (const result of results) {
     if (result.skipped) {
@@ -251,6 +406,7 @@ function parseCliArgs(argv) {
   let jobs;
   let childMode = false;
   let ensureFresh = true;
+  let runMode = "cold";
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -267,16 +423,21 @@ function parseCliArgs(argv) {
       ensureFresh = false;
       continue;
     }
+    if (arg === "--run-mode") {
+      runMode = argv[index + 1] || runMode;
+      index++;
+      continue;
+    }
     names.push(arg);
   }
 
-  return { childMode, ensureFresh, jobs, names };
+  return { childMode, ensureFresh, jobs, names, runMode };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseCliArgs(process.argv.slice(2));
   if (args.childMode) {
-    const result = runSingleProject(args.names[0]);
+    const result = await runSingleProject(args.names[0], { runMode: args.runMode });
     process.stdout.write(JSON.stringify(result));
     process.exit(0);
   }
@@ -284,6 +445,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const ok = await runTestProjects(args.names.length > 0 ? args.names : undefined, {
     ensureFresh: args.ensureFresh,
     jobs: args.jobs,
+    runMode: args.runMode,
   });
   if (!ok) process.exit(1);
 }

@@ -2,8 +2,11 @@
 //! 它串联扫描、模块树、页面规划、渲染、状态写盘和 metadata 导出。
 
 use std::collections::BTreeMap;
+use std::cell::RefCell;
 use std::io;
 use std::path::Path;
+use std::rc::Rc;
+use std::time::Instant;
 use std::time::SystemTime;
 
 use crate::debug_trace;
@@ -24,9 +27,11 @@ use crate::storage::cache_store::{
 };
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::state_store::write_state_with_symbol_graph;
-use crate::storage::wiki_fs::{remove_runtime, write_page};
+use crate::storage::wiki_fs::{remove_runtime_with_cache_mode, write_page};
 use crate::workflows::page_render::prepare_page_artifacts_with_llm;
-use crate::workflows::progress::{NoopProgressSink, ProgressSink, WorkflowReporter};
+use crate::workflows::progress::{
+    NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
+};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -78,11 +83,11 @@ pub fn run_init_with_progress_as(
 ///
 /// # 返回
 /// - 成功时返回 init 报告。
-pub fn run_init_with_progress_and_llm_as(
+pub fn run_init_with_progress_and_llm_as<'a>(
     action: &'static str,
     repo_root: &Path,
-    progress_sink: &mut dyn ProgressSink,
-    _llm_service: Option<&mut dyn LlmService>,
+    progress_sink: &'a mut dyn ProgressSink,
+    _llm_service: Option<&'a mut dyn LlmService>,
 ) -> io::Result<InitReport> {
     if !repo_root.exists() || !repo_root.is_dir() {
         return Err(io::Error::new(
@@ -91,13 +96,31 @@ pub fn run_init_with_progress_and_llm_as(
         ));
     }
 
-    let mut reporter = WorkflowReporter::new(action, progress_sink);
+    let shared_sink = Rc::new(RefCell::new(progress_sink));
+    let started_at = Instant::now();
+    let mut reporter_sink = SharedProgressSink::new(shared_sink.clone());
+    let mut reporter = WorkflowReporter::from_started_at(action, &mut reporter_sink, started_at);
 
     // 按 deterministic pipeline 的顺序串起整条生成链。
     let steering = load_steering_config(repo_root);
-    remove_runtime(repo_root)?;
+    remove_runtime_with_cache_mode(repo_root, steering.llm.cache_mode)?;
     debug_trace::begin_session(action, repo_root, &steering.debug)?;
     let mut llm_runtime = LlmRuntime::new(repo_root, &steering.llm, _llm_service);
+    let usage_sink = shared_sink.clone();
+    llm_runtime.set_usage_reporter(Some(Box::new(move |usage| {
+        usage_sink.borrow_mut().report(WorkflowProgressEvent {
+            action: action.to_string(),
+            phase: "llm_usage".to_string(),
+            message: format!(
+                "LLM usage 已更新：{} requests / {} tokens",
+                usage.request_count, usage.total_tokens
+            ),
+            elapsed_ms: started_at.elapsed().as_millis() as u64,
+            processed: None,
+            total: None,
+            usage: Some(usage),
+        });
+    })));
     let (ignore_paths, include_paths) = steering.scan_boundary();
     if llm_runtime.service_available() {
         reporter.phase("llm_uncertainty_gate", "执行 LLM 不确定性判断");

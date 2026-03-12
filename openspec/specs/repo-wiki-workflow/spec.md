@@ -2,7 +2,6 @@
 
 ## Purpose
 定义 Repo Wiki 核心 workflow 在 `init`、`update` 与 `rebuild` 场景下的执行边界、可观测性与状态收口要求。
-
 ## Requirements
 ### Requirement: `init` 必须为有效本地代码目录建立第一阶段 Repo Wiki
 系统 MUST 在有效本地代码目录上执行完整初始化，生成第一阶段所需的 Wiki 页面、metadata、关系型状态表、symbol snapshot、symbol graph 和增量缓存，并在页面规划阶段基于递归模块树生成层级化页面。Git 信息在存在时可作为元数据补充，但不得成为初始化前提。初始化主链 MUST 按 `scan -> parse_symbols -> resolve_symbol_graph -> analyze_symbol_graph -> module_tree -> page_planner -> render` 的顺序执行，而不是绕过新增的关系解析和图分析阶段。init 完成后 MUST 把 definitions 写入 `symbols`，把 `IMPORTS / CALLS / EXTENDS / IMPLEMENTS` 写入 `edges`，把 community/process 结果写入对应图分析表，再装配 `WikiState` 并导出 `wiki.metadata.json`。为了支撑 editable runtime 和后续检索，init 还 MUST 初始化 page context cache、page generation cache、section 状态、managed section marker、页面级 `section_anchors` 和 `wiki_pages_fts`，而不是只落盘 plain Markdown。
@@ -136,3 +135,30 @@
 - **WHEN** 某个专题页或 workflow 页消费稳定 detected process
 - **THEN** renderer MUST 能基于该流程生成受控流程图
 - **THEN** 当流程事实不足时，系统 MUST 回退到无图或纯文本说明
+
+### Requirement: workflow 主链必须在正式渲染前组装 dossier 并按需执行 bounded research session
+系统 MUST 在保持 deterministic 主链的前提下，在正式渲染前组装 dossier，并按页面类型决定是否执行 bounded research session。research session 的输入 MUST 来自 dossier，而不是绕过主链重新扫描仓库。9.2 首先要求 provider 直连路径下的 bounded research session 可运行、可回退、可观测。
+
+#### Scenario: module 或 topic 页在 render 前执行 research session
+- **WHEN** 用户执行 `init`、`update` 或 `rebuild`，且当前页面为 `module` 或 `topic`
+- **THEN** 系统 MUST 先完成 dossier 组装
+- **THEN** 若 research session 开启，系统 MUST 在 render 前执行该 session 并消费结构化结果
+
+#### Scenario: update 只重建受影响 dossier 与父页 rollup
+- **WHEN** 变化范围只影响部分 dossier、child rollup 或 session 结果
+- **THEN** 系统 MUST 只重建这些页面及其受影响父页
+- **THEN** 未受影响页面不得因为 dossier/session 引入而被无谓重写
+
+### Requirement: uncertainty gate 必须按同类型批量和有限并行执行
+系统 MUST 让 `uncertainty_gate` 优先按同类型候选进行批量判断，并允许在阶段内有限并行。不同阶段、不同 schema 的候选不得被揉成一个跨阶段 mega prompt。
+
+#### Scenario: file_purpose 批量判断
+- **WHEN** 同一阶段内存在多条 `file_purpose` 候选
+- **THEN** 系统 MUST 优先按批次请求这些候选
+- **THEN** 系统不得默认逐条串行请求每个文件角色判断
+
+#### Scenario: 不同 schema 的 gate 保持分阶段
+- **WHEN** workflow 同时存在 `file_purpose`、`top_level_promotion`、`dependency_edge` 等不同类型 gate
+- **THEN** 系统 MUST 允许它们分别批量
+- **THEN** 系统不得把不同 schema 混成一个总 prompt
+

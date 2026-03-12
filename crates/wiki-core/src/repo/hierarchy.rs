@@ -356,6 +356,11 @@ struct TopLevelRootStats {
     tags: BTreeSet<String>,
 }
 
+struct PendingDependencyEdge {
+    edge: RelationEdge,
+    assist_input: DependencyAssistInput,
+}
+
 /// 兜底识别"看起来就是一个独立子系统"的顶层目录。
 /// 这一步专门解决混合仓库场景：目录没有出现在固定白名单里，但明明是独立模块。
 fn discover_meaningful_top_level_roots(
@@ -379,41 +384,44 @@ fn discover_meaningful_top_level_roots(
         observe_top_level_file(stats, file);
     }
 
-    stats_by_root
-        .into_iter()
-        .filter_map(|(root_path, stats)| {
-            // 单文件模块抑制：只含 1 个文件且无子目录的候选节点不提升为独立模块
-            if stats.total_files <= 1 && !stats.has_subdirs {
-                return None;
-            }
-            if stats.should_promote() {
-                return Some(root_path);
-            }
-            if !stats.should_consult_llm() {
-                return None;
-            }
+    let mut promoted = Vec::new();
+    let mut consult_candidates = Vec::new();
 
-            llm_runtime
-                .as_deref_mut()
-                .and_then(|llm_runtime| {
-                    llm_runtime
-                        .decide_top_level_promotion(&TopLevelPromotionAssistInput {
-                            root_path: root_path.clone(),
-                            score: stats.promotion_score(),
-                            total_files: stats.total_files,
-                            source_files: stats.source_files,
-                            config_files: stats.config_files,
-                            entry_points: stats.entry_points,
-                            has_subdirs: stats.has_subdirs,
-                            languages: stats.languages.iter().cloned().collect(),
-                            tags: stats.tags.iter().cloned().collect(),
-                        })
-                        .ok()
-                        .flatten()
-                })
-                .and_then(|promote| promote.then_some(root_path))
-        })
-        .collect()
+    for (root_path, stats) in stats_by_root {
+        if stats.total_files <= 1 && !stats.has_subdirs {
+            continue;
+        }
+        if stats.should_promote() {
+            promoted.push(root_path);
+            continue;
+        }
+        if !stats.should_consult_llm() {
+            continue;
+        }
+        consult_candidates.push(TopLevelPromotionAssistInput {
+            root_path,
+            score: stats.promotion_score(),
+            total_files: stats.total_files,
+            source_files: stats.source_files,
+            config_files: stats.config_files,
+            entry_points: stats.entry_points,
+            has_subdirs: stats.has_subdirs,
+            languages: stats.languages.iter().cloned().collect(),
+            tags: stats.tags.iter().cloned().collect(),
+        });
+    }
+
+    if let Some(llm_runtime) = llm_runtime.as_deref_mut() {
+        if let Ok(decisions) = llm_runtime.decide_top_level_promotions(&consult_candidates) {
+            for (candidate, decision) in consult_candidates.into_iter().zip(decisions.into_iter()) {
+                if decision.unwrap_or(false) {
+                    promoted.push(candidate.root_path);
+                }
+            }
+        }
+    }
+
+    promoted
 }
 
 /// 这里只取路径的第一段，因为我们判断的是"顶层目录是否可以成为模块"。
@@ -926,22 +934,35 @@ fn build_cross_module_edges(
     mut llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
 ) -> Vec<RelationEdge> {
     let mut edges: BTreeMap<String, RelationEdge> = BTreeMap::new();
+    let mut pending_heuristic_edges = Vec::<PendingDependencyEdge>::new();
 
     for dependency in &report.dependency_hints {
-        if let Some(edge) =
-            map_dependency_to_module_edge(dependency, modules, llm_runtime.as_deref_mut())
-        {
-            match edges.get_mut(&edge.id) {
-                Some(existing) => {
-                    for evidence in edge.evidence {
-                        if !existing.evidence.contains(&evidence) {
-                            existing.evidence.push(evidence);
-                        }
-                    }
-                }
-                None => {
-                    edges.insert(edge.id.clone(), edge);
-                }
+        match map_dependency_to_module_edge(dependency, modules) {
+            Some(ResolvedDependencyEdge::Direct(edge)) => {
+                merge_relation_edge(&mut edges, edge);
+            }
+            Some(ResolvedDependencyEdge::Heuristic(candidate)) => {
+                pending_heuristic_edges.push(candidate);
+            }
+            None => {}
+        }
+    }
+
+    if !pending_heuristic_edges.is_empty() {
+        let keep_results = llm_runtime
+            .as_deref_mut()
+            .and_then(|llm_runtime| {
+                let inputs = pending_heuristic_edges
+                    .iter()
+                    .map(|candidate| candidate.assist_input.clone())
+                    .collect::<Vec<_>>();
+                llm_runtime.keep_dependency_edges(&inputs).ok()
+            })
+            .unwrap_or_else(|| vec![Some(true); pending_heuristic_edges.len()]);
+
+        for (candidate, keep) in pending_heuristic_edges.into_iter().zip(keep_results.into_iter()) {
+            if keep.unwrap_or(true) {
+                merge_relation_edge(&mut edges, candidate.edge);
             }
         }
     }
@@ -949,18 +970,7 @@ fn build_cross_module_edges(
     for (source_root, target_roots) in &graph_summary.module_dependency_hints {
         for target_root in target_roots {
             if let Some(edge) = map_graph_roots_to_module_edge(source_root, target_root, modules) {
-                match edges.get_mut(&edge.id) {
-                    Some(existing) => {
-                        for evidence in edge.evidence {
-                            if !existing.evidence.contains(&evidence) {
-                                existing.evidence.push(evidence);
-                            }
-                        }
-                    }
-                    None => {
-                        edges.insert(edge.id.clone(), edge);
-                    }
-                }
+                merge_relation_edge(&mut edges, edge);
             }
         }
     }
@@ -968,12 +978,31 @@ fn build_cross_module_edges(
     edges.into_values().collect()
 }
 
+enum ResolvedDependencyEdge {
+    Direct(RelationEdge),
+    Heuristic(PendingDependencyEdge),
+}
+
+fn merge_relation_edge(edges: &mut BTreeMap<String, RelationEdge>, edge: RelationEdge) {
+    match edges.get_mut(&edge.id) {
+        Some(existing) => {
+            for evidence in edge.evidence {
+                if !existing.evidence.contains(&evidence) {
+                    existing.evidence.push(evidence);
+                }
+            }
+        }
+        None => {
+            edges.insert(edge.id.clone(), edge);
+        }
+    }
+}
+
 /// 把单条依赖线索映射成模块边。
 fn map_dependency_to_module_edge(
     dependency: &DependencyHint,
     modules: &[ModuleNode],
-    llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
-) -> Option<RelationEdge> {
+) -> Option<ResolvedDependencyEdge> {
     let source_module = find_best_module_for_path(&dependency.from, modules)?;
     let target_module = find_best_module_for_path(&dependency.to, modules)?;
 
@@ -985,39 +1014,34 @@ fn map_dependency_to_module_edge(
         return None;
     }
 
-    if dependency.confidence == "heuristic" {
-        let should_keep = llm_runtime
-            .and_then(|llm_runtime| {
-                llm_runtime
-                    .keep_dependency_edge(&DependencyAssistInput {
-                        relation_type: dependency.kind.clone(),
-                        source_path: dependency.from.clone(),
-                        target_path: dependency.to.clone(),
-                        source_module: source_module.name.clone(),
-                        target_module: target_module.name.clone(),
-                        confidence: dependency.confidence.clone(),
-                    })
-                    .ok()
-                    .flatten()
-            })
-            .unwrap_or(true);
-        if !should_keep {
-            return None;
-        }
-    }
-
     let edge_seed = format!(
         "{}:{}:{}",
         source_module.id, target_module.id, dependency.kind
     );
 
-    Some(RelationEdge {
+    let edge = RelationEdge {
         id: stable_id("relation", edge_seed),
         source: source_module.id.clone(),
         target: target_module.id.clone(),
         relation_type: dependency.kind.clone(),
         evidence: vec![dependency.from.clone(), dependency.to.clone()],
-    })
+    };
+
+    if dependency.confidence == "heuristic" {
+        return Some(ResolvedDependencyEdge::Heuristic(PendingDependencyEdge {
+            edge,
+            assist_input: DependencyAssistInput {
+                relation_type: dependency.kind.clone(),
+                source_path: dependency.from.clone(),
+                target_path: dependency.to.clone(),
+                source_module: source_module.name.clone(),
+                target_module: target_module.name.clone(),
+                confidence: dependency.confidence.clone(),
+            },
+        }));
+    }
+
+    Some(ResolvedDependencyEdge::Direct(edge))
 }
 
 fn map_graph_roots_to_module_edge(

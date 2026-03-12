@@ -2,7 +2,7 @@
 // 提供二进制路径解析、JSON IPC 调用、断言辅助等。
 
 import { execFileSync, execSync, spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ const __dirname = path.dirname(__filename);
 export const ROOT_DIR = path.resolve(__dirname, "..", "..");
 export const TMP_DIR = path.join(ROOT_DIR, "tmp");
 export const TEST_DIR = path.join(TMP_DIR, "test");
+export const ROOT_DEV_CONFIG_PATH = path.join(ROOT_DIR, "wiki.dev.yaml");
 const DEFAULT_PROJECT_JOBS = 8;
 
 const BINARY_NAME = process.platform === "win32" ? "wiki-core.exe" : "wiki-core";
@@ -21,9 +22,11 @@ const BINARY_PATH = path.join(ROOT_DIR, "target", "release", BINARY_NAME);
 // 初始化、更新和重建会真正跑完整 workflow，monorepo 项目明显比 query/status 更慢。
 // 项目集脚本还会并行拉起多个长流程 worker，因此需要给重仓库留足超时窗口。
 const DEFAULT_TIMEOUT_MS = 60_000;
-const HEAVY_ACTION_TIMEOUT_MS = 600_000;
+const HEAVY_ACTION_TIMEOUT_MS = 1_200_000;
 const REMOVE_RETRY_DELAY_MS = 500;
 const REMOVE_RETRY_ATTEMPTS = 40;
+const FILE_RETRY_DELAY_MS = 250;
+const FILE_RETRY_ATTEMPTS = 20;
 
 // -------------------------------------------------------------------------
 // 二进制
@@ -134,6 +137,52 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function isTransientFsError(error) {
+  const message = String(error?.code || error?.message || "");
+  return (
+    ["EBUSY", "EPERM", "ENOTEMPTY"].some((code) => message.includes(code))
+    || message.includes("os error 32")
+  );
+}
+
+function writeFileWithRetry(filePath, content) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt < FILE_RETRY_ATTEMPTS; attempt++) {
+    try {
+      writeFileSync(filePath, content);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isTransientFsError(error)) {
+        throw error;
+      }
+      sleepSync(FILE_RETRY_DELAY_MS);
+    }
+  }
+
+  throw lastError;
+}
+
+function unlinkFileWithRetry(filePath) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt < FILE_RETRY_ATTEMPTS; attempt++) {
+    try {
+      unlinkSync(filePath);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isTransientFsError(error)) {
+        throw error;
+      }
+      sleepSync(FILE_RETRY_DELAY_MS);
+    }
+  }
+
+  throw lastError;
+}
+
 /**
  * 在 Windows 文件句柄释放有滞后时，带重试地删除目录或文件。
  *
@@ -156,8 +205,7 @@ export function removePathWithRetry(
       return;
     } catch (error) {
       lastError = error;
-      const message = String(error?.code || error?.message || "");
-      if (!["EBUSY", "EPERM", "ENOTEMPTY"].some((code) => message.includes(code))) {
+      if (!isTransientFsError(error)) {
         throw error;
       }
       sleepSync(delayMs);
@@ -195,6 +243,107 @@ export function callCore(command, options = {}) {
   return parseCoreOutput(output);
 }
 
+/**
+ * 通过 release binary 执行带 progress 的 JSON IPC 调用。
+ *
+ * @param command 要发送给 core 的命令对象。
+ * @param options 运行选项；支持 progress 回调与超时覆盖。
+ * @returns 返回终态响应和捕获到的 progress 事件。
+ */
+export async function callCoreStreaming(command, options = {}) {
+  const timeout =
+    options.timeoutMs
+    ?? (["init", "update", "rebuild"].includes(command.action)
+      ? HEAVY_ACTION_TIMEOUT_MS
+      : DEFAULT_TIMEOUT_MS);
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(BINARY_PATH, ["--json"], {
+      cwd: ROOT_DIR,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let stdoutBuffer = "";
+    let stderr = "";
+    let terminal = null;
+    const progressEvents = [];
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeout);
+
+    child.stdout.on("data", (chunk) => {
+      stdoutBuffer += chunk.toString();
+      drainOutput(false);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      drainOutput(true);
+
+      if (timedOut) {
+        reject(new Error(`wiki-core ${command.action} timed out after ${timeout}ms`));
+        return;
+      }
+      if (code !== 0) {
+        reject(new Error(stderr || `wiki-core exited with code ${code}`));
+        return;
+      }
+      if (!terminal) {
+        reject(new Error("wiki-core stream ended without terminal response"));
+        return;
+      }
+      resolve({ progressEvents, response: terminal });
+    });
+
+    child.stdin.end(`${JSON.stringify({ ...command, streamProgress: true })}\n`);
+
+    function drainOutput(flushRemainder) {
+      while (true) {
+        const newlineIndex = stdoutBuffer.indexOf("\n");
+        if (newlineIndex < 0) {
+          break;
+        }
+        const line = stdoutBuffer.slice(0, newlineIndex).trim();
+        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+        if (!line) {
+          continue;
+        }
+        consumeEventLine(line);
+      }
+
+      if (flushRemainder && stdoutBuffer.trim()) {
+        consumeEventLine(stdoutBuffer.trim());
+        stdoutBuffer = "";
+      }
+    }
+
+    function consumeEventLine(line) {
+      const event = JSON.parse(line);
+      if (event.type === "progress") {
+        progressEvents.push(event);
+        options.onProgress?.(event);
+        return;
+      }
+      if ((event.type === "result" || event.type === "error") && event.response) {
+        if (terminal) {
+          throw new Error("wiki-core emitted multiple terminal events");
+        }
+        terminal = event.response;
+        return;
+      }
+      throw new Error(`unexpected wiki-core event: ${line}`);
+    }
+  });
+}
+
 function parseCoreOutput(output) {
   const trimmed = output.trim();
   if (!trimmed) {
@@ -227,6 +376,64 @@ function parseCoreOutput(output) {
   }
 
   return terminal;
+}
+
+export function formatUsageSnapshot(usage) {
+  if (!usage) {
+    return "requests=0 in=0 out=0 total=0";
+  }
+  return [
+    `requests=${usage.request_count ?? 0}`,
+    `in=${usage.input_tokens ?? 0}`,
+    `out=${usage.output_tokens ?? 0}`,
+    `total=${usage.total_tokens ?? 0}`,
+  ].join(" ");
+}
+
+function applyCacheModeOverride(content, cacheMode) {
+  if (!cacheMode) {
+    return content;
+  }
+
+  if (!/^\s*llm:\s*$/m.test(content)) {
+    return `llm:\n  cache_mode: ${cacheMode}\n\n${content}`;
+  }
+
+  if (/^\s+cache_mode:\s*\S+/m.test(content)) {
+    return content.replace(/(^\s+cache_mode:\s*)\S+/m, `$1${cacheMode}`);
+  }
+
+  return content.replace(/(^\s*llm:\s*$)/m, `$1\n  cache_mode: ${cacheMode}`);
+}
+
+/**
+ * 临时把根目录 `wiki.dev.yaml` 覆盖到目标 repo，并可附加 cache_mode。
+ *
+ * @param repoRoot 目标仓库根目录。
+ * @param callback 需要在 dev 配置存在时执行的逻辑。
+ * @param options 可选覆盖；当前支持 `cacheMode`。
+ * @returns 返回回调结果。
+ */
+export async function withTemporaryDevConfig(repoRoot, callback, options = {}) {
+  if (!existsSync(ROOT_DEV_CONFIG_PATH)) {
+    return await callback();
+  }
+
+  const targetPath = path.join(repoRoot, "wiki.dev.yaml");
+  const source = readFileSync(ROOT_DEV_CONFIG_PATH, "utf-8");
+  const previous = existsSync(targetPath) ? readFileSync(targetPath, "utf-8") : null;
+  const next = applyCacheModeOverride(source, options.cacheMode);
+
+  writeFileWithRetry(targetPath, next);
+  try {
+    return await callback();
+  } finally {
+    if (previous === null) {
+      unlinkFileWithRetry(targetPath);
+    } else {
+      writeFileWithRetry(targetPath, previous);
+    }
+  }
 }
 
 // -------------------------------------------------------------------------

@@ -1,0 +1,109 @@
+{"type":"progress","action":"init","phase":"llm_uncertainty_gate","message":"执行 LLM 不确定性判断","elapsed_ms":4,"processed":null,"total":null}
+{"type":"progress","action":"init","phase":"scan","message":"扫描仓库源码","elapsed_ms":6,"processed":null,"total":null}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号","elapsed_ms":25189,"processed":0,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 1/74","elapsed_ms":25261,"processed":1,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 2/74","elapsed_ms":25261,"processed":2,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 3/74","elapsed_ms":25262,"processed":3,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 4/74","elapsed_ms":25262,"processed":4,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 5/74","elapsed_ms":25262,"processed":5,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 6/74","elapsed_ms":25262,"processed":6,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 7/74","elapsed_ms":25262,"processed":7,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 8/74","elapsed_ms":25263,"processed":8,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 9/74","elapsed_ms":25263,"processed":9,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 10/74","elapsed_ms":25263,"processed":10,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 11/74","elapsed_ms":25263,"processed":11,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 12/74","elapsed_ms":25263,"processed":12,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 13/74","elapsed_ms":25264,"processed":13,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 14/74","elapsed_ms":25264,"processed":14,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 15/74","elapsed_ms":25264,"processed":15,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 16/74","elapsed_ms":25264,"processed":16,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 17/74","elapsed_ms":25264,"processed":17,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 18/74","elapsed_ms":25265,"processed":18,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 19/74","elapsed_ms":25265,"processed":19,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 20/74","elapsed_ms":25265,"processed":20,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 21/74","elapsed_ms":25265,"processed":21,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 22/74","elapsed_ms":25265,"processed":22,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 23/74","elapsed_ms":25265,"processed":23,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 24/74","elapsed_ms":25266,"processed":24,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 25/74","elapsed_ms":25266,"processed":25,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 26/74","elapsed_ms":25266,"processed":26,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 27/74","elapsed_ms":25266,"processed":27,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 28/74","elapsed_ms":25266,"processed":28,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 29/74","elapsed_ms":25267,"processed":29,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 30/74","elapsed_ms":25267,"processed":30,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 31/74","elapsed_ms":25267,"processed":31,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 32/74","elapsed_ms":25267,"processed":32,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 33/74","elapsed_ms":25267,"processed":33,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 34/74","elapsed_ms":25267,"processed":34,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 35/74","elapsed_ms":25268,"processed":35,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 36/74","elapsed_ms":25268,"processed":36,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 37/74","elapsed_ms":25268,"processed":37,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 38/74","elapsed_ms":25268,"processed":38,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 39/74","elapsed_ms":25268,"processed":39,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 40/74","elapsed_ms":25269,"processed":40,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 41/74","elapsed_ms":25269,"processed":41,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 42/74","elapsed_ms":25269,"processed":42,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 43/74","elapsed_ms":25269,"processed":43,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 44/74","elapsed_ms":25269,"processed":44,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 45/74","elapsed_ms":25270,"processed":45,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 46/74","elapsed_ms":25270,"processed":46,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 47/74","elapsed_ms":25270,"processed":47,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 48/74","elapsed_ms":25270,"processed":48,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 49/74","elapsed_ms":25270,"processed":49,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 50/74","elapsed_ms":25270,"processed":50,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 51/74","elapsed_ms":25271,"processed":51,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 52/74","elapsed_ms":25271,"processed":52,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 53/74","elapsed_ms":25271,"processed":53,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 54/74","elapsed_ms":25271,"processed":54,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 55/74","elapsed_ms":25271,"processed":55,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 56/74","elapsed_ms":25272,"processed":56,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 57/74","elapsed_ms":25272,"processed":57,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 58/74","elapsed_ms":25272,"processed":58,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 59/74","elapsed_ms":25272,"processed":59,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 60/74","elapsed_ms":25272,"processed":60,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 61/74","elapsed_ms":25272,"processed":61,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 62/74","elapsed_ms":25273,"processed":62,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 63/74","elapsed_ms":25273,"processed":63,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 64/74","elapsed_ms":25273,"processed":64,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 65/74","elapsed_ms":25273,"processed":65,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 66/74","elapsed_ms":25273,"processed":66,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 67/74","elapsed_ms":25274,"processed":67,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 68/74","elapsed_ms":25274,"processed":68,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 69/74","elapsed_ms":25274,"processed":69,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 70/74","elapsed_ms":25274,"processed":70,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 71/74","elapsed_ms":25274,"processed":71,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 72/74","elapsed_ms":25275,"processed":72,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 73/74","elapsed_ms":25275,"processed":73,"total":74}
+{"type":"progress","action":"init","phase":"parse_symbols","message":"解析源码符号 74/74","elapsed_ms":25275,"processed":74,"total":74}
+{"type":"progress","action":"init","phase":"resolve_symbol_graph","message":"解析符号关系","elapsed_ms":25276,"processed":null,"total":null}
+{"type":"progress","action":"init","phase":"analyze_symbol_graph","message":"分析符号图","elapsed_ms":25285,"processed":null,"total":null}
+{"type":"progress","action":"init","phase":"build_module_tree","message":"构建模块树","elapsed_ms":25295,"processed":null,"total":null}
+{"type":"progress","action":"init","phase":"build_contexts","message":"构建页面上下文","elapsed_ms":25296,"processed":null,"total":null}
+{"type":"progress","action":"init","phase":"plan_pages","message":"规划 Wiki 页面","elapsed_ms":25297,"processed":null,"total":null}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面","elapsed_ms":27091,"processed":0,"total":13}
+{"type":"progress","action":"init","phase":"llm_enrichment","message":"生成页面增强内容","elapsed_ms":27091,"processed":null,"total":null}
+{"type":"progress","action":"init","phase":"llm_usage","message":"LLM usage 已更新：1 requests / 4451 tokens","elapsed_ms":74657,"processed":null,"total":null,"usage":{"request_count":1,"input_tokens":4295,"output_tokens":156,"total_tokens":4451,"by_prompt_type":[{"key":"page_research","request_count":1,"input_tokens":4295,"output_tokens":156,"total_tokens":4451}],"by_provider_model":[{"key":"gpt-5.2-2025-12-11","request_count":1,"input_tokens":4295,"output_tokens":156,"total_tokens":4451}]}}
+{"type":"progress","action":"init","phase":"llm_usage","message":"LLM usage 已更新：2 requests / 8933 tokens","elapsed_ms":121828,"processed":null,"total":null,"usage":{"request_count":2,"input_tokens":8592,"output_tokens":341,"total_tokens":8933,"by_prompt_type":[{"key":"page_research","request_count":2,"input_tokens":8592,"output_tokens":341,"total_tokens":8933}],"by_provider_model":[{"key":"gpt-5.2-2025-12-11","request_count":2,"input_tokens":8592,"output_tokens":341,"total_tokens":8933}]}}
+{"type":"progress","action":"init","phase":"llm_usage","message":"LLM usage 已更新：3 requests / 14513 tokens","elapsed_ms":178033,"processed":null,"total":null,"usage":{"request_count":3,"input_tokens":13742,"output_tokens":771,"total_tokens":14513,"by_prompt_type":[{"key":"page_research","request_count":3,"input_tokens":13742,"output_tokens":771,"total_tokens":14513}],"by_provider_model":[{"key":"gpt-5.2-2025-12-11","request_count":3,"input_tokens":13742,"output_tokens":771,"total_tokens":14513}]}}
+{"type":"progress","action":"init","phase":"llm_usage","message":"LLM usage 已更新：4 requests / 19000 tokens","elapsed_ms":263869,"processed":null,"total":null,"usage":{"request_count":4,"input_tokens":18056,"output_tokens":944,"total_tokens":19000,"by_prompt_type":[{"key":"page_research","request_count":4,"input_tokens":18056,"output_tokens":944,"total_tokens":19000}],"by_provider_model":[{"key":"gpt-5.2-2025-12-11","request_count":4,"input_tokens":18056,"output_tokens":944,"total_tokens":19000}]}}
+{"type":"progress","action":"init","phase":"llm_usage","message":"LLM usage 已更新：5 requests / 24875 tokens","elapsed_ms":318615,"processed":null,"total":null,"usage":{"request_count":5,"input_tokens":23825,"output_tokens":1050,"total_tokens":24875,"by_prompt_type":[{"key":"page_research","request_count":5,"input_tokens":23825,"output_tokens":1050,"total_tokens":24875}],"by_provider_model":[{"key":"gpt-5.2-2025-12-11","request_count":5,"input_tokens":23825,"output_tokens":1050,"total_tokens":24875}]}}
+{"type":"progress","action":"init","phase":"llm_usage","message":"LLM usage 已更新：6 requests / 31040 tokens","elapsed_ms":365842,"processed":null,"total":null,"usage":{"request_count":6,"input_tokens":29796,"output_tokens":1244,"total_tokens":31040,"by_prompt_type":[{"key":"page_research","request_count":6,"input_tokens":29796,"output_tokens":1244,"total_tokens":31040}],"by_provider_model":[{"key":"gpt-5.2-2025-12-11","request_count":6,"input_tokens":29796,"output_tokens":1244,"total_tokens":31040}]}}
+{"type":"progress","action":"init","phase":"llm_enrichment","message":"生成页面增强内容 8/13","elapsed_ms":393334,"processed":8,"total":13}
+{"type":"progress","action":"init","phase":"llm_enrichment","message":"生成页面增强内容 12/13","elapsed_ms":393352,"processed":12,"total":13}
+{"type":"progress","action":"init","phase":"llm_enrichment","message":"生成页面增强内容 13/13","elapsed_ms":393358,"processed":13,"total":13}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面 1/13","elapsed_ms":393707,"processed":1,"total":13}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面 2/13","elapsed_ms":394041,"processed":2,"total":13}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面 3/13","elapsed_ms":394396,"processed":3,"total":13}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面 4/13","elapsed_ms":394718,"processed":4,"total":13}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面 5/13","elapsed_ms":395052,"processed":5,"total":13}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面 6/13","elapsed_ms":395351,"processed":6,"total":13}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面 7/13","elapsed_ms":395635,"processed":7,"total":13}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面 8/13","elapsed_ms":395925,"processed":8,"total":13}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面 9/13","elapsed_ms":396239,"processed":9,"total":13}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面 10/13","elapsed_ms":396859,"processed":10,"total":13}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面 11/13","elapsed_ms":397265,"processed":11,"total":13}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面 12/13","elapsed_ms":397542,"processed":12,"total":13}
+{"type":"progress","action":"init","phase":"render_pages","message":"渲染页面 13/13","elapsed_ms":397979,"processed":13,"total":13}
+{"type":"progress","action":"init","phase":"write_state","message":"写入运行时状态","elapsed_ms":397980,"processed":null,"total":null}
+{"type":"progress","action":"init","phase":"write_metadata","message":"写入元数据","elapsed_ms":398348,"processed":null,"total":null}
+{"type":"result","response":{"ok":true,"error":null,"data":{"generated_pages":[".wiki/项目概述.md",".wiki/系统架构.md",".wiki/工作流与部署.md",".wiki/核心模块/_examples.md",".wiki/核心模块/middleware.md",".wiki/专题/process/process-handlefunc-flow-流程主题：HandleFunc-flow.md",".wiki/专题/process/process-handler-flow-流程主题：Handler-flow.md",".wiki/专题/process/process-handlerfunc-flow-流程主题：HandlerFunc-flow.md",".wiki/专题/process/process-listarticles-flow-流程主题：ListArticles-flow.md",".wiki/专题/process/process-testmuxhandlepatternvalidation-flow-流程主题：TestMuxHandlePatternValidation-flow.md",".wiki/专题/process/process-testsinglehandler-flow-流程主题：TestSingleHandler-flow.md",".wiki/专题/module-capability/module-90018151b0b9-entry-_examples能力：入口编排.md",".wiki/专题/module-capability/module-fb4109464cc5-middleware-middleware能力：中间件.md"],"initialized":true,"state":"fresh"}}}

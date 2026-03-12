@@ -2,9 +2,12 @@
 //! 迭代 5 改为：忽略旧 generation cache，但对同 page_id 页面复用已同步的 user sections。
 
 use serde::Serialize;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
+use std::rc::Rc;
+use std::time::Instant;
 
 use crate::debug_trace;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
@@ -33,7 +36,9 @@ use crate::workflows::init::{
     ancestor_ids_for_page, current_timestamp, page_provenance, source_paths_for_page,
 };
 use crate::workflows::page_render::prepare_page_artifacts_with_llm;
-use crate::workflows::progress::{NoopProgressSink, ProgressSink, WorkflowReporter};
+use crate::workflows::progress::{
+    NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
+};
 
 /// `rebuild` 是显式的"强制重建"入口。
 /// 迭代 5 之后，rebuild 会保留同 page_id 页面中已同步的 user sections。
@@ -71,11 +76,11 @@ pub fn run_rebuild_with_progress_as(
 ///
 /// # 返回
 /// - 成功时返回 rebuild 报告。
-pub fn run_rebuild_with_progress_and_llm_as(
+pub fn run_rebuild_with_progress_and_llm_as<'a>(
     action: &'static str,
     repo_root: &Path,
-    progress_sink: &mut dyn ProgressSink,
-    _llm_service: Option<&mut dyn LlmService>,
+    progress_sink: &'a mut dyn ProgressSink,
+    _llm_service: Option<&'a mut dyn LlmService>,
 ) -> io::Result<RebuildReport> {
     if !repo_root.exists() || !repo_root.is_dir() {
         return Err(io::Error::new(
@@ -84,7 +89,10 @@ pub fn run_rebuild_with_progress_and_llm_as(
         ));
     }
 
-    let mut reporter = WorkflowReporter::new(action, progress_sink);
+    let shared_sink = Rc::new(RefCell::new(progress_sink));
+    let started_at = Instant::now();
+    let mut reporter_sink = SharedProgressSink::new(shared_sink.clone());
+    let mut reporter = WorkflowReporter::from_started_at(action, &mut reporter_sink, started_at);
 
     let steering = load_steering_config(repo_root);
 
@@ -93,11 +101,26 @@ pub fn run_rebuild_with_progress_and_llm_as(
 
     // 清理旧 runtime
     reporter.phase("clear_runtime", "清理旧运行时");
-    crate::storage::wiki_fs::remove_runtime(repo_root)?;
+    crate::storage::wiki_fs::remove_runtime_with_cache_mode(repo_root, steering.llm.cache_mode)?;
     debug_trace::begin_session(action, repo_root, &steering.debug)?;
 
     // 全量 pipeline
     let mut llm_runtime = LlmRuntime::new(repo_root, &steering.llm, _llm_service);
+    let usage_sink = shared_sink.clone();
+    llm_runtime.set_usage_reporter(Some(Box::new(move |usage| {
+        usage_sink.borrow_mut().report(WorkflowProgressEvent {
+            action: action.to_string(),
+            phase: "llm_usage".to_string(),
+            message: format!(
+                "LLM usage 已更新：{} requests / {} tokens",
+                usage.request_count, usage.total_tokens
+            ),
+            elapsed_ms: started_at.elapsed().as_millis() as u64,
+            processed: None,
+            total: None,
+            usage: Some(usage),
+        });
+    })));
     let (ignore_paths, include_paths) = steering.scan_boundary();
     if llm_runtime.service_available() {
         reporter.phase("llm_uncertainty_gate", "执行 LLM 不确定性判断");
