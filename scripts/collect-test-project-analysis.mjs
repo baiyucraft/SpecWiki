@@ -273,6 +273,102 @@ function buildPageMetrics(wikiDir) {
   };
 }
 
+function buildContextMetrics(dbPath) {
+  if (!existsSync(dbPath)) {
+    return {
+      cachedPageContexts: 0,
+      sectionPlanPages: 0,
+      overviewResearchHit: false,
+      architectureResearchHit: false,
+      archetypeTopicPages: 0,
+      preciseEvidenceItems: 0,
+      totalEvidenceItems: 0,
+      preciseEvidenceDensity: 0,
+    };
+  }
+
+  const cachedPageContexts = Number(querySqlite(dbPath, "select count(*) from page_context_cache;") || "0");
+  const sectionPlanPages = Number(
+    querySqlite(
+      dbPath,
+      [
+        "select count(*)",
+        "from page_context_cache",
+        "where coalesce(json_array_length(json_extract(context, '$.research_result.section_plan')), 0) > 0;",
+      ].join(" "),
+    ) || "0",
+  );
+  const overviewResearchHit = Number(
+    querySqlite(
+      dbPath,
+      [
+        "select count(*)",
+        "from page_context_cache",
+        "where json_extract(context, '$.page_type') = 'overview'",
+        "and json_type(json_extract(context, '$.research_result')) = 'object';",
+      ].join(" "),
+    ) || "0",
+  ) > 0;
+  const architectureResearchHit = Number(
+    querySqlite(
+      dbPath,
+      [
+        "select count(*)",
+        "from page_context_cache",
+        "where json_extract(context, '$.page_type') = 'architecture'",
+        "and json_type(json_extract(context, '$.research_result')) = 'object';",
+      ].join(" "),
+    ) || "0",
+  ) > 0;
+  const archetypeTopicPages = Number(
+    querySqlite(
+      dbPath,
+      [
+        "select count(*)",
+        "from page_context_cache",
+        "where json_extract(context, '$.page_type') = 'topic'",
+        "and json_extract(context, '$.topic_dossier.topic_kind') = 'repo-archetype';",
+      ].join(" "),
+    ) || "0",
+  );
+  const totalEvidenceItems = Number(
+    querySqlite(
+      dbPath,
+      [
+        "select count(*)",
+        "from page_context_cache",
+        "join json_each(page_context_cache.context, '$.evidence_groups') as evidence_group",
+        "join json_each(evidence_group.value, '$.items') as evidence_item;",
+      ].join(" "),
+    ) || "0",
+  );
+  const preciseEvidenceItems = Number(
+    querySqlite(
+      dbPath,
+      [
+        "select count(*)",
+        "from page_context_cache",
+        "join json_each(page_context_cache.context, '$.evidence_groups') as evidence_group",
+        "join json_each(evidence_group.value, '$.items') as evidence_item",
+        "where coalesce(json_extract(evidence_item.value, '$.start_line'), 0) > 0",
+        "and coalesce(json_extract(evidence_item.value, '$.end_line'), 0) >= coalesce(json_extract(evidence_item.value, '$.start_line'), 0);",
+      ].join(" "),
+    ) || "0",
+  );
+
+  return {
+    cachedPageContexts,
+    sectionPlanPages,
+    overviewResearchHit,
+    architectureResearchHit,
+    archetypeTopicPages,
+    preciseEvidenceItems,
+    totalEvidenceItems,
+    preciseEvidenceDensity:
+      totalEvidenceItems === 0 ? 0 : round(preciseEvidenceItems / totalEvidenceItems),
+  };
+}
+
 function describeDensity(metrics) {
   if (metrics.avgNonEmptyLinesPerPage >= 80) {
     return "高";
@@ -300,7 +396,14 @@ function describeReferenceDelta(result) {
 }
 
 function describeEnhancementObservation(result) {
-  const { pageMetrics } = result;
+  const { contextMetrics, pageMetrics } = result;
+  if (contextMetrics.sectionPlanPages > 0) {
+    return [
+      `已有 ${contextMetrics.sectionPlanPages} 页缓存了 section plan；`,
+      `overview research=${contextMetrics.overviewResearchHit ? "命中" : "未命中"}，`,
+      `architecture research=${contextMetrics.architectureResearchHit ? "命中" : "未命中"}。`,
+    ].join("");
+  }
   if (
     pageMetrics.totalMermaidBlocks > 0
     || pageMetrics.totalEvidenceBlocks > 0
@@ -421,6 +524,7 @@ function collectProject(project) {
   const metadataPath = path.join(wikiDir, "wiki.metadata.json");
   const metadata = JSON.parse(readFileSync(metadataPath, "utf-8"));
   const pageMetrics = buildPageMetrics(wikiDir);
+  const contextMetrics = buildContextMetrics(dbPath);
 
   const pageCount = countMdFiles(wikiDir);
   const markerCount = countFilesWithMarker(wikiDir);
@@ -447,6 +551,12 @@ function collectProject(project) {
   );
   const representativeSymbols = listRepresentativeSymbols(dbPath);
   const representativeGraphSymbols = listRepresentativeGraphSymbols(dbPath);
+  const llmPromptBreakdown = parseGroupedRows(
+    querySqliteRows(
+      dbPath,
+      "select prompt_type, count(*) from llm_cache group by prompt_type order by count(*) desc, prompt_type asc;",
+    ),
+  );
 
   let representativeSymbol = "";
   let querySummary = null;
@@ -540,6 +650,8 @@ function collectProject(project) {
     representativeSymbol,
     querySummary,
     graphQuerySummary,
+    llmPromptBreakdown,
+    contextMetrics,
     pageMetrics,
     reference: collectReference(project),
   };
@@ -558,12 +670,12 @@ function toMarkdown(results) {
     "",
     `生成时间：${new Date().toISOString()}`,
     "基线命令：`node scripts/run-test-projects.mjs --jobs 1`",
-    "说明：项目集脚本当前直接调用 release binary，不会协商 Agent LLM bridge；但如果目标 repo 根存在可用的 `wiki.dev.yaml` provider 配置，core 仍会优先走 provider 直连。当前这份报告默认描述的是未提供 provider dev 覆盖时的 deterministic baseline，LLM 增强正文、provider 优先和双向协议桥接由 `crates/wiki-core/tests/llm_runtime.rs` 与 `agents/codebuddy/src/runtime/invokeCore.test.ts` 单独覆盖。",
+    "说明：项目集脚本当前直接调用 release binary，不会协商 Agent LLM bridge；如果目标 repo 根存在可用的 `wiki.dev.yaml` provider 配置，core 会优先走 provider 直连。这份报告按当前 `tmp/test/*/.wiki` 实际产物统计 section plan、research 命中、精准 evidence 与 reference 差异。",
     "",
     "## 总览",
     "",
-    "| Project | Pages | Avg lines/page | Avg prose/page | Topic pages | Evidence pages | Graph pages | Mermaid | Reference delta |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+    "| Project | Pages | Avg lines/page | Avg prose/page | Topic pages | Section-plan pages | Core research | Precise evidence | Mermaid | Reference delta |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- |",
   ];
 
   for (const result of results) {
@@ -571,7 +683,7 @@ function toMarkdown(results) {
       ? `${result.pageCount - result.reference.pageCount >= 0 ? "+" : ""}${result.pageCount - result.reference.pageCount}`
       : "n/a";
     lines.push(
-      `| ${result.project} | ${result.pageCount} | ${result.pageMetrics.avgNonEmptyLinesPerPage} | ${result.pageMetrics.avgProseLinesPerPage} | ${result.pageMetrics.topicPages} | ${result.pageMetrics.evidenceLandingPages} | ${result.pageMetrics.graphLandingPages}/${result.pageCount} | ${result.pageMetrics.totalMermaidBlocks} | ${referenceDelta} |`,
+      `| ${result.project} | ${result.pageCount} | ${result.pageMetrics.avgNonEmptyLinesPerPage} | ${result.pageMetrics.avgProseLinesPerPage} | ${result.pageMetrics.topicPages} | ${result.contextMetrics.sectionPlanPages} | ${result.contextMetrics.overviewResearchHit ? "overview" : "-"}${result.contextMetrics.architectureResearchHit ? "/architecture" : ""} | ${result.contextMetrics.preciseEvidenceItems}/${result.contextMetrics.totalEvidenceItems} | ${result.pageMetrics.totalMermaidBlocks} | ${referenceDelta} |`,
     );
   }
 
@@ -592,9 +704,18 @@ function toMarkdown(results) {
       `- 主题与 evidence：专题页 ${result.pageMetrics.topicPages} 个，evidence 落页 ${result.pageMetrics.evidenceLandingPages} 页/${result.pageCount} 页，总计 ${result.pageMetrics.totalEvidenceBlocks} 个 evidence block。`,
     );
     lines.push(
+      `- Research 命中：section-plan 页 ${result.contextMetrics.sectionPlanPages} 个，overview=${result.contextMetrics.overviewResearchHit ? "命中" : "未命中"}，architecture=${result.contextMetrics.architectureResearchHit ? "命中" : "未命中"}，repo-archetype 专题 ${result.contextMetrics.archetypeTopicPages} 个。`,
+    );
+    lines.push(
+      `- 精准 evidence：${result.contextMetrics.preciseEvidenceItems}/${result.contextMetrics.totalEvidenceItems} 条 evidence 带真实行号，密度 ${result.contextMetrics.preciseEvidenceDensity}。`,
+    );
+    lines.push(
       `- 图事实落页：${result.pageMetrics.graphLandingPages}/${result.pageCount} 页面包含 graph facts，总计 ${result.pageMetrics.totalGraphFactLines} 行；概述=${overviewPage?.graphFactLines ?? 0}、架构=${architecturePage?.graphFactLines ?? 0}、工作流=${workflowPage?.graphFactLines ?? 0}，Mermaid ${result.pageMetrics.totalMermaidBlocks} 个，落在 ${result.pageMetrics.mermaidLandingPages} 页。`,
     );
     lines.push(`- Query/图验证：${formatQuerySummary(result)}`);
+    lines.push(
+      `- LLM cache：${result.llmPromptBreakdown.map((item) => `${item.name}(${item.count})`).join("、") || "无"}`,
+    );
     lines.push(`- Reference 对照：${describeReferenceDelta(result)}`);
     lines.push(`- 增强观测：${describeEnhancementObservation(result)}`);
     lines.push("");

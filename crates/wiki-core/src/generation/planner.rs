@@ -348,6 +348,7 @@ pub fn plan_pages_with_graph(
     }
 
     let topic_candidates = topic_candidates(
+        report,
         repo_context,
         module_contexts,
         module_tree,
@@ -363,6 +364,7 @@ pub fn plan_pages_with_graph(
 }
 
 fn topic_candidates(
+    report: &ScanReport,
     repo_context: &RepoContext,
     module_contexts: &[ModuleContext],
     module_tree: &ModuleTree,
@@ -436,6 +438,38 @@ fn topic_candidates(
         }
     }
 
+    for (seed, parent_kind) in discover_archetype_topic_seeds(
+        report,
+        repo_context,
+        module_tree,
+        workflow_page_id.is_some(),
+    ) {
+        let scope = topic_scope(&seed);
+        let (parent_page_id, parent_scope, priority) = match parent_kind {
+            "workflow" => (
+                workflow_page_id.unwrap_or(architecture_page_id).to_string(),
+                "workflow".to_string(),
+                6,
+            ),
+            _ => (
+                architecture_page_id.to_string(),
+                "architecture".to_string(),
+                5,
+            ),
+        };
+        let dedupe_key = format!("{parent_scope}:{}:{}", seed.topic_kind, seed.topic_key);
+        if !seen.insert(dedupe_key) {
+            continue;
+        }
+        candidates.push(TopicCandidate {
+            seed,
+            parent_page_id,
+            parent_scope,
+            scope,
+            priority,
+        });
+    }
+
     candidates.sort_by(|left, right| {
         left.priority.cmp(&right.priority).then_with(|| {
             left.seed
@@ -445,6 +479,234 @@ fn topic_candidates(
         })
     });
     candidates
+}
+
+fn discover_archetype_topic_seeds(
+    report: &ScanReport,
+    repo_context: &RepoContext,
+    module_tree: &ModuleTree,
+    workflow_page_present: bool,
+) -> Vec<(TopicSeed, &'static str)> {
+    let mut topics = Vec::new();
+
+    if let Some(seed) = web_request_topic_seed(report, repo_context, module_tree) {
+        topics.push((seed, "architecture"));
+    }
+    if let Some(seed) = config_runtime_topic_seed(report, repo_context) {
+        topics.push((seed, "architecture"));
+    }
+    if let Some(seed) = cli_entry_topic_seed(report, module_tree) {
+        topics.push((seed, "architecture"));
+    } else if let Some(seed) = library_api_topic_seed(report, module_tree) {
+        topics.push((seed, "architecture"));
+    }
+    if workflow_page_present {
+        if let Some(seed) = ops_runtime_topic_seed(report) {
+            topics.push((seed, "workflow"));
+        }
+    }
+
+    topics
+}
+
+fn web_request_topic_seed(
+    report: &ScanReport,
+    repo_context: &RepoContext,
+    module_tree: &ModuleTree,
+) -> Option<TopicSeed> {
+    let relevant = report
+        .files
+        .iter()
+        .filter(|file| {
+            matches!(
+                file.purpose,
+                crate::repo::scanner::FilePurpose::Entry
+                    | crate::repo::scanner::FilePurpose::Router
+                    | crate::repo::scanner::FilePurpose::Controller
+                    | crate::repo::scanner::FilePurpose::Handler
+                    | crate::repo::scanner::FilePurpose::Middleware
+            ) && file.is_substantive_source()
+        })
+        .take(8)
+        .collect::<Vec<_>>();
+    let has_router = relevant.iter().any(|file| {
+        matches!(
+            file.purpose,
+            crate::repo::scanner::FilePurpose::Router | crate::repo::scanner::FilePurpose::Handler
+        )
+    });
+    if relevant.len() < 3 || !has_router {
+        return None;
+    }
+
+    Some(TopicSeed {
+        topic_kind: "repo-archetype".to_string(),
+        topic_key: "request-lifecycle".to_string(),
+        title: "请求处理链".to_string(),
+        summary: "该专题聚焦入口、路由、中间件与处理函数之间的稳定请求链。".to_string(),
+        source_ids: relevant.iter().map(|file| file.id.clone()).collect(),
+        source_paths: relevant.iter().map(|file| file.path.clone()).collect(),
+        module_ids: repo_context
+            .top_modules
+            .iter()
+            .filter(|module_id| module_tree.module_by_id(module_id).is_some())
+            .cloned()
+            .collect(),
+        relation_ids: Vec::new(),
+    })
+}
+
+fn config_runtime_topic_seed(report: &ScanReport, repo_context: &RepoContext) -> Option<TopicSeed> {
+    let mut paths = report
+        .config_files
+        .iter()
+        .take(6)
+        .cloned()
+        .collect::<Vec<_>>();
+    paths.extend(repo_context.key_entry_points.iter().take(2).cloned());
+    paths.sort();
+    paths.dedup();
+    if paths.len() < 2 {
+        return None;
+    }
+
+    Some(TopicSeed {
+        topic_kind: "repo-archetype".to_string(),
+        topic_key: "config-runtime".to_string(),
+        title: "配置与运行时".to_string(),
+        summary: "该专题聚焦配置文件、运行时入口和环境切换的稳定边界。".to_string(),
+        source_ids: paths
+            .iter()
+            .filter_map(|path| {
+                report
+                    .files
+                    .iter()
+                    .find(|file| file.path == *path)
+                    .map(|file| file.id.clone())
+            })
+            .collect(),
+        source_paths: paths,
+        module_ids: repo_context.top_modules.clone(),
+        relation_ids: Vec::new(),
+    })
+}
+
+fn cli_entry_topic_seed(report: &ScanReport, module_tree: &ModuleTree) -> Option<TopicSeed> {
+    let cli_modules = module_tree
+        .modules
+        .iter()
+        .filter(|module| module.kind == "cli-tool")
+        .collect::<Vec<_>>();
+    if cli_modules.is_empty() {
+        return None;
+    }
+
+    let mut source_paths = cli_modules
+        .iter()
+        .flat_map(|module| module.entry_points.iter().cloned())
+        .collect::<Vec<_>>();
+    if source_paths.is_empty() {
+        source_paths.extend(
+            report
+                .entry_points
+                .iter()
+                .filter(|path| {
+                    path.contains("main") || path.contains("cli") || path.contains("command")
+                })
+                .take(6)
+                .cloned(),
+        );
+    }
+    source_paths.sort();
+    source_paths.dedup();
+    if source_paths.is_empty() {
+        return None;
+    }
+
+    Some(TopicSeed {
+        topic_kind: "repo-archetype".to_string(),
+        topic_key: "cli-entry".to_string(),
+        title: "命令入口与执行流".to_string(),
+        summary: "该专题聚焦命令入口、参数解析和执行主链。".to_string(),
+        source_ids: source_paths
+            .iter()
+            .filter_map(|path| {
+                report
+                    .files
+                    .iter()
+                    .find(|file| file.path == *path)
+                    .map(|file| file.id.clone())
+            })
+            .collect(),
+        source_paths,
+        module_ids: cli_modules.iter().map(|module| module.id.clone()).collect(),
+        relation_ids: Vec::new(),
+    })
+}
+
+fn library_api_topic_seed(report: &ScanReport, module_tree: &ModuleTree) -> Option<TopicSeed> {
+    let relevant = report
+        .files
+        .iter()
+        .filter(|file| {
+            matches!(
+                file.purpose,
+                crate::repo::scanner::FilePurpose::Library
+                    | crate::repo::scanner::FilePurpose::Domain
+                    | crate::repo::scanner::FilePurpose::Model
+                    | crate::repo::scanner::FilePurpose::Service
+            ) && file.is_substantive_source()
+        })
+        .take(8)
+        .collect::<Vec<_>>();
+    if relevant.len() < 3 {
+        return None;
+    }
+
+    Some(TopicSeed {
+        topic_kind: "repo-archetype".to_string(),
+        topic_key: "core-api-models".to_string(),
+        title: "核心 API 与数据模型".to_string(),
+        summary: "该专题聚焦对外 API、核心领域模型与主要实现边界。".to_string(),
+        source_ids: relevant.iter().map(|file| file.id.clone()).collect(),
+        source_paths: relevant.iter().map(|file| file.path.clone()).collect(),
+        module_ids: module_tree
+            .modules
+            .iter()
+            .filter(|module| module.kind == "library")
+            .map(|module| module.id.clone())
+            .collect(),
+        relation_ids: Vec::new(),
+    })
+}
+
+fn ops_runtime_topic_seed(report: &ScanReport) -> Option<TopicSeed> {
+    let relevant = report
+        .files
+        .iter()
+        .filter(|file| {
+            file.path.contains("docker")
+                || file.path.contains("k8s")
+                || file.path.contains("helm")
+                || file.path.starts_with(".github/workflows/")
+                || file.path.starts_with(".gitlab/")
+        })
+        .take(8)
+        .collect::<Vec<_>>();
+    if relevant.len() < 2 {
+        return None;
+    }
+
+    Some(TopicSeed {
+        topic_kind: "repo-archetype".to_string(),
+        topic_key: "ops-runtime".to_string(),
+        title: "部署与环境".to_string(),
+        summary: "该专题聚焦镜像、部署、CI/CD 与环境编排相关事实。".to_string(),
+        source_ids: relevant.iter().map(|file| file.id.clone()).collect(),
+        source_paths: relevant.iter().map(|file| file.path.clone()).collect(),
+        module_ids: Vec::new(),
+        relation_ids: Vec::new(),
+    })
 }
 
 fn should_keep_root_topic(seed: &TopicSeed) -> bool {

@@ -21,7 +21,7 @@ use crate::debug_trace;
 use crate::domain::context::{
     ChildPageRollup, ModuleContext, ModuleDossier, PageContext, PageDiagramInput,
     PageEvidenceGroup, PageResearchResult, PageResearchSessionState, PageResearchTurn,
-    PageToolArtifactRef, RepoContext, TopicDossier,
+    PageToolArtifactRef, RepoContext, RepoDossier, TargetedSnippet, TopicDossier,
 };
 use crate::domain::module_tree::ModuleTree;
 use crate::domain::stable_id::stable_id;
@@ -30,9 +30,13 @@ use crate::domain::steering::{
     LlmProviderConfig, LlmToolsMode,
 };
 use crate::generation::planner::PlannedPage;
-use crate::generation::sections::section_titles_for_page_type;
+use crate::generation::sections::{
+    section_key_for_title, section_title_for_key, section_titles_for_page_type,
+};
 use crate::repo::fingerprint::fingerprint_bytes;
 use crate::repo::scanner::FilePurpose;
+use crate::repo::symbol_graph::{GraphAnalysisSnapshot, ResolvedGraphSnapshot};
+use crate::repo::symbols::{ParsedSymbolsSnapshot, SymbolNode};
 use crate::storage::sqlite_store::{read_llm_cache, write_llm_cache, LlmCacheEntry};
 
 const FILE_PURPOSE_PROMPT_VERSION: &str = "file-purpose/v1";
@@ -468,7 +472,8 @@ impl ProviderApiLlmService {
                     sleep_before_retry(attempt);
                     continue;
                 }
-                let error = io::Error::other(format!("provider returned {status}: {response_json}"));
+                let error =
+                    io::Error::other(format!("provider returned {status}: {response_json}"));
                 debug_trace::record_json(
                     "llm_provider_error",
                     &json!({
@@ -533,9 +538,10 @@ impl ProviderApiLlmService {
 impl LlmService for ProviderApiLlmService {
     fn request(&mut self, request: &LlmPromptRequest) -> io::Result<LlmCompletion> {
         let completion = self.request_chat(request)?;
-        let content = completion.content.as_deref().ok_or_else(|| {
-            io::Error::other("provider response did not contain final content")
-        })?;
+        let content = completion
+            .content
+            .as_deref()
+            .ok_or_else(|| io::Error::other("provider response did not contain final content"))?;
         let output = match parse_provider_json_output(content) {
             Ok(output) => output,
             Err(error) => {
@@ -726,6 +732,9 @@ pub struct PageResearchInput {
     /// 子页上卷。
     #[serde(default)]
     pub child_rollups: Vec<ChildPageRollup>,
+    /// 仓库 dossier。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_dossier: Option<RepoDossier>,
     /// 模块 dossier。
     #[serde(default)]
     pub module_dossiers: Vec<ModuleDossier>,
@@ -754,6 +763,7 @@ impl PageResearchInput {
             summary_inputs: context.summary_inputs.clone(),
             hints: context.hints.clone(),
             child_rollups: context.child_rollups.clone(),
+            repo_dossier: context.repo_dossier.clone(),
             module_dossiers: context.module_dossiers.clone(),
             topic_dossier: context.topic_dossier.clone(),
             evidence_groups: context.evidence_groups.clone(),
@@ -771,6 +781,9 @@ pub struct PageResearchRuntimeContext<'a> {
     pub module_tree: &'a ModuleTree,
     pub repo_context: &'a RepoContext,
     pub module_contexts: &'a [ModuleContext],
+    pub symbol_snapshot: &'a ParsedSymbolsSnapshot,
+    pub resolved_graph: &'a ResolvedGraphSnapshot,
+    pub graph_analysis: &'a GraphAnalysisSnapshot,
 }
 
 /// 单页 research session 的结构化输出。
@@ -852,10 +865,6 @@ impl PageResearchResult {
     /// 对 research 结果做轻量结构校验，避免污染 deterministic renderer。
     pub fn sanitize_for_context(mut self, context: &PageContext) -> Option<Self> {
         self.summary = normalize_sentence(&self.summary);
-        self.key_points = dedupe_non_empty(self.key_points)
-            .into_iter()
-            .take(7)
-            .collect();
         self.open_questions = dedupe_non_empty(self.open_questions)
             .into_iter()
             .take(3)
@@ -871,6 +880,55 @@ impl PageResearchResult {
             .iter()
             .map(|diagram| diagram.diagram_id.clone())
             .collect::<BTreeSet<_>>();
+        let allowed_children = context
+            .child_rollups
+            .iter()
+            .map(|rollup| rollup.page_id.clone())
+            .collect::<BTreeSet<_>>();
+        let max_section_count = section_titles_for_page_type(&context.page_type).len();
+
+        let mut seen_section_keys = BTreeSet::new();
+        self.section_plan = self
+            .section_plan
+            .into_iter()
+            .filter_map(|mut section| {
+                let normalized_key = if section.section_key.trim().is_empty() {
+                    section_key_for_title(&context.page_type, &section.section_title)
+                } else {
+                    section.section_key.trim().to_string()
+                };
+                let section_title =
+                    section_title_for_key(&context.page_type, &normalized_key)?.to_string();
+                if !seen_section_keys.insert(normalized_key.clone()) {
+                    return None;
+                }
+                section.section_key = normalized_key;
+                section.section_title = section_title;
+                section.section_summary = normalize_multiline(&section.section_summary);
+                section.evidence_refs = dedupe_non_empty(section.evidence_refs)
+                    .into_iter()
+                    .filter(|reference| allowed_group_keys.contains(reference))
+                    .take(6)
+                    .collect();
+                section.diagram_refs = dedupe_non_empty(section.diagram_refs)
+                    .into_iter()
+                    .filter(|reference| allowed_diagrams.contains(reference))
+                    .take(4)
+                    .collect();
+                section.child_refs = dedupe_non_empty(section.child_refs)
+                    .into_iter()
+                    .filter(|reference| allowed_children.contains(reference))
+                    .take(6)
+                    .collect();
+
+                (!section.section_summary.is_empty()
+                    || !section.evidence_refs.is_empty()
+                    || !section.diagram_refs.is_empty()
+                    || !section.child_refs.is_empty())
+                .then_some(section)
+            })
+            .take(max_section_count)
+            .collect();
 
         self.evidence_rollup = self
             .evidence_rollup
@@ -887,6 +945,11 @@ impl PageResearchResult {
                     .filter_map(|mut item| {
                         item.path = item.path.trim().to_string();
                         item.note = normalize_sentence(&item.note);
+                        item.evidence_type = item.evidence_type.trim().to_string();
+                        item.section_refs = dedupe_non_empty(item.section_refs)
+                            .into_iter()
+                            .filter(|reference| seen_section_keys.contains(reference))
+                            .collect();
                         (!item.path.is_empty()).then_some(item)
                     })
                     .take(6)
@@ -909,7 +972,7 @@ impl PageResearchResult {
             .collect();
 
         (!self.summary.is_empty()
-            || !self.key_points.is_empty()
+            || !self.section_plan.is_empty()
             || !self.evidence_rollup.is_empty()
             || !self.diagram_rollup.is_empty()
             || !self.open_questions.is_empty())
@@ -958,7 +1021,8 @@ pub struct LlmRuntime<'cfg, 'svc> {
     service: Option<RuntimeLlmService<'svc>>,
     real_calls: usize,
     uncertainty_calls: usize,
-    enrichment_calls: usize,
+    page_calls: usize,
+    core_page_calls: usize,
     usage: LlmUsageSnapshot,
     usage_by_prompt_type: BTreeMap<String, LlmUsageBucket>,
     usage_by_provider_model: BTreeMap<String, LlmUsageBucket>,
@@ -996,7 +1060,8 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             service,
             real_calls: 0,
             uncertainty_calls: 0,
-            enrichment_calls: 0,
+            page_calls: 0,
+            core_page_calls: 0,
             usage: LlmUsageSnapshot::default(),
             usage_by_prompt_type: BTreeMap::new(),
             usage_by_provider_model: BTreeMap::new(),
@@ -1005,7 +1070,10 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
     }
 
     /// 注册普通模式下的实时 usage 回调。
-    pub fn set_usage_reporter(&mut self, reporter: Option<Box<dyn FnMut(LlmUsageSnapshot) + 'svc>>) {
+    pub fn set_usage_reporter(
+        &mut self,
+        reporter: Option<Box<dyn FnMut(LlmUsageSnapshot) + 'svc>>,
+    ) {
         self.usage_reporter = reporter;
     }
 
@@ -1145,8 +1213,8 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
     where
         T: Serialize,
     {
-        let mut input = serde_json::to_value(input)
-            .map_err(|error| io::Error::other(error.to_string()))?;
+        let mut input =
+            serde_json::to_value(input).map_err(|error| io::Error::other(error.to_string()))?;
         let mut session = session.map(|state| trim_session_state(state, self.config));
         let estimated_tokens_before = estimate_payload_tokens(&input, session.as_ref());
         let limit_tokens = prompt_token_limit(prompt_type, self.config);
@@ -1247,7 +1315,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
 
         let mut pending_batches = Vec::<PendingPromptBatch<FilePurposeAssistInput>>::new();
         for chunk in pending.chunks(FILE_PURPOSE_BATCH_SIZE) {
-            if !self.try_consume_budget(PromptType::FilePurpose) {
+            if !self.try_consume_budget(PromptType::FilePurpose, None) {
                 break;
             }
 
@@ -1256,11 +1324,8 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             };
             let prepared =
                 self.prepare_prompt_payload(PromptType::FilePurpose, &batch_input, None)?;
-            let batch_input_hash = build_prompt_input_hash(
-                PromptType::FilePurpose,
-                model.as_deref(),
-                &prepared.input,
-            );
+            let batch_input_hash =
+                build_prompt_input_hash(PromptType::FilePurpose, model.as_deref(), &prepared.input);
             let request = build_structured_request(
                 PromptType::FilePurpose,
                 &batch_input_hash,
@@ -1430,7 +1495,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         }
 
         for chunk in pending.chunks(TOP_LEVEL_PROMOTION_BATCH_SIZE) {
-            if !self.try_consume_budget(PromptType::TopLevelPromotion) {
+            if !self.try_consume_budget(PromptType::TopLevelPromotion, None) {
                 break;
             }
 
@@ -1612,7 +1677,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         }
 
         for chunk in pending.chunks(DEPENDENCY_EDGE_BATCH_SIZE) {
-            if !self.try_consume_budget(PromptType::DependencyEdge) {
+            if !self.try_consume_budget(PromptType::DependencyEdge, None) {
                 break;
             }
 
@@ -1743,19 +1808,23 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         self.enrich_pages_via_provider(inputs, parallel_requests)
     }
 
-    /// 对 `module/topic` 页执行 bounded provider research session。
+    /// 对 research 支持页面执行 bounded provider research session。
     pub fn research_page(
         &mut self,
         input: &PageResearchInput,
         runtime: &PageResearchRuntimeContext<'_>,
     ) -> io::Result<Option<PageResearchSessionOutput>> {
-        if !matches!(input.page_type.as_str(), "module" | "topic") || !self.session_enabled() {
+        if !matches!(
+            input.page_type.as_str(),
+            "overview" | "architecture" | "module" | "topic"
+        ) || !self.session_enabled()
+        {
             return Ok(None);
         }
         let Some(RuntimeLlmService::Provider(_)) = self.service.as_ref() else {
             return Ok(None);
         };
-        if !self.try_consume_budget(PromptType::PageResearch) {
+        if !self.try_consume_budget(PromptType::PageResearch, Some(input.page_type.as_str())) {
             return Ok(None);
         }
 
@@ -1777,15 +1846,18 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                 }
                 if let Ok(parsed) = serde_json::from_str::<PageResearchResult>(&cached.response) {
                     if let Some(result) = parsed.sanitize_for_context(runtime.page_context) {
-                        return Ok(Some(PageResearchSessionOutput {
-                            session: PageResearchSessionState {
-                                session_id: stable_id("research-session", &input.page_id),
-                                session_summary: result.summary.clone(),
-                                recent_turns: Vec::new(),
-                                tool_artifact_refs: Vec::new(),
-                            },
-                            result,
-                        }));
+                        let mut session =
+                            input
+                                .session
+                                .clone()
+                                .unwrap_or_else(|| PageResearchSessionState {
+                                    session_id: stable_id("research-session", &input.page_id),
+                                    session_summary: String::new(),
+                                    recent_turns: Vec::new(),
+                                    tool_artifact_refs: Vec::new(),
+                                });
+                        session.session_summary = result.summary.clone();
+                        return Ok(Some(PageResearchSessionOutput { session, result }));
                     }
                 }
             }
@@ -1876,7 +1948,9 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
     ) -> io::Result<Option<PageResearchSessionOutput>> {
         let result = match mode {
             LlmToolsMode::NativeTools => self.run_provider_research_native_tools(request, runtime),
-            LlmToolsMode::EmulatedTools => self.run_provider_research_emulated_tools(request, runtime),
+            LlmToolsMode::EmulatedTools => {
+                self.run_provider_research_emulated_tools(request, runtime)
+            }
             _ => self.run_provider_research_no_tools(request, runtime),
         };
         match result {
@@ -1921,19 +1995,21 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             _ => return Ok(None),
         };
         self.record_completion_usage(PromptType::PageResearch, &completion);
-        let Some(result) = parse_page_research_output(completion.output, runtime.page_context) else {
+        let Some(result) = parse_page_research_output(completion.output, runtime.page_context)
+        else {
             return Ok(None);
         };
         Ok(Some(PageResearchSessionOutput {
-            session: PageResearchSessionState {
-                session_id: stable_id("research-session", &runtime.page.id),
-                session_summary: result.summary.clone(),
-                recent_turns: vec![PageResearchTurn {
+            session: finalize_research_session(
+                &runtime.page.id,
+                request.session.as_ref(),
+                &result,
+                vec![PageResearchTurn {
                     role: "assistant".to_string(),
                     content: result.summary.clone(),
                 }],
-                tool_artifact_refs: Vec::new(),
-            },
+                Vec::new(),
+            ),
             result,
         }))
     }
@@ -1965,8 +2041,16 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         emulated_tools: bool,
     ) -> io::Result<Option<PageResearchSessionOutput>> {
         let mut messages = ProviderApiLlmService::default_messages(request);
-        let mut recent_turns = Vec::<PageResearchTurn>::new();
-        let mut tool_artifact_refs = Vec::<PageToolArtifactRef>::new();
+        let mut recent_turns = request
+            .session
+            .as_ref()
+            .map(|session| session.recent_turns.clone())
+            .unwrap_or_default();
+        let mut tool_artifact_refs = request
+            .session
+            .as_ref()
+            .map(|session| session.tool_artifact_refs.clone())
+            .unwrap_or_default();
         let max_turns = self.config.session_max_recent_turns.clamp(4, 8);
 
         if emulated_tools {
@@ -2042,8 +2126,9 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                         });
                         messages.push(assistant_message);
                         for tool_call in tool_calls {
-                            let parsed = serde_json::from_value::<ProviderToolCall>(tool_call.clone())
-                                .map_err(|error| io::Error::other(error.to_string()))?;
+                            let parsed =
+                                serde_json::from_value::<ProviderToolCall>(tool_call.clone())
+                                    .map_err(|error| io::Error::other(error.to_string()))?;
                             let (result, artifact_ref) = execute_research_tool(&parsed, runtime)?;
                             if let Some(artifact_ref) = artifact_ref {
                                 tool_artifact_refs.push(artifact_ref);
@@ -2081,6 +2166,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                     return Ok(Some(PageResearchSessionOutput {
                         session: finalize_research_session(
                             &runtime.page.id,
+                            request.session.as_ref(),
                             &result,
                             recent_turns,
                             tool_artifact_refs,
@@ -2110,6 +2196,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                 return Ok(Some(PageResearchSessionOutput {
                     session: finalize_research_session(
                         &runtime.page.id,
+                        request.session.as_ref(),
                         &result,
                         recent_turns,
                         tool_artifact_refs,
@@ -2162,7 +2249,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             return Ok(None);
         }
 
-        if !self.try_consume_budget(prompt_type) {
+        if !self.try_consume_budget(prompt_type, None) {
             return Ok(None);
         }
 
@@ -2239,13 +2326,15 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                 }
             }
 
-            if !self.try_consume_budget(PromptType::PageEnrichment) {
+            if !self.try_consume_budget(
+                PromptType::PageEnrichment,
+                Some(input.page_type.as_str()),
+            ) {
                 continue;
             }
 
             let instruction = build_page_enrichment_instruction(input);
-            let prepared =
-                self.prepare_prompt_payload(PromptType::PageEnrichment, input, None)?;
+            let prepared = self.prepare_prompt_payload(PromptType::PageEnrichment, input, None)?;
             pending.push(PendingPageEnrichmentRequest {
                 index,
                 input_hash: input_hash.clone(),
@@ -2342,25 +2431,52 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         }
 
         match prompt_type {
-            PromptType::PageEnrichment | PromptType::PageResearch => {
-                self.enrichment_calls < self.max_enrichment_calls()
-            }
+            PromptType::PageEnrichment => self.page_budget_available(None),
+            PromptType::PageResearch => false,
             _ => self.uncertainty_calls < self.max_uncertainty_calls(),
         }
     }
 
-    fn try_consume_budget(&mut self, prompt_type: PromptType) -> bool {
-        if !self.budget_available(prompt_type) {
+    fn page_budget_available(&self, page_type: Option<&str>) -> bool {
+        if self.real_calls >= self.config.max_calls {
+            return false;
+        }
+
+        let reserved_core_slots = self.reserved_core_page_calls();
+        let non_core_page_calls = self.page_calls.saturating_sub(self.core_page_calls);
+        let non_core_budget_available =
+            non_core_page_calls < self.max_page_calls().saturating_sub(reserved_core_slots);
+
+        if is_core_page_type(page_type) {
+            self.core_page_calls < reserved_core_slots || non_core_budget_available
+        } else {
+            non_core_budget_available
+        }
+    }
+
+    fn page_research_budget_available(&self, page_type: Option<&str>) -> bool {
+        self.page_budget_available(page_type)
+    }
+
+    fn try_consume_budget(&mut self, prompt_type: PromptType, page_type: Option<&str>) -> bool {
+        let allowed = match prompt_type {
+            PromptType::PageResearch => self.page_research_budget_available(page_type),
+            _ => self.budget_available(prompt_type),
+        };
+        if !allowed {
             debug_trace::record_json(
                 "llm_budget_rejected",
                 &json!({
                     "prompt_type": prompt_type.as_str(),
+                    "page_type": page_type,
                     "real_calls": self.real_calls,
                     "uncertainty_calls": self.uncertainty_calls,
-                    "enrichment_calls": self.enrichment_calls,
+                    "page_calls": self.page_calls,
+                    "core_page_calls": self.core_page_calls,
                     "max_calls": self.config.max_calls,
                     "max_uncertainty_calls": self.max_uncertainty_calls(),
-                    "max_enrichment_calls": self.max_enrichment_calls(),
+                    "max_page_calls": self.max_page_calls(),
+                    "reserved_core_page_calls": self.reserved_core_page_calls(),
                 }),
             );
             return false;
@@ -2368,20 +2484,35 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
 
         self.real_calls += 1;
         match prompt_type {
-            PromptType::PageEnrichment | PromptType::PageResearch => self.enrichment_calls += 1,
+            PromptType::PageEnrichment => {
+                self.page_calls += 1;
+                if is_core_page_type(page_type) {
+                    self.core_page_calls += 1;
+                }
+            }
+            PromptType::PageResearch => {
+                self.page_calls += 1;
+                if is_core_page_type(page_type) {
+                    self.core_page_calls += 1;
+                }
+            }
             _ => self.uncertainty_calls += 1,
         }
         true
     }
 
-    fn max_enrichment_calls(&self) -> usize {
+    fn max_page_calls(&self) -> usize {
         reserved_enrichment_call_budget(self.config.max_calls)
+    }
+
+    fn reserved_core_page_calls(&self) -> usize {
+        reserved_core_page_call_budget(self.max_page_calls())
     }
 
     fn max_uncertainty_calls(&self) -> usize {
         self.config
             .max_calls
-            .saturating_sub(self.max_enrichment_calls())
+            .saturating_sub(self.max_page_calls())
     }
 
     fn write_cached_response<TOutput>(
@@ -2599,8 +2730,18 @@ fn apply_prompt_budget_trim(
                 trim_named_array_field(object, &["summary_inputs"], 12);
             }
             PromptType::PageResearch => {
-                trim_named_array_field(object, &["child_rollups", "module_dossiers"], 6);
+                trim_named_array_field(
+                    object,
+                    &[
+                        "child_rollups",
+                        "module_dossiers",
+                        "evidence_groups",
+                        "diagram_inputs",
+                    ],
+                    6,
+                );
                 trim_named_array_field(object, &["summary_inputs", "hints", "facts"], 10);
+                trim_named_array_field(object, &["targeted_snippets", "evidence_rollup"], 8);
             }
             PromptType::FilePurpose => {
                 trim_named_array_field(object, &["items"], FILE_PURPOSE_BATCH_SIZE);
@@ -3145,6 +3286,18 @@ fn reserved_enrichment_call_budget(max_calls: usize) -> usize {
     }
 }
 
+fn reserved_core_page_call_budget(max_page_calls: usize) -> usize {
+    match max_page_calls {
+        0 => 0,
+        1..=2 => 1,
+        _ => 2,
+    }
+}
+
+fn is_core_page_type(page_type: Option<&str>) -> bool {
+    matches!(page_type, Some("overview" | "architecture"))
+}
+
 fn default_function_type() -> String {
     "function".to_string()
 }
@@ -3384,14 +3537,11 @@ fn parse_provider_json_output(content: &str) -> io::Result<Value> {
     serde_json::from_str(stripped).map_err(|error| io::Error::other(error.to_string()))
 }
 
-fn parse_page_research_output(
-    value: Value,
-    context: &PageContext,
-) -> Option<PageResearchResult> {
+fn parse_page_research_output(value: Value, context: &PageContext) -> Option<PageResearchResult> {
     let object = value.as_object()?;
     let required = [
         "summary",
-        "key_points",
+        "section_plan",
         "evidence_rollup",
         "diagram_rollup",
         "open_questions",
@@ -3405,43 +3555,72 @@ fn parse_page_research_output(
 }
 
 fn build_page_research_instruction(input: &PageResearchInput) -> String {
+    let allowed_sections = section_titles_for_page_type(&input.page_type)
+        .into_iter()
+        .map(|title| {
+            format!(
+                "{} ({title})",
+                section_key_for_title(&input.page_type, title)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("、");
     format!(
         concat!(
             "页面类型：{page_type}\n",
             "页面标题：{title}\n",
             "页面作用域：{scope}\n",
             "child rollups 数量：{child_rollups}\n",
+            "repo dossier：{has_repo_dossier}\n",
             "module dossiers 数量：{module_dossiers}\n",
             "topic dossier：{has_topic_dossier}\n",
             "evidence groups 数量：{evidence_groups}\n",
             "diagram inputs 数量：{diagram_inputs}\n",
+            "允许的 section 槽位：{allowed_sections}\n",
             "输出要求：\n",
             "1. 最终结果必须严格符合 response_schema，对应 `PageResearchResult`。\n",
-            "2. `summary` 只能写 1 段高密度摘要，不得输出 Markdown 页面或 section 标题。\n",
-            "3. `key_points` 只保留最关键的 3 到 7 条结论。\n",
-            "4. `evidence_rollup` 只能引用当前输入中已存在的 evidence group / source path。\n",
+            "2. `summary` 只能写 1 段高密度摘要，不得输出 Markdown 页面。\n",
+            "3. `section_plan` 必须只使用允许的 section 槽位；每节都应给出 `section_key / section_title / section_summary`，并尽量补充 `evidence_refs / diagram_refs / child_refs`。\n",
+            "4. `evidence_rollup` 只能引用当前输入中已存在的 evidence group / source path / line span。\n",
             "5. `diagram_rollup` 只能引用 deterministic 已存在的 diagram inputs。\n",
             "6. 若信息不足，可提出 `open_questions`，但不得凭空捏造事实。\n",
-            "7. 若工具调用有帮助，可以先调用工具，再返回最终结构化结果。"
+            "7. 若工具调用有帮助，可以先调用工具，再返回最终结构化结果。\n",
+            "8. 不要返回自由新章节；重点是决定受控 section 槽位的顺序、重点和支撑材料。"
         ),
         page_type = input.page_type,
         title = input.title,
         scope = input.scope,
         child_rollups = input.child_rollups.len(),
+        has_repo_dossier = input.repo_dossier.is_some(),
         module_dossiers = input.module_dossiers.len(),
         has_topic_dossier = input.topic_dossier.is_some(),
         evidence_groups = input.evidence_groups.len(),
         diagram_inputs = input.diagram_inputs.len(),
+        allowed_sections = allowed_sections,
     )
 }
 
 fn page_research_response_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["summary", "key_points", "evidence_rollup", "diagram_rollup", "open_questions"],
+        "required": ["summary", "section_plan", "evidence_rollup", "diagram_rollup", "open_questions"],
         "properties": {
             "summary": {"type": "string"},
-            "key_points": {"type": "array", "items": {"type": "string"}},
+            "section_plan": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["section_key", "section_title", "section_summary", "evidence_refs", "diagram_refs", "child_refs"],
+                    "properties": {
+                        "section_key": {"type": "string"},
+                        "section_title": {"type": "string"},
+                        "section_summary": {"type": "string"},
+                        "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                        "diagram_refs": {"type": "array", "items": {"type": "string"}},
+                        "child_refs": {"type": "array", "items": {"type": "string"}}
+                    }
+                }
+            },
             "evidence_rollup": {
                 "type": "array",
                 "items": {
@@ -3454,13 +3633,16 @@ fn page_research_response_schema() -> Value {
                             "type": "array",
                             "items": {
                                 "type": "object",
-                                "required": ["path", "start_line", "end_line", "note"],
+                                "required": ["path", "start_line", "end_line", "evidence_type", "section_refs", "note", "coarse_span"],
                                 "properties": {
                                     "source_id": {"type": "string"},
                                     "path": {"type": "string"},
                                     "start_line": {"type": "integer"},
                                     "end_line": {"type": "integer"},
-                                    "note": {"type": "string"}
+                                    "evidence_type": {"type": "string"},
+                                    "section_refs": {"type": "array", "items": {"type": "string"}},
+                                    "note": {"type": "string"},
+                                    "coarse_span": {"type": "boolean"}
                                 }
                             }
                         }
@@ -3626,7 +3808,7 @@ fn build_emulated_tool_user_message(request: &LlmPromptRequest) -> String {
                 "type": "final",
                 "result": {
                     "summary": "...",
-                    "key_points": [],
+                    "section_plan": [],
                     "evidence_rollup": [],
                     "diagram_rollup": [],
                     "open_questions": []
@@ -3634,22 +3816,32 @@ fn build_emulated_tool_user_message(request: &LlmPromptRequest) -> String {
             }
         }
     }))
-    .map(|payload| {
-        format!("{payload}\n请优先输出 tool_calls 或 final 结构，不要输出 Markdown。")
-    })
+    .map(|payload| format!("{payload}\n请优先输出 tool_calls 或 final 结构，不要输出 Markdown。"))
     .unwrap_or_else(|_| request.instruction.clone())
 }
 
 fn finalize_research_session(
     page_id: &str,
+    previous: Option<&PageResearchSessionState>,
     result: &PageResearchResult,
     recent_turns: Vec<PageResearchTurn>,
     tool_artifact_refs: Vec<PageToolArtifactRef>,
 ) -> PageResearchSessionState {
+    let session_id = previous
+        .map(|state| state.session_id.clone())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| stable_id("research-session", page_id));
     PageResearchSessionState {
-        session_id: stable_id("research-session", page_id),
+        session_id,
         session_summary: result.summary.clone(),
-        recent_turns: recent_turns.into_iter().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect(),
+        recent_turns: recent_turns
+            .into_iter()
+            .rev()
+            .take(8)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect(),
         tool_artifact_refs,
     }
 }
@@ -3659,6 +3851,19 @@ fn execute_research_tool(
     runtime: &PageResearchRuntimeContext<'_>,
 ) -> io::Result<(Value, Option<PageToolArtifactRef>)> {
     let args = parse_provider_json_output(&tool_call.function.arguments)?;
+    let source_index = runtime
+        .scan_report
+        .files
+        .iter()
+        .map(|file| (file.id.clone(), file.path.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let symbol_index = runtime
+        .symbol_snapshot
+        .symbols
+        .iter()
+        .map(|symbol| (symbol.symbol_id.clone(), symbol))
+        .collect::<BTreeMap<_, _>>();
+    let snippet_pool = collect_research_snippets(runtime.page_context);
     match tool_call.function.name.as_str() {
         "read_source_snippets" => {
             let source_ids = args
@@ -3669,40 +3874,25 @@ fn execute_research_tool(
                 .into_iter()
                 .filter_map(|value| value.as_str().map(str::to_string))
                 .collect::<Vec<_>>();
-            let source_index = runtime
-                .scan_report
-                .files
-                .iter()
-                .map(|file| (file.id.clone(), file.path.clone()))
-                .collect::<BTreeMap<_, _>>();
             let snippets = source_ids
                 .iter()
                 .filter_map(|source_id| {
-                    let path = source_index.get(source_id)?;
-                    let absolute = Path::new(&runtime.scan_report.root).join(path);
-                    let content = fs::read_to_string(absolute).ok()?;
-                    let snippet = content
-                        .lines()
-                        .take(24)
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                        .trim()
-                        .to_string();
-                    (!snippet.is_empty()).then_some(json!({
-                        "source_id": source_id,
-                        "path": path,
-                        "start_line": 1,
-                        "end_line": snippet.lines().count(),
-                        "content": snippet,
-                    }))
+                    resolve_tool_snippet(
+                        source_id,
+                        &source_index,
+                        &snippet_pool,
+                        &symbol_index,
+                        runtime.scan_report,
+                    )
                 })
+                .map(|snippet| targeted_snippet_to_json(&snippet))
                 .collect::<Vec<_>>();
             Ok((
                 json!({ "snippets": snippets }),
                 Some(PageToolArtifactRef {
                     tool_name: tool_call.function.name.clone(),
                     artifact_id: tool_call.id.clone(),
-                    summary: format!("读取了 {} 个源码片段", source_ids.len()),
+                    summary: format!("读取了 {} 个源码片段", snippets.len()),
                 }),
             ))
         }
@@ -3732,31 +3922,91 @@ fn execute_research_tool(
                         "title": title,
                         "summary": context.role_hints.join("、"),
                         "key_sources": context.key_sources,
+                        "graph_hotspots": context.graph_hotspots,
+                        "communities": context.communities,
+                        "dependencies": context.dependencies,
+                        "dependents": context.dependents,
                         "child_page_ids": runtime.page_context.child_rollups.iter().map(|rollup| rollup.page_id.clone()).collect::<Vec<_>>(),
                     }))
                 })
                 .collect::<Vec<_>>();
             Ok((json!({ "modules": modules }), None))
         }
-        "get_symbol_neighbors" => Ok((json!({ "neighbors": [] }), None)),
+        "get_symbol_neighbors" => {
+            let symbol_ids = args
+                .get("symbol_ids")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect::<BTreeSet<_>>();
+            let edge_types = args
+                .get("edge_types")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect::<BTreeSet<_>>();
+            let neighbors = runtime
+                .resolved_graph
+                .edges
+                .iter()
+                .filter(|edge| {
+                    (symbol_ids.contains(&edge.source_id) || symbol_ids.contains(&edge.target_id))
+                        && (edge_types.is_empty() || edge_types.contains(&edge.edge_type))
+                })
+                .take(24)
+                .filter_map(|edge| {
+                    let source = symbol_index.get(&edge.source_id)?;
+                    let target = symbol_index.get(&edge.target_id)?;
+                    Some(json!({
+                        "edge_id": edge.edge_id,
+                        "edge_type": edge.edge_type,
+                        "confidence": edge.confidence,
+                        "reason": edge.reason,
+                        "source": symbol_to_json(source),
+                        "target": symbol_to_json(target),
+                    }))
+                })
+                .collect::<Vec<_>>();
+            Ok((json!({ "neighbors": neighbors }), None))
+        }
         "get_process_trace" => {
             let process_id = args
                 .get("process_id")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             let process = runtime
-                .repo_context
-                .detected_processes
+                .graph_analysis
+                .processes
                 .iter()
-                .find(|label| label.contains(process_id))
-                .cloned()
-                .or_else(|| runtime.repo_context.detected_processes.first().cloned())
-                .map(|label| {
+                .find(|process| {
+                    process.process_id == process_id || process.label.contains(process_id)
+                })
+                .or_else(|| runtime.graph_analysis.processes.first())
+                .map(|process| {
+                    let steps = runtime
+                        .graph_analysis
+                        .process_steps
+                        .iter()
+                        .filter(|step| step.process_id == process.process_id)
+                        .take(12)
+                        .filter_map(|step| {
+                            let symbol = symbol_index.get(&step.symbol_id)?;
+                            Some(json!({
+                                "step_order": step.step_order,
+                                "symbol": symbol_to_json(symbol),
+                            }))
+                        })
+                        .collect::<Vec<_>>();
                     json!({
                         "process": {
-                            "process_id": process_id,
-                            "title": label,
-                            "steps": []
+                            "process_id": process.process_id,
+                            "title": process.label,
+                            "process_type": process.process_type,
+                            "steps": steps,
                         }
                     })
                 })
@@ -3778,6 +4028,10 @@ fn execute_research_tool(
                             "page_id": rollup.page_id,
                             "title": rollup.title,
                             "summary": rollup.summary,
+                            "page_type": rollup.page_type,
+                            "section_plan_rollup": rollup.section_plan_rollup,
+                            "key_sources_rollup": rollup.key_sources_rollup,
+                            "open_questions": rollup.open_questions,
                         })
                     })
                     .collect::<Vec<_>>()
@@ -3806,11 +4060,17 @@ fn execute_research_tool(
                             "group": {
                                 "group_key": group.group_id,
                                 "title": group.title,
+                                "summary": group.summary,
                                 "items": group.items.iter().map(|item| {
                                     json!({
                                         "source_id": item.source_id,
                                         "path": item.path,
+                                        "start_line": item.start_line,
+                                        "end_line": item.end_line,
+                                        "evidence_type": item.evidence_type,
+                                        "section_refs": item.section_refs,
                                         "note": item.note,
+                                        "coarse_span": item.coarse_span,
                                     })
                                 }).collect::<Vec<_>>(),
                             }
@@ -3824,7 +4084,10 @@ fn execute_research_tool(
         }
         "search_topic_candidates" => {
             let scope = args.get("scope").and_then(Value::as_str).unwrap_or("repo");
-            let scope_id = args.get("scope_id").and_then(Value::as_str).unwrap_or_default();
+            let scope_id = args
+                .get("scope_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let query = args
                 .get("query")
                 .and_then(Value::as_str)
@@ -3842,7 +4105,11 @@ fn execute_research_tool(
                         .flat_map(|context| context.capability_topics.iter()),
                 )
                 .filter(|topic| {
-                    (scope == "repo" || topic.module_ids.iter().any(|module_id| module_id == scope_id))
+                    (scope == "repo"
+                        || topic
+                            .module_ids
+                            .iter()
+                            .any(|module_id| module_id == scope_id))
                         && (query.is_empty()
                             || topic.title.to_ascii_lowercase().contains(&query)
                             || topic.summary.to_ascii_lowercase().contains(&query))
@@ -3861,6 +4128,141 @@ fn execute_research_tool(
         }
         other => Err(io::Error::other(format!("unsupported tool call: {other}"))),
     }
+}
+
+fn collect_research_snippets(context: &PageContext) -> Vec<TargetedSnippet> {
+    let mut snippets = Vec::new();
+    if let Some(repo_dossier) = &context.repo_dossier {
+        snippets.extend(repo_dossier.targeted_snippets.clone());
+    }
+    for dossier in &context.module_dossiers {
+        snippets.extend(dossier.targeted_snippets.clone());
+    }
+    if let Some(topic_dossier) = &context.topic_dossier {
+        snippets.extend(topic_dossier.targeted_snippets.clone());
+    }
+    snippets.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then(left.path.cmp(&right.path))
+            .then(left.start_line.cmp(&right.start_line))
+            .then(left.snippet_id.cmp(&right.snippet_id))
+    });
+    snippets.dedup_by(|left, right| left.snippet_id == right.snippet_id);
+    snippets
+}
+
+fn resolve_tool_snippet(
+    source_id: &str,
+    source_index: &BTreeMap<String, String>,
+    snippet_pool: &[TargetedSnippet],
+    symbol_index: &BTreeMap<String, &SymbolNode>,
+    scan_report: &crate::repo::scanner::ScanReport,
+) -> Option<TargetedSnippet> {
+    if let Some(snippet) = snippet_pool
+        .iter()
+        .find(|snippet| snippet.source_id.as_deref() == Some(source_id))
+    {
+        return Some(snippet.clone());
+    }
+
+    let path = source_index.get(source_id)?;
+    if let Some(symbol) = symbol_index
+        .values()
+        .find(|symbol| symbol.file_path == *path)
+    {
+        return read_tool_snippet(
+            scan_report,
+            path,
+            symbol.start_line,
+            symbol.end_line,
+            "tool-symbol",
+            vec![symbol.symbol_id.clone()],
+            Some(source_id.to_string()),
+        );
+    }
+
+    read_tool_snippet(
+        scan_report,
+        path,
+        1,
+        24,
+        "tool-file-window",
+        Vec::new(),
+        Some(source_id.to_string()),
+    )
+}
+
+fn read_tool_snippet(
+    scan_report: &crate::repo::scanner::ScanReport,
+    path: &str,
+    start_line: usize,
+    end_line: usize,
+    snippet_kind: &str,
+    symbol_ids: Vec<String>,
+    source_id: Option<String>,
+) -> Option<TargetedSnippet> {
+    let absolute_path = Path::new(&scan_report.root).join(path);
+    let content = fs::read_to_string(absolute_path).ok()?;
+    let lines = content.lines().collect::<Vec<_>>();
+    let start = start_line.max(1).min(lines.len().max(1));
+    let end = end_line.max(start).min(lines.len().max(start));
+    let bounded_end = (start + 23).min(end).max(start);
+    let snippet_content = lines
+        .iter()
+        .skip(start.saturating_sub(1))
+        .take(bounded_end.saturating_sub(start) + 1)
+        .map(|line| line.trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+    if snippet_content.is_empty() {
+        return None;
+    }
+
+    Some(TargetedSnippet {
+        snippet_id: stable_id(
+            "snippet",
+            &format!("{path}:{start}:{bounded_end}:{snippet_kind}"),
+        ),
+        source_id,
+        path: path.to_string(),
+        start_line: start,
+        end_line: bounded_end,
+        snippet_kind: snippet_kind.to_string(),
+        score: 0,
+        symbol_ids,
+        content: snippet_content,
+    })
+}
+
+fn targeted_snippet_to_json(snippet: &TargetedSnippet) -> Value {
+    json!({
+        "snippet_id": snippet.snippet_id,
+        "source_id": snippet.source_id,
+        "path": snippet.path,
+        "start_line": snippet.start_line,
+        "end_line": snippet.end_line,
+        "snippet_kind": snippet.snippet_kind,
+        "score": snippet.score,
+        "symbol_ids": snippet.symbol_ids,
+        "content": snippet.content,
+    })
+}
+
+fn symbol_to_json(symbol: &SymbolNode) -> Value {
+    json!({
+        "symbol_id": symbol.symbol_id,
+        "name": symbol.name,
+        "label": symbol.label,
+        "file_path": symbol.file_path,
+        "start_line": symbol.start_line,
+        "end_line": symbol.end_line,
+        "is_exported": symbol.is_exported,
+        "language": symbol.language,
+    })
 }
 
 fn is_provider_tools_unsupported(error: &io::Error) -> bool {
@@ -3948,7 +4350,11 @@ fn record_provider_retry(
 }
 
 fn is_retryable_provider_transport_error(error: &reqwest::Error) -> bool {
-    error.is_timeout() || error.is_connect() || error.is_request() || error.is_body() || error.is_decode()
+    error.is_timeout()
+        || error.is_connect()
+        || error.is_request()
+        || error.is_body()
+        || error.is_decode()
 }
 
 fn is_retryable_provider_status(status: u16) -> bool {

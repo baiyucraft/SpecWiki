@@ -1,8 +1,8 @@
 //! init workflow 负责按全量链路生成第一版 Repo Wiki runtime。
 //! 它串联扫描、模块树、页面规划、渲染、状态写盘和 metadata 导出。
 
-use std::collections::BTreeMap;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -195,6 +195,9 @@ pub fn run_init_with_progress_and_llm_as<'a>(
         &module_tree,
         &repo_context,
         &module_contexts,
+        &symbol_snapshot,
+        &resolved_graph,
+        &analysis,
         &steering,
         Some(&mut llm_runtime),
         llm_enrichment_enabled.then_some(&mut llm_progress as &mut dyn FnMut(usize, usize)),

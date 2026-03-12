@@ -95,6 +95,14 @@ fn planner_generates_root_and_module_topic_pages() {
             page.page_type == "topic" && page.topic_kind.as_deref() == Some("module-capability")
         })
         .expect("module capability topic page should exist");
+    let archetype_topic = pages
+        .iter()
+        .find(|page| {
+            page.page_type == "topic"
+                && page.topic_kind.as_deref() == Some("repo-archetype")
+                && page.topic_key.as_deref() == Some("request-lifecycle")
+        })
+        .expect("request lifecycle topic page should exist");
     let architecture = pages
         .iter()
         .find(|page| page.page_type == "architecture")
@@ -114,8 +122,16 @@ fn planner_generates_root_and_module_topic_pages() {
         module_topic.parent_id.as_deref(),
         Some(app_module_page.id.as_str())
     );
+    assert_eq!(
+        archetype_topic.parent_id.as_deref(),
+        Some(architecture.id.as_str())
+    );
     assert!(!root_topic.source_ids.is_empty());
     assert!(!module_topic.source_ids.is_empty());
+    assert!(archetype_topic
+        .topic_summary
+        .as_deref()
+        .is_some_and(|summary| summary.contains("请求链")));
 }
 
 #[test]

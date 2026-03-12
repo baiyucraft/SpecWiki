@@ -4,9 +4,9 @@
  * 做逐项目、逐文件的结构化对比，输出到当前 OpenSpec change 目录。
  *
  * 默认输出：
- * - openspec/changes/iteration-9-2-dossier-session-and-llm-budget-controls/reference-project-reports/*.md
- * - openspec/changes/iteration-9-2-dossier-session-and-llm-budget-controls/reference-project-reports/_summary.md
- * - openspec/changes/iteration-9-2-dossier-session-and-llm-budget-controls/reference-project-reports/_optimization-notes.md
+ * - openspec/changes/<change>/reference-project-reports/*.md
+ * - openspec/changes/<change>/reference-project-reports/_summary.md
+ * - openspec/changes/<change>/reference-project-reports/_optimization-notes.md
  *
  * 用法：
  *   node scripts/collect-reference-project-reports.mjs
@@ -40,15 +40,7 @@ import {
 } from "./testing/helpers.mjs";
 
 const REFERENCE_DIR = path.join(TMP_DIR, "reference");
-const CHANGE_DIR = path.join(
-  ROOT_DIR,
-  "openspec",
-  "changes",
-  "iteration-9-2-dossier-session-and-llm-budget-controls",
-);
-const REPORT_DIR = path.join(CHANGE_DIR, "reference-project-reports");
-const SUMMARY_PATH = path.join(REPORT_DIR, "_summary.md");
-const OPTIMIZATION_NOTES_PATH = path.join(REPORT_DIR, "_optimization-notes.md");
+const DEFAULT_CHANGE = "iteration-9-3-targeted-dossier-and-research-driven-pages";
 const REAL_REPO_MAP = {
   aLocal: "E:\\project\\aLocal",
 };
@@ -556,6 +548,17 @@ function summarizeCoverage(comparisons, generatedPages, referencePages) {
   const referenceEvidencePages = referencePages.filter((page) => page.evidenceBlocks > 0 || page.citations.length > 0);
   const generatedDiagramPages = generatedPages.filter((page) => page.mermaidBlocks > 0);
   const referenceDiagramPages = referencePages.filter((page) => page.mermaidBlocks > 0);
+  const archetypeTopicPages = generatedPages.filter((page) =>
+    page.relativePath.startsWith("专题/repo-archetype/")
+  ).length;
+  const generatedCitationUnits = generatedPages.reduce(
+    (sum, page) => sum + page.evidenceBlocks + page.citations.length,
+    0,
+  );
+  const referenceCitationUnits = referencePages.reduce(
+    (sum, page) => sum + page.evidenceBlocks + page.citations.length,
+    0,
+  );
   const topicLabelCounts = new Map();
 
   for (const page of generatedTopicPages) {
@@ -587,6 +590,13 @@ function summarizeCoverage(comparisons, generatedPages, referencePages) {
     referenceEvidencePages: referenceEvidencePages.length,
     generatedDiagramPages: generatedDiagramPages.length,
     referenceDiagramPages: referenceDiagramPages.length,
+    archetypeTopicPages,
+    generatedCitationUnits,
+    referenceCitationUnits,
+    generatedCitationDensity:
+      generatedPages.length === 0 ? 0 : Number((generatedCitationUnits / generatedPages.length).toFixed(2)),
+    referenceCitationDensity:
+      referencePages.length === 0 ? 0 : Number((referenceCitationUnits / referencePages.length).toFixed(2)),
     matchedEvidenceShortfall: matched.filter((item) => item.generatedEvidence < item.referenceEvidence).length,
     matchedDiagramShortfall: matched.filter((item) => item.generatedMermaid < item.referenceMermaid).length,
     topicLabels: [...topicLabelCounts.entries()].sort((left, right) => right[1] - left[1]),
@@ -648,8 +658,9 @@ function renderProjectReport(result) {
     "",
     "## 覆盖统计",
     "",
-    `- 专题页覆盖：generated ${result.coverage.generatedTopicPages} / reference ${result.coverage.referenceTopicPages}`,
+    `- 专题页覆盖：generated ${result.coverage.generatedTopicPages} / reference ${result.coverage.referenceTopicPages}（repo-archetype=${result.coverage.archetypeTopicPages}）`,
     `- evidence 落页：generated ${result.coverage.generatedEvidencePages} / reference ${result.coverage.referenceEvidencePages}`,
+    `- citation 密度：generated ${result.coverage.generatedCitationDensity} / reference ${result.coverage.referenceCitationDensity}`,
     `- 图表达覆盖：generated ${result.coverage.generatedDiagramPages} / reference ${result.coverage.referenceDiagramPages}`,
     `- page research 请求：${promptCount(result.usage, "page_research")}`,
     `- page enrichment 请求：${promptCount(result.usage, "page_enrichment")}`,
@@ -746,13 +757,13 @@ function renderSummary(results) {
     "",
     `生成时间：${new Date().toISOString()}`,
     "",
-    "| Project | generated | reference | matched | missing | topic(gen/ref) | evidence(gen/ref) | diagram(gen/ref) | extra generated |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| Project | generated | reference | matched | missing | topic(gen/ref) | archetype | citation(gen/ref) | diagram(gen/ref) | extra generated |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
   ];
 
   for (const result of results) {
     lines.push(
-    `| ${result.project} | ${result.generatedPageCount} | ${result.referencePageCount} | ${result.matchedCount} | ${result.missingCount} | ${result.coverage.generatedTopicPages}/${result.coverage.referenceTopicPages} | ${result.coverage.generatedEvidencePages}/${result.coverage.referenceEvidencePages} | ${result.coverage.generatedDiagramPages}/${result.coverage.referenceDiagramPages} | ${result.extraGeneratedPages.length} |`,
+    `| ${result.project} | ${result.generatedPageCount} | ${result.referencePageCount} | ${result.matchedCount} | ${result.missingCount} | ${result.coverage.generatedTopicPages}/${result.coverage.referenceTopicPages} | ${result.coverage.archetypeTopicPages} | ${result.coverage.generatedCitationDensity}/${result.coverage.referenceCitationDensity} | ${result.coverage.generatedDiagramPages}/${result.coverage.referenceDiagramPages} | ${result.extraGeneratedPages.length} |`,
     );
   }
 
@@ -779,7 +790,7 @@ function renderOptimizationNotes(results) {
     "",
     "## 当前收敛",
     "",
-    "这轮 9.1 已经把专题页、evidence layer 和 deterministic Mermaid 接入主链，但 reference 项目集仍然能看出剩余差距主要集中在 coverage 阈值和页面粒度，而不是简单的正文措辞。",
+    "这轮 9.3 已经把 targeted dossier、section-plan-driven 页面组装和 archetype 专题页接入主链，但 reference 项目集仍然能看出剩余差距主要集中在 planner 覆盖率、citation 密度和 research 结果对正文结构的主导程度。",
     "",
     "## 高频观察",
     "",
@@ -795,36 +806,59 @@ function renderOptimizationNotes(results) {
   const projectsWithTopicPages = results.filter((result) => result.coverage.generatedTopicPages > 0).length;
   const projectsWithEvidence = results.filter((result) => result.coverage.generatedEvidencePages > 0).length;
   const projectsWithDiagrams = results.filter((result) => result.coverage.generatedDiagramPages > 0).length;
+  const projectsWithArchetypeTopics = results.filter((result) => result.coverage.archetypeTopicPages > 0).length;
+  const avgGeneratedCitationDensity =
+    results.length === 0
+      ? 0
+      : Number(
+        (
+          results.reduce((sum, result) => sum + result.coverage.generatedCitationDensity, 0)
+          / results.length
+        ).toFixed(2),
+      );
+  const avgReferenceCitationDensity =
+    results.length === 0
+      ? 0
+      : Number(
+        (
+          results.reduce((sum, result) => sum + result.coverage.referenceCitationDensity, 0)
+          / results.length
+        ).toFixed(2),
+      );
 
   lines.push(`- 已生成专题页的项目：${projectsWithTopicPages}/${results.length}`);
+  lines.push(`- 已生成 repo-archetype 专题的项目：${projectsWithArchetypeTopics}/${results.length}`);
   lines.push(`- 已落 evidence block 的项目：${projectsWithEvidence}/${results.length}`);
   lines.push(`- 已落 Mermaid 图的项目：${projectsWithDiagrams}/${results.length}`);
+  lines.push(`- 平均 citation 密度：generated ${avgGeneratedCitationDensity} / reference ${avgReferenceCitationDensity}`);
   lines.push(
     `- 高频缺失专题：${[...topTopicGaps.entries()].sort((left, right) => right[1] - left[1]).slice(0, 6).map(([label, count]) => `${label}(${count})`).join("、") || "无"}`,
   );
   lines.push("");
   lines.push("## 下一步建议");
   lines.push("");
-  lines.push("- 优先继续调 planner 阈值和 topic seed 规则，让根级机制页、流程主题页和模块能力页覆盖更多 reference 高频主题。");
-  lines.push("- evidence layer 下一步应补“证据分组更细”和“模块页/专题页的 section 内证据密度”，而不是回退到全文文件清单。");
+  lines.push("- 优先继续调 planner 阈值和 topic seed 规则，让根级机制页、流程主题页、repo-archetype 专题覆盖更多 reference 高频主题。");
+  lines.push("- evidence layer 下一步应补 citation 密度和 section 内证据命中率，而不是回退到全文文件清单。");
+  lines.push("- overview/architecture 的 research 结果需要更稳定落页，否则 section-plan 对总览页的收益会被 budget 和 fallback 抵消。");
   lines.push("- Mermaid 已进入主链，下一步重点是让更多页面拥有 diagram inputs，而不是放宽 LLM 自由生成结构图。");
 
   return `${lines.join("\n")}\n`;
 }
 
-function writeReports(results) {
-  ensureDir(REPORT_DIR);
+function writeReports(results, reportDir, summaryPath, optimizationNotesPath) {
+  ensureDir(reportDir);
   for (const result of results) {
-    writeFileSync(path.join(REPORT_DIR, `${result.project}.md`), renderProjectReport(result));
+    writeFileSync(path.join(reportDir, `${result.project}.md`), renderProjectReport(result));
   }
-  writeFileSync(SUMMARY_PATH, renderSummary(results));
-  writeFileSync(OPTIMIZATION_NOTES_PATH, renderOptimizationNotes(results));
+  writeFileSync(summaryPath, renderSummary(results));
+  writeFileSync(optimizationNotesPath, renderOptimizationNotes(results));
 }
 
 function parseCliArgs(argv) {
   const names = [];
   let jobs;
   let runMode = "cold";
+  let change = DEFAULT_CHANGE;
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -838,13 +872,22 @@ function parseCliArgs(argv) {
       index++;
       continue;
     }
+    if (arg === "--change") {
+      change = argv[index + 1] || change;
+      index++;
+      continue;
+    }
     names.push(arg);
   }
 
-  return { jobs, names, runMode };
+  return { change, jobs, names, runMode };
 }
 
 async function main(argv) {
+  const changeDir = path.join(ROOT_DIR, "openspec", "changes", argv.change);
+  const reportDir = path.join(changeDir, "reference-project-reports");
+  const summaryPath = path.join(reportDir, "_summary.md");
+  const optimizationNotesPath = path.join(reportDir, "_optimization-notes.md");
   const projects = argv.names.length > 0 ? argv.names : discoverProjects();
   const jobs = argv.jobs == null ? 1 : resolveProjectJobs(argv.jobs, projects.length);
   const results = await runTaskPool(projects, jobs, async (project, index) => {
@@ -858,11 +901,12 @@ async function main(argv) {
     return result;
   });
 
-  writeReports(results);
+  writeReports(results, reportDir, summaryPath, optimizationNotesPath);
   process.stdout.write(`${JSON.stringify({
-    reportDir: REPORT_DIR,
-    summaryPath: SUMMARY_PATH,
-    optimizationNotesPath: OPTIMIZATION_NOTES_PATH,
+    change: argv.change,
+    reportDir,
+    summaryPath,
+    optimizationNotesPath,
     jobs,
     runMode: argv.runMode,
     projects: results.map((result) => ({

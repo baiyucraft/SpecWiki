@@ -2,6 +2,7 @@
 //! 它只产出内存中的 page artifacts；最终写盘、cache 和状态收口仍由 workflow 串行完成。
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::thread;
 
 use crate::debug_trace;
@@ -12,15 +13,16 @@ use crate::domain::context::{
 use crate::domain::module_tree::ModuleTree;
 use crate::domain::state::compute_page_input_hash;
 use crate::domain::steering::SteeringConfig;
-use crate::generation::context::build_page_context_with_inputs;
+use crate::generation::context::build_page_context_with_graph_inputs;
 use crate::generation::planner::PlannedPage;
 use crate::generation::renderer::{
     render_page_bundle, render_page_bundle_with_enrichment, RenderedPage,
 };
-use crate::llm::{
-    LlmRuntime, PageEnrichmentInput, PageResearchInput, PageResearchRuntimeContext,
-};
+use crate::llm::{LlmRuntime, PageEnrichmentInput, PageResearchInput, PageResearchRuntimeContext};
 use crate::repo::scanner::ScanReport;
+use crate::repo::symbol_graph::{GraphAnalysisSnapshot, ResolvedGraphSnapshot};
+use crate::repo::symbols::ParsedSymbolsSnapshot;
+use crate::storage::cache_store::read_page_context_cache;
 
 /// `PreparedPageArtifact` 是页面预渲染阶段的稳定输出。
 /// 它把后续串行写盘需要的 page/context/hash/rendered bundle 统一打包。
@@ -54,6 +56,8 @@ pub fn prepare_page_artifacts(
     module_tree: &ModuleTree,
     repo_context: &RepoContext,
     module_contexts: &[ModuleContext],
+    symbol_snapshot: &ParsedSymbolsSnapshot,
+    graph_analysis: &GraphAnalysisSnapshot,
 ) -> Vec<PreparedPageArtifact> {
     prepare_page_artifacts_with_workers(
         pages,
@@ -61,6 +65,8 @@ pub fn prepare_page_artifacts(
         module_tree,
         repo_context,
         module_contexts,
+        symbol_snapshot,
+        graph_analysis,
         configured_page_worker_count(pages.len()),
     )
 }
@@ -72,6 +78,9 @@ pub fn prepare_page_artifacts_with_llm(
     module_tree: &ModuleTree,
     repo_context: &RepoContext,
     module_contexts: &[ModuleContext],
+    symbol_snapshot: &ParsedSymbolsSnapshot,
+    resolved_graph: &ResolvedGraphSnapshot,
+    graph_analysis: &GraphAnalysisSnapshot,
     steering: &SteeringConfig,
     llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
     mut on_llm_progress: Option<&mut dyn FnMut(usize, usize)>,
@@ -83,6 +92,8 @@ pub fn prepare_page_artifacts_with_llm(
             module_tree,
             repo_context,
             module_contexts,
+            symbol_snapshot,
+            graph_analysis,
         );
     };
     if !llm_runtime.enrichment_enabled() {
@@ -92,6 +103,8 @@ pub fn prepare_page_artifacts_with_llm(
             module_tree,
             repo_context,
             module_contexts,
+            symbol_snapshot,
+            graph_analysis,
         );
     }
 
@@ -149,18 +162,28 @@ pub fn prepare_page_artifacts_with_llm(
                 .flat_map(|child_ids| child_ids.iter())
                 .filter_map(|child_id| rollups.get(child_id).cloned())
                 .collect::<Vec<_>>();
-            let mut page_context = build_page_context_with_inputs(
+            let mut page_context = build_page_context_with_graph_inputs(
                 page,
                 scan_report,
                 module_tree,
                 repo_context,
                 module_contexts,
+                Some(symbol_snapshot),
+                Some(graph_analysis),
                 hints,
                 child_summaries,
                 child_rollups,
             );
-            if llm_runtime.session_enabled() && matches!(page.page_type.as_str(), "module" | "topic")
+            if llm_runtime.session_enabled()
+                && matches!(
+                    page.page_type.as_str(),
+                    "overview" | "architecture" | "module" | "topic"
+                )
             {
+                if let Ok(cached) = read_page_context_cache(Path::new(&scan_report.root), &page.id)
+                {
+                    page_context.research_session = cached.context.research_session;
+                }
                 let research_input = PageResearchInput::from_page(page, &page_context);
                 let research_runtime = PageResearchRuntimeContext {
                     page,
@@ -169,6 +192,9 @@ pub fn prepare_page_artifacts_with_llm(
                     module_tree,
                     repo_context,
                     module_contexts,
+                    symbol_snapshot,
+                    resolved_graph,
+                    graph_analysis,
                 };
                 match llm_runtime.research_page(&research_input, &research_runtime) {
                     Ok(Some(output)) => {
@@ -192,9 +218,9 @@ pub fn prepare_page_artifacts_with_llm(
             let input_hash = compute_page_input_hash(page, &page_context, scan_report);
             let enrichment_input = (!matches!(page.page_type.as_str(), "module" | "topic")
                 || page_context.research_result.is_none())
-                .then(|| {
-                    PageEnrichmentInput::from_page(page, &page_context, steering.llm.allow_mermaid)
-                });
+            .then(|| {
+                PageEnrichmentInput::from_page(page, &page_context, steering.llm.allow_mermaid)
+            });
             pending_group.push(PendingLlmPageArtifact {
                 index,
                 page: page.clone(),
@@ -277,6 +303,8 @@ fn prepare_page_artifacts_with_workers(
     module_tree: &ModuleTree,
     repo_context: &RepoContext,
     module_contexts: &[ModuleContext],
+    symbol_snapshot: &ParsedSymbolsSnapshot,
+    graph_analysis: &GraphAnalysisSnapshot,
     _worker_count: usize,
 ) -> Vec<PreparedPageArtifact> {
     let children_by_parent = page_children_index(pages);
@@ -321,19 +349,28 @@ fn prepare_page_artifacts_with_workers(
             module_tree,
             repo_context,
             module_contexts,
+            symbol_snapshot,
+            graph_analysis,
             child_summaries,
             child_rollups,
         );
         summaries.insert(artifact.page.id.clone(), artifact.page_summary.clone());
         rollups.insert(
             artifact.page.id.clone(),
-            build_child_page_rollup(&artifact.page, &artifact.page_context, &artifact.page_summary),
+            build_child_page_rollup(
+                &artifact.page,
+                &artifact.page_context,
+                &artifact.page_summary,
+            ),
         );
         artifacts.push((index, artifact));
     }
 
     artifacts.sort_by_key(|(index, _)| *index);
-    artifacts.into_iter().map(|(_, artifact)| artifact).collect()
+    artifacts
+        .into_iter()
+        .map(|(_, artifact)| artifact)
+        .collect()
 }
 
 fn configured_page_worker_count(page_count: usize) -> usize {
@@ -355,15 +392,19 @@ fn build_page_artifact(
     module_tree: &ModuleTree,
     repo_context: &RepoContext,
     module_contexts: &[ModuleContext],
+    symbol_snapshot: &ParsedSymbolsSnapshot,
+    graph_analysis: &GraphAnalysisSnapshot,
     child_summaries: Vec<String>,
     child_rollups: Vec<ChildPageRollup>,
 ) -> PreparedPageArtifact {
-    let page_context = build_page_context_with_inputs(
+    let page_context = build_page_context_with_graph_inputs(
         page,
         scan_report,
         module_tree,
         repo_context,
         module_contexts,
+        Some(symbol_snapshot),
+        Some(graph_analysis),
         Vec::new(),
         child_summaries,
         child_rollups,
@@ -403,9 +444,12 @@ fn build_child_page_rollup(
                         .map(|item| PageResearchEvidenceItem {
                             source_id: item.source_id.clone(),
                             path: item.path.clone(),
-                            start_line: 0,
-                            end_line: 0,
+                            start_line: item.start_line,
+                            end_line: item.end_line,
+                            evidence_type: item.evidence_type.clone(),
+                            section_refs: item.section_refs.clone(),
                             note: item.note.clone(),
+                            coarse_span: item.coarse_span,
                         })
                         .collect(),
                 })
@@ -427,16 +471,45 @@ fn build_child_page_rollup(
                 })
                 .collect()
         });
+    let section_plan_rollup = page_context
+        .research_result
+        .as_ref()
+        .map(|result| result.section_plan.clone())
+        .unwrap_or_default();
     let key_sources_rollup = page_context
-        .module_dossiers
+        .repo_dossier
         .iter()
         .flat_map(|dossier| dossier.key_sources.iter().cloned())
+        .chain(page_context.repo_dossier.iter().flat_map(|dossier| {
+            dossier
+                .targeted_snippets
+                .iter()
+                .map(|snippet| snippet.path.clone())
+        }))
+        .chain(
+            page_context
+                .module_dossiers
+                .iter()
+                .flat_map(|dossier| dossier.key_sources.iter().cloned()),
+        )
+        .chain(page_context.module_dossiers.iter().flat_map(|dossier| {
+            dossier
+                .targeted_snippets
+                .iter()
+                .map(|snippet| snippet.path.clone())
+        }))
         .chain(
             page_context
                 .topic_dossier
                 .iter()
                 .flat_map(|dossier| dossier.key_sources.iter().cloned()),
         )
+        .chain(page_context.topic_dossier.iter().flat_map(|dossier| {
+            dossier
+                .targeted_snippets
+                .iter()
+                .map(|snippet| snippet.path.clone())
+        }))
         .collect::<Vec<_>>();
     let open_questions = page_context
         .research_result
@@ -449,6 +522,7 @@ fn build_child_page_rollup(
         title: page.title.clone(),
         page_type: page.page_type.clone(),
         summary: page_summary.to_string(),
+        section_plan_rollup,
         key_sources_rollup,
         evidence_rollup,
         diagram_rollup,
@@ -580,6 +654,8 @@ mod tests {
             &module_tree,
             &repo_context,
             &module_contexts,
+            &symbol_snapshot,
+            &analysis,
             1,
         );
         let parallel = prepare_page_artifacts_with_workers(
@@ -588,6 +664,8 @@ mod tests {
             &module_tree,
             &repo_context,
             &module_contexts,
+            &symbol_snapshot,
+            &analysis,
             4,
         );
 

@@ -5,6 +5,7 @@
 use std::fs;
 use tempfile::TempDir;
 
+use wiki_core::domain::context::{PageResearchResult, PageResearchSectionPlan};
 use wiki_core::domain::steering::SteeringConfig;
 use wiki_core::generation::context::{
     build_module_contexts, build_page_context, build_repo_context,
@@ -388,4 +389,59 @@ fn topic_page_renders_stable_evidence_block() {
     assert!(rendered.content.contains("关键证据"));
     assert!(rendered.content.contains("**关键来源**"));
     assert!(rendered.content.contains("router.ts"));
+}
+
+#[test]
+fn module_page_prefers_section_plan_order_and_summary() {
+    let repo = make_repo_with_ci();
+    let steering = SteeringConfig::default();
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let pages = plan_pages(&report, &tree, &repo_ctx, &mod_ctxs, &steering);
+
+    let module_page = pages
+        .iter()
+        .find(|page| page.page_type == "module")
+        .expect("module page should exist");
+    let mut ctx = build_page_context(module_page, &report, &tree, &repo_ctx, &mod_ctxs);
+    ctx.research_result = Some(PageResearchResult {
+        summary: "research summary".to_string(),
+        section_plan: vec![
+            PageResearchSectionPlan {
+                section_key: "dependencies".to_string(),
+                section_title: "依赖关系".to_string(),
+                section_summary: "先解释依赖链。".to_string(),
+                evidence_refs: Vec::new(),
+                diagram_refs: Vec::new(),
+                child_refs: Vec::new(),
+            },
+            PageResearchSectionPlan {
+                section_key: "module-intro".to_string(),
+                section_title: "模块说明".to_string(),
+                section_summary: "再解释模块职责。".to_string(),
+                evidence_refs: Vec::new(),
+                diagram_refs: Vec::new(),
+                child_refs: Vec::new(),
+            },
+        ],
+        evidence_rollup: Vec::new(),
+        diagram_rollup: Vec::new(),
+        open_questions: Vec::new(),
+    });
+
+    let rendered = render_page_bundle(module_page, &ctx);
+    let dependency_pos = rendered
+        .content
+        .find("## 依赖关系")
+        .expect("dependency section should exist");
+    let intro_pos = rendered
+        .content
+        .find("## 模块说明")
+        .expect("module intro section should exist");
+
+    assert!(dependency_pos < intro_pos);
+    assert!(rendered.content.contains("先解释依赖链。"));
+    assert!(rendered.content.contains("再解释模块职责。"));
 }

@@ -22,7 +22,7 @@ const BINARY_PATH = path.join(ROOT_DIR, "target", "release", BINARY_NAME);
 // 初始化、更新和重建会真正跑完整 workflow，monorepo 项目明显比 query/status 更慢。
 // 项目集脚本还会并行拉起多个长流程 worker，因此需要给重仓库留足超时窗口。
 const DEFAULT_TIMEOUT_MS = 60_000;
-const HEAVY_ACTION_TIMEOUT_MS = 1_200_000;
+const HEAVY_ACTION_TIMEOUT_MS = 2_400_000;
 const REMOVE_RETRY_DELAY_MS = 500;
 const REMOVE_RETRY_ATTEMPTS = 40;
 const FILE_RETRY_DELAY_MS = 250;

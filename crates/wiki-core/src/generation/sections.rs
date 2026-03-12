@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::context::PageContext;
+use crate::domain::context::{PageContext, PageResearchSectionPlan};
 use crate::domain::stable_id::stable_id;
 use crate::generation::planner::PlannedPage;
 use crate::llm::PageEnrichmentResult;
@@ -26,6 +26,12 @@ pub struct SectionDraft {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SectionSlot {
+    key: &'static str,
+    title: &'static str,
+}
+
 /// 返回某类页面的稳定 section 标题模板。
 ///
 /// # 参数
@@ -34,14 +40,25 @@ pub struct SectionDraft {
 /// # 返回
 /// - 返回该页面类型对应的稳定 section 标题顺序。
 pub fn section_titles_for_page_type(page_type: &str) -> Vec<&'static str> {
-    match page_type {
-        "overview" => vec!["简介", "项目事实", "技术栈", "入口与构建", "关键信息"],
-        "architecture" => vec!["架构概览", "模块结构", "跨模块关系", "架构提示"],
-        "module" => vec!["模块说明", "关键源码", "依赖关系", "模块事实", "子模块概述"],
-        "workflow" => vec!["工作流概述", "构建流程", "CI/CD 配置", "容器化"],
-        "topic" => vec!["主题说明", "关键证据", "结构图", "关联模块"],
-        _ => vec!["简介"],
-    }
+    section_slots_for_page_type(page_type)
+        .into_iter()
+        .map(|slot| slot.title)
+        .collect()
+}
+
+pub fn section_key_for_title(page_type: &str, title: &str) -> String {
+    section_slots_for_page_type(page_type)
+        .into_iter()
+        .find(|slot| slot.title == title)
+        .map(|slot| slot.key.to_string())
+        .unwrap_or_else(|| slug_key(title))
+}
+
+pub fn section_title_for_key(page_type: &str, section_key: &str) -> Option<&'static str> {
+    section_slots_for_page_type(page_type)
+        .into_iter()
+        .find(|slot| slot.key == section_key)
+        .map(|slot| slot.title)
 }
 
 /// 基于页面 ID 和标题生成稳定 section ID。
@@ -54,6 +71,10 @@ pub fn section_titles_for_page_type(page_type: &str) -> Vec<&'static str> {
 /// - 返回稳定的 section ID。
 pub fn section_id_for_title(page_id: &str, title: &str) -> String {
     stable_id("section", &format!("{page_id}:{title}"))
+}
+
+pub fn section_id_for_key(page_id: &str, section_key: &str) -> String {
+    stable_id("section", &format!("{page_id}:{section_key}"))
 }
 
 /// 为当前页面构建稳定的 section 草稿集合。
@@ -74,25 +95,20 @@ pub fn build_section_drafts_with_enrichment(
     context: &PageContext,
     enrichment: Option<&PageEnrichmentResult>,
 ) -> Vec<SectionDraft> {
-    let templates = match page.page_type.as_str() {
-        "overview" => overview_section_templates(context),
-        "architecture" => architecture_section_templates(context),
-        "module" => module_section_templates(context),
-        "workflow" => workflow_section_templates(context),
-        "topic" => topic_section_templates(context),
-        _ => vec![(
-            "简介".to_string(),
-            "由 codebuddy-wiki 自动生成。".to_string(),
-        )],
-    };
-
-    templates
+    let templates = section_templates_for_page(page.page_type.as_str(), context);
+    ordered_section_templates(page.page_type.as_str(), &templates, context)
         .into_iter()
-        .map(|(title, content)| {
+        .map(|(section_key, title, content, plan)| {
             let content = merged_section_content(&title, &content, enrichment);
             SectionDraft {
-                section_id: section_id_for_title(&page.id, &title),
-                content: append_supporting_blocks(&title, &content, context),
+                section_id: section_id_for_key(&page.id, &section_key),
+                content: append_supporting_blocks(
+                    &section_key,
+                    &title,
+                    &content,
+                    context,
+                    plan.as_ref(),
+                ),
                 title,
                 managed: true,
                 source_ids: context.source_ids.clone(),
@@ -102,63 +118,350 @@ pub fn build_section_drafts_with_enrichment(
         .collect()
 }
 
-fn overview_section_templates(context: &PageContext) -> Vec<(String, String)> {
+fn section_slots_for_page_type(page_type: &str) -> Vec<SectionSlot> {
+    match page_type {
+        "overview" => vec![
+            SectionSlot {
+                key: "intro",
+                title: "简介",
+            },
+            SectionSlot {
+                key: "facts",
+                title: "项目事实",
+            },
+            SectionSlot {
+                key: "tech-stack",
+                title: "技术栈",
+            },
+            SectionSlot {
+                key: "entry-build",
+                title: "入口与构建",
+            },
+            SectionSlot {
+                key: "key-insights",
+                title: "关键信息",
+            },
+        ],
+        "architecture" => vec![
+            SectionSlot {
+                key: "overview",
+                title: "架构概览",
+            },
+            SectionSlot {
+                key: "module-structure",
+                title: "模块结构",
+            },
+            SectionSlot {
+                key: "cross-module-relations",
+                title: "跨模块关系",
+            },
+            SectionSlot {
+                key: "architecture-hints",
+                title: "架构提示",
+            },
+        ],
+        "module" => vec![
+            SectionSlot {
+                key: "module-intro",
+                title: "模块说明",
+            },
+            SectionSlot {
+                key: "key-sources",
+                title: "关键源码",
+            },
+            SectionSlot {
+                key: "dependencies",
+                title: "依赖关系",
+            },
+            SectionSlot {
+                key: "module-facts",
+                title: "模块事实",
+            },
+            SectionSlot {
+                key: "child-overview",
+                title: "子模块概述",
+            },
+        ],
+        "workflow" => vec![
+            SectionSlot {
+                key: "workflow-overview",
+                title: "工作流概述",
+            },
+            SectionSlot {
+                key: "build-process",
+                title: "构建流程",
+            },
+            SectionSlot {
+                key: "ci-cd",
+                title: "CI/CD 配置",
+            },
+            SectionSlot {
+                key: "containerization",
+                title: "容器化",
+            },
+        ],
+        "topic" => vec![
+            SectionSlot {
+                key: "topic-intro",
+                title: "主题说明",
+            },
+            SectionSlot {
+                key: "topic-evidence",
+                title: "关键证据",
+            },
+            SectionSlot {
+                key: "topic-diagram",
+                title: "结构图",
+            },
+            SectionSlot {
+                key: "topic-related",
+                title: "关联模块",
+            },
+        ],
+        _ => vec![SectionSlot {
+            key: "intro",
+            title: "简介",
+        }],
+    }
+}
+
+fn section_templates_for_page(
+    page_type: &str,
+    context: &PageContext,
+) -> Vec<(String, String, String)> {
+    match page_type {
+        "overview" => overview_section_templates(context),
+        "architecture" => architecture_section_templates(context),
+        "module" => module_section_templates(context),
+        "workflow" => workflow_section_templates(context),
+        "topic" => topic_section_templates(context),
+        _ => vec![(
+            "intro".to_string(),
+            "简介".to_string(),
+            "由 codebuddy-wiki 自动生成。".to_string(),
+        )],
+    }
+}
+
+fn overview_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
     vec![
-        ("简介".to_string(), overview_intro(context)),
-        ("项目事实".to_string(), overview_project_facts(context)),
-        ("技术栈".to_string(), tech_stack_section(context)),
-        ("入口与构建".to_string(), entry_and_build_section(context)),
-        ("关键信息".to_string(), overview_key_insights(context)),
+        (
+            "intro".to_string(),
+            "简介".to_string(),
+            overview_intro(context),
+        ),
+        (
+            "facts".to_string(),
+            "项目事实".to_string(),
+            overview_project_facts(context),
+        ),
+        (
+            "tech-stack".to_string(),
+            "技术栈".to_string(),
+            tech_stack_section(context),
+        ),
+        (
+            "entry-build".to_string(),
+            "入口与构建".to_string(),
+            entry_and_build_section(context),
+        ),
+        (
+            "key-insights".to_string(),
+            "关键信息".to_string(),
+            overview_key_insights(context),
+        ),
     ]
 }
 
-fn architecture_section_templates(context: &PageContext) -> Vec<(String, String)> {
+fn architecture_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
     vec![
-        ("架构概览".to_string(), architecture_overview(context)),
         (
+            "overview".to_string(),
+            "架构概览".to_string(),
+            architecture_overview(context),
+        ),
+        (
+            "module-structure".to_string(),
             "模块结构".to_string(),
             architecture_module_structure(context),
         ),
-        ("跨模块关系".to_string(), relation_section(context)),
-        ("架构提示".to_string(), architecture_hints_section(context)),
-    ]
-}
-
-fn module_section_templates(context: &PageContext) -> Vec<(String, String)> {
-    vec![
-        ("模块说明".to_string(), module_intro(context)),
-        ("关键源码".to_string(), source_section(context)),
-        ("依赖关系".to_string(), dependency_section(context)),
-        ("模块事实".to_string(), module_fact_section(context)),
-        ("子模块概述".to_string(), child_module_section(context)),
-    ]
-}
-
-fn workflow_section_templates(context: &PageContext) -> Vec<(String, String)> {
-    vec![
-        ("工作流概述".to_string(), workflow_overview(context)),
         (
+            "cross-module-relations".to_string(),
+            "跨模块关系".to_string(),
+            relation_section(context),
+        ),
+        (
+            "architecture-hints".to_string(),
+            "架构提示".to_string(),
+            architecture_hints_section(context),
+        ),
+    ]
+}
+
+fn module_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
+    vec![
+        (
+            "module-intro".to_string(),
+            "模块说明".to_string(),
+            module_intro(context),
+        ),
+        (
+            "key-sources".to_string(),
+            "关键源码".to_string(),
+            source_section(context),
+        ),
+        (
+            "dependencies".to_string(),
+            "依赖关系".to_string(),
+            dependency_section(context),
+        ),
+        (
+            "module-facts".to_string(),
+            "模块事实".to_string(),
+            module_fact_section(context),
+        ),
+        (
+            "child-overview".to_string(),
+            "子模块概述".to_string(),
+            child_module_section(context),
+        ),
+    ]
+}
+
+fn workflow_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
+    vec![
+        (
+            "workflow-overview".to_string(),
+            "工作流概述".to_string(),
+            workflow_overview(context),
+        ),
+        (
+            "build-process".to_string(),
             "构建流程".to_string(),
             prefixed_bullets(&context.facts, "构建", "当前未检测到稳定的构建流程线索。"),
         ),
         (
+            "ci-cd".to_string(),
             "CI/CD 配置".to_string(),
             prefixed_bullets(&context.facts, "CI", "当前未检测到 CI/CD 配置。"),
         ),
         (
+            "containerization".to_string(),
             "容器化".to_string(),
             prefixed_bullets(&context.facts, "容器", "当前未检测到容器化配置。"),
         ),
     ]
 }
 
-fn topic_section_templates(context: &PageContext) -> Vec<(String, String)> {
+fn topic_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
     vec![
-        ("主题说明".to_string(), topic_intro(context)),
-        ("关键证据".to_string(), topic_evidence_section(context)),
-        ("结构图".to_string(), topic_diagram_section(context)),
-        ("关联模块".to_string(), topic_related_section(context)),
+        (
+            "topic-intro".to_string(),
+            "主题说明".to_string(),
+            topic_intro(context),
+        ),
+        (
+            "topic-evidence".to_string(),
+            "关键证据".to_string(),
+            topic_evidence_section(context),
+        ),
+        (
+            "topic-diagram".to_string(),
+            "结构图".to_string(),
+            topic_diagram_section(context),
+        ),
+        (
+            "topic-related".to_string(),
+            "关联模块".to_string(),
+            topic_related_section(context),
+        ),
     ]
+}
+
+fn ordered_section_templates(
+    page_type: &str,
+    templates: &[(String, String, String)],
+    context: &PageContext,
+) -> Vec<(String, String, String, Option<PageResearchSectionPlan>)> {
+    let template_map = templates
+        .iter()
+        .cloned()
+        .map(|(key, title, content)| (key, (title, content)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let plan_map = context
+        .research_result
+        .as_ref()
+        .map(|result| {
+            result
+                .section_plan
+                .iter()
+                .cloned()
+                .map(|plan| (normalize_section_key(page_type, &plan), plan))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let mut ordered_keys = Vec::new();
+
+    if let Some(result) = &context.research_result {
+        for plan in &result.section_plan {
+            let key = normalize_section_key(page_type, plan);
+            if template_map.contains_key(&key) && !ordered_keys.contains(&key) {
+                ordered_keys.push(key);
+            }
+        }
+    }
+    for (key, _, _) in templates {
+        if !ordered_keys.contains(key) {
+            ordered_keys.push(key.clone());
+        }
+    }
+
+    ordered_keys
+        .into_iter()
+        .filter_map(|key| {
+            let (title, deterministic) = template_map.get(&key)?.clone();
+            let plan = plan_map.get(&key).cloned();
+            let content = plan
+                .as_ref()
+                .map(|plan| normalize_multiline(&plan.section_summary))
+                .filter(|summary| !summary.is_empty())
+                .unwrap_or(deterministic);
+            Some((key, title, content, plan))
+        })
+        .collect()
+}
+
+fn normalize_section_key(page_type: &str, plan: &PageResearchSectionPlan) -> String {
+    let explicit = plan.section_key.trim();
+    if !explicit.is_empty() {
+        return explicit.to_string();
+    }
+
+    section_key_for_title(page_type, &plan.section_title)
+}
+
+fn slug_key(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| match character {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => character,
+            ' ' | '/' | '\\' | ':' => '-',
+            _ if character.is_ascii_alphanumeric() => character,
+            _ => '-',
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_ascii_lowercase()
+}
+
+fn normalize_multiline(value: &str) -> String {
+    value
+        .lines()
+        .map(|line| line.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 /// 把字符串列表渲染成 Markdown 项目符号列表。
@@ -400,12 +703,12 @@ fn source_section(context: &PageContext) -> String {
             blocks.push(grouped_bullet_block("关键源码", &dossier.key_sources).unwrap());
         }
         let snippets = dossier
-            .source_snippets
+            .targeted_snippets
             .iter()
             .take(3)
             .map(|snippet| {
                 format!(
-                    "- `{}`:{}-{}",
+                    "`{}`:{}-{}",
                     snippet.path, snippet.start_line, snippet.end_line
                 )
             })
@@ -442,7 +745,13 @@ fn dependency_section(context: &PageContext) -> String {
 fn module_fact_section(context: &PageContext) -> String {
     let mut blocks = vec![bullet_lines(&context.facts)];
     if let Some(result) = &context.research_result {
-        if let Some(block) = grouped_bullet_block("关键要点", &result.key_points) {
+        let planned_sections = result
+            .section_plan
+            .iter()
+            .map(|plan| format!("{}：{}", plan.section_title, plan.section_summary))
+            .filter(|line| !line.ends_with('：'))
+            .collect::<Vec<_>>();
+        if let Some(block) = grouped_bullet_block("研究重点", &planned_sections) {
             blocks.push(block);
         }
         if let Some(block) = grouped_bullet_block("待确认点", &result.open_questions) {
@@ -691,19 +1000,81 @@ fn merged_section_content(
     }
 }
 
-fn append_supporting_blocks(title: &str, content: &str, context: &PageContext) -> String {
+fn append_supporting_blocks(
+    section_key: &str,
+    title: &str,
+    content: &str,
+    context: &PageContext,
+    plan: Option<&PageResearchSectionPlan>,
+) -> String {
+    let planned_evidence_refs = plan
+        .map(|plan| {
+            plan.evidence_refs
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let planned_diagram_refs = plan
+        .map(|plan| {
+            plan.diagram_refs
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let planned_child_refs = plan
+        .map(|plan| {
+            plan.child_refs
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+        .unwrap_or_default();
     let evidence_blocks = context
         .evidence_groups
         .iter()
-        .filter(|group| group.section_title == title)
+        .filter(|group| {
+            if !planned_evidence_refs.is_empty() {
+                return planned_evidence_refs.contains(&group.group_id);
+            }
+            group.section_title == title
+                || group.items.iter().any(|item| {
+                    item.section_refs
+                        .iter()
+                        .any(|reference| reference == section_key)
+                })
+        })
         .filter_map(render_evidence_group)
         .collect::<Vec<_>>();
     let diagram_blocks = context
         .diagram_inputs
         .iter()
-        .filter(|diagram| diagram.section_title == title)
+        .filter(|diagram| {
+            if !planned_diagram_refs.is_empty() {
+                return planned_diagram_refs.contains(&diagram.diagram_id);
+            }
+            diagram.section_title == title
+        })
         .filter_map(render_diagram_block)
         .collect::<Vec<_>>();
+    let child_block = if planned_child_refs.is_empty() {
+        None
+    } else {
+        let lines = context
+            .child_rollups
+            .iter()
+            .filter(|rollup| planned_child_refs.contains(&rollup.page_id))
+            .map(|rollup| {
+                if rollup.summary.trim().is_empty() {
+                    rollup.title.clone()
+                } else {
+                    format!("{}：{}", rollup.title, rollup.summary.trim())
+                }
+            })
+            .collect::<Vec<_>>();
+        grouped_bullet_block("关联子页", &lines)
+    };
 
     let mut blocks = Vec::new();
     if !content.trim().is_empty() {
@@ -711,6 +1082,9 @@ fn append_supporting_blocks(title: &str, content: &str, context: &PageContext) -
     }
     blocks.extend(evidence_blocks);
     blocks.extend(diagram_blocks);
+    if let Some(child_block) = child_block {
+        blocks.push(child_block);
+    }
 
     if blocks.is_empty() {
         content.to_string()
@@ -729,10 +1103,16 @@ fn render_evidence_group(group: &crate::domain::context::PageEvidenceGroup) -> O
         lines.push(group.summary.trim().to_string());
     }
     lines.extend(group.items.iter().take(8).map(|item| {
-        if item.note.trim().is_empty() {
-            format!("- `{}`", item.path)
+        let span = if item.start_line > 0 && item.end_line >= item.start_line {
+            format!(":{}-{}", item.start_line, item.end_line)
         } else {
-            format!("- `{}`: {}", item.path, item.note.trim())
+            String::new()
+        };
+        let coarse = if item.coarse_span { " (coarse)" } else { "" };
+        if item.note.trim().is_empty() {
+            format!("- `{}`{}{coarse}", item.path, span)
+        } else {
+            format!("- `{}`{}{coarse}: {}", item.path, span, item.note.trim())
         }
     }));
 

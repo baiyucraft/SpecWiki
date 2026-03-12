@@ -39,9 +39,24 @@ pub struct PageEvidenceItem {
     /// 可选的源码稳定 ID。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,
+    /// 对应源码起始行号。
+    #[serde(default)]
+    pub start_line: usize,
+    /// 对应源码结束行号。
+    #[serde(default)]
+    pub end_line: usize,
+    /// 证据类别，例如 `entry-point / symbol / process / child-rollup`。
+    #[serde(default)]
+    pub evidence_type: String,
+    /// 当前 evidence 直接支撑的 section keys。
+    #[serde(default)]
+    pub section_refs: Vec<String>,
     /// evidence 的补充说明。
     #[serde(default)]
     pub note: String,
+    /// 是否只能提供文件级粗粒度跨度。
+    #[serde(default)]
+    pub coarse_span: bool,
 }
 
 /// `PageEvidenceGroup` 让 renderer/LLM/测试共享同一组 evidence 分组。
@@ -104,9 +119,11 @@ pub struct PageDiagramInput {
     pub edges: Vec<PageDiagramEdge>,
 }
 
-/// `SourceSnippet` 是 dossier / tool 共享的受控源码片段。
+/// `TargetedSnippet` 是 dossier / tool 共享的定点源码片段。
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct SourceSnippet {
+pub struct TargetedSnippet {
+    /// 当前 snippet 的稳定 ID。
+    pub snippet_id: String,
     /// 对应源码稳定 ID。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,
@@ -116,10 +133,22 @@ pub struct SourceSnippet {
     pub start_line: usize,
     /// 片段结束行号。
     pub end_line: usize,
+    /// 片段类别，例如 `symbol / entry-point / process / evidence / child-rollup`。
+    #[serde(default)]
+    pub snippet_kind: String,
+    /// 片段打分，供裁剪阶段稳定排序。
+    #[serde(default)]
+    pub score: i32,
+    /// 当前片段直接关联的稳定 symbol IDs。
+    #[serde(default)]
+    pub symbol_ids: Vec<String>,
     /// 片段内容。
     #[serde(default)]
     pub content: String,
 }
+
+/// 兼容现有调用路径，`SourceSnippet` 继续指向 9.3 的定点片段结构。
+pub type SourceSnippet = TargetedSnippet;
 
 /// `PageResearchEvidenceItem` 是 research 结果里的单条 evidence。
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -135,9 +164,18 @@ pub struct PageResearchEvidenceItem {
     /// 结束行号。
     #[serde(default)]
     pub end_line: usize,
+    /// 证据类别。
+    #[serde(default)]
+    pub evidence_type: String,
+    /// 当前 evidence 直接支撑的 section keys。
+    #[serde(default)]
+    pub section_refs: Vec<String>,
     /// evidence 说明。
     #[serde(default)]
     pub note: String,
+    /// 是否只能提供粗粒度跨度。
+    #[serde(default)]
+    pub coarse_span: bool,
 }
 
 /// `PageResearchEvidenceGroup` 是 research 结果里的证据分组。
@@ -166,6 +204,27 @@ pub struct PageResearchDiagramRollup {
     pub summary: String,
 }
 
+/// `PageResearchSectionPlan` 是 research 用来驱动正式 section 结构的稳定对象。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PageResearchSectionPlan {
+    /// section 稳定 key。
+    pub section_key: String,
+    /// section 展示标题。
+    pub section_title: String,
+    /// 该节高密度摘要。
+    #[serde(default)]
+    pub section_summary: String,
+    /// 当前节直接引用的 evidence groups。
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    /// 当前节直接引用的 deterministic 图输入。
+    #[serde(default)]
+    pub diagram_refs: Vec<String>,
+    /// 当前节直接引用的子页 rollup。
+    #[serde(default)]
+    pub child_refs: Vec<String>,
+}
+
 /// `ChildPageRollup` 表示父页可复用的结构化子页结果。
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ChildPageRollup {
@@ -178,6 +237,9 @@ pub struct ChildPageRollup {
     /// 子页高密度摘要。
     #[serde(default)]
     pub summary: String,
+    /// 子页上卷后的 section plan。
+    #[serde(default)]
+    pub section_plan_rollup: Vec<PageResearchSectionPlan>,
     /// 子页上卷后的关键源码路径。
     #[serde(default)]
     pub key_sources_rollup: Vec<String>,
@@ -190,6 +252,42 @@ pub struct ChildPageRollup {
     /// 子页尚未确认的开放问题。
     #[serde(default)]
     pub open_questions: Vec<String>,
+}
+
+/// `RepoDossier` 是 overview / architecture research 前的稳定研究包。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RepoDossier {
+    /// dossier 稳定 ID。
+    pub dossier_id: String,
+    /// dossier 展示标题。
+    pub title: String,
+    /// 当前仓库研究包的关键源码路径。
+    #[serde(default)]
+    pub key_sources: Vec<String>,
+    /// 当前仓库研究包的关键符号 ID。
+    #[serde(default)]
+    pub key_symbols: Vec<String>,
+    /// 当前仓库研究包的定点片段。
+    #[serde(default)]
+    pub targeted_snippets: Vec<TargetedSnippet>,
+    /// 当前仓库研究包的跨模块关系摘要。
+    #[serde(default)]
+    pub cross_module_edges: Vec<String>,
+    /// 当前仓库研究包的流程候选。
+    #[serde(default)]
+    pub process_candidates: Vec<String>,
+    /// 当前仓库研究包的重点模块。
+    #[serde(default)]
+    pub module_focus: Vec<String>,
+    /// 当前仓库 research 使用的 evidence 上卷。
+    #[serde(default)]
+    pub evidence_rollup: Vec<PageResearchEvidenceGroup>,
+    /// 当前仓库 research 使用的图摘要。
+    #[serde(default)]
+    pub diagram_rollup: Vec<PageResearchDiagramRollup>,
+    /// 当前仓库 research 使用的子页上卷。
+    #[serde(default)]
+    pub child_page_rollup: Vec<ChildPageRollup>,
 }
 
 /// `ModuleDossier` 是模块页 research 前的稳定研究包。
@@ -207,9 +305,9 @@ pub struct ModuleDossier {
     /// 当前模块的关键符号 ID。
     #[serde(default)]
     pub key_symbols: Vec<String>,
-    /// 当前模块的源码片段。
+    /// 当前模块的定点源码片段。
     #[serde(default)]
-    pub source_snippets: Vec<SourceSnippet>,
+    pub targeted_snippets: Vec<TargetedSnippet>,
     /// 当前模块的跨模块关系摘要。
     #[serde(default)]
     pub cross_module_edges: Vec<String>,
@@ -247,9 +345,9 @@ pub struct TopicDossier {
     /// 关键符号 ID。
     #[serde(default)]
     pub key_symbols: Vec<String>,
-    /// 源码片段。
+    /// 定点源码片段。
     #[serde(default)]
-    pub source_snippets: Vec<SourceSnippet>,
+    pub targeted_snippets: Vec<TargetedSnippet>,
     /// evidence 上卷。
     #[serde(default)]
     pub evidence_rollup: Vec<PageResearchEvidenceGroup>,
@@ -267,9 +365,9 @@ pub struct PageResearchResult {
     /// 页面高密度摘要。
     #[serde(default)]
     pub summary: String,
-    /// 关键要点。
+    /// 驱动正式页面结构的稳定 section 计划。
     #[serde(default)]
-    pub key_points: Vec<String>,
+    pub section_plan: Vec<PageResearchSectionPlan>,
     /// 证据上卷。
     #[serde(default)]
     pub evidence_rollup: Vec<PageResearchEvidenceGroup>,
@@ -397,6 +495,9 @@ pub struct PageContext {
     /// 页面稳定图输入，供 renderer 直接构造 Mermaid。
     #[serde(default)]
     pub diagram_inputs: Vec<PageDiagramInput>,
+    /// 当前页面关联的仓库级 dossier。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_dossier: Option<RepoDossier>,
     /// 当前页面关联的模块级 dossier。
     #[serde(default)]
     pub module_dossiers: Vec<ModuleDossier>,
