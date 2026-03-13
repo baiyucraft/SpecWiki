@@ -150,6 +150,29 @@ pub struct TargetedSnippet {
 /// 兼容现有调用路径，`SourceSnippet` 继续指向 9.3 的定点片段结构。
 pub type SourceSnippet = TargetedSnippet;
 
+/// `ResearchSurface` 表示 dossier 中的非源码 surface 输入。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ResearchSurface {
+    /// surface 稳定 ID。
+    pub surface_id: String,
+    /// surface 类别，例如 `docs-anchor / public-api / config / type`。
+    pub surface_type: String,
+    /// 对应源码稳定 ID。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    /// 对应路径。
+    pub path: String,
+    /// 展示标题。
+    #[serde(default)]
+    pub title: String,
+    /// 对应锚点或命名线索。
+    #[serde(default)]
+    pub anchor: String,
+    /// 摘要说明。
+    #[serde(default)]
+    pub summary: String,
+}
+
 /// `PageResearchEvidenceItem` 是 research 结果里的单条 evidence。
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PageResearchEvidenceItem {
@@ -225,138 +248,37 @@ pub struct PageResearchSectionPlan {
     pub child_refs: Vec<String>,
 }
 
-/// `ChildPageRollup` 表示父页可复用的结构化子页结果。
+/// `PageComposeSection` 是 renderer 真正消费的章节计划。
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ChildPageRollup {
-    /// 子页稳定 ID。
-    pub page_id: String,
-    /// 子页标题。
-    pub title: String,
-    /// 子页类型。
-    pub page_type: String,
-    /// 子页高密度摘要。
+pub struct PageComposeSection {
+    /// section 稳定 key。
+    pub section_key: String,
+    /// section 展示标题。
+    pub section_title: String,
+    /// section 最终待渲染正文。
+    #[serde(default)]
+    pub content: String,
+    /// 当前节引用的 evidence groups。
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    /// 当前节引用的 deterministic 图输入。
+    #[serde(default)]
+    pub diagram_refs: Vec<String>,
+    /// 当前节引用的子页结果。
+    #[serde(default)]
+    pub child_refs: Vec<String>,
+}
+
+/// `PageComposePlan` 是 renderer 前的显式 compose 结果。
+/// 新 pipeline 已由 `PageDraft` + compose 层取代，此类型仅保留用于序列化兼容。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PageComposePlan {
+    #[serde(default)]
+    pub page_positioning: String,
     #[serde(default)]
     pub summary: String,
-    /// 子页上卷后的 section plan。
     #[serde(default)]
-    pub section_plan_rollup: Vec<PageResearchSectionPlan>,
-    /// 子页上卷后的关键源码路径。
-    #[serde(default)]
-    pub key_sources_rollup: Vec<String>,
-    /// 子页上卷后的证据分组。
-    #[serde(default)]
-    pub evidence_rollup: Vec<PageResearchEvidenceGroup>,
-    /// 子页上卷后的图摘要。
-    #[serde(default)]
-    pub diagram_rollup: Vec<PageResearchDiagramRollup>,
-    /// 子页尚未确认的开放问题。
-    #[serde(default)]
-    pub open_questions: Vec<String>,
-}
-
-/// `RepoDossier` 是 overview / architecture research 前的稳定研究包。
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct RepoDossier {
-    /// dossier 稳定 ID。
-    pub dossier_id: String,
-    /// dossier 展示标题。
-    pub title: String,
-    /// 当前仓库研究包的关键源码路径。
-    #[serde(default)]
-    pub key_sources: Vec<String>,
-    /// 当前仓库研究包的关键符号 ID。
-    #[serde(default)]
-    pub key_symbols: Vec<String>,
-    /// 当前仓库研究包的定点片段。
-    #[serde(default)]
-    pub targeted_snippets: Vec<TargetedSnippet>,
-    /// 当前仓库研究包的跨模块关系摘要。
-    #[serde(default)]
-    pub cross_module_edges: Vec<String>,
-    /// 当前仓库研究包的流程候选。
-    #[serde(default)]
-    pub process_candidates: Vec<String>,
-    /// 当前仓库研究包的重点模块。
-    #[serde(default)]
-    pub module_focus: Vec<String>,
-    /// 当前仓库 research 使用的 evidence 上卷。
-    #[serde(default)]
-    pub evidence_rollup: Vec<PageResearchEvidenceGroup>,
-    /// 当前仓库 research 使用的图摘要。
-    #[serde(default)]
-    pub diagram_rollup: Vec<PageResearchDiagramRollup>,
-    /// 当前仓库 research 使用的子页上卷。
-    #[serde(default)]
-    pub child_page_rollup: Vec<ChildPageRollup>,
-}
-
-/// `ModuleDossier` 是模块页 research 前的稳定研究包。
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ModuleDossier {
-    /// dossier 稳定 ID。
-    pub dossier_id: String,
-    /// 对应模块 ID。
-    pub module_id: String,
-    /// dossier 展示标题。
-    pub title: String,
-    /// 当前模块的关键源码路径。
-    #[serde(default)]
-    pub key_sources: Vec<String>,
-    /// 当前模块的关键符号 ID。
-    #[serde(default)]
-    pub key_symbols: Vec<String>,
-    /// 当前模块的定点源码片段。
-    #[serde(default)]
-    pub targeted_snippets: Vec<TargetedSnippet>,
-    /// 当前模块的跨模块关系摘要。
-    #[serde(default)]
-    pub cross_module_edges: Vec<String>,
-    /// 当前模块涉及的流程候选。
-    #[serde(default)]
-    pub process_candidates: Vec<String>,
-    /// 当前模块 evidence 上卷。
-    #[serde(default)]
-    pub evidence_rollup: Vec<PageResearchEvidenceGroup>,
-    /// 当前模块 diagram 上卷。
-    #[serde(default)]
-    pub diagram_rollup: Vec<PageResearchDiagramRollup>,
-    /// 当前模块消费的子页上卷。
-    #[serde(default)]
-    pub child_page_rollup: Vec<ChildPageRollup>,
-}
-
-/// `TopicDossier` 是专题页 research 前的稳定研究包。
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct TopicDossier {
-    /// dossier 稳定 ID。
-    pub dossier_id: String,
-    /// 对应主题稳定键。
-    pub topic_key: String,
-    /// 主题类别。
-    pub topic_kind: String,
-    /// dossier 展示标题。
-    pub title: String,
-    /// 主题摘要。
-    #[serde(default)]
-    pub summary: String,
-    /// 关键源码路径。
-    #[serde(default)]
-    pub key_sources: Vec<String>,
-    /// 关键符号 ID。
-    #[serde(default)]
-    pub key_symbols: Vec<String>,
-    /// 定点源码片段。
-    #[serde(default)]
-    pub targeted_snippets: Vec<TargetedSnippet>,
-    /// evidence 上卷。
-    #[serde(default)]
-    pub evidence_rollup: Vec<PageResearchEvidenceGroup>,
-    /// diagram 上卷。
-    #[serde(default)]
-    pub diagram_rollup: Vec<PageResearchDiagramRollup>,
-    /// 子页上卷。
-    #[serde(default)]
-    pub child_page_rollup: Vec<ChildPageRollup>,
+    pub sections: Vec<PageComposeSection>,
 }
 
 /// `PageResearchResult` 固定为结构化研究结果，不承载最终 Markdown。
@@ -365,6 +287,9 @@ pub struct PageResearchResult {
     /// 页面高密度摘要。
     #[serde(default)]
     pub summary: String,
+    /// 当前页面在页面树中的定位说明。
+    #[serde(default)]
+    pub page_positioning: String,
     /// 驱动正式页面结构的稳定 section 计划。
     #[serde(default)]
     pub section_plan: Vec<PageResearchSectionPlan>,
@@ -462,7 +387,7 @@ pub struct ModuleContext {
 
 /// `PageContext` 是最终传给渲染器的统一输入。
 /// 到这一层以后，页面生成只需要关心“如何表达”，不用再重新做结构分析。
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct PageContext {
     /// 当前页面的稳定 ID。
     pub page_id: String,
@@ -470,6 +395,15 @@ pub struct PageContext {
     pub page_type: String,
     /// 页面作用域标签。
     pub scope: String,
+    /// 当前页面直接对应的知识单元 ID。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_id: Option<String>,
+    /// 当前页面直接对应的知识单元类型。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_type: Option<String>,
+    /// 当前页面归属的知识域 ID。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_id: Option<String>,
     /// 页面直接依赖的源码 ID。
     pub source_ids: Vec<String>,
     /// 页面直接映射到的模块 ID。
@@ -486,28 +420,10 @@ pub struct PageContext {
     /// 叶子优先增强阶段从子页汇总出的摘要。
     #[serde(default)]
     pub child_summaries: Vec<String>,
-    /// 供父页消费的结构化子页上卷。
-    #[serde(default)]
-    pub child_rollups: Vec<ChildPageRollup>,
     /// 页面稳定 evidence groups，供 renderer、LLM 和验证脚本共享。
     #[serde(default)]
     pub evidence_groups: Vec<PageEvidenceGroup>,
     /// 页面稳定图输入，供 renderer 直接构造 Mermaid。
     #[serde(default)]
     pub diagram_inputs: Vec<PageDiagramInput>,
-    /// 当前页面关联的仓库级 dossier。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repo_dossier: Option<RepoDossier>,
-    /// 当前页面关联的模块级 dossier。
-    #[serde(default)]
-    pub module_dossiers: Vec<ModuleDossier>,
-    /// 当前页面关联的专题 dossier。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub topic_dossier: Option<TopicDossier>,
-    /// 当前页面 research session 的结构化结果。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub research_result: Option<PageResearchResult>,
-    /// 当前页面 research session 的压缩状态。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub research_session: Option<PageResearchSessionState>,
 }

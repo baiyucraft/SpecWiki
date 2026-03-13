@@ -2,7 +2,7 @@
 // 提供二进制路径解析、JSON IPC 调用、断言辅助等。
 
 import { execFileSync, execSync, spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,12 +17,13 @@ export const ROOT_DEV_CONFIG_PATH = path.join(ROOT_DIR, "wiki.dev.yaml");
 const DEFAULT_PROJECT_JOBS = 8;
 
 const BINARY_NAME = process.platform === "win32" ? "wiki-core.exe" : "wiki-core";
-const BINARY_PATH = path.join(ROOT_DIR, "target", "release", BINARY_NAME);
+const DEBUG_BINARY_PATH = path.join(ROOT_DIR, "target", "debug", BINARY_NAME);
+const RELEASE_BINARY_PATH = path.join(ROOT_DIR, "target", "release", BINARY_NAME);
 
 // 初始化、更新和重建会真正跑完整 workflow，monorepo 项目明显比 query/status 更慢。
 // 项目集脚本还会并行拉起多个长流程 worker，因此需要给重仓库留足超时窗口。
 const DEFAULT_TIMEOUT_MS = 60_000;
-const HEAVY_ACTION_TIMEOUT_MS = 2_400_000;
+const HEAVY_ACTION_TIMEOUT_MS = 3_600_000;
 const REMOVE_RETRY_DELAY_MS = 500;
 const REMOVE_RETRY_ATTEMPTS = 40;
 const FILE_RETRY_DELAY_MS = 250;
@@ -33,16 +34,42 @@ const FILE_RETRY_ATTEMPTS = 20;
 // -------------------------------------------------------------------------
 
 /**
- * 确保测试脚本使用的是可执行的 release binary。
+ * 确保测试脚本至少有一个可执行的 `wiki-core` binary 可用。
  *
  * @param options 运行选项；`fresh` 为真时总是先做一次 release build。
  * @returns 无返回值；如果构建失败会直接抛错。
  */
 export function ensureBinary(options = {}) {
-  if (options.fresh || !existsSync(BINARY_PATH)) {
+  if (options.fresh || (!existsSync(DEBUG_BINARY_PATH) && !existsSync(RELEASE_BINARY_PATH))) {
     console.log(`[build] ${options.fresh ? "refreshing" : "release binary not found, building"}...`);
     execSync("cargo build --release -p wiki-core", { cwd: ROOT_DIR, stdio: "inherit" });
   }
+}
+
+/**
+ * 解析当前应该使用的 `wiki-core` binary。
+ *
+ * 优先使用较新的 build 产物，避免测试脚本继续调用过期的 release binary。
+ *
+ * @returns 返回 debug/release 中较新的可执行文件路径。
+ */
+function resolveBinaryPath() {
+  const hasDebug = existsSync(DEBUG_BINARY_PATH);
+  const hasRelease = existsSync(RELEASE_BINARY_PATH);
+
+  if (!hasDebug && !hasRelease) {
+    throw new Error(`缺少 wiki-core binary: ${DEBUG_BINARY_PATH} / ${RELEASE_BINARY_PATH}`);
+  }
+  if (!hasDebug) {
+    return RELEASE_BINARY_PATH;
+  }
+  if (!hasRelease) {
+    return DEBUG_BINARY_PATH;
+  }
+
+  return statSync(DEBUG_BINARY_PATH).mtimeMs >= statSync(RELEASE_BINARY_PATH).mtimeMs
+    ? DEBUG_BINARY_PATH
+    : RELEASE_BINARY_PATH;
 }
 
 /**
@@ -228,12 +255,13 @@ export function removePathWithRetry(
  */
 export function callCore(command, options = {}) {
   const input = JSON.stringify(command);
+  const binaryPath = resolveBinaryPath();
   const timeout =
     options.timeoutMs
     ?? (["init", "update", "rebuild"].includes(command.action)
       ? HEAVY_ACTION_TIMEOUT_MS
       : DEFAULT_TIMEOUT_MS);
-  const output = execFileSync(BINARY_PATH, ["--json"], {
+  const output = execFileSync(binaryPath, ["--json"], {
     cwd: ROOT_DIR,
     input,
     encoding: "utf-8",
@@ -251,6 +279,7 @@ export function callCore(command, options = {}) {
  * @returns 返回终态响应和捕获到的 progress 事件。
  */
 export async function callCoreStreaming(command, options = {}) {
+  const binaryPath = resolveBinaryPath();
   const timeout =
     options.timeoutMs
     ?? (["init", "update", "rebuild"].includes(command.action)
@@ -258,7 +287,7 @@ export async function callCoreStreaming(command, options = {}) {
       : DEFAULT_TIMEOUT_MS);
 
   return await new Promise((resolve, reject) => {
-    const child = spawn(BINARY_PATH, ["--json"], {
+    const child = spawn(binaryPath, ["--json"], {
       cwd: ROOT_DIR,
       stdio: ["pipe", "pipe", "pipe"],
     });

@@ -1,171 +1,148 @@
-//! 专题页规划测试。
-//! 覆盖根级主题、模块能力主题以及 topic page identity 稳定性。
+//! 9.4 之后，页面规划的验收重点转为 Knowledge Planning 层。
+//! 这组测试覆盖 storybook / dagger archetype 的知识域发现与知识单元规划。
 
 use std::fs;
-
 use tempfile::TempDir;
+use wiki_core::domain::knowledge::{DomainType, UnitType};
 use wiki_core::domain::steering::SteeringConfig;
 use wiki_core::generation::context::{build_module_contexts, build_repo_context};
-use wiki_core::generation::planner::plan_pages;
+use wiki_core::generation::knowledge_planner::{
+    build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
+};
 use wiki_core::repo::hierarchy::build_module_tree;
 use wiki_core::repo::scanner::scan_repo;
+use wiki_core::repo::symbol_graph::GraphSummary;
 
-fn make_topic_repo() -> TempDir {
-    let dir = TempDir::new().unwrap();
-    fs::write(
-        dir.path().join("package.json"),
-        r#"{"name":"topic-demo","private":true,"workspaces":["packages/*"]}"#,
-    )
-    .unwrap();
-
-    fs::write(
-        dir.path().join("router.ts"),
-        "export function router() { return true; }\n",
-    )
-    .unwrap();
-    fs::write(
-        dir.path().join("handler.ts"),
-        "export function handleRoot() { return router(); }\n",
-    )
-    .unwrap();
-    fs::write(
-        dir.path().join("middleware.ts"),
-        "export function middleware() { return handleRoot(); }\n",
-    )
-    .unwrap();
-
-    fs::create_dir_all(dir.path().join("packages/app/src")).unwrap();
-    fs::write(
-        dir.path().join("packages/app/package.json"),
-        r#"{"name":"app","version":"1.0.0"}"#,
-    )
-    .unwrap();
-    fs::write(
-        dir.path().join("packages/app/src/handler_a.ts"),
-        "export function handleA() { return true; }\n",
-    )
-    .unwrap();
-    fs::write(
-        dir.path().join("packages/app/src/handler_b.ts"),
-        "export function handleB() { return true; }\n",
-    )
-    .unwrap();
-    fs::write(
-        dir.path().join("packages/app/src/index.ts"),
-        "import { handleA } from \"./handler_a\";\nexport function run() { return handleA(); }\n",
-    )
-    .unwrap();
-    fs::write(
-        dir.path().join("packages/app/src/service.ts"),
-        "export function service() { return true; }\n",
-    )
-    .unwrap();
-
-    dir
+fn make_storybook_like_repo() -> TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    fs::create_dir_all(repo.path().join("code/addons/a11y/src")).unwrap();
+    fs::create_dir_all(repo.path().join("code/frameworks/react/src")).unwrap();
+    fs::create_dir_all(repo.path().join("code/frameworks/vue3/src")).unwrap();
+    fs::create_dir_all(repo.path().join("code/builders/vite/src")).unwrap();
+    fs::create_dir_all(repo.path().join("code/core/src")).unwrap();
+    fs::create_dir_all(repo.path().join("docs/get-started")).unwrap();
+    fs::create_dir_all(repo.path().join("docs/api")).unwrap();
+    fs::create_dir_all(repo.path().join("docs/configure")).unwrap();
+    fs::create_dir_all(repo.path().join("themes/default")).unwrap();
+    fs::create_dir_all(repo.path().join("tests/e2e")).unwrap();
+    fs::write(repo.path().join("package.json"), r#"{"name":"storybook-like","private":true}"#).unwrap();
+    fs::write(repo.path().join("code/addons/a11y/src/index.ts"), "export const addon = true;
+").unwrap();
+    fs::write(repo.path().join("code/frameworks/react/src/index.ts"), "export const reactRenderer = true;
+").unwrap();
+    fs::write(repo.path().join("code/frameworks/vue3/src/index.ts"), "export const vueRenderer = true;
+").unwrap();
+    fs::write(repo.path().join("code/builders/vite/src/index.ts"), "export const viteBuilder = true;
+").unwrap();
+    fs::write(repo.path().join("code/core/src/public-types.ts"), "export type StorybookApi = { run(): void };
+").unwrap();
+    fs::write(repo.path().join("code/core/src/main.ts"), "export const main = {};
+").unwrap();
+    fs::write(repo.path().join("themes/default/theme.css"), ":root { color: red; }
+").unwrap();
+    fs::write(repo.path().join("docs/get-started/index.md"), "# Get Started
+").unwrap();
+    fs::write(repo.path().join("docs/api/index.md"), "# API
+").unwrap();
+    fs::write(repo.path().join("docs/configure/index.md"), "# Configure
+").unwrap();
+    fs::write(repo.path().join("tests/e2e/smoke.test.ts"), "test('smoke', () => {});
+").unwrap();
+    repo
 }
 
-fn plan_topic_pages(repo: &TempDir) -> Vec<wiki_core::generation::planner::PlannedPage> {
+fn make_dagger_like_repo() -> TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    fs::create_dir_all(repo.path().join("dagger-runtime/src/main/java/runtime")).unwrap();
+    fs::create_dir_all(repo.path().join("dagger-android/src/main/java/android")).unwrap();
+    fs::create_dir_all(repo.path().join("hilt-core/src/main/java/hilt")).unwrap();
+    fs::create_dir_all(repo.path().join("dagger-compiler/src/main/java/compiler")).unwrap();
+    fs::create_dir_all(repo.path().join("docs/guide")).unwrap();
+    fs::create_dir_all(repo.path().join("api")).unwrap();
+    fs::create_dir_all(repo.path().join("tests/integration")).unwrap();
+    fs::write(repo.path().join("settings.gradle"), "include ':dagger-runtime', ':dagger-android', ':hilt-core', ':dagger-compiler'
+").unwrap();
+    fs::write(repo.path().join("dagger-runtime/src/main/java/runtime/CoreRuntime.java"), "class CoreRuntime {}
+").unwrap();
+    fs::write(repo.path().join("dagger-android/src/main/java/android/AndroidBinding.java"), "class AndroidBinding {}
+").unwrap();
+    fs::write(repo.path().join("hilt-core/src/main/java/hilt/HiltEntry.java"), "class HiltEntry {}
+").unwrap();
+    fs::write(repo.path().join("dagger-compiler/src/main/java/compiler/Codegen.java"), "class Codegen {}
+").unwrap();
+    fs::write(repo.path().join("api/PublicApi.java"), "public class PublicApi {}
+").unwrap();
+    fs::write(repo.path().join("docs/guide/index.md"), "# Concepts
+").unwrap();
+    fs::write(repo.path().join("tests/integration/runtime_test.java"), "class RuntimeTest {}
+").unwrap();
+    repo
+}
+
+fn discovered_domain_types(repo: &TempDir) -> Vec<DomainType> {
     let report = scan_repo(repo.path(), &[]).unwrap();
     let tree = build_module_tree(&report);
     let repo_ctx = build_repo_context(&report, &tree);
     let mod_ctxs = build_module_contexts(&report, &tree);
-    plan_pages(
+    let domains = discover_knowledge_domains(
         &report,
         &tree,
         &repo_ctx,
         &mod_ctxs,
+        &GraphSummary::default(),
         &SteeringConfig::default(),
-    )
+    );
+    domains.into_iter().map(|domain| domain.domain_type).collect()
 }
 
 #[test]
-fn planner_generates_root_and_module_topic_pages() {
-    let repo = make_topic_repo();
-    let pages = plan_topic_pages(&repo);
+fn storybook_archetype_discovers_expected_domains() {
+    let repo = make_storybook_like_repo();
+    let domains = discovered_domain_types(&repo);
 
-    let root_topic = pages
-        .iter()
-        .find(|page| {
-            page.page_type == "topic" && page.topic_kind.as_deref() == Some("root-mechanism")
-        })
-        .expect("root topic page should exist");
-    let module_topic = pages
-        .iter()
-        .find(|page| {
-            page.page_type == "topic" && page.topic_kind.as_deref() == Some("module-capability")
-        })
-        .expect("module capability topic page should exist");
-    let archetype_topic = pages
-        .iter()
-        .find(|page| {
-            page.page_type == "topic"
-                && page.topic_kind.as_deref() == Some("repo-archetype")
-                && page.topic_key.as_deref() == Some("request-lifecycle")
-        })
-        .expect("request lifecycle topic page should exist");
-    let architecture = pages
-        .iter()
-        .find(|page| page.page_type == "architecture")
-        .unwrap();
-    let app_module_page = pages
-        .iter()
-        .find(|page| {
-            page.page_type == "module" && page.relative_path.ends_with("核心模块/packages/app.md")
-        })
-        .unwrap();
-
-    assert_eq!(
-        root_topic.parent_id.as_deref(),
-        Some(architecture.id.as_str())
-    );
-    assert_eq!(
-        module_topic.parent_id.as_deref(),
-        Some(app_module_page.id.as_str())
-    );
-    assert_eq!(
-        archetype_topic.parent_id.as_deref(),
-        Some(architecture.id.as_str())
-    );
-    assert!(!root_topic.source_ids.is_empty());
-    assert!(!module_topic.source_ids.is_empty());
-    assert!(archetype_topic
-        .topic_summary
-        .as_deref()
-        .is_some_and(|summary| summary.contains("请求链")));
+    assert!(domains.contains(&DomainType::PluginEcosystem));
+    assert!(domains.contains(&DomainType::MultiFramework));
+    assert!(domains.contains(&DomainType::BuildSystem));
+    assert!(domains.contains(&DomainType::TestingInfra));
+    assert!(domains.contains(&DomainType::ApiReference));
+    assert!(domains.contains(&DomainType::ConfigReference));
+    assert!(domains.contains(&DomainType::ConceptGuide));
+    assert!(domains.contains(&DomainType::ThemeSystem));
 }
 
 #[test]
-fn topic_page_identity_is_stable_across_runs() {
-    let repo_a = make_topic_repo();
-    let repo_b = make_topic_repo();
+fn dagger_archetype_discovers_expected_domains() {
+    let repo = make_dagger_like_repo();
+    let domains = discovered_domain_types(&repo);
 
-    let pages_a = plan_topic_pages(&repo_a);
-    let pages_b = plan_topic_pages(&repo_b);
+    assert!(domains.contains(&DomainType::CoreRuntime));
+    assert!(domains.contains(&DomainType::Framework));
+    assert!(domains.contains(&DomainType::PlatformBinding));
+    assert!(domains.contains(&DomainType::CompilerToolchain));
+    assert!(domains.contains(&DomainType::TestingInfra));
+    assert!(domains.contains(&DomainType::ApiReference));
+    assert!(domains.contains(&DomainType::ConceptGuide));
+}
 
-    let topics_a = pages_a
-        .iter()
-        .filter(|page| page.page_type == "topic")
-        .map(|page| {
-            (
-                (page.topic_kind.clone(), page.topic_key.clone()),
-                (&page.id, &page.relative_path),
-            )
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let topics_b = pages_b
-        .iter()
-        .filter(|page| page.page_type == "topic")
-        .map(|page| {
-            (
-                (page.topic_kind.clone(), page.topic_key.clone()),
-                (&page.id, &page.relative_path),
-            )
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
+#[test]
+fn knowledge_units_include_domain_index_and_leaf_units() {
+    let repo = make_storybook_like_repo();
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let domains = discover_knowledge_domains(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &GraphSummary::default(),
+        &SteeringConfig::default(),
+    );
+    let units = plan_knowledge_units(&domains, &tree, &report, &mod_ctxs, &SteeringConfig::default());
+    let knowledge_tree = build_knowledge_tree(domains, units);
 
-    for (key, (id_a, path_a)) in topics_a {
-        let (id_b, path_b) = topics_b.get(&key).expect("topic should exist in both runs");
-        assert_eq!(id_a, *id_b);
-        assert_eq!(path_a, *path_b);
-    }
+    assert!(knowledge_tree.units.values().any(|unit| unit.unit_type == UnitType::DomainIndex));
+    assert!(knowledge_tree.units.values().any(|unit| matches!(unit.unit_type, UnitType::ApiDoc | UnitType::ConceptGuide | UnitType::ModuleDoc)));
+    assert!(!knowledge_tree.processing_order.is_empty());
 }

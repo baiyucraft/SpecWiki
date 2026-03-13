@@ -21,7 +21,7 @@ pub struct QueryMatch {
     pub title: String,
     /// 相对 `.wiki/` 的 Markdown 路径。
     pub path: String,
-    /// 页面类别，例如 overview / architecture / module。
+    /// 页面类别，例如 `overview / architecture / family-index / family-child / family-leaf-doc / module / topic`。
     pub item_type: String,
     /// 与该页面关联的模块 ID 集合。
     pub module_ids: Vec<String>,

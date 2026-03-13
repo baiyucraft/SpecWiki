@@ -24,8 +24,8 @@
 │  ├─ testing/            # 测试共享工具与 lifecycle phase wrapper
 │  └─ tests/              # 根级整体测试：staging / e2e / 工作区检查
 ├─ openspec/              # proposal / design / tasks
-├─ DESIGN.md              # 项目级设计
-└─ DESIGN-CORE.md         # core 设计
+├─ DESIGN2.0.md           # 项目级设计（2.0）
+└─ DESIGN-CORE2.0.md      # core 四层 pipeline 设计（2.0）
 ```
 
 ## 运行产物

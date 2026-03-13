@@ -11,6 +11,7 @@ use rusqlite::{
 };
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use std::time::Duration;
 
 use crate::domain::metadata::DirtyState;
 use crate::domain::module_tree::ModuleNode;
@@ -25,6 +26,7 @@ use crate::storage::cache_store::{cache_dir, ensure_cache_dir};
 
 /// DB 文件名。
 const DB_FILENAME: &str = "wiki-cache.db";
+const SQLITE_BUSY_TIMEOUT_MS: u64 = 60_000;
 
 /// 页面 FTS 命中结果。
 #[derive(Debug, Clone)]
@@ -109,6 +111,8 @@ pub fn open_db(repo_root: &Path) -> io::Result<Connection> {
     )
     .map_err(|e| io::Error::other(format!("sqlite open: {e}")))?;
 
+    conn.busy_timeout(Duration::from_millis(SQLITE_BUSY_TIMEOUT_MS))
+        .map_err(|e| io::Error::other(format!("sqlite busy_timeout: {e}")))?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
         .map_err(|e| io::Error::other(format!("sqlite pragmas: {e}")))?;
 
@@ -126,8 +130,11 @@ pub fn open_db_readonly(repo_root: &Path) -> io::Result<Connection> {
         ));
     }
 
-    Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| io::Error::other(format!("sqlite open readonly: {e}")))
+    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| io::Error::other(format!("sqlite open readonly: {e}")))?;
+    conn.busy_timeout(Duration::from_millis(SQLITE_BUSY_TIMEOUT_MS))
+        .map_err(|e| io::Error::other(format!("sqlite readonly busy_timeout: {e}")))?;
+    Ok(conn)
 }
 
 /// DB 是否存在。
@@ -381,7 +388,65 @@ fn init_runtime_tables(conn: &Connection) -> io::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
         CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type);
         CREATE INDEX IF NOT EXISTS idx_llm_cache_lookup
-            ON llm_cache(prompt_type, prompt_version, model);",
+            ON llm_cache(prompt_type, prompt_version, model);
+
+        CREATE TABLE IF NOT EXISTS knowledge_domains (
+            id             TEXT PRIMARY KEY,
+            domain_type    TEXT NOT NULL,
+            label          TEXT NOT NULL,
+            evidence       TEXT,
+            source_modules TEXT,
+            source_files   TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS knowledge_units (
+            id              TEXT PRIMARY KEY,
+            unit_type       TEXT NOT NULL,
+            title           TEXT NOT NULL,
+            domain_id       TEXT REFERENCES knowledge_domains(id),
+            parent_unit_id  TEXT REFERENCES knowledge_units(id),
+            relative_path   TEXT NOT NULL,
+            scope           TEXT,
+            priority        REAL
+        );
+
+        CREATE TABLE IF NOT EXISTS research_cache (
+            research_type  TEXT NOT NULL,
+            target_id      TEXT NOT NULL,
+            input_hash     TEXT NOT NULL,
+            result         TEXT NOT NULL,
+            model          TEXT,
+            created_at     TEXT DEFAULT (datetime('now')),
+            ttl_seconds    INTEGER DEFAULT 604800,
+            PRIMARY KEY (research_type, target_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS page_digests (
+            unit_id      TEXT PRIMARY KEY REFERENCES knowledge_units(id),
+            digest       TEXT NOT NULL,
+            content_hash TEXT,
+            created_at   TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS page_drafts (
+            unit_id      TEXT PRIMARY KEY REFERENCES knowledge_units(id),
+            draft        TEXT NOT NULL,
+            content_hash TEXT,
+            created_at   TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS pipeline_checkpoint (
+            checkpoint_id         TEXT PRIMARY KEY,
+            facts_input_hash      TEXT NOT NULL,
+            interrupted_stage     TEXT NOT NULL,
+            interrupted_target_id TEXT,
+            error_message         TEXT,
+            created_at            TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_knowledge_units_domain ON knowledge_units(domain_id);
+        CREATE INDEX IF NOT EXISTS idx_knowledge_units_parent ON knowledge_units(parent_unit_id);
+        CREATE INDEX IF NOT EXISTS idx_research_cache_type ON research_cache(research_type);",
     )
     .map_err(|e| io::Error::other(format!("runtime schema init: {e}")))?;
     Ok(())
@@ -2342,4 +2407,291 @@ fn parse_llm_cache_timestamp(value: &str) -> Option<OffsetDateTime> {
         };
         OffsetDateTime::parse(&normalized, &Rfc3339).ok()
     })
+}
+
+// ── knowledge_domains / knowledge_units CRUD ────────────────────────
+
+pub fn write_knowledge_domains(
+    conn: &Connection,
+    domains: &[crate::domain::knowledge::KnowledgeDomain],
+) -> io::Result<()> {
+    conn.execute("DELETE FROM knowledge_units", [])
+        .map_err(|e| io::Error::other(format!("clear knowledge_units: {e}")))?;
+    conn.execute("DELETE FROM knowledge_domains", [])
+        .map_err(|e| io::Error::other(format!("clear knowledge_domains: {e}")))?;
+    for domain in domains {
+        let evidence = serde_json::to_string(&domain.evidence).unwrap_or_default();
+        let modules = serde_json::to_string(&domain.source_modules).unwrap_or_default();
+        let files = serde_json::to_string(&domain.source_files).unwrap_or_default();
+        conn.execute(
+            "INSERT INTO knowledge_domains (id, domain_type, label, evidence, source_modules, source_files)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                domain.id,
+                format!("{:?}", domain.domain_type),
+                domain.label,
+                evidence,
+                modules,
+                files,
+            ],
+        )
+        .map_err(|e| io::Error::other(format!("write_knowledge_domain({}): {e}", domain.id)))?;
+    }
+    Ok(())
+}
+
+pub fn write_knowledge_units(
+    conn: &Connection,
+    units: &[crate::domain::knowledge::KnowledgeUnit],
+) -> io::Result<()> {
+    let mut remaining = units.iter().cloned().collect::<Vec<_>>();
+    let mut inserted = BTreeSet::new();
+
+    while !remaining.is_empty() {
+        let mut progressed = false;
+        let mut deferred = Vec::new();
+
+        for unit in remaining {
+            if let Some(parent_unit_id) = &unit.parent_unit_id {
+                if !inserted.contains(parent_unit_id) {
+                    deferred.push(unit);
+                    continue;
+                }
+            }
+
+            let scope = serde_json::to_string(&unit.scope).unwrap_or_default();
+            let domain_id = if unit.domain_id.is_empty()
+                || matches!(
+                    unit.unit_type,
+                    crate::domain::knowledge::UnitType::Overview
+                        | crate::domain::knowledge::UnitType::Architecture
+                ) {
+                None
+            } else {
+                Some(unit.domain_id.as_str())
+            };
+            conn.execute(
+                "INSERT OR REPLACE INTO knowledge_units
+                 (id, unit_type, title, domain_id, parent_unit_id, relative_path, scope, priority)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    unit.id,
+                    format!("{:?}", unit.unit_type),
+                    unit.title,
+                    domain_id,
+                    unit.parent_unit_id,
+                    unit.relative_path,
+                    scope,
+                    unit.priority,
+                ],
+            )
+            .map_err(|e| io::Error::other(format!("write_knowledge_unit({}): {e}", unit.id)))?;
+            inserted.insert(unit.id);
+            progressed = true;
+        }
+
+        if !progressed {
+            let blocked = deferred
+                .iter()
+                .map(|unit| unit.id.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(io::Error::other(format!(
+                "write_knowledge_units: unresolved parent/domain dependencies for [{blocked}]"
+            )));
+        }
+
+        remaining = deferred;
+    }
+    Ok(())
+}
+
+// ── research_cache CRUD ─────────────────────────────────────────────
+
+pub fn write_research_cache(
+    conn: &Connection,
+    research_type: &str,
+    target_id: &str,
+    input_hash: &str,
+    result_json: &str,
+    model: Option<&str>,
+) -> io::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO research_cache
+         (research_type, target_id, input_hash, result, model)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![research_type, target_id, input_hash, result_json, model],
+    )
+    .map_err(|e| {
+        io::Error::other(format!(
+            "write_research_cache({research_type}, {target_id}): {e}"
+        ))
+    })?;
+    Ok(())
+}
+
+pub fn read_research_cache(
+    conn: &Connection,
+    research_type: &str,
+    target_id: &str,
+    input_hash: &str,
+) -> io::Result<Option<String>> {
+    if !table_exists(conn, "research_cache")? {
+        return Ok(None);
+    }
+    let result: Option<String> = conn
+        .query_row(
+            "SELECT result FROM research_cache
+             WHERE research_type = ?1 AND target_id = ?2 AND input_hash = ?3
+               AND (ttl_seconds <= 0
+                    OR datetime(created_at, '+' || ttl_seconds || ' seconds') > datetime('now'))",
+            params![research_type, target_id, input_hash],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| {
+            io::Error::other(format!(
+                "read_research_cache({research_type}, {target_id}): {e}"
+            ))
+        })?;
+    Ok(result)
+}
+
+pub fn clear_research_cache(conn: &Connection) -> io::Result<()> {
+    if !table_exists(conn, "research_cache")? {
+        return Ok(());
+    }
+    conn.execute("DELETE FROM research_cache", [])
+        .map_err(|e| io::Error::other(format!("clear_research_cache: {e}")))?;
+    Ok(())
+}
+
+// ── page_digests CRUD ───────────────────────────────────────────────
+
+pub fn write_page_digest(
+    conn: &Connection,
+    unit_id: &str,
+    digest_json: &str,
+    content_hash: Option<&str>,
+) -> io::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO page_digests (unit_id, digest, content_hash) VALUES (?1, ?2, ?3)",
+        params![unit_id, digest_json, content_hash],
+    )
+    .map_err(|e| io::Error::other(format!("write_page_digest({unit_id}): {e}")))?;
+    Ok(())
+}
+
+pub fn read_page_digest(conn: &Connection, unit_id: &str) -> io::Result<Option<String>> {
+    if !table_exists(conn, "page_digests")? {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT digest FROM page_digests WHERE unit_id = ?1",
+        params![unit_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| io::Error::other(format!("read_page_digest({unit_id}): {e}")))
+}
+
+pub fn clear_page_digests(conn: &Connection) -> io::Result<()> {
+    if !table_exists(conn, "page_digests")? {
+        return Ok(());
+    }
+    conn.execute("DELETE FROM page_digests", [])
+        .map_err(|e| io::Error::other(format!("clear_page_digests: {e}")))?;
+    Ok(())
+}
+
+// ── page_drafts CRUD ────────────────────────────────────────────────
+
+pub fn write_page_draft(
+    conn: &Connection,
+    unit_id: &str,
+    draft_json: &str,
+    content_hash: Option<&str>,
+) -> io::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO page_drafts (unit_id, draft, content_hash) VALUES (?1, ?2, ?3)",
+        params![unit_id, draft_json, content_hash],
+    )
+    .map_err(|e| io::Error::other(format!("write_page_draft({unit_id}): {e}")))?;
+    Ok(())
+}
+
+pub fn read_page_draft(conn: &Connection, unit_id: &str) -> io::Result<Option<String>> {
+    if !table_exists(conn, "page_drafts")? {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT draft FROM page_drafts WHERE unit_id = ?1",
+        params![unit_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| io::Error::other(format!("read_page_draft({unit_id}): {e}")))
+}
+
+pub fn clear_page_drafts(conn: &Connection) -> io::Result<()> {
+    if !table_exists(conn, "page_drafts")? {
+        return Ok(());
+    }
+    conn.execute("DELETE FROM page_drafts", [])
+        .map_err(|e| io::Error::other(format!("clear_page_drafts: {e}")))?;
+    Ok(())
+}
+
+// ── pipeline_checkpoint CRUD ────────────────────────────────────────
+
+pub fn write_pipeline_checkpoint(
+    conn: &Connection,
+    checkpoint_id: &str,
+    facts_input_hash: &str,
+    interrupted_stage: &str,
+    interrupted_target_id: Option<&str>,
+    error_message: Option<&str>,
+) -> io::Result<()> {
+    conn.execute("DELETE FROM pipeline_checkpoint", [])
+        .map_err(|e| io::Error::other(format!("clear checkpoint before write: {e}")))?;
+    conn.execute(
+        "INSERT INTO pipeline_checkpoint
+         (checkpoint_id, facts_input_hash, interrupted_stage, interrupted_target_id, error_message)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            checkpoint_id,
+            facts_input_hash,
+            interrupted_stage,
+            interrupted_target_id,
+            error_message,
+        ],
+    )
+    .map_err(|e| io::Error::other(format!("write_pipeline_checkpoint: {e}")))?;
+    Ok(())
+}
+
+pub fn read_pipeline_checkpoint(
+    conn: &Connection,
+) -> io::Result<Option<(String, String, String, Option<String>, Option<String>)>> {
+    if !table_exists(conn, "pipeline_checkpoint")? {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT checkpoint_id, facts_input_hash, interrupted_stage,
+                interrupted_target_id, error_message
+         FROM pipeline_checkpoint LIMIT 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+    )
+    .optional()
+    .map_err(|e| io::Error::other(format!("read_pipeline_checkpoint: {e}")))
+}
+
+pub fn clear_pipeline_checkpoint(conn: &Connection) -> io::Result<()> {
+    if !table_exists(conn, "pipeline_checkpoint")? {
+        return Ok(());
+    }
+    conn.execute("DELETE FROM pipeline_checkpoint", [])
+        .map_err(|e| io::Error::other(format!("clear_pipeline_checkpoint: {e}")))?;
+    Ok(())
 }

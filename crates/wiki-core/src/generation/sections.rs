@@ -3,10 +3,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::context::{PageContext, PageResearchSectionPlan};
+use crate::domain::context::{
+    PageComposePlan, PageComposeSection, PageContext, PageResearchSectionPlan,
+};
 use crate::domain::stable_id::stable_id;
 use crate::generation::planner::PlannedPage;
-use crate::llm::PageEnrichmentResult;
 
 /// `SectionDraft` 是页面组装前的标准章节草稿。
 /// 迭代 3 之后，页面重生成将围绕这个粒度做局部替换和缓存复用。
@@ -35,7 +36,7 @@ struct SectionSlot {
 /// 返回某类页面的稳定 section 标题模板。
 ///
 /// # 参数
-/// - `page_type`：页面类型，如 `overview / architecture / module / workflow`。
+/// - `page_type`：页面类型，如 `overview / architecture / family-index / family-child / family-leaf-doc / module / workflow`。
 ///
 /// # 返回
 /// - 返回该页面类型对应的稳定 section 标题顺序。
@@ -86,34 +87,64 @@ pub fn section_id_for_key(page_id: &str, section_key: &str) -> String {
 /// # 返回
 /// - 返回按稳定顺序排列的 section 草稿集合。
 pub fn build_section_drafts(page: &PlannedPage, context: &PageContext) -> Vec<SectionDraft> {
-    build_section_drafts_with_enrichment(page, context, None)
+    let compose_plan = build_page_compose_plan(page, context);
+    build_section_drafts_from_compose_plan(page, context, &compose_plan)
 }
 
-/// 为当前页面构建可选 LLM 增强后的稳定 section 草稿集合。
-pub fn build_section_drafts_with_enrichment(
+/// 在 renderer 前显式生成 compose 计划。
+pub fn build_page_compose_plan(
     page: &PlannedPage,
     context: &PageContext,
-    enrichment: Option<&PageEnrichmentResult>,
-) -> Vec<SectionDraft> {
+) -> PageComposePlan {
     let templates = section_templates_for_page(page.page_type.as_str(), context);
-    ordered_section_templates(page.page_type.as_str(), &templates, context)
+    let sections = ordered_section_templates(page.page_type.as_str(), &templates, context)
         .into_iter()
         .map(|(section_key, title, content, plan)| {
-            let content = merged_section_content(&title, &content, enrichment);
-            SectionDraft {
-                section_id: section_id_for_key(&page.id, &section_key),
-                content: append_supporting_blocks(
-                    &section_key,
-                    &title,
-                    &content,
-                    context,
-                    plan.as_ref(),
-                ),
-                title,
-                managed: true,
-                source_ids: context.source_ids.clone(),
-                relation_ids: context.relation_ids.clone(),
+            let content =
+                append_supporting_blocks(&section_key, &title, &content, context, plan.as_ref());
+            PageComposeSection {
+                section_key,
+                section_title: title,
+                content,
+                evidence_refs: plan
+                    .as_ref()
+                    .map(|plan| plan.evidence_refs.clone())
+                    .unwrap_or_default(),
+                diagram_refs: plan
+                    .as_ref()
+                    .map(|plan| plan.diagram_refs.clone())
+                    .unwrap_or_default(),
+                child_refs: plan
+                    .as_ref()
+                    .map(|plan| plan.child_refs.clone())
+                    .unwrap_or_default(),
             }
+        })
+        .collect();
+
+    PageComposePlan {
+        page_positioning: String::new(),
+        summary: String::new(),
+        sections,
+    }
+}
+
+/// 把 compose 计划转成稳定的 section 草稿。
+pub fn build_section_drafts_from_compose_plan(
+    page: &PlannedPage,
+    context: &PageContext,
+    compose_plan: &PageComposePlan,
+) -> Vec<SectionDraft> {
+    compose_plan
+        .sections
+        .iter()
+        .map(|section| SectionDraft {
+            section_id: section_id_for_key(&page.id, &section.section_key),
+            title: section.section_title.clone(),
+            managed: true,
+            source_ids: context.source_ids.clone(),
+            relation_ids: context.relation_ids.clone(),
+            content: section.content.clone(),
         })
         .collect()
 }
@@ -218,6 +249,60 @@ fn section_slots_for_page_type(page_type: &str) -> Vec<SectionSlot> {
                 title: "关联模块",
             },
         ],
+        "family-index" => vec![
+            SectionSlot {
+                key: "family-overview",
+                title: "知识域概览",
+            },
+            SectionSlot {
+                key: "family-scope",
+                title: "Docs / API / 配置面",
+            },
+            SectionSlot {
+                key: "family-children",
+                title: "子页结构",
+            },
+            SectionSlot {
+                key: "family-evidence",
+                title: "关键来源",
+            },
+        ],
+        "family-child" => vec![
+            SectionSlot {
+                key: "family-child-intro",
+                title: "主题定位",
+            },
+            SectionSlot {
+                key: "family-child-surfaces",
+                title: "API / 配置面",
+            },
+            SectionSlot {
+                key: "family-child-sources",
+                title: "关键源码",
+            },
+            SectionSlot {
+                key: "family-child-related",
+                title: "关联结果",
+            },
+        ],
+        "family-leaf-doc" => vec![
+            SectionSlot {
+                key: "family-leaf-intro",
+                title: "叶子主题",
+            },
+            SectionSlot {
+                key: "family-leaf-surfaces",
+                title: "命中面",
+            },
+            SectionSlot {
+                key: "family-leaf-sources",
+                title: "关键来源",
+            },
+            SectionSlot {
+                key: "family-leaf-related",
+                title: "上游与关联结果",
+            },
+        ],
         _ => vec![SectionSlot {
             key: "intro",
             title: "简介",
@@ -235,6 +320,9 @@ fn section_templates_for_page(
         "module" => module_section_templates(context),
         "workflow" => workflow_section_templates(context),
         "topic" => topic_section_templates(context),
+        "family-index" => family_index_section_templates(context),
+        "family-child" => family_child_section_templates(context),
+        "family-leaf-doc" => family_leaf_section_templates(context),
         _ => vec![(
             "intro".to_string(),
             "简介".to_string(),
@@ -378,66 +466,91 @@ fn topic_section_templates(context: &PageContext) -> Vec<(String, String, String
     ]
 }
 
-fn ordered_section_templates(
-    page_type: &str,
-    templates: &[(String, String, String)],
-    context: &PageContext,
-) -> Vec<(String, String, String, Option<PageResearchSectionPlan>)> {
-    let template_map = templates
-        .iter()
-        .cloned()
-        .map(|(key, title, content)| (key, (title, content)))
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let plan_map = context
-        .research_result
-        .as_ref()
-        .map(|result| {
-            result
-                .section_plan
-                .iter()
-                .cloned()
-                .map(|plan| (normalize_section_key(page_type, &plan), plan))
-                .collect::<std::collections::BTreeMap<_, _>>()
-        })
-        .unwrap_or_default();
-    let mut ordered_keys = Vec::new();
-
-    if let Some(result) = &context.research_result {
-        for plan in &result.section_plan {
-            let key = normalize_section_key(page_type, plan);
-            if template_map.contains_key(&key) && !ordered_keys.contains(&key) {
-                ordered_keys.push(key);
-            }
-        }
-    }
-    for (key, _, _) in templates {
-        if !ordered_keys.contains(key) {
-            ordered_keys.push(key.clone());
-        }
-    }
-
-    ordered_keys
-        .into_iter()
-        .filter_map(|key| {
-            let (title, deterministic) = template_map.get(&key)?.clone();
-            let plan = plan_map.get(&key).cloned();
-            let content = plan
-                .as_ref()
-                .map(|plan| normalize_multiline(&plan.section_summary))
-                .filter(|summary| !summary.is_empty())
-                .unwrap_or(deterministic);
-            Some((key, title, content, plan))
-        })
-        .collect()
+fn family_index_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
+    vec![
+        (
+            "family-overview".to_string(),
+            "知识域概览".to_string(),
+            family_index_intro(context),
+        ),
+        (
+            "family-scope".to_string(),
+            "Docs / API / 配置面".to_string(),
+            family_scope_section(context),
+        ),
+        (
+            "family-children".to_string(),
+            "子页结构".to_string(),
+            family_children_section(context),
+        ),
+        (
+            "family-evidence".to_string(),
+            "关键来源".to_string(),
+            family_evidence_section(context),
+        ),
+    ]
 }
 
-fn normalize_section_key(page_type: &str, plan: &PageResearchSectionPlan) -> String {
-    let explicit = plan.section_key.trim();
-    if !explicit.is_empty() {
-        return explicit.to_string();
-    }
+fn family_child_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
+    vec![
+        (
+            "family-child-intro".to_string(),
+            "主题定位".to_string(),
+            family_child_intro(context),
+        ),
+        (
+            "family-child-surfaces".to_string(),
+            "API / 配置面".to_string(),
+            family_scope_section(context),
+        ),
+        (
+            "family-child-sources".to_string(),
+            "关键源码".to_string(),
+            family_sources_section(context),
+        ),
+        (
+            "family-child-related".to_string(),
+            "关联结果".to_string(),
+            family_related_section(context),
+        ),
+    ]
+}
 
-    section_key_for_title(page_type, &plan.section_title)
+fn family_leaf_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
+    vec![
+        (
+            "family-leaf-intro".to_string(),
+            "叶子主题".to_string(),
+            family_leaf_intro(context),
+        ),
+        (
+            "family-leaf-surfaces".to_string(),
+            "命中面".to_string(),
+            family_leaf_surface_section(context),
+        ),
+        (
+            "family-leaf-sources".to_string(),
+            "关键来源".to_string(),
+            family_sources_section(context),
+        ),
+        (
+            "family-leaf-related".to_string(),
+            "上游与关联结果".to_string(),
+            family_leaf_related_section(context),
+        ),
+    ]
+}
+
+fn ordered_section_templates(
+    _page_type: &str,
+    templates: &[(String, String, String)],
+    _context: &PageContext,
+) -> Vec<(String, String, String, Option<PageResearchSectionPlan>)> {
+    templates
+        .iter()
+        .cloned()
+        .map(|(key, title, content)| (key, title, content, None))
+        .collect()
 }
 
 fn slug_key(value: &str) -> String {
@@ -452,16 +565,6 @@ fn slug_key(value: &str) -> String {
         .collect::<String>()
         .trim_matches('-')
         .to_ascii_lowercase()
-}
-
-fn normalize_multiline(value: &str) -> String {
-    value
-        .lines()
-        .map(|line| line.trim_end())
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
 }
 
 /// 把字符串列表渲染成 Markdown 项目符号列表。
@@ -529,6 +632,10 @@ fn grouped_bullet_block(title: &str, lines: &[String]) -> Option<String> {
 }
 
 fn overview_intro(context: &PageContext) -> String {
+    if let Some(intro) = research_intro(context) {
+        return intro;
+    }
+
     let repo_root = fact_value(&context.facts, "仓库根路径").unwrap_or("当前仓库");
     let tech_stack = prefixed_values(&context.facts, "技术栈");
     let module_count = fact_value(&context.facts, "模块数量").unwrap_or("未识别");
@@ -613,6 +720,10 @@ fn overview_key_insights(context: &PageContext) -> String {
 }
 
 fn architecture_overview(context: &PageContext) -> String {
+    if let Some(intro) = research_intro(context) {
+        return intro;
+    }
+
     let module_count = fact_value(&context.facts, "模块数量").unwrap_or("未识别");
     let relation_count = fact_value(&context.facts, "跨模块关系").unwrap_or("0");
     let top_modules = fact_value(&context.facts, "顶层模块").unwrap_or("未识别");
@@ -666,13 +777,8 @@ fn architecture_hints_section(context: &PageContext) -> String {
 }
 
 fn module_intro(context: &PageContext) -> String {
-    if let Some(summary) = context
-        .research_result
-        .as_ref()
-        .map(|result| result.summary.trim())
-        .filter(|summary| !summary.is_empty())
-    {
-        return summary.to_string();
+    if let Some(intro) = research_intro(context) {
+        return intro;
     }
 
     let module_name = fact_value(&context.facts, "模块名称").unwrap_or("当前模块");
@@ -697,30 +803,6 @@ fn module_intro(context: &PageContext) -> String {
 }
 
 fn source_section(context: &PageContext) -> String {
-    if let Some(dossier) = context.module_dossiers.first() {
-        let mut blocks = Vec::new();
-        if !dossier.key_sources.is_empty() {
-            blocks.push(grouped_bullet_block("关键源码", &dossier.key_sources).unwrap());
-        }
-        let snippets = dossier
-            .targeted_snippets
-            .iter()
-            .take(3)
-            .map(|snippet| {
-                format!(
-                    "`{}`:{}-{}",
-                    snippet.path, snippet.start_line, snippet.end_line
-                )
-            })
-            .collect::<Vec<_>>();
-        if let Some(block) = grouped_bullet_block("源码片段", &snippets) {
-            blocks.push(block);
-        }
-        if !blocks.is_empty() {
-            return blocks.join("\n\n");
-        }
-    }
-
     prefixed_bullets(
         &context.summary_inputs,
         "源码",
@@ -729,12 +811,6 @@ fn source_section(context: &PageContext) -> String {
 }
 
 fn dependency_section(context: &PageContext) -> String {
-    if let Some(dossier) = context.module_dossiers.first() {
-        if !dossier.cross_module_edges.is_empty() {
-            return bullet_lines(&dossier.cross_module_edges);
-        }
-    }
-
     prefixed_bullets(
         &context.summary_inputs,
         "依赖",
@@ -744,20 +820,6 @@ fn dependency_section(context: &PageContext) -> String {
 
 fn module_fact_section(context: &PageContext) -> String {
     let mut blocks = vec![bullet_lines(&context.facts)];
-    if let Some(result) = &context.research_result {
-        let planned_sections = result
-            .section_plan
-            .iter()
-            .map(|plan| format!("{}：{}", plan.section_title, plan.section_summary))
-            .filter(|line| !line.ends_with('：'))
-            .collect::<Vec<_>>();
-        if let Some(block) = grouped_bullet_block("研究重点", &planned_sections) {
-            blocks.push(block);
-        }
-        if let Some(block) = grouped_bullet_block("待确认点", &result.open_questions) {
-            blocks.push(block);
-        }
-    }
 
     if let Some(block) = grouped_bullet_block(
         "关键调用热点",
@@ -778,25 +840,12 @@ fn module_fact_section(context: &PageContext) -> String {
         blocks.push(block);
     }
 
-    blocks.join("\n\n")
+    blocks.join("
+
+")
 }
 
 fn child_module_section(context: &PageContext) -> String {
-    if !context.child_rollups.is_empty() {
-        let lines = context
-            .child_rollups
-            .iter()
-            .map(|rollup| {
-                if rollup.summary.trim().is_empty() {
-                    format!("{}（{}）", rollup.title, rollup.page_type)
-                } else {
-                    format!("{}：{}", rollup.title, rollup.summary.trim())
-                }
-            })
-            .collect::<Vec<_>>();
-        return bullet_lines(&lines);
-    }
-
     prefixed_bullets(
         &context.summary_inputs,
         "子模块",
@@ -824,13 +873,8 @@ fn workflow_overview(context: &PageContext) -> String {
 }
 
 fn topic_intro(context: &PageContext) -> String {
-    if let Some(summary) = context
-        .research_result
-        .as_ref()
-        .map(|result| result.summary.trim())
-        .filter(|summary| !summary.is_empty())
-    {
-        return summary.to_string();
+    if let Some(intro) = research_intro(context) {
+        return intro;
     }
 
     let topic_title = fact_value(&context.facts, "主题标题").unwrap_or("当前主题");
@@ -852,46 +896,6 @@ fn topic_intro(context: &PageContext) -> String {
 }
 
 fn topic_evidence_section(context: &PageContext) -> String {
-    if let Some(result) = &context.research_result {
-        let lines = result
-            .evidence_rollup
-            .iter()
-            .map(|group| {
-                let items = group
-                    .items
-                    .iter()
-                    .take(4)
-                    .map(|item| item.path.clone())
-                    .collect::<Vec<_>>();
-                format!("{}：{}", group.title, items.join("、"))
-            })
-            .filter(|line| !line.ends_with('：'))
-            .collect::<Vec<_>>();
-        if !lines.is_empty() {
-            return bullet_lines(&lines);
-        }
-    }
-
-    if let Some(dossier) = &context.topic_dossier {
-        let lines = dossier
-            .evidence_rollup
-            .iter()
-            .map(|group| {
-                let items = group
-                    .items
-                    .iter()
-                    .take(4)
-                    .map(|item| item.path.clone())
-                    .collect::<Vec<_>>();
-                format!("{}：{}", group.title, items.join("、"))
-            })
-            .filter(|line| !line.ends_with('：'))
-            .collect::<Vec<_>>();
-        if !lines.is_empty() {
-            return bullet_lines(&lines);
-        }
-    }
-
     let source_paths = prefixed_values(&context.summary_inputs, "关键源码");
     if source_paths.is_empty() {
         "当前主题还没有额外的关键源码摘要。".to_string()
@@ -901,23 +905,6 @@ fn topic_evidence_section(context: &PageContext) -> String {
 }
 
 fn topic_diagram_section(context: &PageContext) -> String {
-    if let Some(result) = &context.research_result {
-        if !result.diagram_rollup.is_empty() {
-            let lines = result
-                .diagram_rollup
-                .iter()
-                .map(|diagram| {
-                    if diagram.summary.trim().is_empty() {
-                        format!("{}（{}）", diagram.title, diagram.diagram_type)
-                    } else {
-                        format!("{}：{}", diagram.title, diagram.summary.trim())
-                    }
-                })
-                .collect::<Vec<_>>();
-            return bullet_lines(&lines);
-        }
-    }
-
     if context
         .diagram_inputs
         .iter()
@@ -930,29 +917,94 @@ fn topic_diagram_section(context: &PageContext) -> String {
 }
 
 fn topic_related_section(context: &PageContext) -> String {
-    if let Some(dossier) = &context.topic_dossier {
-        if !dossier.child_page_rollup.is_empty() {
-            let lines = dossier
-                .child_page_rollup
-                .iter()
-                .map(|rollup| {
-                    if rollup.summary.trim().is_empty() {
-                        rollup.title.clone()
-                    } else {
-                        format!("{}：{}", rollup.title, rollup.summary.trim())
-                    }
-                })
-                .collect::<Vec<_>>();
-            return bullet_lines(&lines);
-        }
-    }
-
     let related_modules = prefixed_values(&context.summary_inputs, "关联模块");
     if related_modules.is_empty() {
         "当前专题页没有额外的关联模块线索。".to_string()
     } else {
         grouped_bullet_block("关联模块", &related_modules).unwrap_or_else(|| "- 无".to_string())
     }
+}
+
+fn family_index_intro(context: &PageContext) -> String {
+    if let Some(intro) = research_intro(context) {
+        return intro;
+    }
+
+    let family_title = fact_value(&context.facts, "知识域标题").unwrap_or("当前知识域");
+    let family_kind = fact_value(&context.facts, "知识域类别").unwrap_or("family");
+    let source_count = fact_value(&context.facts, "关联源码数").unwrap_or("0");
+    let summary = prefixed_values(&context.summary_inputs, "知识域摘要");
+
+    let mut sentences = vec![format!(
+        "`{family_title}` 是一个 {family_kind} 类型的知识域索引页。"
+    )];
+    if let Some(summary) = summary.first() {
+        sentences.push(summary.clone());
+    }
+    sentences.push(format!("当前索引页直接聚合 {source_count} 份源码、文档或配置线索。"));
+    paragraph_lines(&sentences, "该页面用于汇总某个稳定知识域。")
+}
+
+fn family_scope_section(_context: &PageContext) -> String {
+    "当前知识域尚未命中稳定的 docs / API / 配置面。".to_string()
+}
+
+fn family_children_section(_context: &PageContext) -> String {
+    "当前知识域尚未拆出稳定子页。".to_string()
+}
+
+fn family_evidence_section(_context: &PageContext) -> String {
+    "当前知识域还没有稳定的关键来源上卷。".to_string()
+}
+
+fn family_child_intro(context: &PageContext) -> String {
+    if let Some(intro) = research_intro(context) {
+        return intro;
+    }
+
+    let family_title = fact_value(&context.facts, "知识域标题").unwrap_or("当前知识域子页");
+    let family_kind = fact_value(&context.facts, "知识域类别").unwrap_or("family");
+    let summary = prefixed_values(&context.summary_inputs, "知识域摘要");
+    let mut sentences =
+        vec![format!("`{family_title}` 聚焦一个 {family_kind} 主题子域。")];
+    if let Some(summary) = summary.first() {
+        sentences.push(summary.clone());
+    }
+    paragraph_lines(&sentences, "该页面用于解释知识域中的单个高信号子主题。")
+}
+
+fn family_sources_section(_context: &PageContext) -> String {
+    "当前知识域子页尚未命中高信号源码。".to_string()
+}
+
+fn family_related_section(_context: &PageContext) -> String {
+    "当前知识域子页没有更多关联结果。".to_string()
+}
+
+fn family_leaf_intro(context: &PageContext) -> String {
+    if let Some(intro) = research_intro(context) {
+        return intro;
+    }
+
+    let family_title = fact_value(&context.facts, "知识域标题").unwrap_or("当前叶子主题");
+    let family_kind = fact_value(&context.facts, "知识域类别").unwrap_or("family");
+    let summary = prefixed_values(&context.summary_inputs, "知识域摘要");
+    let mut sentences = vec![format!(
+        "`{family_title}` 是 `{family_kind}` 知识域下的叶子文档页。"
+    )];
+    if let Some(summary) = summary.first() {
+        sentences.push(summary.clone());
+    }
+    sentences.push("该页优先承接一手 docs / API / 配置 / 类型入口，而不是继续充当索引页。".to_string());
+    paragraph_lines(&sentences, "该页面聚焦一个更细粒度的叶子主题。")
+}
+
+fn family_leaf_surface_section(_context: &PageContext) -> String {
+    "当前叶子主题尚未命中稳定的 docs / API / 配置 / 类型面。".to_string()
+}
+
+fn family_leaf_related_section(_context: &PageContext) -> String {
+    "当前叶子主题没有更多上游或关联结果。".to_string()
 }
 
 fn render_module_tree_markdown(lines: &[String]) -> String {
@@ -969,35 +1021,8 @@ fn render_module_tree_markdown(lines: &[String]) -> String {
         .join("\n")
 }
 
-fn merged_section_content(
-    title: &str,
-    deterministic: &str,
-    enrichment: Option<&PageEnrichmentResult>,
-) -> String {
-    let Some(enrichment) = enrichment else {
-        return deterministic.to_string();
-    };
-
-    let mut content = enrichment
-        .section_overrides
-        .get(title)
-        .cloned()
-        .unwrap_or_else(|| deterministic.to_string());
-
-    if let Some(mermaid) = enrichment.mermaid_blocks.get(title) {
-        if !content.is_empty() {
-            content.push_str("\n\n");
-        }
-        content.push_str("```mermaid\n");
-        content.push_str(mermaid);
-        content.push_str("\n```");
-    }
-
-    if content.trim().is_empty() {
-        deterministic.to_string()
-    } else {
-        content
-    }
+fn research_intro(_context: &PageContext) -> Option<String> {
+    None
 }
 
 fn append_supporting_blocks(
@@ -1023,7 +1048,7 @@ fn append_supporting_blocks(
                 .collect::<std::collections::BTreeSet<_>>()
         })
         .unwrap_or_default();
-    let planned_child_refs = plan
+    let _planned_child_refs = plan
         .map(|plan| {
             plan.child_refs
                 .iter()
@@ -1058,29 +1083,15 @@ fn append_supporting_blocks(
         })
         .filter_map(render_diagram_block)
         .collect::<Vec<_>>();
-    let child_block = if planned_child_refs.is_empty() {
-        None
-    } else {
-        let lines = context
-            .child_rollups
-            .iter()
-            .filter(|rollup| planned_child_refs.contains(&rollup.page_id))
-            .map(|rollup| {
-                if rollup.summary.trim().is_empty() {
-                    rollup.title.clone()
-                } else {
-                    format!("{}：{}", rollup.title, rollup.summary.trim())
-                }
-            })
-            .collect::<Vec<_>>();
-        grouped_bullet_block("关联子页", &lines)
-    };
+    let child_block: Option<String> = None;
 
     let mut blocks = Vec::new();
     if !content.trim().is_empty() {
         blocks.push(content.trim().to_string());
     }
-    blocks.extend(evidence_blocks);
+    if !evidence_blocks.is_empty() {
+        blocks.push(format!("章节来源：\n{}", evidence_blocks.join("\n\n")));
+    }
     blocks.extend(diagram_blocks);
     if let Some(child_block) = child_block {
         blocks.push(child_block);

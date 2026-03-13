@@ -1,4 +1,8 @@
-# Repo Wiki Design
+# ~~Repo Wiki Design~~ (已废弃)
+
+> **⚠️ 本文档已废弃。** 请使用 [DESIGN2.0.md](./DESIGN2.0.md) 和 [DESIGN-CORE2.0.md](./DESIGN-CORE2.0.md) 作为当前设计参考。
+
+---
 
 ## 项目目标
 

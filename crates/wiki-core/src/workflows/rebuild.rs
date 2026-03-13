@@ -17,7 +17,7 @@ use crate::generation::context::{build_module_contexts_with_graph, build_repo_co
 use crate::generation::managed_sections::{
     merge_sections, parse_wiki_page, ManagedSectionBlock, PageBlock,
 };
-use crate::generation::renderer::assemble_page_from_merge;
+use crate::generation::renderer::{assemble_page_from_merge, render_page_draft};
 use crate::generation::sections::section_titles_for_page_type;
 use crate::llm::{LlmRuntime, LlmService};
 use crate::repo::fingerprint::fingerprint_bytes;
@@ -30,12 +30,14 @@ use crate::storage::cache_store::{
     write_page_generation_cache, write_scan_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::metadata_store::write_metadata;
+use crate::storage::sqlite_store;
 use crate::storage::state_store::write_state_with_symbol_graph;
 use crate::storage::wiki_fs::{resolve_page_path, write_page};
 use crate::workflows::init::{
-    ancestor_ids_for_page, current_timestamp, page_provenance, source_paths_for_page,
+    ancestor_ids_for_page, build_minimal_page_context, current_timestamp, find_or_build_planned_page,
+    page_provenance, source_paths_for_page,
 };
-use crate::workflows::page_render::prepare_page_artifacts_with_llm;
+use crate::workflows::page_render::run_compose_pipeline;
 use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
 };
@@ -159,49 +161,39 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
     let repo_context = build_repo_context_with_graph(&scan_report, &module_tree, &graph_summary);
     let module_contexts =
         build_module_contexts_with_graph(&scan_report, &module_tree, &graph_summary);
-    reporter.phase("plan_pages", "规划 Wiki 页面");
-    let pages = crate::generation::planner::plan_pages_with_graph(
+
+    // ── Layer 2-4: Knowledge Planning → Research → Compose ──
+    reporter.phase("knowledge_planning", "知识域发现与单元规划");
+    reporter.phase("research", "执行分层研究");
+    reporter.phase("compose", "组合生成页面内容");
+    let research_provider =
+        crate::generation::research_engine::StructuralResearchProvider;
+    let pipeline = run_compose_pipeline(
+        repo_root,
         &scan_report,
         &module_tree,
         &repo_context,
         &module_contexts,
-        &steering,
         &graph_summary,
-    );
+        &steering,
+        &research_provider,
+    )?;
+    let page_drafts = pipeline.page_drafts;
+    let digests = pipeline.digests;
+    let knowledge_tree = pipeline.knowledge_tree;
+    let pages_by_id: BTreeMap<String, _> = pipeline
+        .planned_pages
+        .iter()
+        .map(|p| (p.id.clone(), p.clone()))
+        .collect();
 
     ensure_cache_dir(repo_root)?;
     ensure_page_cache_dirs(repo_root)?;
     write_scan_cache(repo_root, &scan_report)?;
     write_module_tree_cache(repo_root, &module_tree)?;
 
-    let page_total = pages.len();
-
+    let page_total = page_drafts.len();
     reporter.counted("render_pages", "渲染页面", 0, page_total);
-    let llm_enrichment_enabled = llm_runtime.enrichment_enabled();
-    if llm_enrichment_enabled {
-        reporter.phase("llm_enrichment", "生成页面增强内容");
-    }
-    let mut llm_progress = |processed: usize, total: usize| {
-        reporter.counted(
-            "llm_enrichment",
-            format!("生成页面增强内容 {processed}/{total}"),
-            processed,
-            total,
-        );
-    };
-    let prepared_pages = prepare_page_artifacts_with_llm(
-        &pages,
-        &scan_report,
-        &module_tree,
-        &repo_context,
-        &module_contexts,
-        &symbol_snapshot,
-        &resolved_graph,
-        &analysis,
-        &steering,
-        Some(&mut llm_runtime),
-        llm_enrichment_enabled.then_some(&mut llm_progress as &mut dyn FnMut(usize, usize)),
-    );
 
     let mut page_results = Vec::new();
     let mut generated_pages = Vec::new();
@@ -209,54 +201,65 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
     let generated_at = current_timestamp();
     let mut ancestor_ids_by_page = BTreeMap::new();
 
-    for (index, artifact) in prepared_pages.into_iter().enumerate() {
-        // 尝试从旧页面恢复 user sections
-        let final_content = match old_page_contents.get(&artifact.page.id) {
+    for (index, draft) in page_drafts.iter().enumerate() {
+        let rendered = render_page_draft(draft);
+        let planned_page = find_or_build_planned_page(draft, &pages_by_id);
+        let page_context = build_minimal_page_context(draft, &knowledge_tree);
+
+        let final_content = match old_page_contents.get(&planned_page.id) {
             Some(old_content) => merge_old_user_sections(
-                &artifact.page,
-                &artifact.rendered_page.sections,
-                &artifact.rendered_page.content,
+                &planned_page,
+                &rendered.sections,
+                &rendered.content,
                 old_content,
                 &mut all_warnings,
             ),
-            None => artifact.rendered_page.content.clone(),
+            None => rendered.content.clone(),
         };
 
-        write_page(repo_root, &artifact.page.relative_path, &final_content)?;
-        let page_path = format!(".wiki/{}", artifact.page.relative_path);
+        write_page(repo_root, &draft.relative_path, &final_content)?;
+        let page_path = format!(".wiki/{}", draft.relative_path);
         generated_pages.push(page_path);
-        let ancestor_ids = ancestor_ids_for_page(&artifact.page, &ancestor_ids_by_page);
-        ancestor_ids_by_page.insert(artifact.page.id.clone(), ancestor_ids.clone());
+        let ancestor_ids = ancestor_ids_for_page(&planned_page, &ancestor_ids_by_page);
+        ancestor_ids_by_page.insert(planned_page.id.clone(), ancestor_ids.clone());
         let content_hash = fingerprint_bytes(final_content.as_bytes());
+        let input_hash = crate::repo::fingerprint::fingerprint_bytes(
+            format!("{}:{}", draft.page_id, draft.citation_count).as_bytes(),
+        );
+
+        let summary = digests
+            .get(&draft.unit_id)
+            .map(|d| d.summary.clone())
+            .unwrap_or_default();
 
         write_page_context_cache(
             repo_root,
             &PageContextCacheEntry {
-                page_id: artifact.page.id.clone(),
-                input_hash: artifact.input_hash.clone(),
-                context: artifact.page_context.clone(),
+                page_id: planned_page.id.clone(),
+                input_hash: input_hash.clone(),
+                context: page_context.clone(),
             },
         )?;
         write_page_generation_cache(
             repo_root,
             &PageGenerationCacheEntry {
-                page_id: artifact.page.id.clone(),
-                input_hash: artifact.input_hash.clone(),
+                page_id: planned_page.id.clone(),
+                input_hash: input_hash.clone(),
                 content_hash: content_hash.clone(),
-                sections: artifact.rendered_page.sections.clone(),
+                sections: rendered.sections.clone(),
             },
         )?;
 
         page_results.push(PageBuildResult {
-            page: artifact.page.clone(),
-            context: artifact.page_context.clone(),
-            summary: artifact.page_summary.clone(),
-            input_hash: artifact.input_hash,
+            page: planned_page.clone(),
+            context: page_context.clone(),
+            summary,
+            input_hash,
             content_hash,
-            source_paths: source_paths_for_page(&scan_report, &artifact.page_context),
+            source_paths: source_paths_for_page(&scan_report, &page_context),
             ancestor_ids,
-            provenance: page_provenance(&artifact.page, &artifact.page_context, &scan_report),
-            sections: artifact.rendered_page.sections,
+            provenance: page_provenance(&planned_page, &page_context, &scan_report),
+            sections: rendered.sections,
         });
 
         reporter.counted(
@@ -265,6 +268,12 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
             index + 1,
             page_total,
         );
+    }
+
+    // page_id 去重
+    {
+        let mut seen = std::collections::HashSet::new();
+        page_results.retain(|r| seen.insert(r.page.id.clone()));
     }
 
     let state = assemble_state(&page_results, &scan_report, &module_tree, &generated_at);
@@ -288,6 +297,7 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
     let metadata = export_metadata(&state, &export_context);
     reporter.phase("write_metadata", "写入元数据");
     write_metadata(repo_root, &metadata)?;
+    sqlite_store::clear_pipeline_checkpoint(&sqlite_store::open_db(repo_root)?)?;
 
     Ok(RebuildReport {
         state: state.dirty_state.status,

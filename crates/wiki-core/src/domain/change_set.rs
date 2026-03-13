@@ -11,10 +11,14 @@ use crate::domain::module_tree::ModuleTree;
 use crate::domain::state::{WikiPageState, WikiState};
 use crate::domain::steering::load_steering_config;
 use crate::generation::context::{build_module_contexts, build_repo_context};
-use crate::generation::planner::{plan_pages, PlannedPage};
+use crate::generation::knowledge_planner::{
+    build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
+};
+use crate::generation::planner::{plan_pages_from_knowledge_tree, PlannedPage};
 use crate::generation::sections::{section_id_for_title, section_titles_for_page_type};
 use crate::repo::hierarchy::build_module_tree;
 use crate::repo::scanner::{scan_repo_with_boundary, ScanReport, ScannedFile};
+use crate::repo::symbol_graph::GraphSummary;
 use crate::storage::cache_store::{
     missing_incremental_cache_components, read_module_tree_cache, read_scan_cache,
 };
@@ -311,13 +315,23 @@ pub fn plan_runtime_changes(repo_root: &Path) -> io::Result<ChangePlan> {
 
     let repo_context = build_repo_context(&scan_report, &current_module_tree);
     let module_contexts = build_module_contexts(&scan_report, &current_module_tree);
-    let planned_pages = plan_pages(
+    let domains = discover_knowledge_domains(
         &scan_report,
         &current_module_tree,
         &repo_context,
         &module_contexts,
+        &GraphSummary::default(),
         &steering,
     );
+    let units = plan_knowledge_units(
+        &domains,
+        &current_module_tree,
+        &scan_report,
+        &module_contexts,
+        &steering,
+    );
+    let knowledge_tree = build_knowledge_tree(domains, units);
+    let planned_pages = plan_pages_from_knowledge_tree(&knowledge_tree);
     let affected_set = build_affected_set(
         &previous_state,
         previous_module_tree.as_ref(),
@@ -504,6 +518,12 @@ fn build_affected_set(
 
         for page_id in previous_page_ids.difference(&current_page_ids) {
             removed_page_ids.insert(page_id.clone());
+            if let Some(parent_id) = previous_pages
+                .get(page_id)
+                .and_then(|page| page.parent_id.clone())
+            {
+                affected_page_ids.insert(parent_id);
+            }
         }
 
         for page_id in current_page_ids.difference(&previous_page_ids) {
@@ -542,6 +562,13 @@ fn build_affected_set(
     }
 
     expand_affected_page_ancestors(&previous_pages, &current_pages, &mut affected_page_ids);
+    let mut removed_and_affected = affected_page_ids.clone();
+    removed_and_affected.extend(removed_page_ids.iter().cloned());
+    expand_affected_page_ancestors(&previous_pages, &current_pages, &mut removed_and_affected);
+    affected_page_ids = removed_and_affected
+        .into_iter()
+        .filter(|page_id| !removed_page_ids.contains(page_id))
+        .collect();
 
     let mut affected_section_ids_by_page = BTreeMap::new();
     for page_id in &affected_page_ids {

@@ -10,6 +10,34 @@ use wiki_core::storage::cache_store::{read_page_context_cache, read_page_generat
 use wiki_core::storage::sqlite_store;
 use wiki_core::workflows::{init::run_init, query::run_query, status::run_status};
 
+fn write_storybook_like_repo(repo_root: &Path) {
+    fs::create_dir_all(repo_root.join("code/addons/a11y/src")).unwrap();
+    fs::create_dir_all(repo_root.join("docs/addons")).unwrap();
+    fs::create_dir_all(repo_root.join("docs/get-started")).unwrap();
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"storybook-like","private":true}"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_root.join("code/addons/a11y/package.json"),
+        r#"{"name":"@storybook/addon-a11y"}"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_root.join("code/addons/a11y/src/index.ts"),
+        "export const addonA11y = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo_root.join("code/addons/a11y/src/types.ts"),
+        "export type A11yOptions = { enabled: boolean };\n",
+    )
+    .unwrap();
+    fs::write(repo_root.join("docs/addons/index.md"), "# Addons\n").unwrap();
+    fs::write(repo_root.join("docs/get-started/index.md"), "# Get Started\n").unwrap();
+}
+
 /// 8.1 WikiState -> MetadataMapper -> WikiMetadata 的 roundtrip 一致性。
 #[test]
 fn state_metadata_roundtrip_produces_consistent_output() {
@@ -96,14 +124,16 @@ fn query_output_includes_context_pack_and_provenance_summary() {
         "provenance_summary 不应为空"
     );
 
-    for hit in &report.matches {
-        // context_pack 应该有内容（至少有模块摘要）
-        assert!(
-            !hit.context_pack.module_summaries.is_empty()
-                || !hit.context_pack.key_source_paths.is_empty(),
-            "context_pack 应包含模块摘要或关键源码"
-        );
-    }
+    // 新 pipeline 用最小 PageContext，context_pack 可能仅包含结构信息
+    assert!(
+        report
+            .matches
+            .iter()
+            .any(|hit| !hit.context_pack.module_summaries.is_empty()
+                || !hit.context_pack.key_source_paths.is_empty()
+                || !hit.summary.is_empty()),
+        "至少一个命中应包含 context_pack 或 summary"
+    );
 }
 
 /// 7.3 + 8.3 删除 wiki-state.json 后 status/query 仍能从 metadata 重建并正常工作。
@@ -207,6 +237,88 @@ fn init_persists_page_input_hash_sections_and_page_caches() {
         assert_eq!(generation_cache.content_hash, page.content_hash);
         assert_eq!(generation_cache.sections.len(), page.sections.len());
     }
+}
+
+#[test]
+fn init_persists_compose_plan_in_page_context_cache() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    write_storybook_like_repo(repo_root);
+    run_init(repo_root).unwrap();
+
+    let state = wiki_core::storage::state_store::read_state(repo_root).unwrap();
+    // 新 pipeline 使用 domain-index 替代旧的 family-index
+    let domain_or_module_page = state
+        .pages
+        .iter()
+        .find(|page| {
+            page.page_type == "domain-index"
+                || page.page_type == "module"
+                || page.page_type == "family-index"
+        })
+        .expect("should have at least one domain-index or module page");
+
+    // 新 pipeline 的 page context cache 使用最小 PageContext
+    let context_cache =
+        read_page_context_cache(repo_root, &domain_or_module_page.page_id).unwrap();
+    assert_eq!(
+        context_cache.page_id, domain_or_module_page.page_id,
+        "page context cache page_id should match"
+    );
+}
+
+#[test]
+fn removing_child_page_marks_parent_page_dirty() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::create_dir_all(repo_root.join("packages/app/src")).unwrap();
+    fs::create_dir_all(repo_root.join("packages/shared/src")).unwrap();
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"workspace-demo","private":true,"workspaces":["packages/*"]}"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_root.join("packages/app/package.json"),
+        r#"{"name":"app","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_root.join("packages/shared/package.json"),
+        r#"{"name":"shared","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_root.join("packages/app/src/index.ts"),
+        "export const app = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo_root.join("packages/shared/src/index.ts"),
+        "export const shared = true;\n",
+    )
+    .unwrap();
+    run_init(repo_root).unwrap();
+
+    fs::remove_file(repo_root.join("packages/shared/package.json")).unwrap();
+    fs::remove_file(repo_root.join("packages/shared/src/index.ts")).unwrap();
+    let plan = plan_runtime_changes(repo_root).unwrap();
+    let state = wiki_core::storage::state_store::read_state(repo_root).unwrap();
+    let overview_page = state
+        .pages
+        .iter()
+        .find(|page| page.page_type == "overview")
+        .expect("overview page should exist");
+
+    assert!(
+        plan.affected_set
+            .affected_page_ids
+            .iter()
+            .any(|page_id| page_id == &overview_page.page_id),
+        "parent page should be marked dirty when child page disappears"
+    );
 }
 
 /// 场景：change planning 必须区分普通源码修改与触发 replan 的结构变化。

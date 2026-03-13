@@ -78,7 +78,7 @@
 ## REMOVED Requirements
 
 ### Requirement: steering 配置必须支持全局和按语言两层忽略路径
-**Reason**: `DESIGN-CORE.md` 已将扫描侧 steering 结构收敛到 `scan.ignore` / `scan.include`，旧的 `ignore.global` 与 `ignore.<language>` 结构不再是长期事实模型。
+**Reason**: `DESIGN-CORE2.0.md` 已将扫描侧 steering 结构收敛到 `scan.ignore` / `scan.include`，旧的 `ignore.global` 与 `ignore.<language>` 结构不再是长期事实模型。
 **Migration**: 现有仓库应把旧的 `ignore.global` / `ignore.<language>` 配置迁移为 `scan.ignore`，需要强制纳入扫描的路径迁移为 `scan.include`。兼容读取仅作为过渡行为，不构成长期 contract。
 
 ## ADDED Requirements
@@ -132,6 +132,11 @@
 - **WHEN** `.wiki/wiki.steering.yaml` 未声明 provider 直连参数，但 repo 根存在 `wiki.dev.yaml`
 - **THEN** 系统 MUST 从 `wiki.dev.yaml` 读取并覆盖对应的 `llm.providers.*` 与 `llm.model` 配置
 - **THEN** workflow MUST 使用覆盖后的本地 provider 配置参与 LLM 选择逻辑
+
+#### Scenario: provider 级请求重试参数可配置
+- **WHEN** steering、`wiki.dev.yaml` 或 `~/.spec-wiki/config.yaml` 中声明 `llm.providers.<provider>.max_retries` 或 `llm.providers.<provider>.retry_backoff_ms`
+- **THEN** 系统 MUST 分别把它们视为“总尝试次数（含首次请求）”和“线性退避的基础毫秒数”
+- **THEN** 当这些字段缺失、非法或小于 `1` 时，系统 MUST 回退到安全默认值而不是禁用保护
 
 #### Scenario: dev 配置缺失时保持共享 steering 行为
 - **WHEN** repo 根不存在 `wiki.dev.yaml`

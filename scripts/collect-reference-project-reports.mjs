@@ -40,7 +40,7 @@ import {
 } from "./testing/helpers.mjs";
 
 const REFERENCE_DIR = path.join(TMP_DIR, "reference");
-const DEFAULT_CHANGE = "iteration-9-3-targeted-dossier-and-research-driven-pages";
+const DEFAULT_CHANGE = "iteration-9-4-family-planner-and-research-first-composition";
 const REAL_REPO_MAP = {
   aLocal: "E:\\project\\aLocal",
 };

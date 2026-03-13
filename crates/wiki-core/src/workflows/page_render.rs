@@ -1,608 +1,452 @@
-//! 页面预渲染辅助层负责并行构造 page context、input hash 和 Markdown bundle。
-//! 它只产出内存中的 page artifacts；最终写盘、cache 和状态收口仍由 workflow 串行完成。
+//! 页面预渲染辅助层：
+//! `run_compose_pipeline()` 封装 knowledge planning → research → compose，
+//! 并负责 pipeline checkpoint / cache 驱动的中断恢复。
 
 use std::collections::BTreeMap;
+use std::io;
 use std::path::Path;
-use std::thread;
 
-use crate::debug_trace;
-use crate::domain::context::{
-    ChildPageRollup, ModuleContext, PageContext, PageResearchDiagramRollup,
-    PageResearchEvidenceGroup, PageResearchEvidenceItem, RepoContext,
+use rusqlite::Connection;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+
+use crate::domain::checkpoint::{
+    compute_facts_input_hash, PipelineCheckpoint, PipelineStage,
 };
+use crate::domain::compose::PageDraft;
+use crate::domain::context::{ModuleContext, RepoContext};
+use crate::domain::knowledge::{KnowledgeTree, KnowledgeUnit, UnitType};
 use crate::domain::module_tree::ModuleTree;
-use crate::domain::state::compute_page_input_hash;
+use crate::domain::research::{DomainResearch, PageDigest, SystemResearch, UnitResearch};
 use crate::domain::steering::SteeringConfig;
-use crate::generation::context::build_page_context_with_graph_inputs;
-use crate::generation::planner::PlannedPage;
-use crate::generation::renderer::{
-    render_page_bundle, render_page_bundle_with_enrichment, RenderedPage,
+use crate::generation::compose_engine::{
+    compose_index_page, compose_leaf_page, compose_parent_page, compose_system_page,
 };
-use crate::llm::{LlmRuntime, PageEnrichmentInput, PageResearchInput, PageResearchRuntimeContext};
+use crate::generation::knowledge_planner::{
+    build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
+};
+use crate::generation::planner::{plan_pages_from_knowledge_tree, PlannedPage};
+use crate::generation::research_engine::{ResearchDataSource, ResearchProvider};
+use crate::repo::fingerprint::fingerprint_bytes;
 use crate::repo::scanner::ScanReport;
-use crate::repo::symbol_graph::{GraphAnalysisSnapshot, ResolvedGraphSnapshot};
-use crate::repo::symbols::ParsedSymbolsSnapshot;
-use crate::storage::cache_store::read_page_context_cache;
+use crate::repo::symbol_graph::GraphSummary;
+use crate::storage::sqlite_store;
 
-/// `PreparedPageArtifact` 是页面预渲染阶段的稳定输出。
-/// 它把后续串行写盘需要的 page/context/hash/rendered bundle 统一打包。
-#[derive(Debug, Clone)]
-pub struct PreparedPageArtifact {
-    /// 当前 artifact 对应的 planner 页面定义。
-    pub page: PlannedPage,
-    /// 当前页面的渲染上下文。
-    pub page_context: PageContext,
-    /// 当前页面输入事实的稳定摘要。
-    pub input_hash: String,
-    /// 当前页面供父页消费和状态层持久化的摘要。
-    pub page_summary: String,
-    /// 当前页面渲染得到的 Markdown bundle。
-    pub rendered_page: RenderedPage,
+/// 新 compose pipeline 的统一输出。
+pub struct ComposePipelineOutput {
+    pub page_drafts: Vec<PageDraft>,
+    pub digests: BTreeMap<String, PageDigest>,
+    pub knowledge_tree: KnowledgeTree,
+    pub planned_pages: Vec<PlannedPage>,
 }
 
-#[derive(Debug, Clone)]
-struct PendingLlmPageArtifact {
-    index: usize,
-    page: PlannedPage,
-    page_context: PageContext,
-    input_hash: String,
-    enrichment_input: Option<PageEnrichmentInput>,
-}
-
-/// 并行预渲染页面 artifacts，并按 planner 顺序返回稳定结果。
-pub fn prepare_page_artifacts(
-    pages: &[PlannedPage],
+/// 封装 knowledge planning → research → compose 全链路。
+/// 由 init / rebuild / update 共用。
+/// `research_provider` 控制 research 层的实现——LLM-backed 或 structural-only。
+pub fn run_compose_pipeline(
+    repo_root: &Path,
     scan_report: &ScanReport,
     module_tree: &ModuleTree,
     repo_context: &RepoContext,
     module_contexts: &[ModuleContext],
-    symbol_snapshot: &ParsedSymbolsSnapshot,
-    graph_analysis: &GraphAnalysisSnapshot,
-) -> Vec<PreparedPageArtifact> {
-    prepare_page_artifacts_with_workers(
-        pages,
-        scan_report,
-        module_tree,
-        repo_context,
-        module_contexts,
-        symbol_snapshot,
-        graph_analysis,
-        configured_page_worker_count(pages.len()),
-    )
-}
-
-/// 在 LLM 可用时执行叶子优先的页面增强编排。
-pub fn prepare_page_artifacts_with_llm(
-    pages: &[PlannedPage],
-    scan_report: &ScanReport,
-    module_tree: &ModuleTree,
-    repo_context: &RepoContext,
-    module_contexts: &[ModuleContext],
-    symbol_snapshot: &ParsedSymbolsSnapshot,
-    resolved_graph: &ResolvedGraphSnapshot,
-    graph_analysis: &GraphAnalysisSnapshot,
+    graph_summary: &GraphSummary,
     steering: &SteeringConfig,
-    llm_runtime: Option<&mut LlmRuntime<'_, '_>>,
-    mut on_llm_progress: Option<&mut dyn FnMut(usize, usize)>,
-) -> Vec<PreparedPageArtifact> {
-    let Some(llm_runtime) = llm_runtime else {
-        return prepare_page_artifacts(
-            pages,
-            scan_report,
-            module_tree,
-            repo_context,
-            module_contexts,
-            symbol_snapshot,
-            graph_analysis,
-        );
-    };
-    if !llm_runtime.enrichment_enabled() {
-        return prepare_page_artifacts(
-            pages,
-            scan_report,
-            module_tree,
-            repo_context,
-            module_contexts,
-            symbol_snapshot,
-            graph_analysis,
-        );
-    }
+    research_provider: &dyn ResearchProvider,
+) -> io::Result<ComposePipelineOutput> {
+    let conn = sqlite_store::open_db(repo_root)?;
+    let facts_input_hash = compute_facts_input_hash(scan_report, module_tree);
+    let resume_enabled = prepare_resume_state(&conn, &facts_input_hash)?;
 
-    let children_by_parent = page_children_index(pages);
-    let index_by_page_id = pages
-        .iter()
-        .enumerate()
-        .map(|(index, page)| (page.id.clone(), index))
-        .collect::<BTreeMap<_, _>>();
-    let depths = page_depth_index(pages);
-    let mut page_order = pages
-        .iter()
-        .map(|page| {
-            (
-                depths.get(&page.id).copied().unwrap_or_default(),
-                index_by_page_id.get(&page.id).copied().unwrap_or_default(),
-                page,
-            )
-        })
-        .collect::<Vec<_>>();
-    page_order.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
-    let mut depth_groups = Vec::<Vec<(usize, &PlannedPage)>>::new();
-    let mut last_depth = None::<usize>;
-    for (depth, index, page) in page_order {
-        if last_depth == Some(depth) {
-            depth_groups
-                .last_mut()
-                .expect("depth group should exist")
-                .push((index, page));
-        } else {
-            depth_groups.push(vec![(index, page)]);
-            last_depth = Some(depth);
-        }
-    }
-
-    let mut summaries = BTreeMap::<String, String>::new();
-    let mut rollups = BTreeMap::<String, ChildPageRollup>::new();
-    let mut artifacts = Vec::<(usize, PreparedPageArtifact)>::with_capacity(pages.len());
-    let mut llm_processed = 0;
-
-    for group in depth_groups {
-        let mut pending_group = Vec::<PendingLlmPageArtifact>::with_capacity(group.len());
-        for (index, page) in group {
-            let module_paths = page_module_paths(page, module_tree);
-            let hints = steering.page_hints_for(&page.page_type, Some(&page.id), &module_paths);
-            let child_summaries = children_by_parent
-                .get(&page.id)
-                .into_iter()
-                .flat_map(|child_ids| child_ids.iter())
-                .filter_map(|child_id| summaries.get(child_id).cloned())
-                .collect::<Vec<_>>();
-            let child_rollups = children_by_parent
-                .get(&page.id)
-                .into_iter()
-                .flat_map(|child_ids| child_ids.iter())
-                .filter_map(|child_id| rollups.get(child_id).cloned())
-                .collect::<Vec<_>>();
-            let mut page_context = build_page_context_with_graph_inputs(
-                page,
-                scan_report,
-                module_tree,
-                repo_context,
-                module_contexts,
-                Some(symbol_snapshot),
-                Some(graph_analysis),
-                hints,
-                child_summaries,
-                child_rollups,
-            );
-            if llm_runtime.session_enabled()
-                && matches!(
-                    page.page_type.as_str(),
-                    "overview" | "architecture" | "module" | "topic"
-                )
-            {
-                if let Ok(cached) = read_page_context_cache(Path::new(&scan_report.root), &page.id)
-                {
-                    page_context.research_session = cached.context.research_session;
-                }
-                let research_input = PageResearchInput::from_page(page, &page_context);
-                let research_runtime = PageResearchRuntimeContext {
-                    page,
-                    page_context: &page_context,
-                    scan_report,
-                    module_tree,
-                    repo_context,
-                    module_contexts,
-                    symbol_snapshot,
-                    resolved_graph,
-                    graph_analysis,
-                };
-                match llm_runtime.research_page(&research_input, &research_runtime) {
-                    Ok(Some(output)) => {
-                        page_context.research_result = Some(output.result);
-                        page_context.research_session = Some(output.session);
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        debug_trace::record_json(
-                            "llm_research_error",
-                            &serde_json::json!({
-                                "page_id": page.id,
-                                "page_type": page.page_type,
-                                "title": page.title,
-                                "error": error.to_string(),
-                            }),
-                        );
-                    }
-                }
-            }
-            let input_hash = compute_page_input_hash(page, &page_context, scan_report);
-            let enrichment_input = (!matches!(page.page_type.as_str(), "module" | "topic")
-                || page_context.research_result.is_none())
-            .then(|| {
-                PageEnrichmentInput::from_page(page, &page_context, steering.llm.allow_mermaid)
-            });
-            pending_group.push(PendingLlmPageArtifact {
-                index,
-                page: page.clone(),
-                page_context,
-                input_hash,
-                enrichment_input,
-            });
-        }
-
-        let group_inputs = pending_group
-            .iter()
-            .filter_map(|task| task.enrichment_input.clone())
-            .collect::<Vec<_>>();
-        let enrichments = llm_runtime
-            .enrich_pages(&group_inputs)
-            .unwrap_or_else(|_| vec![None; group_inputs.len()]);
-        let mut enrichments_iter = enrichments.into_iter();
-
-        for task in pending_group.into_iter() {
-            let enrichment = if task.enrichment_input.is_some() {
-                enrichments_iter.next().unwrap_or(None)
-            } else {
-                None
-            };
-            let page_summary = if let Some(summary) = enrichment
-                .as_ref()
-                .map(|result| result.summary.trim())
-                .filter(|summary| !summary.is_empty())
-            {
-                summary.to_string()
-            } else if let Some(summary) = task
-                .page_context
-                .research_result
-                .as_ref()
-                .map(|result| result.summary.trim())
-                .filter(|summary| !summary.is_empty())
-            {
-                summary.to_string()
-            } else {
-                task.page_context.summary_inputs.join("；")
-            };
-            let rendered_page = render_page_bundle_with_enrichment(
-                &task.page,
-                &task.page_context,
-                enrichment.as_ref(),
-            );
-
-            summaries.insert(task.page.id.clone(), page_summary.clone());
-            rollups.insert(
-                task.page.id.clone(),
-                build_child_page_rollup(&task.page, &task.page_context, &page_summary),
-            );
-            artifacts.push((
-                task.index,
-                PreparedPageArtifact {
-                    page: task.page,
-                    page_context: task.page_context,
-                    input_hash: task.input_hash,
-                    page_summary,
-                    rendered_page,
-                },
-            ));
-        }
-        llm_processed += group_inputs.len();
-        if let Some(callback) = on_llm_progress.as_deref_mut() {
-            callback(llm_processed, pages.len());
-        }
-    }
-
-    artifacts.sort_by_key(|(index, _)| *index);
-    artifacts
-        .into_iter()
-        .map(|(_, artifact)| artifact)
-        .collect()
-}
-
-fn prepare_page_artifacts_with_workers(
-    pages: &[PlannedPage],
-    scan_report: &ScanReport,
-    module_tree: &ModuleTree,
-    repo_context: &RepoContext,
-    module_contexts: &[ModuleContext],
-    symbol_snapshot: &ParsedSymbolsSnapshot,
-    graph_analysis: &GraphAnalysisSnapshot,
-    _worker_count: usize,
-) -> Vec<PreparedPageArtifact> {
-    let children_by_parent = page_children_index(pages);
-    let index_by_page_id = pages
-        .iter()
-        .enumerate()
-        .map(|(index, page)| (page.id.clone(), index))
-        .collect::<BTreeMap<_, _>>();
-    let depths = page_depth_index(pages);
-    let mut page_order = pages
-        .iter()
-        .map(|page| {
-            (
-                depths.get(&page.id).copied().unwrap_or_default(),
-                index_by_page_id.get(&page.id).copied().unwrap_or_default(),
-                page,
-            )
-        })
-        .collect::<Vec<_>>();
-    page_order.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
-
-    let mut summaries = BTreeMap::<String, String>::new();
-    let mut rollups = BTreeMap::<String, ChildPageRollup>::new();
-    let mut artifacts = Vec::<(usize, PreparedPageArtifact)>::with_capacity(pages.len());
-
-    for (_, index, page) in page_order {
-        let child_summaries = children_by_parent
-            .get(&page.id)
-            .into_iter()
-            .flat_map(|child_ids| child_ids.iter())
-            .filter_map(|child_id| summaries.get(child_id).cloned())
-            .collect::<Vec<_>>();
-        let child_rollups = children_by_parent
-            .get(&page.id)
-            .into_iter()
-            .flat_map(|child_ids| child_ids.iter())
-            .filter_map(|child_id| rollups.get(child_id).cloned())
-            .collect::<Vec<_>>();
-        let artifact = build_page_artifact(
-            page,
-            scan_report,
-            module_tree,
-            repo_context,
-            module_contexts,
-            symbol_snapshot,
-            graph_analysis,
-            child_summaries,
-            child_rollups,
-        );
-        summaries.insert(artifact.page.id.clone(), artifact.page_summary.clone());
-        rollups.insert(
-            artifact.page.id.clone(),
-            build_child_page_rollup(
-                &artifact.page,
-                &artifact.page_context,
-                &artifact.page_summary,
-            ),
-        );
-        artifacts.push((index, artifact));
-    }
-
-    artifacts.sort_by_key(|(index, _)| *index);
-    artifacts
-        .into_iter()
-        .map(|(_, artifact)| artifact)
-        .collect()
-}
-
-fn configured_page_worker_count(page_count: usize) -> usize {
-    let configured = std::env::var("WIKI_PAGE_RENDER_WORKERS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0);
-    let default = thread::available_parallelism()
-        .map(|value| value.get())
-        .unwrap_or(1)
-        .min(4);
-
-    configured.unwrap_or(default).clamp(1, page_count.max(1))
-}
-
-fn build_page_artifact(
-    page: &PlannedPage,
-    scan_report: &ScanReport,
-    module_tree: &ModuleTree,
-    repo_context: &RepoContext,
-    module_contexts: &[ModuleContext],
-    symbol_snapshot: &ParsedSymbolsSnapshot,
-    graph_analysis: &GraphAnalysisSnapshot,
-    child_summaries: Vec<String>,
-    child_rollups: Vec<ChildPageRollup>,
-) -> PreparedPageArtifact {
-    let page_context = build_page_context_with_graph_inputs(
-        page,
+    let domains = discover_knowledge_domains(
         scan_report,
         module_tree,
         repo_context,
         module_contexts,
-        Some(symbol_snapshot),
-        Some(graph_analysis),
-        Vec::new(),
-        child_summaries,
-        child_rollups,
+        graph_summary,
+        steering,
     );
-    let input_hash = compute_page_input_hash(page, &page_context, scan_report);
-    let page_summary = page_context.summary_inputs.join("；");
-    let rendered_page = render_page_bundle(page, &page_context);
+    let units = plan_knowledge_units(&domains, module_tree, scan_report, module_contexts, steering);
+    let knowledge_tree = build_knowledge_tree(domains.clone(), units.clone());
+    sqlite_store::write_knowledge_domains(&conn, &domains)?;
+    sqlite_store::write_knowledge_units(&conn, &units)?;
 
-    PreparedPageArtifact {
-        page: page.clone(),
-        page_context,
+    let research_ds = ResearchDataSource {
+        report: scan_report,
+        module_tree,
+        repo_context,
+        module_contexts,
+        graph_summary,
+        knowledge_tree: &knowledge_tree,
+    };
+
+    let system_input_hash = compute_system_input_hash(&facts_input_hash, &research_ds);
+    let system_research = load_or_compute_research(
+        &conn,
+        "system",
+        "system",
+        &facts_input_hash,
+        &system_input_hash,
+        resume_enabled,
+        PipelineStage::ResearchSystem,
+        None,
+        || research_provider.research_system(&research_ds),
+    )?;
+
+    let mut domain_researches = BTreeMap::new();
+    for domain in knowledge_tree.domains.values() {
+        let domain_input_hash = compute_domain_input_hash(&facts_input_hash, domain);
+        let research = load_or_compute_research(
+            &conn,
+            "domain",
+            &domain.id,
+            &facts_input_hash,
+            &domain_input_hash,
+            resume_enabled,
+            PipelineStage::ResearchDomain,
+            Some(domain.id.clone()),
+            || research_provider.research_domain(domain, &research_ds),
+        )?;
+        domain_researches.insert(domain.id.clone(), research);
+    }
+
+    let mut unit_researches = BTreeMap::new();
+    let mut unit_digests_for_research = BTreeMap::new();
+    for unit_id in &knowledge_tree.processing_order {
+        let Some(unit) = knowledge_tree.get_unit(unit_id) else {
+            continue;
+        };
+        if matches!(
+            unit.unit_type,
+            UnitType::Overview | UnitType::Architecture | UnitType::DomainIndex
+        ) {
+            continue;
+        }
+
+        let child_digests: Vec<PageDigest> = unit
+            .child_unit_ids
+            .iter()
+            .filter_map(|child_id| unit_digests_for_research.get(child_id).cloned())
+            .collect();
+        let unit_input_hash = compute_unit_input_hash(&facts_input_hash, unit, &child_digests);
+        let research = load_or_compute_research(
+            &conn,
+            "unit",
+            &unit.id,
+            &facts_input_hash,
+            &unit_input_hash,
+            resume_enabled,
+            PipelineStage::ResearchUnit,
+            Some(unit.id.clone()),
+            || research_provider.research_unit(unit, &research_ds, &child_digests),
+        )?;
+
+        let digest = build_research_digest(unit, &research);
+        unit_digests_for_research.insert(unit.id.clone(), digest);
+        unit_researches.insert(unit.id.clone(), research);
+    }
+
+    let mut page_drafts = Vec::new();
+    let mut digests = BTreeMap::new();
+    for unit_id in &knowledge_tree.processing_order {
+        let Some(unit) = knowledge_tree.get_unit(unit_id) else {
+            continue;
+        };
+        if resume_enabled {
+            if let (Some(draft), Some(digest)) = (
+                read_cached_json::<PageDraft, _>(&conn, unit.id.as_str(), sqlite_store::read_page_draft)?,
+                read_cached_json::<PageDigest, _>(&conn, unit.id.as_str(), sqlite_store::read_page_digest)?,
+            ) {
+                digests.insert(unit.id.clone(), digest);
+                page_drafts.push(draft);
+                continue;
+            }
+        }
+
+        let child_digests: Vec<PageDigest> = unit
+            .child_unit_ids
+            .iter()
+            .filter_map(|child_id| digests.get(child_id).cloned())
+            .collect();
+        let (draft, digest, stage) = compose_unit_page(
+            unit,
+            &child_digests,
+            &system_research,
+            &domain_researches,
+            &unit_researches,
+        )
+        .map_err(|error| save_checkpoint_and_return(&conn, &facts_input_hash, stage_for_compose_error(unit), Some(unit.id.clone()), error))?;
+
+        persist_compose_result(&conn, unit, &draft, &digest)?;
+        digests.insert(unit.id.clone(), digest);
+        page_drafts.push(draft);
+
+        let _ = stage;
+    }
+
+    let planned_pages = plan_pages_from_knowledge_tree(&knowledge_tree);
+    Ok(ComposePipelineOutput {
+        page_drafts,
+        digests,
+        knowledge_tree,
+        planned_pages,
+    })
+}
+
+fn prepare_resume_state(conn: &Connection, facts_input_hash: &str) -> io::Result<bool> {
+    let checkpoint = sqlite_store::read_pipeline_checkpoint(conn)?;
+    let Some((_checkpoint_id, checkpoint_hash, _stage, _target, _message)) = checkpoint else {
+        sqlite_store::clear_page_drafts(conn)?;
+        sqlite_store::clear_page_digests(conn)?;
+        return Ok(false);
+    };
+
+    if checkpoint_hash != facts_input_hash {
+        sqlite_store::clear_pipeline_checkpoint(conn)?;
+        sqlite_store::clear_page_drafts(conn)?;
+        sqlite_store::clear_page_digests(conn)?;
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
+fn load_or_compute_research<T, F>(
+    conn: &Connection,
+    research_type: &str,
+    target_id: &str,
+    facts_input_hash: &str,
+    input_hash: &str,
+    resume_enabled: bool,
+    stage: PipelineStage,
+    interrupted_target_id: Option<String>,
+    compute: F,
+) -> io::Result<T>
+where
+    T: Serialize + DeserializeOwned,
+    F: FnOnce() -> io::Result<T>,
+{
+    if let Some(cached) = read_cached_research(conn, research_type, target_id, input_hash)? {
+        return Ok(cached);
+    }
+
+    let result = compute()
+        .map_err(|error| save_checkpoint_and_return(conn, facts_input_hash, stage, interrupted_target_id, error))?;
+    let result_json = serde_json::to_string(&result)
+        .map_err(|error| io::Error::other(format!("serialize research cache: {error}")))?;
+    sqlite_store::write_research_cache(
+        conn,
+        research_type,
+        target_id,
         input_hash,
-        page_summary,
-        rendered_page,
+        &result_json,
+        None,
+    )?;
+
+    if !resume_enabled {
+        sqlite_store::clear_pipeline_checkpoint(conn)?;
+    }
+
+    Ok(result)
+}
+
+fn read_cached_research<T: DeserializeOwned>(
+    conn: &Connection,
+    research_type: &str,
+    target_id: &str,
+    input_hash: &str,
+) -> io::Result<Option<T>> {
+    let Some(raw) = sqlite_store::read_research_cache(conn, research_type, target_id, input_hash)? else {
+        return Ok(None);
+    };
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|error| io::Error::other(format!("deserialize research cache: {error}")))
+}
+
+fn read_cached_json<T, F>(conn: &Connection, unit_id: &str, reader: F) -> io::Result<Option<T>>
+where
+    T: DeserializeOwned,
+    F: Fn(&Connection, &str) -> io::Result<Option<String>>,
+{
+    let Some(raw) = reader(conn, unit_id)? else {
+        return Ok(None);
+    };
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|error| io::Error::other(format!("deserialize cached json: {error}")))
+}
+
+fn build_research_digest(unit: &KnowledgeUnit, research: &UnitResearch) -> PageDigest {
+    PageDigest {
+        unit_id: unit.id.clone(),
+        page_id: crate::domain::stable_id::stable_id("page", &unit.relative_path),
+        title: unit.title.clone(),
+        summary: research.summary.clone(),
+        key_topics: research.section_plan.iter().map(|section| section.title.clone()).collect(),
+        key_sources: research.key_sources.clone(),
     }
 }
 
-fn build_child_page_rollup(
-    page: &PlannedPage,
-    page_context: &PageContext,
-    page_summary: &str,
-) -> ChildPageRollup {
-    let evidence_rollup = page_context
-        .research_result
-        .as_ref()
-        .map(|result| result.evidence_rollup.clone())
-        .unwrap_or_else(|| {
-            page_context
-                .evidence_groups
-                .iter()
-                .map(|group| PageResearchEvidenceGroup {
-                    group_key: group.group_id.clone(),
-                    title: group.title.clone(),
-                    items: group
-                        .items
-                        .iter()
-                        .map(|item| PageResearchEvidenceItem {
-                            source_id: item.source_id.clone(),
-                            path: item.path.clone(),
-                            start_line: item.start_line,
-                            end_line: item.end_line,
-                            evidence_type: item.evidence_type.clone(),
-                            section_refs: item.section_refs.clone(),
-                            note: item.note.clone(),
-                            coarse_span: item.coarse_span,
-                        })
-                        .collect(),
-                })
-                .collect()
-        });
-    let diagram_rollup = page_context
-        .research_result
-        .as_ref()
-        .map(|result| result.diagram_rollup.clone())
-        .unwrap_or_else(|| {
-            page_context
-                .diagram_inputs
-                .iter()
-                .map(|diagram| PageResearchDiagramRollup {
-                    diagram_key: diagram.diagram_id.clone(),
-                    diagram_type: diagram.diagram_type.clone(),
-                    title: diagram.title.clone(),
-                    summary: diagram.summary.clone(),
-                })
-                .collect()
-        });
-    let section_plan_rollup = page_context
-        .research_result
-        .as_ref()
-        .map(|result| result.section_plan.clone())
-        .unwrap_or_default();
-    let key_sources_rollup = page_context
-        .repo_dossier
-        .iter()
-        .flat_map(|dossier| dossier.key_sources.iter().cloned())
-        .chain(page_context.repo_dossier.iter().flat_map(|dossier| {
-            dossier
-                .targeted_snippets
-                .iter()
-                .map(|snippet| snippet.path.clone())
-        }))
-        .chain(
-            page_context
-                .module_dossiers
-                .iter()
-                .flat_map(|dossier| dossier.key_sources.iter().cloned()),
-        )
-        .chain(page_context.module_dossiers.iter().flat_map(|dossier| {
-            dossier
-                .targeted_snippets
-                .iter()
-                .map(|snippet| snippet.path.clone())
-        }))
-        .chain(
-            page_context
-                .topic_dossier
-                .iter()
-                .flat_map(|dossier| dossier.key_sources.iter().cloned()),
-        )
-        .chain(page_context.topic_dossier.iter().flat_map(|dossier| {
-            dossier
-                .targeted_snippets
-                .iter()
-                .map(|snippet| snippet.path.clone())
-        }))
-        .collect::<Vec<_>>();
-    let open_questions = page_context
-        .research_result
-        .as_ref()
-        .map(|result| result.open_questions.clone())
-        .unwrap_or_default();
-
-    ChildPageRollup {
-        page_id: page.id.clone(),
-        title: page.title.clone(),
-        page_type: page.page_type.clone(),
-        summary: page_summary.to_string(),
-        section_plan_rollup,
-        key_sources_rollup,
-        evidence_rollup,
-        diagram_rollup,
-        open_questions,
-    }
-}
-
-fn page_children_index(pages: &[PlannedPage]) -> BTreeMap<String, Vec<String>> {
-    let mut children = BTreeMap::<String, Vec<String>>::new();
-
-    for page in pages {
-        if let Some(parent_id) = &page.parent_id {
-            children
-                .entry(parent_id.clone())
-                .or_default()
-                .push(page.id.clone());
+fn compose_unit_page(
+    unit: &KnowledgeUnit,
+    child_digests: &[PageDigest],
+    system_research: &SystemResearch,
+    domain_researches: &BTreeMap<String, DomainResearch>,
+    unit_researches: &BTreeMap<String, UnitResearch>,
+) -> io::Result<(PageDraft, PageDigest, PipelineStage)> {
+    match unit.unit_type {
+        UnitType::Overview | UnitType::Architecture => {
+            let draft = compose_system_page(unit, system_research, child_digests);
+            let digest = PageDigest {
+                unit_id: unit.id.clone(),
+                page_id: draft.page_id.clone(),
+                title: unit.title.clone(),
+                summary: system_research.description.clone(),
+                key_topics: system_research.key_domains.clone(),
+                key_sources: Vec::new(),
+            };
+            Ok((draft, digest, PipelineStage::ComposeSystem))
+        }
+        UnitType::DomainIndex => {
+            let Some(domain_research) = domain_researches.get(&unit.domain_id) else {
+                return Err(io::Error::other(format!(
+                    "missing domain research for {}",
+                    unit.domain_id
+                )));
+            };
+            let draft = compose_index_page(unit, domain_research, child_digests);
+            let digest = PageDigest {
+                unit_id: unit.id.clone(),
+                page_id: draft.page_id.clone(),
+                title: unit.title.clone(),
+                summary: domain_research.domain_summary.clone(),
+                key_topics: child_digests.iter().map(|digest| digest.title.clone()).collect(),
+                key_sources: Vec::new(),
+            };
+            Ok((draft, digest, PipelineStage::ComposeIndex))
+        }
+        _ => {
+            let Some(unit_research) = unit_researches.get(&unit.id) else {
+                return Err(io::Error::other(format!(
+                    "missing unit research for {}",
+                    unit.id
+                )));
+            };
+            let (draft, digest) = if unit.is_leaf() {
+                compose_leaf_page(unit, unit_research)
+            } else {
+                compose_parent_page(unit, unit_research, child_digests)
+            };
+            let stage = if unit.is_leaf() {
+                PipelineStage::ComposeLeaf
+            } else {
+                PipelineStage::ComposeParent
+            };
+            Ok((draft, digest, stage))
         }
     }
-
-    children
 }
 
-fn page_depth_index(pages: &[PlannedPage]) -> BTreeMap<String, usize> {
-    let pages_by_id = pages
-        .iter()
-        .map(|page| (page.id.clone(), page))
-        .collect::<BTreeMap<_, _>>();
-    let mut depths = BTreeMap::new();
+fn persist_compose_result(
+    conn: &Connection,
+    unit: &KnowledgeUnit,
+    draft: &PageDraft,
+    digest: &PageDigest,
+) -> io::Result<()> {
+    let draft_json = serde_json::to_string(draft)
+        .map_err(|error| io::Error::other(format!("serialize page draft: {error}")))?;
+    let digest_json = serde_json::to_string(digest)
+        .map_err(|error| io::Error::other(format!("serialize page digest: {error}")))?;
+    let draft_hash = fingerprint_bytes(draft_json.as_bytes());
+    let digest_hash = fingerprint_bytes(digest_json.as_bytes());
+    sqlite_store::write_page_draft(conn, &unit.id, &draft_json, Some(&draft_hash))?;
+    sqlite_store::write_page_digest(conn, &unit.id, &digest_json, Some(&digest_hash))?;
+    Ok(())
+}
 
-    for page in pages {
-        depths.insert(page.id.clone(), page_depth(page, &pages_by_id));
+fn compute_system_input_hash(facts_input_hash: &str, ds: &ResearchDataSource<'_>) -> String {
+    stable_hash(&(facts_input_hash, &ds.repo_context.tech_stack, ds.knowledge_tree.domain_count()))
+}
+
+fn compute_domain_input_hash(
+    facts_input_hash: &str,
+    domain: &crate::domain::knowledge::KnowledgeDomain,
+) -> String {
+    stable_hash(&(facts_input_hash, domain))
+}
+
+fn compute_unit_input_hash(
+    facts_input_hash: &str,
+    unit: &KnowledgeUnit,
+    child_digests: &[PageDigest],
+) -> String {
+    stable_hash(&(facts_input_hash, unit, child_digests))
+}
+
+fn stable_hash<T: Serialize>(value: &T) -> String {
+    let serialized = serde_json::to_vec(value).unwrap_or_default();
+    fingerprint_bytes(&serialized)
+}
+
+fn save_checkpoint_and_return(
+    conn: &Connection,
+    facts_input_hash: &str,
+    stage: PipelineStage,
+    interrupted_target_id: Option<String>,
+    error: io::Error,
+) -> io::Error {
+    let checkpoint = PipelineCheckpoint::new(
+        facts_input_hash.to_string(),
+        stage,
+        interrupted_target_id.clone(),
+        Some(error.to_string()),
+    );
+    let _ = sqlite_store::write_pipeline_checkpoint(
+        conn,
+        &checkpoint.checkpoint_id,
+        &checkpoint.facts_input_hash,
+        checkpoint.interrupted_stage.as_str(),
+        interrupted_target_id.as_deref(),
+        checkpoint.error_message.as_deref(),
+    );
+    error
+}
+
+fn stage_for_compose_error(unit: &KnowledgeUnit) -> PipelineStage {
+    match unit.unit_type {
+        UnitType::Overview | UnitType::Architecture => PipelineStage::ComposeSystem,
+        UnitType::DomainIndex => PipelineStage::ComposeIndex,
+        _ if unit.is_leaf() => PipelineStage::ComposeLeaf,
+        _ => PipelineStage::ComposeParent,
     }
-
-    depths
-}
-
-fn page_depth(page: &PlannedPage, pages_by_id: &BTreeMap<String, &PlannedPage>) -> usize {
-    let mut depth = 0;
-    let mut current = page.parent_id.as_deref();
-
-    while let Some(parent_id) = current {
-        depth += 1;
-        current = pages_by_id
-            .get(parent_id)
-            .and_then(|parent| parent.parent_id.as_deref());
-    }
-
-    depth
-}
-
-fn page_module_paths(page: &PlannedPage, module_tree: &ModuleTree) -> Vec<String> {
-    page.module_ids
-        .iter()
-        .filter_map(|module_id| module_tree.module_by_id(module_id))
-        .flat_map(|module| module.root_paths.iter().cloned())
-        .collect()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::fs;
+    use std::io;
+    use std::rc::Rc;
 
     use tempfile::tempdir;
 
+    use crate::domain::knowledge::{KnowledgeDomain, KnowledgeUnit};
+    use crate::domain::research::{DomainResearch, PageDigest, SystemResearch, UnitResearch};
     use crate::domain::steering::load_steering_config;
     use crate::generation::context::{
         build_module_contexts_with_graph, build_repo_context_with_graph,
     };
-    use crate::generation::planner::plan_pages_with_graph;
+    use crate::generation::research_engine::{ResearchDataSource, ResearchProvider, StructuralResearchProvider};
     use crate::repo::hierarchy::build_module_tree_with_graph;
     use crate::repo::scanner::scan_repo_with_boundary;
-    use crate::repo::symbol_graph::{
-        analyze_symbol_graph, build_graph_summary, resolve_symbol_graph,
-    };
+    use crate::repo::symbol_graph::{build_graph_summary, resolve_symbol_graph};
     use crate::repo::symbols::parse_symbols;
+    use crate::storage::sqlite_store;
 
-    use super::prepare_page_artifacts_with_workers;
+    use super::run_compose_pipeline;
 
     #[test]
-    fn page_artifacts_keep_deterministic_order_and_hashes_across_worker_counts() {
+    fn compose_pipeline_produces_deterministic_output() {
         let fixture = tempdir().unwrap();
         let repo_root = fixture.path();
         fs::write(
@@ -631,53 +475,281 @@ mod tests {
         let symbol_snapshot = parse_symbols(repo_root, &scan_report).unwrap();
         let resolved_graph =
             resolve_symbol_graph(repo_root, &scan_report, &symbol_snapshot).unwrap();
-        let analysis = analyze_symbol_graph(&symbol_snapshot, &resolved_graph);
-        let graph_summary =
-            build_graph_summary(&scan_report, &symbol_snapshot, &resolved_graph, &analysis);
+        let graph_summary = build_graph_summary(
+            &scan_report,
+            &symbol_snapshot,
+            &resolved_graph,
+            &crate::repo::symbol_graph::analyze_symbol_graph(&symbol_snapshot, &resolved_graph),
+        );
         let module_tree = build_module_tree_with_graph(&scan_report, &graph_summary);
         let repo_context =
             build_repo_context_with_graph(&scan_report, &module_tree, &graph_summary);
         let module_contexts =
             build_module_contexts_with_graph(&scan_report, &module_tree, &graph_summary);
-        let pages = plan_pages_with_graph(
+
+        let provider = StructuralResearchProvider;
+        let output1 = run_compose_pipeline(
+            repo_root,
             &scan_report,
             &module_tree,
             &repo_context,
             &module_contexts,
-            &steering,
             &graph_summary,
-        );
-
-        let single = prepare_page_artifacts_with_workers(
-            &pages,
+            &steering,
+            &provider,
+        )
+        .unwrap();
+        let output2 = run_compose_pipeline(
+            repo_root,
             &scan_report,
             &module_tree,
             &repo_context,
             &module_contexts,
+            &graph_summary,
+            &steering,
+            &provider,
+        )
+        .unwrap();
+
+        assert_eq!(output1.page_drafts.len(), output2.page_drafts.len());
+        for (left, right) in output1.page_drafts.iter().zip(output2.page_drafts.iter()) {
+            assert_eq!(left.page_id, right.page_id);
+            assert_eq!(left.title, right.title);
+            assert_eq!(left.citation_count, right.citation_count);
+        }
+        assert!(output1.page_drafts.len() >= 2);
+    }
+
+    #[test]
+    fn compose_pipeline_saves_checkpoint_and_resumes_from_research_cache() {
+        let fixture = tempdir().unwrap();
+        let repo_root = fixture.path();
+        fs::write(repo_root.join("package.json"), r#"{"name":"resume-demo"}"#).unwrap();
+        fs::create_dir_all(repo_root.join("src/core")).unwrap();
+        fs::write(repo_root.join("src/index.ts"), "export const root = 1;\n").unwrap();
+        fs::write(
+            repo_root.join("src/core/runtime.ts"),
+            "export function runtime() { return root; }\n",
+        )
+        .unwrap();
+
+        let steering = load_steering_config(repo_root);
+        let (ignore_paths, include_paths) = steering.scan_boundary();
+        let scan_report = scan_repo_with_boundary(repo_root, ignore_paths, include_paths).unwrap();
+        let symbol_snapshot = parse_symbols(repo_root, &scan_report).unwrap();
+        let resolved_graph =
+            resolve_symbol_graph(repo_root, &scan_report, &symbol_snapshot).unwrap();
+        let graph_summary = build_graph_summary(
+            &scan_report,
             &symbol_snapshot,
-            &analysis,
-            1,
+            &resolved_graph,
+            &crate::repo::symbol_graph::analyze_symbol_graph(&symbol_snapshot, &resolved_graph),
         );
-        let parallel = prepare_page_artifacts_with_workers(
-            &pages,
+        let module_tree = build_module_tree_with_graph(&scan_report, &graph_summary);
+        let repo_context =
+            build_repo_context_with_graph(&scan_report, &module_tree, &graph_summary);
+        let module_contexts =
+            build_module_contexts_with_graph(&scan_report, &module_tree, &graph_summary);
+
+        let fail_after = Rc::new(RefCell::new(Some(0usize)));
+        let fail_provider = FailingProvider {
+            inner: StructuralResearchProvider,
+            fail_after_unit_calls: fail_after.clone(),
+            system_calls: Rc::new(RefCell::new(0)),
+            domain_calls: Rc::new(RefCell::new(0)),
+            unit_calls: Rc::new(RefCell::new(0)),
+        };
+
+        let first = run_compose_pipeline(
+            repo_root,
             &scan_report,
             &module_tree,
             &repo_context,
             &module_contexts,
-            &symbol_snapshot,
-            &analysis,
-            4,
+            &graph_summary,
+            &steering,
+            &fail_provider,
         );
+        assert!(first.is_err());
 
-        assert_eq!(single.len(), parallel.len());
-        for (left, right) in single.iter().zip(parallel.iter()) {
-            assert_eq!(left.page.id, right.page.id);
-            assert_eq!(left.input_hash, right.input_hash);
-            assert_eq!(
-                left.page_context.summary_inputs,
-                right.page_context.summary_inputs
-            );
-            assert_eq!(left.rendered_page.content, right.rendered_page.content);
+        let conn = sqlite_store::open_db(repo_root).unwrap();
+        let checkpoint = sqlite_store::read_pipeline_checkpoint(&conn).unwrap();
+        assert!(checkpoint.is_some());
+
+        let resumed_system_calls = Rc::new(RefCell::new(0usize));
+        let resumed_domain_calls = Rc::new(RefCell::new(0usize));
+        let resumed_unit_calls = Rc::new(RefCell::new(0usize));
+        let resume_provider = FailingProvider {
+            inner: StructuralResearchProvider,
+            fail_after_unit_calls: Rc::new(RefCell::new(None)),
+            system_calls: resumed_system_calls.clone(),
+            domain_calls: resumed_domain_calls.clone(),
+            unit_calls: resumed_unit_calls.clone(),
+        };
+        let resumed = run_compose_pipeline(
+            repo_root,
+            &scan_report,
+            &module_tree,
+            &repo_context,
+            &module_contexts,
+            &graph_summary,
+            &steering,
+            &resume_provider,
+        )
+        .unwrap();
+
+        assert!(!resumed.page_drafts.is_empty());
+        assert_eq!(*resumed_system_calls.borrow(), 0);
+        assert_eq!(*resumed_domain_calls.borrow(), 0);
+        assert!(*resumed_unit_calls.borrow() >= 1);
+        assert!(sqlite_store::read_pipeline_checkpoint(&conn).unwrap().is_some());
+    }
+
+    #[test]
+    fn compose_pipeline_invokes_research_in_system_domain_unit_order() {
+        let fixture = tempdir().unwrap();
+        let repo_root = fixture.path();
+        fs::write(repo_root.join("package.json"), r#"{"name":"ordering-demo"}"#).unwrap();
+        fs::create_dir_all(repo_root.join("src/addons")).unwrap();
+        fs::create_dir_all(repo_root.join("docs")).unwrap();
+        fs::write(repo_root.join("docs/guide.md"), "# Guide\n").unwrap();
+        fs::write(repo_root.join("src/index.ts"), "export const core = 1;\n").unwrap();
+        fs::write(
+            repo_root.join("src/addons/panel.ts"),
+            "export function panel() { return core; }\n",
+        )
+        .unwrap();
+
+        let steering = load_steering_config(repo_root);
+        let (ignore_paths, include_paths) = steering.scan_boundary();
+        let scan_report = scan_repo_with_boundary(repo_root, ignore_paths, include_paths).unwrap();
+        let symbol_snapshot = parse_symbols(repo_root, &scan_report).unwrap();
+        let resolved_graph =
+            resolve_symbol_graph(repo_root, &scan_report, &symbol_snapshot).unwrap();
+        let graph_summary = build_graph_summary(
+            &scan_report,
+            &symbol_snapshot,
+            &resolved_graph,
+            &crate::repo::symbol_graph::analyze_symbol_graph(&symbol_snapshot, &resolved_graph),
+        );
+        let module_tree = build_module_tree_with_graph(&scan_report, &graph_summary);
+        let repo_context =
+            build_repo_context_with_graph(&scan_report, &module_tree, &graph_summary);
+        let module_contexts =
+            build_module_contexts_with_graph(&scan_report, &module_tree, &graph_summary);
+
+        let call_log = Rc::new(RefCell::new(Vec::<String>::new()));
+        let provider = RecordingProvider {
+            inner: StructuralResearchProvider,
+            call_log: call_log.clone(),
+        };
+
+        let output = run_compose_pipeline(
+            repo_root,
+            &scan_report,
+            &module_tree,
+            &repo_context,
+            &module_contexts,
+            &graph_summary,
+            &steering,
+            &provider,
+        )
+        .unwrap();
+
+        assert!(output.knowledge_tree.domain_count() >= 1);
+        let log = call_log.borrow();
+        assert!(!log.is_empty());
+        assert_eq!(log.first().map(String::as_str), Some("system"));
+        let first_unit_index = log
+            .iter()
+            .position(|entry| entry.starts_with("unit:"))
+            .unwrap();
+        let last_domain_index = log
+            .iter()
+            .rposition(|entry| entry.starts_with("domain:"))
+            .unwrap();
+        assert!(last_domain_index < first_unit_index);
+    }
+
+    struct FailingProvider {
+        inner: StructuralResearchProvider,
+        fail_after_unit_calls: Rc<RefCell<Option<usize>>>,
+        system_calls: Rc<RefCell<usize>>,
+        domain_calls: Rc<RefCell<usize>>,
+        unit_calls: Rc<RefCell<usize>>,
+    }
+
+    struct RecordingProvider {
+        inner: StructuralResearchProvider,
+        call_log: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl ResearchProvider for FailingProvider {
+        fn research_system(&self, ds: &ResearchDataSource) -> io::Result<SystemResearch> {
+            *self.system_calls.borrow_mut() += 1;
+            self.inner.research_system(ds)
+        }
+
+        fn research_domain(
+            &self,
+            domain: &KnowledgeDomain,
+            ds: &ResearchDataSource,
+        ) -> io::Result<DomainResearch> {
+            *self.domain_calls.borrow_mut() += 1;
+            self.inner.research_domain(domain, ds)
+        }
+
+        fn research_unit(
+            &self,
+            unit: &KnowledgeUnit,
+            ds: &ResearchDataSource,
+            child_digests: &[PageDigest],
+        ) -> io::Result<UnitResearch> {
+            let mut calls = self.unit_calls.borrow_mut();
+            *calls += 1;
+            if let Some(limit) = *self.fail_after_unit_calls.borrow() {
+                if *calls > limit {
+                    return Err(io::Error::other(format!("forced failure for {}", unit.id)));
+                }
+            }
+            self.inner.research_unit(unit, ds, child_digests)
+        }
+    }
+
+    impl ResearchProvider for RecordingProvider {
+        fn research_system(&self, ds: &ResearchDataSource) -> io::Result<SystemResearch> {
+            assert!(ds.report.files.len() >= 2);
+            assert!(ds.knowledge_tree.domain_count() >= 1);
+            self.call_log.borrow_mut().push("system".to_string());
+            self.inner.research_system(ds)
+        }
+
+        fn research_domain(
+            &self,
+            domain: &KnowledgeDomain,
+            ds: &ResearchDataSource,
+        ) -> io::Result<DomainResearch> {
+            assert!(ds.knowledge_tree.get_domain(&domain.id).is_some());
+            self.call_log
+                .borrow_mut()
+                .push(format!("domain:{}", domain.id));
+            self.inner.research_domain(domain, ds)
+        }
+
+        fn research_unit(
+            &self,
+            unit: &KnowledgeUnit,
+            ds: &ResearchDataSource,
+            child_digests: &[PageDigest],
+        ) -> io::Result<UnitResearch> {
+            assert!(ds.knowledge_tree.get_unit(&unit.id).is_some());
+            if unit.parent_unit_id.is_some() {
+                assert!(child_digests.len() <= unit.child_unit_ids.len());
+            }
+            self.call_log
+                .borrow_mut()
+                .push(format!("unit:{}", unit.id));
+            self.inner.research_unit(unit, ds, child_digests)
         }
     }
 }

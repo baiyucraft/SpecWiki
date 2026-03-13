@@ -19,9 +19,8 @@ use serde_json::{json, Map, Value};
 
 use crate::debug_trace;
 use crate::domain::context::{
-    ChildPageRollup, ModuleContext, ModuleDossier, PageContext, PageDiagramInput,
-    PageEvidenceGroup, PageResearchResult, PageResearchSessionState, PageResearchTurn,
-    PageToolArtifactRef, RepoContext, RepoDossier, TargetedSnippet, TopicDossier,
+    ModuleContext, PageContext, PageDiagramInput, PageEvidenceGroup, PageResearchResult,
+    PageResearchSessionState, PageResearchTurn, PageToolArtifactRef, RepoContext, TargetedSnippet,
 };
 use crate::domain::module_tree::ModuleTree;
 use crate::domain::stable_id::stable_id;
@@ -43,7 +42,6 @@ const FILE_PURPOSE_PROMPT_VERSION: &str = "file-purpose/v1";
 const TOP_LEVEL_PROMOTION_PROMPT_VERSION: &str = "top-level-promotion/v1";
 const MODULE_KIND_PROMPT_VERSION: &str = "module-kind/v1";
 const DEPENDENCY_PROMPT_VERSION: &str = "dependency-edge/v1";
-const PAGE_ENRICHMENT_PROMPT_VERSION: &str = "page-enrichment/v2";
 const PAGE_RESEARCH_PROMPT_VERSION: &str = "page-research/v1";
 const LLM_REQUEST_PROTOCOL: &str = "agent_session_v1";
 const LEGACY_LLM_REQUEST_PROTOCOL: &str = "ndjson_session_v1";
@@ -52,7 +50,6 @@ const TOP_LEVEL_PROMOTION_BATCH_SIZE: usize = 8;
 const DEPENDENCY_EDGE_BATCH_SIZE: usize = 8;
 const PROVIDER_TOOLS_TTL_HOURS: u64 = 24 * 7;
 const NEGATIVE_LLM_CACHE_STATUS: &str = "negative";
-const PROVIDER_RETRY_BASE_DELAY_MS: u64 = 400;
 const FILE_PURPOSE_ALLOWED_VALUES: [&str; 24] = [
     "entry",
     "router",
@@ -118,7 +115,6 @@ pub enum PromptType {
     TopLevelPromotion,
     ModuleKind,
     DependencyEdge,
-    PageEnrichment,
     PageResearch,
 }
 
@@ -130,7 +126,6 @@ impl PromptType {
             PromptType::TopLevelPromotion => "top_level_promotion",
             PromptType::ModuleKind => "module_kind",
             PromptType::DependencyEdge => "dependency_edge",
-            PromptType::PageEnrichment => "page_enrichment",
             PromptType::PageResearch => "page_research",
         }
     }
@@ -142,7 +137,6 @@ impl PromptType {
             PromptType::TopLevelPromotion => TOP_LEVEL_PROMPT_VERSION_FIXTURE,
             PromptType::ModuleKind => MODULE_KIND_PROMPT_VERSION,
             PromptType::DependencyEdge => DEPENDENCY_PROMPT_VERSION,
-            PromptType::PageEnrichment => PAGE_ENRICHMENT_PROMPT_VERSION,
             PromptType::PageResearch => PAGE_RESEARCH_PROMPT_VERSION,
         }
     }
@@ -416,7 +410,7 @@ impl ProviderApiLlmService {
                             &error.to_string(),
                             None,
                         );
-                        sleep_before_retry(attempt);
+                        sleep_before_retry(self.provider.retry_backoff_ms, attempt);
                         continue;
                     }
                     debug_trace::record_json(
@@ -444,7 +438,7 @@ impl ProviderApiLlmService {
                             &error.to_string(),
                             None,
                         );
-                        sleep_before_retry(attempt);
+                        sleep_before_retry(self.provider.retry_backoff_ms, attempt);
                         continue;
                     }
                     debug_trace::record_json(
@@ -469,7 +463,7 @@ impl ProviderApiLlmService {
                         &format!("provider returned {status}"),
                         Some(&response_json),
                     );
-                    sleep_before_retry(attempt);
+                    sleep_before_retry(self.provider.retry_backoff_ms, attempt);
                     continue;
                 }
                 let error =
@@ -658,60 +652,6 @@ pub struct DependencyAssistInput {
     pub confidence: String,
 }
 
-/// 页面增强输入。
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct PageEnrichmentInput {
-    /// 页面稳定 ID。
-    pub page_id: String,
-    /// 页面类型。
-    pub page_type: String,
-    /// 页面标题。
-    pub title: String,
-    /// 页面作用域。
-    pub scope: String,
-    /// 当前页面允许覆盖的 section 标题集合。
-    pub section_titles: Vec<String>,
-    /// 必须保真的事实输入。
-    pub facts: Vec<String>,
-    /// 可用于组织正文的补充输入。
-    pub summary_inputs: Vec<String>,
-    /// steering 传入的页面提示。
-    pub hints: Vec<String>,
-    /// 来自子页面的摘要。
-    pub child_summaries: Vec<String>,
-    /// 当前页面的稳定 evidence groups。
-    #[serde(default)]
-    pub evidence_groups: Vec<PageEvidenceGroup>,
-    /// 当前页面的 deterministic 图输入。
-    #[serde(default)]
-    pub diagram_inputs: Vec<PageDiagramInput>,
-    /// 当前页面是否允许产出 Mermaid 图。
-    pub allow_mermaid: bool,
-}
-
-impl PageEnrichmentInput {
-    /// 基于 `PlannedPage + PageContext` 构造稳定增强输入。
-    pub fn from_page(page: &PlannedPage, context: &PageContext, allow_mermaid: bool) -> Self {
-        Self {
-            page_id: page.id.clone(),
-            page_type: page.page_type.clone(),
-            title: page.title.clone(),
-            scope: page.scope.clone(),
-            section_titles: section_titles_for_page_type(&page.page_type)
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-            facts: context.facts.clone(),
-            summary_inputs: context.summary_inputs.clone(),
-            hints: context.hints.clone(),
-            child_summaries: context.child_summaries.clone(),
-            evidence_groups: context.evidence_groups.clone(),
-            diagram_inputs: context.diagram_inputs.clone(),
-            allow_mermaid,
-        }
-    }
-}
-
 /// 页面 research session 输入。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PageResearchInput {
@@ -729,18 +669,6 @@ pub struct PageResearchInput {
     pub summary_inputs: Vec<String>,
     /// 当前页面 steering hints。
     pub hints: Vec<String>,
-    /// 子页上卷。
-    #[serde(default)]
-    pub child_rollups: Vec<ChildPageRollup>,
-    /// 仓库 dossier。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repo_dossier: Option<RepoDossier>,
-    /// 模块 dossier。
-    #[serde(default)]
-    pub module_dossiers: Vec<ModuleDossier>,
-    /// 主题 dossier。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub topic_dossier: Option<TopicDossier>,
     /// 稳定 evidence groups。
     #[serde(default)]
     pub evidence_groups: Vec<PageEvidenceGroup>,
@@ -762,13 +690,9 @@ impl PageResearchInput {
             facts: context.facts.clone(),
             summary_inputs: context.summary_inputs.clone(),
             hints: context.hints.clone(),
-            child_rollups: context.child_rollups.clone(),
-            repo_dossier: context.repo_dossier.clone(),
-            module_dossiers: context.module_dossiers.clone(),
-            topic_dossier: context.topic_dossier.clone(),
             evidence_groups: context.evidence_groups.clone(),
             diagram_inputs: context.diagram_inputs.clone(),
-            session: context.research_session.clone(),
+            session: None,
         }
     }
 }
@@ -793,78 +717,11 @@ pub struct PageResearchSessionOutput {
     pub session: PageResearchSessionState,
 }
 
-/// 页面增强输出。
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct PageEnrichmentResult {
-    /// 父页面消费的叶子摘要。
-    #[serde(default)]
-    pub summary: String,
-    /// section 标题 -> 增强正文。
-    #[serde(default)]
-    pub section_overrides: BTreeMap<String, String>,
-    /// section 标题 -> Mermaid 图正文（不带 fenced block）。
-    #[serde(default)]
-    pub mermaid_blocks: BTreeMap<String, String>,
-    /// 实际命中的页面提示。
-    #[serde(default)]
-    pub consumed_hints: Vec<String>,
-    /// 实际消费的子页摘要。
-    #[serde(default)]
-    pub consumed_child_summaries: Vec<String>,
-}
-
-impl PageEnrichmentResult {
-    /// 对模型输出做轻量结构校验，避免污染正式页面。
-    pub fn sanitize_for_input(mut self, input: &PageEnrichmentInput) -> Option<Self> {
-        self.summary = normalize_sentence(&self.summary);
-        self.consumed_hints = dedupe_non_empty(self.consumed_hints);
-        self.consumed_child_summaries = dedupe_non_empty(self.consumed_child_summaries);
-
-        let allowed_titles = input
-            .section_titles
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let diagram_titles = input
-            .diagram_inputs
-            .iter()
-            .map(|diagram| diagram.section_title.clone())
-            .collect::<BTreeSet<_>>();
-        self.section_overrides = self
-            .section_overrides
-            .into_iter()
-            .filter_map(|(title, content)| {
-                let title = title.trim().to_string();
-                let content = normalize_multiline(&content);
-                (allowed_titles.contains(&title) && !content.is_empty()).then_some((title, content))
-            })
-            .collect();
-        self.mermaid_blocks = self
-            .mermaid_blocks
-            .into_iter()
-            .filter_map(|(title, content)| {
-                let title = title.trim().to_string();
-                if !input.allow_mermaid
-                    || !allowed_titles.contains(&title)
-                    || !diagram_titles.contains(&title)
-                {
-                    return None;
-                }
-                sanitize_mermaid_body(&content).map(|normalized| (title, normalized))
-            })
-            .collect();
-
-        (!self.summary.is_empty()
-            || !self.section_overrides.is_empty()
-            || !self.mermaid_blocks.is_empty())
-        .then_some(self)
-    }
-}
-
 impl PageResearchResult {
     /// 对 research 结果做轻量结构校验，避免污染 deterministic renderer。
     pub fn sanitize_for_context(mut self, context: &PageContext) -> Option<Self> {
         self.summary = normalize_sentence(&self.summary);
+        self.page_positioning = normalize_sentence(&self.page_positioning);
         self.open_questions = dedupe_non_empty(self.open_questions)
             .into_iter()
             .take(3)
@@ -880,11 +737,7 @@ impl PageResearchResult {
             .iter()
             .map(|diagram| diagram.diagram_id.clone())
             .collect::<BTreeSet<_>>();
-        let allowed_children = context
-            .child_rollups
-            .iter()
-            .map(|rollup| rollup.page_id.clone())
-            .collect::<BTreeSet<_>>();
+        let allowed_children = BTreeSet::<String>::new();
         let max_section_count = section_titles_for_page_type(&context.page_type).len();
 
         let mut seen_section_keys = BTreeSet::new();
@@ -972,19 +825,13 @@ impl PageResearchResult {
             .collect();
 
         (!self.summary.is_empty()
+            || !self.page_positioning.is_empty()
             || !self.section_plan.is_empty()
             || !self.evidence_rollup.is_empty()
             || !self.diagram_rollup.is_empty()
             || !self.open_questions.is_empty())
         .then_some(self)
     }
-}
-
-#[derive(Debug, Clone)]
-struct PendingPageEnrichmentRequest {
-    index: usize,
-    input_hash: String,
-    request: LlmPromptRequest,
 }
 
 #[derive(Debug, Clone)]
@@ -1082,16 +929,9 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         self.config.enabled && self.service.is_some()
     }
 
-    /// 页面增强是否处于可用状态。
-    pub fn enrichment_enabled(&self) -> bool {
-        self.service_available() && self.config.content_enrichment_enabled()
-    }
-
     /// bounded research session 是否可用。
     pub fn session_enabled(&self) -> bool {
-        self.service_available()
-            && self.selected_path() == Some(SelectedLlmPath::ProviderApi)
-            && self.config.session_enabled()
+        self.service_available() && self.config.enabled
     }
 
     /// 返回当前 workflow 实际选中的请求路径。
@@ -1116,7 +956,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
     /// provider 直连路径下当前可用的 uncertainty gate 并行度。
     pub fn uncertainty_parallel_requests(&self) -> usize {
         if self.selected_path() == Some(SelectedLlmPath::ProviderApi) {
-            self.config.uncertainty_gate_parallel_requests.max(1)
+            3
         } else {
             1
         }
@@ -1145,9 +985,8 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             PromptType::FilePurpose
             | PromptType::TopLevelPromotion
             | PromptType::ModuleKind
-            | PromptType::DependencyEdge => self.config.uncertainty_gate_enabled(),
-            PromptType::PageEnrichment => self.config.content_enrichment_enabled(),
-            PromptType::PageResearch => self.config.session_enabled(),
+            | PromptType::DependencyEdge
+            | PromptType::PageResearch => self.config.enabled,
         }
     }
 
@@ -1759,55 +1598,6 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         Ok(results)
     }
 
-    /// 基于稳定页面输入生成可回退的增强正文。
-    pub fn enrich_page(
-        &mut self,
-        input: &PageEnrichmentInput,
-    ) -> io::Result<Option<PageEnrichmentResult>> {
-        let instruction = build_page_enrichment_instruction(input);
-        self.request_structured(
-            PromptType::PageEnrichment,
-            input,
-            "你是 Repo Wiki 的页面增强模型，只能改写解释层，不能虚构 facts、源码结构或依赖关系，也不要机械复述原始前缀标签。",
-            &instruction,
-            json!({
-                "type": "object",
-                "required": ["summary", "section_overrides", "mermaid_blocks"],
-                "properties": {
-                    "summary": {"type": "string"},
-                    "section_overrides": {"type": "object"},
-                    "mermaid_blocks": {"type": "object"},
-                    "consumed_hints": {"type": "array", "items": {"type": "string"}},
-                    "consumed_child_summaries": {"type": "array", "items": {"type": "string"}}
-                }
-            }),
-        )
-        .map(|result: Option<PageEnrichmentResult>| {
-            result.and_then(|output| output.sanitize_for_input(input))
-        })
-    }
-
-    /// 对一组页面增强输入执行可选的批量增强。
-    /// provider 直连时会在同一深度层内做有限并行；Agent bridge 保持串行。
-    pub fn enrich_pages(
-        &mut self,
-        inputs: &[PageEnrichmentInput],
-    ) -> io::Result<Vec<Option<PageEnrichmentResult>>> {
-        if inputs.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let parallel_requests = self.provider_parallel_requests();
-        if self.selected_path() != Some(SelectedLlmPath::ProviderApi)
-            || parallel_requests <= 1
-            || inputs.len() <= 1
-        {
-            return inputs.iter().map(|input| self.enrich_page(input)).collect();
-        }
-
-        self.enrich_pages_via_provider(inputs, parallel_requests)
-    }
-
     /// 对 research 支持页面执行 bounded provider research session。
     pub fn research_page(
         &mut self,
@@ -1816,8 +1606,13 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
     ) -> io::Result<Option<PageResearchSessionOutput>> {
         if !matches!(
             input.page_type.as_str(),
-            "overview" | "architecture" | "module" | "topic"
-        ) || !self.session_enabled()
+            "overview"
+                | "architecture"
+                | "module"
+                | "topic"
+                | "family-index"
+                | "family-child"
+        ) || !(self.service_available() && self.config.enabled)
         {
             return Ok(None);
         }
@@ -2051,7 +1846,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             .as_ref()
             .map(|session| session.tool_artifact_refs.clone())
             .unwrap_or_default();
-        let max_turns = self.config.session_max_recent_turns.clamp(4, 8);
+        let max_turns = 6_usize.clamp(4, 8);
 
         if emulated_tools {
             messages[1]["content"] = Value::String(build_emulated_tool_user_message(request));
@@ -2294,144 +2089,12 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         Ok(Some(parsed))
     }
 
-    fn enrich_pages_via_provider(
-        &mut self,
-        inputs: &[PageEnrichmentInput],
-        parallel_requests: usize,
-    ) -> io::Result<Vec<Option<PageEnrichmentResult>>> {
-        let model = self.model_id().map(str::to_string);
-        let mut results = vec![None; inputs.len()];
-        let mut pending = Vec::new();
-
-        for (index, input) in inputs.iter().enumerate() {
-            let input_hash =
-                build_prompt_input_hash(PromptType::PageEnrichment, model.as_deref(), input);
-            if self.cache_reads_enabled() {
-                if let Some(cached) = read_llm_cache(
-                    self.repo_root,
-                    &input_hash,
-                    PromptType::PageEnrichment.as_str(),
-                    PromptType::PageEnrichment.version(),
-                    model.as_deref(),
-                )? {
-                    if is_negative_cache_payload(&cached.response) {
-                        continue;
-                    }
-                    if let Ok(parsed) =
-                        serde_json::from_str::<PageEnrichmentResult>(&cached.response)
-                    {
-                        results[index] = parsed.sanitize_for_input(input);
-                        continue;
-                    }
-                }
-            }
-
-            if !self.try_consume_budget(
-                PromptType::PageEnrichment,
-                Some(input.page_type.as_str()),
-            ) {
-                continue;
-            }
-
-            let instruction = build_page_enrichment_instruction(input);
-            let prepared = self.prepare_prompt_payload(PromptType::PageEnrichment, input, None)?;
-            pending.push(PendingPageEnrichmentRequest {
-                index,
-                input_hash: input_hash.clone(),
-                request: build_structured_request(
-                    PromptType::PageEnrichment,
-                    &input_hash,
-                    model.clone(),
-                    "你是 Repo Wiki 的页面增强模型，只能改写解释层，不能虚构 facts、源码结构或依赖关系，也不要机械复述原始前缀标签。",
-                    &instruction,
-                    &prepared.input,
-                    json!({
-                        "type": "object",
-                        "required": ["summary", "section_overrides", "mermaid_blocks"],
-                        "properties": {
-                            "summary": {"type": "string"},
-                            "section_overrides": {"type": "object"},
-                            "mermaid_blocks": {"type": "object"},
-                            "consumed_hints": {"type": "array", "items": {"type": "string"}},
-                            "consumed_child_summaries": {"type": "array", "items": {"type": "string"}}
-                        }
-                    }),
-                    prepared.session,
-                ),
-            });
-        }
-
-        if pending.is_empty() {
-            return Ok(results);
-        }
-
-        let next_index = AtomicUsize::new(0);
-        let completions = Mutex::new(vec![None; pending.len()]);
-        let worker_count = parallel_requests.max(1).min(pending.len());
-        thread::scope(|scope| {
-            for _ in 0..worker_count {
-                let next_index_ref = &next_index;
-                let pending_ref = &pending;
-                let completions_ref = &completions;
-                let config = self.config;
-                scope.spawn(move || {
-                    let Ok(mut service) = ProviderApiLlmService::from_config(config) else {
-                        return;
-                    };
-                    loop {
-                        let task_index = next_index_ref.fetch_add(1, Ordering::Relaxed);
-                        if task_index >= pending_ref.len() {
-                            break;
-                        }
-                        let completion = service.request(&pending_ref[task_index].request).ok();
-                        completions_ref.lock().unwrap()[task_index] = completion;
-                    }
-                });
-            }
-        });
-
-        for (task_index, completion) in completions.into_inner().unwrap().into_iter().enumerate() {
-            let Some(completion) = completion else {
-                continue;
-            };
-            self.record_completion_usage(PromptType::PageEnrichment, &completion);
-            let pending_request = &pending[task_index];
-            let completion_model = completion.model.clone();
-            let parsed =
-                match serde_json::from_value::<PageEnrichmentResult>(completion.output.clone()) {
-                    Ok(parsed) => parsed,
-                    Err(_) => {
-                        self.write_negative_cached_response(
-                            PromptType::PageEnrichment,
-                            pending_request.input_hash.clone(),
-                            model.clone(),
-                            completion_model,
-                            "invalid_output",
-                        )?;
-                        continue;
-                    }
-                };
-            self.write_cached_response(
-                PromptType::PageEnrichment,
-                pending_request.input_hash.clone(),
-                model.clone(),
-                completion.model,
-                &parsed,
-            )?;
-            results[pending_request.index] =
-                parsed.sanitize_for_input(&inputs[pending_request.index]);
-        }
-
-        Ok(results)
-    }
-
     fn budget_available(&self, prompt_type: PromptType) -> bool {
         if self.real_calls >= self.config.max_calls {
             return false;
         }
 
         match prompt_type {
-            PromptType::PageEnrichment => self.page_budget_available(None),
             PromptType::PageResearch => false,
             _ => self.uncertainty_calls < self.max_uncertainty_calls(),
         }
@@ -2484,12 +2147,6 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
 
         self.real_calls += 1;
         match prompt_type {
-            PromptType::PageEnrichment => {
-                self.page_calls += 1;
-                if is_core_page_type(page_type) {
-                    self.core_page_calls += 1;
-                }
-            }
             PromptType::PageResearch => {
                 self.page_calls += 1;
                 if is_core_page_type(page_type) {
@@ -2654,14 +2311,13 @@ fn is_negative_cache_payload(payload: &str) -> bool {
         .is_some_and(|status| status == NEGATIVE_LLM_CACHE_STATUS)
 }
 
-fn prompt_token_limit(prompt_type: PromptType, config: &LlmConfig) -> usize {
+fn prompt_token_limit(prompt_type: PromptType, _config: &LlmConfig) -> usize {
     match prompt_type {
         PromptType::FilePurpose
         | PromptType::TopLevelPromotion
         | PromptType::ModuleKind
-        | PromptType::DependencyEdge => config.uncertainty_gate_max_input_tokens.max(256),
-        PromptType::PageEnrichment => config.page_enrichment_max_input_tokens.max(256),
-        PromptType::PageResearch => config.session_max_context_tokens.max(512),
+        | PromptType::DependencyEdge => 12_000_usize.max(256),
+        PromptType::PageResearch => 16_000_usize.max(512),
     }
 }
 
@@ -2677,9 +2333,9 @@ fn estimate_payload_tokens(input: &Value, session: Option<&PageResearchSessionSt
 
 fn trim_session_state(
     mut state: PageResearchSessionState,
-    config: &LlmConfig,
+    _config: &LlmConfig,
 ) -> PageResearchSessionState {
-    let max_turns = config.session_max_recent_turns.clamp(4, 8);
+    let max_turns = 6_usize.clamp(4, 8);
     if state.recent_turns.len() > max_turns {
         state.recent_turns = state
             .recent_turns
@@ -2725,23 +2381,27 @@ fn apply_prompt_budget_trim(
 
     if let Some(object) = input.as_object_mut() {
         match prompt_type {
-            PromptType::PageEnrichment => {
-                trim_named_array_field(object, &["child_summaries", "hints", "facts"], 8);
-                trim_named_array_field(object, &["summary_inputs"], 12);
-            }
             PromptType::PageResearch => {
                 trim_named_array_field(
                     object,
-                    &[
-                        "child_rollups",
-                        "module_dossiers",
-                        "evidence_groups",
-                        "diagram_inputs",
-                    ],
+                    &["evidence_groups", "diagram_inputs"],
                     6,
                 );
                 trim_named_array_field(object, &["summary_inputs", "hints", "facts"], 10);
-                trim_named_array_field(object, &["targeted_snippets", "evidence_rollup"], 8);
+                trim_named_array_field(
+                    object,
+                    &[
+                        "targeted_snippets",
+                        "evidence_rollup",
+                        "family_scoped_evidence",
+                        "child_page_results",
+                        "docs_anchors",
+                        "public_api_surfaces",
+                        "config_surfaces",
+                        "type_surfaces",
+                    ],
+                    8,
+                );
             }
             PromptType::FilePurpose => {
                 trim_named_array_field(object, &["items"], FILE_PURPOSE_BATCH_SIZE);
@@ -2759,12 +2419,10 @@ fn apply_prompt_budget_trim(
     let mut max_string_chars = match prompt_type {
         PromptType::FilePurpose => 1_200,
         PromptType::TopLevelPromotion | PromptType::DependencyEdge | PromptType::ModuleKind => 800,
-        PromptType::PageEnrichment => 1_600,
         PromptType::PageResearch => 2_000,
     };
     let mut max_array_items = match prompt_type {
         PromptType::PageResearch => 8,
-        PromptType::PageEnrichment => 10,
         _ => 8,
     };
 
@@ -3188,33 +2846,6 @@ fn dedupe_non_empty(values: Vec<String>) -> Vec<String> {
     deduped
 }
 
-fn sanitize_mermaid_body(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    let stripped = trimmed
-        .strip_prefix("```mermaid")
-        .map(str::trim)
-        .and_then(|value| value.strip_suffix("```").map(str::trim))
-        .unwrap_or(trimmed);
-    let normalized = normalize_multiline(stripped);
-    let mut lines = normalized.lines();
-    let header = lines.next()?.trim();
-
-    if !matches!(
-        header,
-        "graph TD" | "graph LR" | "flowchart TD" | "flowchart LR"
-    ) {
-        return None;
-    }
-    if normalized.contains("```") {
-        return None;
-    }
-    if normalized.lines().count() < 2 {
-        return None;
-    }
-
-    Some(normalized)
-}
-
 fn select_runtime_service<'svc>(
     config: &LlmConfig,
     agent_service: Option<&'svc mut dyn LlmService>,
@@ -3233,47 +2864,6 @@ fn select_runtime_service<'svc>(
     }
 
     agent_service.map(RuntimeLlmService::Agent)
-}
-
-fn build_page_enrichment_instruction(input: &PageEnrichmentInput) -> String {
-    format!(
-        concat!(
-            "页面类型：{page_type}\n",
-            "页面标题：{title}\n",
-            "页面作用域：{scope}\n",
-            "允许覆盖的 section 标题：{section_titles}\n",
-            "evidence groups 数量：{evidence_group_count}\n",
-            "diagram inputs 数量：{diagram_input_count}\n",
-            "{focus}\n",
-            "输出要求：\n",
-            "1. `summary` 用 1 到 2 句总结页面真正关心的核心内容。\n",
-            "2. `section_overrides` 尽量为每个 section 标题生成非空正文；优先写解释性段落，必要时可用 3 到 6 条项目符号。\n",
-            "3. 不要简单回显 `技术栈：`、`图热点：`、`关系：` 这类原始前缀；请去重、压缩重复项，并过滤低价值噪音。\n",
-            "4. 只有在 facts 明确支持时才提及循环、社区或流程；如果信息不足，请明确写出“当前事实未显示”或“当前未检测到”，不要猜测。\n",
-            "5. 若 `hints`、`child_summaries`、`evidence_groups` 或 `diagram_inputs` 对正文有帮助，请在内容里自然吸收，并把实际使用的 hints/child summaries 写入 `consumed_hints` / `consumed_child_summaries`。\n",
-            "6. `mermaid_blocks` 只能复用 `diagram_inputs` 已经给出的稳定图类型与关系；若当前 section 没有 diagram input，请不要返回 Mermaid。\n",
-            "7. 不要删除、改写或重新命名 evidence groups 的稳定身份；正文应解释这些 evidence 为什么重要。\n",
-            "8. 整体目标是把稳定 facts 组织成可读、可复用的 Wiki 正文，而不是列出原始事实清单。"
-        ),
-        page_type = input.page_type,
-        title = input.title,
-        scope = input.scope,
-        section_titles = input.section_titles.join("、"),
-        evidence_group_count = input.evidence_groups.len(),
-        diagram_input_count = input.diagram_inputs.len(),
-        focus = page_enrichment_focus(input.page_type.as_str()),
-    )
-}
-
-fn page_enrichment_focus(page_type: &str) -> &'static str {
-    match page_type {
-        "overview" => "优先总结仓库定位、主要能力、核心模块和典型执行路径。",
-        "architecture" => "优先解释顶层模块分工、结构边界、跨模块协作和关键流程。",
-        "module" => "优先解释模块职责、关键源码入口、上下游依赖以及子模块分工。",
-        "workflow" => "优先解释构建、CI/CD、部署与运行流程。",
-        "topic" => "优先解释专题边界、关键 evidence、相关模块以及图中体现出的稳定关系。",
-        _ => "优先解释页面主题和稳定事实之间的关系。",
-    }
 }
 
 fn reserved_enrichment_call_budget(max_calls: usize) -> usize {
@@ -3541,6 +3131,7 @@ fn parse_page_research_output(value: Value, context: &PageContext) -> Option<Pag
     let object = value.as_object()?;
     let required = [
         "summary",
+        "page_positioning",
         "section_plan",
         "evidence_rollup",
         "diagram_rollup",
@@ -3570,30 +3161,23 @@ fn build_page_research_instruction(input: &PageResearchInput) -> String {
             "页面类型：{page_type}\n",
             "页面标题：{title}\n",
             "页面作用域：{scope}\n",
-            "child rollups 数量：{child_rollups}\n",
-            "repo dossier：{has_repo_dossier}\n",
-            "module dossiers 数量：{module_dossiers}\n",
-            "topic dossier：{has_topic_dossier}\n",
             "evidence groups 数量：{evidence_groups}\n",
             "diagram inputs 数量：{diagram_inputs}\n",
             "允许的 section 槽位：{allowed_sections}\n",
             "输出要求：\n",
             "1. 最终结果必须严格符合 response_schema，对应 `PageResearchResult`。\n",
-            "2. `summary` 只能写 1 段高密度摘要，不得输出 Markdown 页面。\n",
-            "3. `section_plan` 必须只使用允许的 section 槽位；每节都应给出 `section_key / section_title / section_summary`，并尽量补充 `evidence_refs / diagram_refs / child_refs`。\n",
-            "4. `evidence_rollup` 只能引用当前输入中已存在的 evidence group / source path / line span。\n",
-            "5. `diagram_rollup` 只能引用 deterministic 已存在的 diagram inputs。\n",
-            "6. 若信息不足，可提出 `open_questions`，但不得凭空捏造事实。\n",
-            "7. 若工具调用有帮助，可以先调用工具，再返回最终结构化结果。\n",
-            "8. 不要返回自由新章节；重点是决定受控 section 槽位的顺序、重点和支撑材料。"
+            "2. `page_positioning` 用 1 到 2 句说明当前页面在整体知识树中的定位，不得输出 Markdown 页面。\n",
+            "3. `summary` 只能写 1 段高密度摘要，不得输出 Markdown 页面。\n",
+            "4. `section_plan` 必须只使用允许的 section 槽位；每节都应给出 `section_key / section_title / section_summary`，并尽量补充 `evidence_refs / diagram_refs / child_refs`。\n",
+            "5. `evidence_rollup` 只能引用当前输入中已存在的 evidence group / source path / line span。\n",
+            "6. `diagram_rollup` 只能引用 deterministic 已存在的 diagram inputs。\n",
+            "7. 若信息不足，可提出 `open_questions`，但不得凭空捏造事实。\n",
+            "8. 若工具调用有帮助，可以先调用工具，再返回最终结构化结果。\n",
+            "9. 不要返回自由新章节；重点是决定受控 section 槽位的顺序、重点和支撑材料。"
         ),
         page_type = input.page_type,
         title = input.title,
         scope = input.scope,
-        child_rollups = input.child_rollups.len(),
-        has_repo_dossier = input.repo_dossier.is_some(),
-        module_dossiers = input.module_dossiers.len(),
-        has_topic_dossier = input.topic_dossier.is_some(),
         evidence_groups = input.evidence_groups.len(),
         diagram_inputs = input.diagram_inputs.len(),
         allowed_sections = allowed_sections,
@@ -3603,9 +3187,10 @@ fn build_page_research_instruction(input: &PageResearchInput) -> String {
 fn page_research_response_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["summary", "section_plan", "evidence_rollup", "diagram_rollup", "open_questions"],
+        "required": ["summary", "page_positioning", "section_plan", "evidence_rollup", "diagram_rollup", "open_questions"],
         "properties": {
             "summary": {"type": "string"},
+            "page_positioning": {"type": "string"},
             "section_plan": {
                 "type": "array",
                 "items": {
@@ -3808,6 +3393,7 @@ fn build_emulated_tool_user_message(request: &LlmPromptRequest) -> String {
                 "type": "final",
                 "result": {
                     "summary": "...",
+                    "page_positioning": "...",
                     "section_plan": [],
                     "evidence_rollup": [],
                     "diagram_rollup": [],
@@ -3926,7 +3512,7 @@ fn execute_research_tool(
                         "communities": context.communities,
                         "dependencies": context.dependencies,
                         "dependents": context.dependents,
-                        "child_page_ids": runtime.page_context.child_rollups.iter().map(|rollup| rollup.page_id.clone()).collect::<Vec<_>>(),
+                        "child_page_ids": Vec::<String>::new(),
                     }))
                 })
                 .collect::<Vec<_>>();
@@ -4014,30 +3600,7 @@ fn execute_research_tool(
             Ok((process, None))
         }
         "get_page_children" => {
-            let page_id = args
-                .get("page_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let children = if page_id == runtime.page.id {
-                runtime
-                    .page_context
-                    .child_rollups
-                    .iter()
-                    .map(|rollup| {
-                        json!({
-                            "page_id": rollup.page_id,
-                            "title": rollup.title,
-                            "summary": rollup.summary,
-                            "page_type": rollup.page_type,
-                            "section_plan_rollup": rollup.section_plan_rollup,
-                            "key_sources_rollup": rollup.key_sources_rollup,
-                            "open_questions": rollup.open_questions,
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
+            let children = Vec::<Value>::new();
             Ok((json!({ "children": children }), None))
         }
         "get_evidence_group" => {
@@ -4130,27 +3693,8 @@ fn execute_research_tool(
     }
 }
 
-fn collect_research_snippets(context: &PageContext) -> Vec<TargetedSnippet> {
-    let mut snippets = Vec::new();
-    if let Some(repo_dossier) = &context.repo_dossier {
-        snippets.extend(repo_dossier.targeted_snippets.clone());
-    }
-    for dossier in &context.module_dossiers {
-        snippets.extend(dossier.targeted_snippets.clone());
-    }
-    if let Some(topic_dossier) = &context.topic_dossier {
-        snippets.extend(topic_dossier.targeted_snippets.clone());
-    }
-    snippets.sort_by(|left, right| {
-        right
-            .score
-            .cmp(&left.score)
-            .then(left.path.cmp(&right.path))
-            .then(left.start_line.cmp(&right.start_line))
-            .then(left.snippet_id.cmp(&right.snippet_id))
-    });
-    snippets.dedup_by(|left, right| left.snippet_id == right.snippet_id);
-    snippets
+fn collect_research_snippets(_context: &PageContext) -> Vec<TargetedSnippet> {
+    Vec::new()
 }
 
 fn resolve_tool_snippet(
@@ -4322,8 +3866,8 @@ fn estimate_tokens(value: &str) -> usize {
     }
 }
 
-fn sleep_before_retry(attempt: usize) {
-    let delay_ms = PROVIDER_RETRY_BASE_DELAY_MS.saturating_mul(attempt as u64);
+fn sleep_before_retry(base_delay_ms: u64, attempt: usize) {
+    let delay_ms = base_delay_ms.saturating_mul(attempt as u64);
     thread::sleep(Duration::from_millis(delay_ms));
 }
 

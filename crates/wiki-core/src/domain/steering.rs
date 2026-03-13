@@ -27,6 +27,8 @@ pub struct SteeringConfig {
     pub debug: DebugConfig,
     /// LLM 辅助增强配置。
     pub llm: LlmConfig,
+    /// 知识规划控制配置。
+    pub knowledge: KnowledgeConfig,
     /// 小模块合并阈值（源文件数 ≤ 该值且无子模块的模块被合并）。
     pub merge_threshold: u32,
 }
@@ -111,6 +113,25 @@ pub struct PageHint {
     pub hint: String,
 }
 
+/// 知识规划控制配置。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct KnowledgeConfig {
+    /// 强制包含的知识域类型（即使启发式规则未发现也会保留）。
+    pub force_domains: Vec<String>,
+    /// 强制排除的知识域类型。
+    pub suppress_domains: Vec<String>,
+    /// 知识单元权重阈值（低于此值的单元会被过滤）。
+    pub unit_weight_threshold: f32,
+    /// 单个知识域内的最大单元数。
+    #[serde(default = "default_max_units_per_domain")]
+    pub max_units_per_domain: usize,
+}
+
+fn default_max_units_per_domain() -> usize {
+    30
+}
+
 /// LLM 增强配置。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -121,24 +142,10 @@ pub struct LlmConfig {
     pub model: String,
     /// 单次 workflow 允许的真实调用上限。
     pub max_calls: usize,
-    /// 是否允许 `uncertainty_gate` 路径发起 LLM 请求。
-    pub uncertainty_gate_enabled: bool,
-    /// 是否允许 `content_enrichment` 路径发起 LLM 请求。
-    pub content_enrichment_enabled: bool,
-    /// 是否允许 `module/topic` 页进入 bounded research session。
-    pub session_enabled: bool,
-    /// `uncertainty_gate` 的单请求输入上限。
-    pub uncertainty_gate_max_input_tokens: usize,
-    /// `page_enrichment` 的单请求输入上限。
-    pub page_enrichment_max_input_tokens: usize,
-    /// bounded research session 的上下文上限。
-    pub session_max_context_tokens: usize,
-    /// bounded research session 保留的最近轮次窗口。
-    pub session_max_recent_turns: usize,
-    /// `uncertainty_gate` 的安全并行度。
-    pub uncertainty_gate_parallel_requests: usize,
-    /// provider 直连路径下允许的页面增强请求并行度。
-    pub page_enrichment_parallel_requests: usize,
+    /// Research 阶段允许的最大 LLM 调用次数。
+    pub max_research_calls: usize,
+    /// Compose 阶段允许的最大 LLM 调用次数。
+    pub max_compose_calls: usize,
     /// prompt 级缓存 TTL（秒）。
     pub cache_ttl_seconds: u64,
     /// LLM cache 生命周期模式。
@@ -196,6 +203,9 @@ pub struct LlmProviderConfig {
     /// provider 瞬时失败时的总尝试次数，包含首次请求。
     #[serde(alias = "maxRetries")]
     pub max_retries: usize,
+    /// provider 瞬时失败时线性退避的基础毫秒数。
+    #[serde(alias = "retryBackoffMs")]
+    pub retry_backoff_ms: u64,
     /// provider 级默认模型名；当顶层 `llm.model` 为空时可作为回退。
     #[serde(alias = "defaultModel")]
     pub default_model: String,
@@ -292,6 +302,7 @@ struct RawSteeringConfig {
     pages: Option<PagesConfig>,
     debug: Option<RawDebugConfig>,
     llm: Option<RawLlmConfig>,
+    knowledge: Option<KnowledgeConfig>,
     merge_threshold: Option<u32>,
 }
 
@@ -326,16 +337,8 @@ struct RawLlmConfig {
     enabled: Option<bool>,
     model: Option<String>,
     max_calls: Option<usize>,
-    uncertainty_gate_enabled: Option<bool>,
-    content_enrichment_enabled: Option<bool>,
-    session_enabled: Option<bool>,
-    uncertainty_gate_max_input_tokens: Option<usize>,
-    page_enrichment_max_input_tokens: Option<usize>,
-    session_max_context_tokens: Option<usize>,
-    session_max_recent_turns: Option<usize>,
-    uncertainty_gate_parallel_requests: Option<usize>,
-    #[serde(alias = "parallel_requests")]
-    page_enrichment_parallel_requests: Option<usize>,
+    max_research_calls: Option<usize>,
+    max_compose_calls: Option<usize>,
     cache_ttl_seconds: Option<u64>,
     cache_mode: Option<LlmCacheMode>,
     allow_mermaid: Option<bool>,
@@ -355,6 +358,8 @@ struct RawLlmProviderConfig {
     timeout_seconds: Option<u64>,
     #[serde(alias = "maxRetries")]
     max_retries: Option<usize>,
+    #[serde(alias = "retryBackoffMs")]
+    retry_backoff_ms: Option<u64>,
     #[serde(alias = "defaultModel")]
     default_model: Option<String>,
     capabilities: Option<RawLlmProviderCapabilitiesConfig>,
@@ -390,6 +395,7 @@ impl Default for SteeringConfig {
             pages: PagesConfig::default(),
             debug: DebugConfig::default(),
             llm: LlmConfig::default(),
+            knowledge: KnowledgeConfig::default(),
             merge_threshold: 3,
         }
     }
@@ -401,15 +407,8 @@ impl Default for LlmConfig {
             enabled: false,
             model: String::new(),
             max_calls: 24,
-            uncertainty_gate_enabled: true,
-            content_enrichment_enabled: true,
-            session_enabled: true,
-            uncertainty_gate_max_input_tokens: 12_000,
-            page_enrichment_max_input_tokens: 8_000,
-            session_max_context_tokens: 16_000,
-            session_max_recent_turns: 6,
-            uncertainty_gate_parallel_requests: 3,
-            page_enrichment_parallel_requests: 3,
+            max_research_calls: 50,
+            max_compose_calls: 100,
             cache_ttl_seconds: 60 * 60 * 24 * 7,
             cache_mode: LlmCacheMode::Preserve,
             allow_mermaid: true,
@@ -426,6 +425,7 @@ impl Default for LlmProviderConfig {
             api_key_env: String::new(),
             timeout_seconds: 90,
             max_retries: 3,
+            retry_backoff_ms: 400,
             default_model: String::new(),
             capabilities: LlmProviderCapabilitiesConfig::default(),
             models: BTreeMap::new(),
@@ -538,22 +538,7 @@ impl LlmConfig {
 
     /// 返回 provider 直连路径可用的安全并行度。
     pub fn provider_parallel_requests(&self) -> usize {
-        self.page_enrichment_parallel_requests.max(1)
-    }
-
-    /// 返回 `uncertainty_gate` 是否可用。
-    pub fn uncertainty_gate_enabled(&self) -> bool {
-        self.enabled && self.uncertainty_gate_enabled
-    }
-
-    /// 返回 `content_enrichment` 是否可用。
-    pub fn content_enrichment_enabled(&self) -> bool {
-        self.enabled && self.content_enrichment_enabled
-    }
-
-    /// 返回 bounded research session 是否可用。
-    pub fn session_enabled(&self) -> bool {
-        self.enabled && self.session_enabled
+        3
     }
 }
 
@@ -657,6 +642,9 @@ fn apply_raw_steering_config(config: &mut SteeringConfig, raw: RawSteeringConfig
     if let Some(raw_llm) = raw.llm {
         apply_raw_llm_config(&mut config.llm, raw_llm);
     }
+    if let Some(knowledge) = raw.knowledge {
+        config.knowledge = knowledge;
+    }
     if let Some(merge_threshold) = raw.merge_threshold {
         config.merge_threshold = merge_threshold;
     }
@@ -690,32 +678,11 @@ fn apply_raw_llm_config(config: &mut LlmConfig, raw: RawLlmConfig) {
     if let Some(max_calls) = raw.max_calls {
         config.max_calls = max_calls;
     }
-    if let Some(enabled) = raw.uncertainty_gate_enabled {
-        config.uncertainty_gate_enabled = enabled;
+    if let Some(max_research_calls) = raw.max_research_calls {
+        config.max_research_calls = max_research_calls;
     }
-    if let Some(enabled) = raw.content_enrichment_enabled {
-        config.content_enrichment_enabled = enabled;
-    }
-    if let Some(enabled) = raw.session_enabled {
-        config.session_enabled = enabled;
-    }
-    if let Some(limit) = raw.uncertainty_gate_max_input_tokens {
-        config.uncertainty_gate_max_input_tokens = limit;
-    }
-    if let Some(limit) = raw.page_enrichment_max_input_tokens {
-        config.page_enrichment_max_input_tokens = limit;
-    }
-    if let Some(limit) = raw.session_max_context_tokens {
-        config.session_max_context_tokens = limit;
-    }
-    if let Some(limit) = raw.session_max_recent_turns {
-        config.session_max_recent_turns = limit;
-    }
-    if let Some(parallel_requests) = raw.uncertainty_gate_parallel_requests {
-        config.uncertainty_gate_parallel_requests = parallel_requests;
-    }
-    if let Some(parallel_requests) = raw.page_enrichment_parallel_requests {
-        config.page_enrichment_parallel_requests = parallel_requests;
+    if let Some(max_compose_calls) = raw.max_compose_calls {
+        config.max_compose_calls = max_compose_calls;
     }
     if let Some(cache_ttl_seconds) = raw.cache_ttl_seconds {
         config.cache_ttl_seconds = cache_ttl_seconds;
@@ -749,6 +716,9 @@ fn apply_raw_llm_provider_config(config: &mut LlmProviderConfig, raw: RawLlmProv
     }
     if let Some(max_retries) = raw.max_retries {
         config.max_retries = max_retries;
+    }
+    if let Some(retry_backoff_ms) = raw.retry_backoff_ms {
+        config.retry_backoff_ms = retry_backoff_ms;
     }
     if let Some(default_model) = raw.default_model {
         config.default_model = default_model;
@@ -850,27 +820,11 @@ fn normalize_debug_config(config: &mut DebugConfig) {
 
 fn normalize_llm_config(config: &mut LlmConfig) {
     config.model = config.model.trim().to_string();
-    if config.uncertainty_gate_max_input_tokens == 0 {
-        config.uncertainty_gate_max_input_tokens =
-            LlmConfig::default().uncertainty_gate_max_input_tokens;
+    if config.max_research_calls == 0 {
+        config.max_research_calls = LlmConfig::default().max_research_calls;
     }
-    if config.page_enrichment_max_input_tokens == 0 {
-        config.page_enrichment_max_input_tokens =
-            LlmConfig::default().page_enrichment_max_input_tokens;
-    }
-    if config.session_max_context_tokens == 0 {
-        config.session_max_context_tokens = LlmConfig::default().session_max_context_tokens;
-    }
-    if config.session_max_recent_turns == 0 {
-        config.session_max_recent_turns = LlmConfig::default().session_max_recent_turns;
-    }
-    if config.uncertainty_gate_parallel_requests == 0 {
-        config.uncertainty_gate_parallel_requests =
-            LlmConfig::default().uncertainty_gate_parallel_requests;
-    }
-    if config.page_enrichment_parallel_requests == 0 {
-        config.page_enrichment_parallel_requests =
-            LlmConfig::default().page_enrichment_parallel_requests;
+    if config.max_compose_calls == 0 {
+        config.max_compose_calls = LlmConfig::default().max_compose_calls;
     }
 
     let mut normalized_providers = BTreeMap::new();
@@ -889,6 +843,9 @@ fn normalize_llm_config(config: &mut LlmConfig) {
         }
         if provider.max_retries == 0 {
             provider.max_retries = LlmProviderConfig::default().max_retries;
+        }
+        if provider.retry_backoff_ms == 0 {
+            provider.retry_backoff_ms = LlmProviderConfig::default().retry_backoff_ms;
         }
 
         let mut normalized_models = BTreeMap::new();

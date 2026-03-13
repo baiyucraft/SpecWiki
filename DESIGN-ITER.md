@@ -2,7 +2,7 @@
 
 ## 重排历史
 
-迭代 0-5 期间经历过五次重排（详见 git 历史）。迭代 5 完成后，DESIGN-CORE.md 基于四个上游项目（GitNexus、codewiki、deepwiki-rs、deepwiki-open）源码实际阅读进行了完全重写，核心架构从文件级扫描升级为三层解析（文件扫描 → 符号解析 → 图分析），存储从 JSON 文件迁移到 SQLite，搜索从结构化查询升级为 BM25 + 图查询 + 混合搜索。
+迭代 0-5 期间经历过五次重排（详见 git 历史）。迭代 5 完成后，DESIGN-CORE.md 基于四个上游项目（GitNexus、codewiki、deepwiki-rs、deepwiki-open）源码实际阅读进行了完全重写，核心架构从文件级扫描升级为三层解析（文件扫描 → 符号解析 → 图分析），存储从 JSON 文件迁移到 SQLite，搜索从结构化查询升级为 BM25 + 图查询 + 混合搜索。迭代 9.4 完成后，基于 storybook/dagger 两个验收样本的 reference 深度对比和四个上游项目源码的再次深入阅读，核心设计升级为 DESIGN-CORE2.0.md，pipeline 从三段式（Facts → Planner → Renderer）重构为四层式（Facts → Knowledge Planning → Research → Compose），引入知识单元抽象、research-first composition 和 leaf-first/parent-consume-child 模式。
 
 迭代 6 完成了基础 SQLite 迁移（kv_store + page cache）、Steering 配置、页面拓扑稳定和 section 模板丰富。随后插入的迭代 6.5 已完成并归档，补齐了完整关系型 schema、FilePurpose 分类和 FTS5 搜索；迭代 7 现已完成并归档；迭代 8、8.5、9、9.1、9.2 也均已完成并归档，后续迭代从 10 开始。
 

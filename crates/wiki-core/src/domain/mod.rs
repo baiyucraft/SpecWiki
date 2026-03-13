@@ -2,11 +2,15 @@
 //! 这些结构会在扫描、生成、运行时状态和协议之间反复流转。
 
 pub mod change_set;
+pub mod checkpoint;
+pub mod compose;
 pub mod context;
+pub mod knowledge;
 pub mod metadata;
 pub mod metadata_mapper;
 pub mod module_tree;
 pub mod relation;
+pub mod research;
 pub mod stable_id;
 pub mod state;
 pub mod steering;

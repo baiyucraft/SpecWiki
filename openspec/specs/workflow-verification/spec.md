@@ -82,7 +82,7 @@
 
 #### Scenario: 测试项目集全量 init 分析
 - **WHEN** 迭代 7 的 tasks 设计或测试阶段
-- **THEN** 必须对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init` 分析
+- **THEN** 必须对 `DESIGN2.0.md § 测试项目集` 的完整项目集执行 `init` 分析
 - **THEN** 必须重点关注多语言 symbol 提取质量、symbol query 命中、增量重解析结果以及既有页面拓扑不变量
 - **THEN** 如果存在 reference，必须对照 `.wiki/*.md` 与 `wiki.metadata.json`
 - **THEN** 必须输出 `test-project-analysis.md`
@@ -113,7 +113,7 @@
 - **THEN** 测试 MUST 观察到 provenance 区分 BM25 与 graph 命中来源
 
 ### Requirement: 包装语言与项目集验证必须覆盖 Vue / Svelte graph 解析
-系统 MUST 在 fixture、integration test 或项目集分析中覆盖 Vue / Svelte 单文件组件的 script wrapper 解析，验证定义类符号、raw relation captures 与 graph resolution 都能映射回原始组件文件。每轮与迭代 8 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出 graph facts、graph query 命中表现与 reference 差异。
+系统 MUST 在 fixture、integration test 或项目集分析中覆盖 Vue / Svelte 单文件组件的 script wrapper 解析，验证定义类符号、raw relation captures 与 graph resolution 都能映射回原始组件文件。每轮与迭代 8 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN2.0.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出 graph facts、graph query 命中表现与 reference 差异。
 
 #### Scenario: Vue 或 Svelte wrapper 解析通过
 - **WHEN** 测试在包含 Vue 或 Svelte 单文件组件的 fixture 或项目中执行 `init`
@@ -190,7 +190,7 @@
 - **THEN** 测试 MUST 同时验证父页晚于子页、总真实调用数不超过预算、缓存命中页不占用真实并行槽
 
 ### Requirement: 项目集验证必须覆盖增强后的页面信息密度与 graph 落地
-每轮与迭代 9 相关的 tasks 设计、实现或测试时，系统 MUST 对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出增强后的页面信息密度、graph facts 是否进入页面正文、workflow/architecture 页面表现，以及与 reference 的差异。9.3 还 MUST 逐项目统计 `section_plan` 覆盖率、overview/architecture research 命中和精准 evidence 引用密度；验证可以按 deterministic baseline 与增强模式做对照，但不得只给总表结论。
+每轮与迭代 9 相关的 tasks 设计、实现或测试时，系统 MUST 对 `DESIGN2.0.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出增强后的页面信息密度、graph facts 是否进入页面正文、workflow/architecture 页面表现，以及与 reference 的差异。9.3 还 MUST 逐项目统计 `section_plan` 覆盖率、overview/architecture research 命中和精准 evidence 引用密度；验证可以按 deterministic baseline 与增强模式做对照，但不得只给总表结论。
 
 #### Scenario: 项目集分析逐项目输出增强表现
 - **WHEN** 迭代 9 的 tasks 设计或测试阶段执行完整项目集 `init` 分析
@@ -244,4 +244,39 @@
 - **WHEN** 测试在存在多条 `file_purpose` 候选的项目上执行 workflow
 - **THEN** 报告 MUST 能区分批量 gate 请求与逐条请求
 - **THEN** 测试 MUST 继续验证批量化后单条 fallback 和 cache 粒度未被破坏
+
+### Requirement: reference 与项目集验证必须覆盖 family coverage 和页面折叠度
+系统 MUST 在项目集分析和 reference 报告中新增 family coverage、family index/child 数量、API/config/docs 命中率和页面折叠度指标。对 `storybook` 等 docs-heavy/platform 仓库，验证 MUST 能指出哪些 reference 页面仍被错误折叠进少数 overview/module/topic 页。
+
+#### Scenario: reference 报告输出 family coverage 与 page collapse
+- **WHEN** 脚本对带 reference 的 docs-heavy 或 platform 仓库生成报告
+- **THEN** 报告 MUST 说明 family index/child 覆盖情况
+- **THEN** 报告 MUST 说明 `pageCollapseRatio` 或等价折叠指标
+- **THEN** 报告 MUST 指出仍然被错误折叠的主要页面家族
+
+#### Scenario: 项目集分析输出 API/config/docs 命中率
+- **WHEN** 运行完整项目集 `init` 分析
+- **THEN** 报告 MUST 逐项目说明 API surface、config surface 和 docs anchors 是否进入正式页面
+- **THEN** 对无 reference 项目，报告也 MUST 明确输出这些命中指标，而不是只写“无 reference”
+
+### Requirement: storybook 专项验证必须覆盖 leaf doc 与 section citation 收敛
+系统 MUST 在 `storybook` 专项验证中额外输出 `family-leaf-doc` 覆盖、leaf-first compose 命中和 section-scoped citation 命中情况，并把它们作为 9.4 后半程的核心验收指标。
+
+#### Scenario: storybook 报告输出 leaf doc 覆盖与 section citation
+- **WHEN** 系统对 `storybook` 生成专项 reference 报告
+- **THEN** 报告 MUST 说明新增 leaf doc 页面数量与仍然折叠的主要 family
+- **THEN** 报告 MUST 说明 citation 是否已从页面级附属块转为 section-scoped 命中
+
+### Requirement: dagger 专项验证必须覆盖 runtime-heavy / compiler-heavy 的知识域拆分
+系统 MUST 在 `dagger` 专项验证中输出 `CoreRuntime / Framework / PlatformBinding / CompilerToolchain / ApiReference / TestingInfra / ConceptGuide` 等知识域的发现情况，并记录 API/测试/教程页是否仍被折叠回大模块页。
+
+#### Scenario: dagger 报告输出知识域发现与缺页分布
+- **WHEN** 系统对 `dagger` 生成专项 reference 报告
+- **THEN** 报告 MUST 说明 runtime-heavy / compiler-heavy 相关知识域是否被稳定发现
+- **THEN** 报告 MUST 说明缺失 reference 页面主要集中在哪些 API / 框架 / 测试 / 教程主题
+
+#### Scenario: storybook 与 dagger 的 lifecycle 验证都必须通过
+- **WHEN** 运行 `storybook + dagger` 的 lifecycle 脚本
+- **THEN** 两个样本的 `init → status → sync → update → rebuild` 断言都 MUST 通过
+- **THEN** 报告 MUST 明确记录 token 统计、符号图稳定性和 parent rebuild 传播结果
 

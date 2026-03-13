@@ -19,7 +19,7 @@ use crate::domain::state::{assemble_state_from_pages, build_page_state, PageBuil
 use crate::domain::steering::load_steering_config;
 use crate::generation::context::{build_module_contexts_with_graph, build_repo_context_with_graph};
 use crate::generation::managed_sections::{merge_sections, parse_wiki_page, ManagedSectionBlock};
-use crate::generation::renderer::assemble_page_from_merge;
+use crate::generation::renderer::{assemble_page_from_merge, render_page_draft};
 use crate::generation::sections::section_titles_for_page_type;
 use crate::llm::{LlmRuntime, LlmService};
 use crate::repo::fingerprint::fingerprint_bytes;
@@ -42,10 +42,10 @@ use crate::storage::sqlite_store;
 use crate::storage::state_store::write_state_with_symbol_graph_for_files;
 use crate::storage::wiki_fs::{resolve_page_path, write_page};
 use crate::workflows::init::{
-    ancestor_ids_for_page, current_timestamp, page_provenance, run_init_with_progress_and_llm_as,
-    source_paths_for_page,
+    ancestor_ids_for_page, build_minimal_page_context, current_timestamp, find_or_build_planned_page,
+    page_provenance, run_init_with_progress_and_llm_as, source_paths_for_page,
 };
-use crate::workflows::page_render::prepare_page_artifacts_with_llm;
+use crate::workflows::page_render::run_compose_pipeline;
 use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
 };
@@ -287,15 +287,32 @@ fn apply_incremental_update<'a>(
     let repo_context = build_repo_context_with_graph(&scan_report, &module_tree, &graph_summary);
     let module_contexts =
         build_module_contexts_with_graph(&scan_report, &module_tree, &graph_summary);
-    reporter.phase("plan_pages", "规划 Wiki 页面");
-    let pages = crate::generation::planner::plan_pages_with_graph(
+
+    // ── Layer 2-4: Knowledge Planning → Research → Compose ──
+    reporter.phase("knowledge_planning", "知识域发现与单元规划");
+    reporter.phase("research", "执行分层研究");
+    reporter.phase("compose", "组合生成页面内容");
+    let research_provider =
+        crate::generation::research_engine::StructuralResearchProvider;
+    let pipeline = run_compose_pipeline(
+        repo_root,
         &scan_report,
         &module_tree,
         &repo_context,
         &module_contexts,
-        &steering,
         &graph_summary,
-    );
+        &steering,
+        &research_provider,
+    )?;
+    let page_drafts = pipeline.page_drafts;
+    let digests = pipeline.digests;
+    let knowledge_tree = pipeline.knowledge_tree;
+    let pages_by_id: BTreeMap<String, _> = pipeline
+        .planned_pages
+        .iter()
+        .map(|p| (p.id.clone(), p.clone()))
+        .collect();
+
     let explicit_affected_page_ids = plan
         .affected_set
         .affected_page_ids
@@ -313,34 +330,10 @@ fn apply_incremental_update<'a>(
         .iter()
         .map(|page| (page.page_id.clone(), page))
         .collect::<BTreeMap<_, _>>();
-    let llm_enrichment_enabled = llm_runtime.enrichment_enabled();
-    if llm_enrichment_enabled {
-        reporter.phase("llm_enrichment", "生成页面增强内容");
-    }
-    let mut llm_progress = |processed: usize, total: usize| {
-        reporter.counted(
-            "llm_enrichment",
-            format!("生成页面增强内容 {processed}/{total}"),
-            processed,
-            total,
-        );
-    };
-    let prepared_pages = prepare_page_artifacts_with_llm(
-        &pages,
-        &scan_report,
-        &module_tree,
-        &repo_context,
-        &module_contexts,
-        &full_symbol_snapshot,
-        &full_resolved_graph,
-        &analysis,
-        &steering,
-        Some(&mut llm_runtime),
-        llm_enrichment_enabled.then_some(&mut llm_progress as &mut dyn FnMut(usize, usize)),
-    );
-    let current_page_ids = prepared_pages
+
+    let current_page_ids = page_drafts
         .iter()
-        .map(|artifact| artifact.page.id.clone())
+        .map(|d| d.page_id.clone())
         .collect::<BTreeSet<_>>();
     let removed_page_ids = previous_pages
         .keys()
@@ -350,13 +343,19 @@ fn apply_incremental_update<'a>(
     let mut ancestor_ids_by_page = BTreeMap::new();
     let mut next_pages = Vec::new();
     let mut touched_paths = BTreeSet::new();
-    let page_total = prepared_pages.len();
+    let page_total = page_drafts.len();
 
     reporter.counted("render_pages", "渲染页面", 0, page_total);
 
-    for (index, artifact) in prepared_pages.iter().enumerate() {
-        let planned_page = &artifact.page;
-        let ancestor_ids = ancestor_ids_for_page(planned_page, &ancestor_ids_by_page);
+    for (index, draft) in page_drafts.iter().enumerate() {
+        let rendered = render_page_draft(draft);
+        let planned_page = find_or_build_planned_page(draft, &pages_by_id);
+        let page_context = build_minimal_page_context(draft, &knowledge_tree);
+        let input_hash = crate::repo::fingerprint::fingerprint_bytes(
+            format!("{}:{}", draft.page_id, draft.citation_count).as_bytes(),
+        );
+
+        let ancestor_ids = ancestor_ids_for_page(&planned_page, &ancestor_ids_by_page);
         ancestor_ids_by_page.insert(planned_page.id.clone(), ancestor_ids.clone());
         let current_page_path = format!(".wiki/{}", planned_page.relative_path);
         let previous_page = previous_pages.get(&planned_page.id).copied();
@@ -364,7 +363,7 @@ fn apply_incremental_update<'a>(
             Some(previous_page)
                 if !explicit_affected_page_ids.contains(&planned_page.id)
                     && !explicit_removed_page_ids.contains(&planned_page.id)
-                    && previous_page.input_hash == artifact.input_hash
+                    && previous_page.input_hash == input_hash
                     && previous_page.path == current_page_path =>
             {
                 false
@@ -379,13 +378,12 @@ fn apply_incremental_update<'a>(
             }
         }
 
-        // 尝试从磁盘读取旧页面，解析出 user sections 并 merge 回新页面
         let final_content = merge_user_sections_into_page(
             repo_root,
             previous_page.map(|page| page.path.as_str()),
-            planned_page,
-            &artifact.rendered_page.sections,
-            &artifact.rendered_page.content,
+            &planned_page,
+            &rendered.sections,
+            &rendered.content,
         );
 
         let content_hash = fingerprint_bytes(final_content.as_bytes());
@@ -400,34 +398,40 @@ fn apply_incremental_update<'a>(
                 touched_paths.insert(previous_page.path.clone());
             }
         }
+
+        let summary = digests
+            .get(&draft.unit_id)
+            .map(|d| d.summary.clone())
+            .unwrap_or_default();
+
         write_page_context_cache(
             repo_root,
             &PageContextCacheEntry {
                 page_id: planned_page.id.clone(),
-                input_hash: artifact.input_hash.clone(),
-                context: artifact.page_context.clone(),
+                input_hash: input_hash.clone(),
+                context: page_context.clone(),
             },
         )?;
         write_page_generation_cache(
             repo_root,
             &PageGenerationCacheEntry {
                 page_id: planned_page.id.clone(),
-                input_hash: artifact.input_hash.clone(),
+                input_hash: input_hash.clone(),
                 content_hash: content_hash.clone(),
-                sections: artifact.rendered_page.sections.clone(),
+                sections: rendered.sections.clone(),
             },
         )?;
 
         next_pages.push(build_page_state(&PageBuildResult {
             page: planned_page.clone(),
-            context: artifact.page_context.clone(),
-            summary: artifact.page_summary.clone(),
-            input_hash: artifact.input_hash.clone(),
+            context: page_context.clone(),
+            summary,
+            input_hash,
             content_hash,
-            source_paths: source_paths_for_page(&scan_report, &artifact.page_context),
+            source_paths: source_paths_for_page(&scan_report, &page_context),
             ancestor_ids,
-            provenance: page_provenance(planned_page, &artifact.page_context, &scan_report),
-            sections: artifact.rendered_page.sections.clone(),
+            provenance: page_provenance(&planned_page, &page_context, &scan_report),
+            sections: rendered.sections,
         }));
         touched_paths.insert(current_page_path);
         reporter.counted(
@@ -447,6 +451,12 @@ fn apply_incremental_update<'a>(
             remove_page_caches(repo_root, &removed_page_id)?;
             touched_paths.insert(previous_page.path.clone());
         }
+    }
+
+    // page_id 去重
+    {
+        let mut seen = std::collections::HashSet::new();
+        next_pages.retain(|p| seen.insert(p.page_id.clone()));
     }
 
     let generated_at = current_timestamp();
@@ -481,6 +491,7 @@ fn apply_incremental_update<'a>(
     let metadata = export_metadata(&next_state, &export_context);
     reporter.phase("write_metadata", "写入元数据");
     write_metadata(repo_root, &metadata)?;
+    sqlite_store::clear_pipeline_checkpoint(&sqlite_store::open_db(repo_root)?)?;
 
     Ok(touched_paths.into_iter().collect())
 }

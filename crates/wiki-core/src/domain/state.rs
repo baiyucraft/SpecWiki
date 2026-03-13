@@ -52,7 +52,7 @@ pub struct WikiPageState {
     pub title: String,
     /// 页面在 `.wiki/` 下的稳定相对路径。
     pub path: String,
-    /// 页面类型，如 `overview / architecture / module`。
+    /// 页面类型，如 `overview / architecture / family-index / family-child / family-leaf-doc / module / topic`。
     pub page_type: String,
     /// 父页面 ID，用于恢复页面层级关系。
     pub parent_id: Option<String>,
@@ -319,9 +319,9 @@ pub fn compute_page_input_hash(
         generation_mode: &'a str,
         parent_id: &'a Option<String>,
         scope: &'a str,
-        topic_kind: &'a Option<String>,
-        topic_key: &'a Option<String>,
-        topic_summary: &'a Option<String>,
+        unit_id: &'a Option<String>,
+        unit_type: &'a Option<String>,
+        domain_id: &'a Option<String>,
         source_ids: &'a [String],
         module_ids: &'a [String],
         relation_ids: &'a [String],
@@ -329,13 +329,8 @@ pub fn compute_page_input_hash(
         summary_inputs: &'a [String],
         hints: &'a [String],
         child_summaries: &'a [String],
-        child_rollups: &'a [crate::domain::context::ChildPageRollup],
         evidence_groups: &'a [crate::domain::context::PageEvidenceGroup],
         diagram_inputs: &'a [crate::domain::context::PageDiagramInput],
-        module_dossiers: &'a [crate::domain::context::ModuleDossier],
-        topic_dossier: &'a Option<crate::domain::context::TopicDossier>,
-        research_result: &'a Option<crate::domain::context::PageResearchResult>,
-        research_session: &'a Option<crate::domain::context::PageResearchSessionState>,
         source_fingerprints: Vec<(&'a str, &'a str)>,
     }
 
@@ -362,9 +357,9 @@ pub fn compute_page_input_hash(
         generation_mode: &page.generation_mode,
         parent_id: &page.parent_id,
         scope: &page.scope,
-        topic_kind: &page.topic_kind,
-        topic_key: &page.topic_key,
-        topic_summary: &page.topic_summary,
+        unit_id: &page.unit_id,
+        unit_type: &page.unit_type,
+        domain_id: &page.domain_id,
         source_ids: &context.source_ids,
         module_ids: &page.module_ids,
         relation_ids: &page.relation_ids,
@@ -372,13 +367,8 @@ pub fn compute_page_input_hash(
         summary_inputs: &context.summary_inputs,
         hints: &context.hints,
         child_summaries: &context.child_summaries,
-        child_rollups: &context.child_rollups,
         evidence_groups: &context.evidence_groups,
         diagram_inputs: &context.diagram_inputs,
-        module_dossiers: &context.module_dossiers,
-        topic_dossier: &context.topic_dossier,
-        research_result: &context.research_result,
-        research_session: &context.research_session,
         source_fingerprints,
     };
 

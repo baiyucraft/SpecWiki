@@ -3,10 +3,9 @@ use std::fs;
 use std::path::Path;
 
 use crate::domain::context::{
-    ChildPageRollup, ModuleContext, ModuleDossier, PageContext, PageDiagramEdge, PageDiagramInput,
-    PageDiagramNode, PageEvidenceGroup, PageEvidenceItem, PageResearchDiagramRollup,
-    PageResearchEvidenceGroup, PageResearchEvidenceItem, RepoContext, RepoDossier, TargetedSnippet,
-    TopicDossier, TopicSeed,
+    ModuleContext, PageContext,
+    PageDiagramEdge, PageDiagramInput, PageDiagramNode, PageEvidenceGroup, PageEvidenceItem,
+    RepoContext, ResearchSurface, TopicSeed,
 };
 use crate::domain::module_tree::{ModuleNode, ModuleTree};
 use crate::domain::stable_id::stable_id;
@@ -534,12 +533,10 @@ pub fn build_page_context(
         None,
         Vec::new(),
         Vec::new(),
-        Vec::new(),
     )
 }
 
 /// 构建带页面 hints 和 child summaries 的页面上下文。
-/// 这条路径服务迭代 9 的页面增强输入，但 deterministic 渲染仍然只消费稳定 facts。
 pub fn build_page_context_with_inputs(
     page: &PlannedPage,
     report: &ScanReport,
@@ -548,7 +545,6 @@ pub fn build_page_context_with_inputs(
     module_contexts: &[ModuleContext],
     hints: Vec<String>,
     child_summaries: Vec<String>,
-    child_rollups: Vec<ChildPageRollup>,
 ) -> PageContext {
     build_page_context_with_graph_inputs(
         page,
@@ -560,7 +556,6 @@ pub fn build_page_context_with_inputs(
         None,
         hints,
         child_summaries,
-        child_rollups,
     )
 }
 
@@ -572,10 +567,9 @@ pub fn build_page_context_with_graph_inputs(
     repo_context: &RepoContext,
     module_contexts: &[ModuleContext],
     symbol_snapshot: Option<&ParsedSymbolsSnapshot>,
-    graph_analysis: Option<&GraphAnalysisSnapshot>,
+    _graph_analysis: Option<&GraphAnalysisSnapshot>,
     hints: Vec<String>,
     child_summaries: Vec<String>,
-    child_rollups: Vec<ChildPageRollup>,
 ) -> PageContext {
     let module_context_index = module_contexts
         .iter()
@@ -875,19 +869,14 @@ pub fn build_page_context_with_graph_inputs(
             }
         }
         "topic" => {
-            let topic_seed = lookup_topic_seed(page, repo_context, module_contexts);
-            let topic_summary = page
-                .topic_summary
-                .as_ref()
-                .filter(|summary| !summary.is_empty())
-                .cloned()
-                .or_else(|| topic_seed.as_ref().map(|seed| seed.summary.clone()))
-                .unwrap_or_else(|| "当前主题由 deterministic planner 生成。".to_string());
             let topic_kind = page
-                .topic_kind
-                .clone()
-                .or_else(|| topic_seed.as_ref().map(|seed| seed.topic_kind.clone()))
-                .unwrap_or_else(|| "topic".to_string());
+                .scope
+                .split(':')
+                .nth(1)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("topic")
+                .to_string();
+            let topic_summary = format!("当前专题页聚焦 `{}` 这一稳定知识单元。", page.title);
 
             facts.push(format!("主题类别：{topic_kind}"));
             facts.push(format!("主题标题：{}", page.title));
@@ -896,62 +885,138 @@ pub fn build_page_context_with_graph_inputs(
             for module_id in &page.module_ids {
                 summary_inputs.push(format!("关联模块：{}", module_name(module_tree, module_id)));
             }
-            for source_path in topic_seed
-                .as_ref()
-                .map(|seed| seed.source_paths.clone())
-                .unwrap_or_default()
-                .into_iter()
-                .take(6)
-            {
-                summary_inputs.push(format!("关键源码：{source_path}"));
+            for path in select_paths_for_source_ids(report, &page.source_ids).into_iter().take(6) {
+                summary_inputs.push(format!("关键源码：{path}"));
             }
-            if let Some(seed) = topic_seed {
-                if let Some(group) = build_evidence_group(
-                    report,
-                    &symbol_index,
+            if let Some(group) = build_evidence_group(
+                report,
+                &symbol_index,
+                &page.id,
+                "关键证据",
+                section_key_for_title(page.page_type.as_str(), "关键证据"),
+                &format!("topic-evidence:{}", slug_key(&page.title)),
+                "关键来源",
+                "这些 evidence 直接支撑当前专题页的主题判断。",
+                "topic-evidence",
+                select_paths_for_source_ids(report, &page.source_ids)
+                    .into_iter()
+                    .take(8)
+                    .map(|path| (source_id_for_path(report, &path), path, String::new()))
+                    .collect(),
+            ) {
+                evidence_groups.push(group);
+            }
+            if !page.module_ids.is_empty() {
+                if let Some(diagram) = build_dependency_diagram_for_modules(
                     &page.id,
-                    "关键证据",
-                    section_key_for_title(page.page_type.as_str(), "关键证据"),
-                    &format!("topic-evidence:{}", seed.topic_key),
-                    "关键来源",
-                    "这些 evidence 直接支撑当前专题页的主题判断。",
-                    "topic-evidence",
-                    seed.source_paths
-                        .iter()
-                        .zip(
-                            seed.source_ids
-                                .iter()
-                                .cloned()
-                                .chain(std::iter::repeat(String::new())),
-                        )
-                        .take(8)
-                        .map(|(path, source_id)| {
-                            (
-                                (!source_id.is_empty()).then_some(source_id),
-                                path.clone(),
-                                String::new(),
-                            )
-                        })
-                        .collect(),
+                    "关联模块",
+                    "关联模块图",
+                    module_tree,
+                    &page.module_ids,
                 ) {
-                    evidence_groups.push(group);
+                    diagram_inputs.push(diagram);
                 }
-                if seed.topic_kind == "process" {
-                    if let Some(diagram) =
-                        build_process_diagram(&page.id, "结构图", "流程图", &seed.summary)
-                    {
-                        diagram_inputs.push(diagram);
-                    }
-                } else if !page.module_ids.is_empty() {
-                    if let Some(diagram) = build_dependency_diagram_for_modules(
-                        &page.id,
-                        "关联模块",
-                        "关联模块图",
-                        module_tree,
-                        &page.module_ids,
-                    ) {
-                        diagram_inputs.push(diagram);
-                    }
+            }
+        }
+        "family-index" | "family-child" | "family-leaf-doc" => {
+            let family_kind = page
+                .relative_path
+                .split('/')
+                .next()
+                .filter(|value| !value.is_empty())
+                .unwrap_or("family")
+                .to_string();
+            let family_key = slug_key(&page.relative_path);
+            let family_summary = format!("当前页面聚焦 `{}` 对应的知识域单元。", page.title);
+
+            facts.push(format!("知识域类别：{family_kind}"));
+            facts.push(format!("知识域键：{family_key}"));
+            facts.push(format!("知识域标题：{}", page.title));
+            facts.push(format!("关联源码数：{}", page.source_ids.len()));
+            summary_inputs.push(format!("知识域摘要：{family_summary}"));
+
+            let docs_anchors = select_family_docs_anchors(report, &page.source_ids);
+            let public_api_surfaces = select_family_public_api_surfaces(report, &page.source_ids);
+            let config_surfaces = select_family_config_surfaces(report, &page.source_ids);
+            let type_surfaces = select_family_type_surfaces(report, &page.source_ids);
+
+            for surface in docs_anchors.iter().take(8) {
+                summary_inputs.push(format!(
+                    "Docs Anchor：{}（{}）",
+                    surface.path, surface.summary
+                ));
+            }
+            for surface in public_api_surfaces.iter().take(8) {
+                summary_inputs.push(format!(
+                    "Public API：{}（{}）",
+                    surface.path, surface.summary
+                ));
+            }
+            for surface in config_surfaces.iter().take(8) {
+                summary_inputs.push(format!(
+                    "Config Surface：{}（{}）",
+                    surface.path, surface.summary
+                ));
+            }
+            for surface in type_surfaces.iter().take(8) {
+                summary_inputs.push(format!(
+                    "Type Surface：{}（{}）",
+                    surface.path, surface.summary
+                ));
+            }
+
+            let evidence_items = docs_anchors
+                .iter()
+                .chain(public_api_surfaces.iter())
+                .chain(config_surfaces.iter())
+                .chain(type_surfaces.iter())
+                .take(10)
+                .map(|surface| {
+                    (
+                        surface.source_id.clone(),
+                        surface.path.clone(),
+                        format!("{family_kind}:{}", surface.surface_type),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if let Some(group) = build_evidence_group(
+                report,
+                &symbol_index,
+                &page.id,
+                if page.page_type == "family-index" {
+                    "家族来源"
+                } else {
+                    "叶子来源"
+                },
+                section_key_for_title(
+                    page.page_type.as_str(),
+                    if page.page_type == "family-index" {
+                        "关键来源"
+                    } else {
+                        "关键来源"
+                    },
+                ),
+                &format!("family-evidence:{family_kind}:{family_key}"),
+                "关键来源",
+                "这些 docs / API / config / type 入口共同支撑当前知识域页面。",
+                "family-source",
+                evidence_items,
+            ) {
+                evidence_groups.push(group);
+            }
+            if !page.module_ids.is_empty() {
+                if let Some(diagram) = build_dependency_diagram_for_modules(
+                    &page.id,
+                    if page.page_type == "family-index" {
+                        "知识域结构"
+                    } else {
+                        "关联模块"
+                    },
+                    "知识域模块图",
+                    module_tree,
+                    &page.module_ids,
+                ) {
+                    diagram_inputs.push(diagram);
                 }
             }
         }
@@ -966,43 +1031,14 @@ pub fn build_page_context_with_graph_inputs(
     }
     facts = dedupe_lines(facts);
     summary_inputs = dedupe_lines(summary_inputs);
-    let module_dossiers = build_module_dossiers(
-        page,
-        report,
-        module_tree,
-        &module_context_index,
-        symbol_snapshot,
-        graph_analysis,
-        &child_rollups,
-        &evidence_groups,
-        &diagram_inputs,
-    );
-    let repo_dossier = build_repo_dossier(
-        page,
-        report,
-        repo_context,
-        symbol_snapshot,
-        graph_analysis,
-        &child_rollups,
-        &evidence_groups,
-        &diagram_inputs,
-    );
-    let topic_dossier = build_topic_dossier(
-        page,
-        report,
-        repo_context,
-        module_contexts,
-        symbol_snapshot,
-        graph_analysis,
-        &child_rollups,
-        &evidence_groups,
-        &diagram_inputs,
-    );
 
     PageContext {
         page_id: page.id.clone(),
         page_type: page.page_type.clone(),
         scope: page.scope.clone(),
+        unit_id: page.unit_id.clone(),
+        unit_type: page.unit_type.clone(),
+        domain_id: page.domain_id.clone(),
         source_ids: page.source_ids.clone(),
         module_ids: page.module_ids.clone(),
         relation_ids: page.relation_ids.clone(),
@@ -1010,170 +1046,11 @@ pub fn build_page_context_with_graph_inputs(
         summary_inputs,
         hints,
         child_summaries,
-        child_rollups,
         evidence_groups,
         diagram_inputs,
-        repo_dossier,
-        module_dossiers,
-        topic_dossier,
-        research_result: None,
-        research_session: None,
     }
 }
 
-fn build_module_dossiers(
-    page: &PlannedPage,
-    report: &ScanReport,
-    module_tree: &ModuleTree,
-    module_context_index: &BTreeMap<String, &ModuleContext>,
-    symbol_snapshot: Option<&ParsedSymbolsSnapshot>,
-    graph_analysis: Option<&GraphAnalysisSnapshot>,
-    child_rollups: &[ChildPageRollup],
-    evidence_groups: &[PageEvidenceGroup],
-    diagram_inputs: &[PageDiagramInput],
-) -> Vec<ModuleDossier> {
-    let symbol_index = build_symbol_index(symbol_snapshot);
-    page.module_ids
-        .iter()
-        .filter_map(|module_id| {
-            let module = module_tree.module_by_id(module_id)?;
-            let context = module_context_index.get(module_id)?;
-            let key_sources = context.key_sources.clone();
-            let title = format!("{} 研究包", module.name);
-            let key_symbols = select_key_symbols_for_paths(&key_sources, &symbol_index, 8);
-            let targeted_snippets = build_targeted_snippets(
-                report,
-                &symbol_index,
-                symbol_snapshot,
-                graph_analysis,
-                &key_sources,
-                &key_symbols,
-                &context.public_surface,
-                &context.graph_hotspots,
-                child_rollups,
-                "module",
-            );
-
-            Some(ModuleDossier {
-                dossier_id: stable_id("module-dossier", module_id),
-                module_id: module_id.clone(),
-                title,
-                key_sources: key_sources.clone(),
-                key_symbols,
-                targeted_snippets,
-                cross_module_edges: context
-                    .dependencies
-                    .iter()
-                    .map(|dep| format!("依赖 -> {}", module_name(module_tree, dep)))
-                    .chain(
-                        context
-                            .dependents
-                            .iter()
-                            .map(|dep| format!("被依赖 <- {}", module_name(module_tree, dep))),
-                    )
-                    .collect(),
-                process_candidates: context.graph_hotspots.iter().take(4).cloned().collect(),
-                evidence_rollup: evidence_groups_to_research_rollup(evidence_groups),
-                diagram_rollup: diagram_inputs_to_research_rollup(diagram_inputs),
-                child_page_rollup: child_rollups.to_vec(),
-            })
-        })
-        .collect()
-}
-
-fn build_topic_dossier(
-    page: &PlannedPage,
-    report: &ScanReport,
-    repo_context: &RepoContext,
-    module_contexts: &[ModuleContext],
-    symbol_snapshot: Option<&ParsedSymbolsSnapshot>,
-    graph_analysis: Option<&GraphAnalysisSnapshot>,
-    child_rollups: &[ChildPageRollup],
-    evidence_groups: &[PageEvidenceGroup],
-    diagram_inputs: &[PageDiagramInput],
-) -> Option<TopicDossier> {
-    if page.page_type != "topic" {
-        return None;
-    }
-
-    let seed = lookup_topic_seed(page, repo_context, module_contexts)?;
-    let key_sources = seed.source_paths.clone();
-    let symbol_index = build_symbol_index(symbol_snapshot);
-    let key_symbols = select_key_symbols_for_paths(&key_sources, &symbol_index, 8);
-    let targeted_snippets = build_targeted_snippets(
-        report,
-        &symbol_index,
-        symbol_snapshot,
-        graph_analysis,
-        &key_sources,
-        &key_symbols,
-        &Vec::new(),
-        std::slice::from_ref(&seed.summary),
-        child_rollups,
-        "topic",
-    );
-    Some(TopicDossier {
-        dossier_id: stable_id("topic-dossier", &seed.topic_key),
-        topic_key: seed.topic_key.clone(),
-        topic_kind: seed.topic_kind.clone(),
-        title: seed.title.clone(),
-        summary: seed.summary.clone(),
-        key_sources: key_sources.clone(),
-        key_symbols,
-        targeted_snippets,
-        evidence_rollup: evidence_groups_to_research_rollup(evidence_groups),
-        diagram_rollup: diagram_inputs_to_research_rollup(diagram_inputs),
-        child_page_rollup: child_rollups.to_vec(),
-    })
-}
-
-fn build_repo_dossier(
-    page: &PlannedPage,
-    report: &ScanReport,
-    repo_context: &RepoContext,
-    symbol_snapshot: Option<&ParsedSymbolsSnapshot>,
-    graph_analysis: Option<&GraphAnalysisSnapshot>,
-    child_rollups: &[ChildPageRollup],
-    evidence_groups: &[PageEvidenceGroup],
-    diagram_inputs: &[PageDiagramInput],
-) -> Option<RepoDossier> {
-    if !matches!(page.page_type.as_str(), "overview" | "architecture") {
-        return None;
-    }
-
-    let key_sources = select_repo_core_sources(report);
-    let symbol_index = build_symbol_index(symbol_snapshot);
-    let key_symbols = select_key_symbols_for_paths(&key_sources, &symbol_index, 10);
-    let targeted_snippets = build_targeted_snippets(
-        report,
-        &symbol_index,
-        symbol_snapshot,
-        graph_analysis,
-        &key_sources,
-        &key_symbols,
-        &repo_context.key_entry_points,
-        &repo_context.detected_processes,
-        child_rollups,
-        "repo",
-    );
-
-    Some(RepoDossier {
-        dossier_id: stable_id("repo-dossier", page.page_type.as_str()),
-        title: match page.page_type.as_str() {
-            "overview" => "仓库概览研究包".to_string(),
-            _ => "系统架构研究包".to_string(),
-        },
-        key_sources,
-        key_symbols,
-        targeted_snippets,
-        cross_module_edges: repo_context.global_relations.clone(),
-        process_candidates: repo_context.detected_processes.clone(),
-        module_focus: repo_context.top_modules.clone(),
-        evidence_rollup: evidence_groups_to_research_rollup(evidence_groups),
-        diagram_rollup: diagram_inputs_to_research_rollup(diagram_inputs),
-        child_page_rollup: child_rollups.to_vec(),
-    })
-}
 
 #[derive(Debug, Clone, Copy)]
 struct SpanHint {
@@ -1209,255 +1086,6 @@ fn build_symbol_index(
     index
 }
 
-fn select_key_symbols_for_paths(
-    key_sources: &[String],
-    symbol_index: &BTreeMap<String, Vec<SymbolNode>>,
-    limit: usize,
-) -> Vec<String> {
-    let mut candidates = key_sources
-        .iter()
-        .flat_map(|path| symbol_index.get(path).into_iter().flatten())
-        .map(|symbol| {
-            let kind_score = match symbol.label.as_str() {
-                "function" | "method" => 40,
-                "class" | "struct" | "interface" | "trait" | "enum" => 35,
-                _ => 20,
-            };
-            let export_score = if symbol.is_exported { 20 } else { 0 };
-            let span_penalty =
-                ((symbol.end_line.saturating_sub(symbol.start_line)) as i32 / 12).clamp(0, 20);
-            (
-                kind_score + export_score - span_penalty,
-                symbol.file_path.clone(),
-                symbol.start_line,
-                symbol.symbol_id.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-
-    candidates.sort_by(|left, right| {
-        right
-            .0
-            .cmp(&left.0)
-            .then(left.1.cmp(&right.1))
-            .then(left.2.cmp(&right.2))
-            .then(left.3.cmp(&right.3))
-    });
-
-    candidates
-        .into_iter()
-        .map(|(_, _, _, symbol_id)| symbol_id)
-        .take(limit)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn build_targeted_snippets(
-    report: &ScanReport,
-    symbol_index: &BTreeMap<String, Vec<SymbolNode>>,
-    symbol_snapshot: Option<&ParsedSymbolsSnapshot>,
-    graph_analysis: Option<&GraphAnalysisSnapshot>,
-    key_sources: &[String],
-    key_symbols: &[String],
-    entry_points: &[String],
-    process_candidates: &[String],
-    child_rollups: &[ChildPageRollup],
-    scope_kind: &str,
-) -> Vec<TargetedSnippet> {
-    let symbols_by_id = symbol_snapshot
-        .map(|snapshot| {
-            snapshot
-                .symbols
-                .iter()
-                .map(|symbol| (symbol.symbol_id.clone(), symbol))
-                .collect::<BTreeMap<_, _>>()
-        })
-        .unwrap_or_default();
-    let mut snippets = Vec::<TargetedSnippet>::new();
-    let mut seen = BTreeSet::<String>::new();
-
-    for symbol_id in key_symbols {
-        let Some(symbol) = symbols_by_id.get(symbol_id).copied() else {
-            continue;
-        };
-        if let Some(snippet) = read_targeted_snippet(
-            report,
-            symbol.file_path.as_str(),
-            symbol.start_line,
-            symbol.end_line,
-            "symbol",
-            100,
-            vec![symbol.symbol_id.clone()],
-        ) {
-            if seen.insert(snippet.snippet_id.clone()) {
-                snippets.push(snippet);
-            }
-        }
-    }
-
-    for path in entry_points.iter().chain(key_sources.iter()) {
-        if let Some(symbols) = symbol_index.get(path) {
-            for symbol in symbols.iter().take(2) {
-                let kind = if entry_points.iter().any(|entry| entry == path) {
-                    "entry-point"
-                } else {
-                    "key-source"
-                };
-                if let Some(snippet) = read_targeted_snippet(
-                    report,
-                    path,
-                    symbol.start_line,
-                    symbol.end_line,
-                    kind,
-                    80,
-                    vec![symbol.symbol_id.clone()],
-                ) {
-                    if seen.insert(snippet.snippet_id.clone()) {
-                        snippets.push(snippet);
-                    }
-                }
-            }
-        } else if let Some(snippet) =
-            read_file_window_snippet(report, path, 1, 24, "file-preview", 40)
-        {
-            if seen.insert(snippet.snippet_id.clone()) {
-                snippets.push(snippet);
-            }
-        }
-    }
-
-    if let Some(graph_analysis) = graph_analysis {
-        let relevant_processes = graph_analysis
-            .processes
-            .iter()
-            .filter(|process| {
-                process_candidates.is_empty()
-                    || process_candidates
-                        .iter()
-                        .any(|candidate| candidate.contains(&process.label))
-            })
-            .take(2)
-            .collect::<Vec<_>>();
-        for process in relevant_processes {
-            for step in graph_analysis
-                .process_steps
-                .iter()
-                .filter(|step| step.process_id == process.process_id)
-                .take(4)
-            {
-                let Some(symbol) = symbols_by_id.get(&step.symbol_id).copied() else {
-                    continue;
-                };
-                if let Some(snippet) = read_targeted_snippet(
-                    report,
-                    symbol.file_path.as_str(),
-                    symbol.start_line,
-                    symbol.end_line,
-                    "process-step",
-                    70 - step.step_order as i32,
-                    vec![symbol.symbol_id.clone()],
-                ) {
-                    if seen.insert(snippet.snippet_id.clone()) {
-                        snippets.push(snippet);
-                    }
-                }
-            }
-        }
-    }
-
-    for child_path in child_rollups
-        .iter()
-        .flat_map(|rollup| rollup.key_sources_rollup.iter())
-        .take(4)
-    {
-        if let Some(snippet) =
-            read_file_window_snippet(report, child_path, 1, 18, "child-rollup", 30)
-        {
-            if seen.insert(snippet.snippet_id.clone()) {
-                snippets.push(snippet);
-            }
-        }
-    }
-
-    snippets.sort_by(|left, right| {
-        right
-            .score
-            .cmp(&left.score)
-            .then(left.path.cmp(&right.path))
-            .then(left.start_line.cmp(&right.start_line))
-            .then(left.snippet_id.cmp(&right.snippet_id))
-    });
-    snippets.truncate(match scope_kind {
-        "repo" => 12,
-        "module" => 10,
-        _ => 8,
-    });
-    snippets
-}
-
-fn read_targeted_snippet(
-    report: &ScanReport,
-    path: &str,
-    start_line: usize,
-    end_line: usize,
-    snippet_kind: &str,
-    score: i32,
-    symbol_ids: Vec<String>,
-) -> Option<TargetedSnippet> {
-    let source_id = source_id_for_path(report, path);
-    let absolute_path = Path::new(&report.root).join(path);
-    let content = fs::read_to_string(&absolute_path).ok()?;
-    let lines = content.lines().collect::<Vec<_>>();
-    let start = start_line.max(1).min(lines.len().max(1));
-    let end = end_line.max(start).min(lines.len().max(start));
-    let bounded_end = (start + 23).min(end).max(start);
-    let snippet_lines = lines
-        .iter()
-        .skip(start.saturating_sub(1))
-        .take(bounded_end.saturating_sub(start) + 1)
-        .map(|line| line.trim_end().to_string())
-        .collect::<Vec<_>>();
-    let content = snippet_lines.join("\n").trim().to_string();
-    if content.is_empty() {
-        return None;
-    }
-
-    Some(TargetedSnippet {
-        snippet_id: stable_id(
-            "snippet",
-            &format!("{path}:{start}:{bounded_end}:{snippet_kind}"),
-        ),
-        source_id,
-        path: path.to_string(),
-        start_line: start,
-        end_line: bounded_end,
-        snippet_kind: snippet_kind.to_string(),
-        score,
-        symbol_ids,
-        content,
-    })
-}
-
-fn read_file_window_snippet(
-    report: &ScanReport,
-    path: &str,
-    start_line: usize,
-    window: usize,
-    snippet_kind: &str,
-    score: i32,
-) -> Option<TargetedSnippet> {
-    read_targeted_snippet(
-        report,
-        path,
-        start_line,
-        start_line.saturating_add(window),
-        snippet_kind,
-        score,
-        Vec::new(),
-    )
-}
-
 fn best_span_for_path(
     report: &ScanReport,
     symbol_index: &BTreeMap<String, Vec<SymbolNode>>,
@@ -1488,75 +1116,13 @@ fn best_span_for_path(
     }
 }
 
-fn evidence_groups_to_research_rollup(
-    evidence_groups: &[PageEvidenceGroup],
-) -> Vec<PageResearchEvidenceGroup> {
-    evidence_groups
+fn select_paths_for_source_ids(report: &ScanReport, source_ids: &[String]) -> Vec<String> {
+    report
+        .files
         .iter()
-        .map(|group| PageResearchEvidenceGroup {
-            group_key: group.group_id.clone(),
-            title: group.title.clone(),
-            items: group
-                .items
-                .iter()
-                .map(|item| PageResearchEvidenceItem {
-                    source_id: item.source_id.clone(),
-                    path: item.path.clone(),
-                    start_line: item.start_line,
-                    end_line: item.end_line,
-                    evidence_type: item.evidence_type.clone(),
-                    section_refs: item.section_refs.clone(),
-                    note: item.note.clone(),
-                    coarse_span: item.coarse_span,
-                })
-                .collect(),
-        })
+        .filter(|file| source_ids.contains(&file.id))
+        .map(|file| file.path.clone())
         .collect()
-}
-
-fn diagram_inputs_to_research_rollup(
-    diagram_inputs: &[PageDiagramInput],
-) -> Vec<PageResearchDiagramRollup> {
-    diagram_inputs
-        .iter()
-        .map(|diagram| PageResearchDiagramRollup {
-            diagram_key: diagram.diagram_id.clone(),
-            diagram_type: normalize_diagram_type(&diagram.diagram_type),
-            title: diagram.title.clone(),
-            summary: diagram.summary.clone(),
-        })
-        .collect()
-}
-
-fn normalize_diagram_type(diagram_type: &str) -> String {
-    match diagram_type {
-        "dependency" => "module_dependency".to_string(),
-        "structure" => "hierarchy".to_string(),
-        "flow" => "process".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn lookup_topic_seed(
-    page: &PlannedPage,
-    repo_context: &RepoContext,
-    module_contexts: &[ModuleContext],
-) -> Option<TopicSeed> {
-    let topic_key = page.topic_key.as_deref()?;
-
-    repo_context
-        .root_topics
-        .iter()
-        .chain(repo_context.process_topics.iter())
-        .find(|seed| seed.topic_key == topic_key)
-        .cloned()
-        .or_else(|| {
-            module_contexts
-                .iter()
-                .flat_map(|context| context.capability_topics.iter())
-                .find(|seed| seed.topic_key == topic_key)
-                .cloned()
-        })
 }
 
 fn source_id_for_path(report: &ScanReport, path: &str) -> Option<String> {
@@ -2035,4 +1601,162 @@ fn select_repo_core_sources(report: &ScanReport) -> Vec<String> {
         .map(|(_, _, path)| path)
         .take(8)
         .collect()
+}
+
+fn select_family_docs_anchors(report: &ScanReport, source_ids: &[String]) -> Vec<ResearchSurface> {
+    let paths = report
+        .files
+        .iter()
+        .filter(|file| source_ids.contains(&file.id))
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
+    select_family_docs_anchors_for_paths(report, &paths)
+}
+
+fn select_family_public_api_surfaces(
+    report: &ScanReport,
+    source_ids: &[String],
+) -> Vec<ResearchSurface> {
+    let paths = report
+        .files
+        .iter()
+        .filter(|file| source_ids.contains(&file.id))
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
+    select_family_public_api_surfaces_for_paths(report, &paths)
+}
+
+fn select_family_config_surfaces(
+    report: &ScanReport,
+    source_ids: &[String],
+) -> Vec<ResearchSurface> {
+    let paths = report
+        .files
+        .iter()
+        .filter(|file| source_ids.contains(&file.id))
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
+    select_family_config_surfaces_for_paths(report, &paths)
+}
+
+fn select_family_type_surfaces(
+    report: &ScanReport,
+    source_ids: &[String],
+) -> Vec<ResearchSurface> {
+    let paths = report
+        .files
+        .iter()
+        .filter(|file| source_ids.contains(&file.id))
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
+    select_family_type_surfaces_for_paths(report, &paths)
+}
+
+fn select_family_docs_anchors_for_paths(
+    report: &ScanReport,
+    paths: &[String],
+) -> Vec<ResearchSurface> {
+    select_research_surfaces_for_paths(report, paths, "docs-anchor", |path| {
+        path.starts_with("docs/")
+            || path.ends_with("README.md")
+            || path.contains("/README.")
+            || path.contains("/docs/")
+    })
+}
+
+fn select_family_public_api_surfaces_for_paths(
+    report: &ScanReport,
+    paths: &[String],
+) -> Vec<ResearchSurface> {
+    select_research_surfaces_for_paths(report, paths, "public-api", |path| {
+        path.ends_with("/index.ts")
+            || path.ends_with("/index.js")
+            || path.ends_with("/public-types.ts")
+            || path.ends_with("/types.ts")
+            || path.ends_with("/typings.d.ts")
+            || path.ends_with("/package.json")
+    })
+}
+
+fn select_family_config_surfaces_for_paths(
+    report: &ScanReport,
+    paths: &[String],
+) -> Vec<ResearchSurface> {
+    select_research_surfaces_for_paths(report, paths, "config", |path| {
+        path.contains(".storybook/")
+            || path.ends_with("/main.ts")
+            || path.ends_with("/main.js")
+            || path.ends_with("/preview.ts")
+            || path.ends_with("/preview.js")
+            || path.ends_with("/manager.ts")
+            || path.ends_with("/manager.js")
+            || path.ends_with("/preset.js")
+            || path.ends_with("/preset.ts")
+            || path.ends_with("/build-config.ts")
+            || path.ends_with("/project.json")
+    })
+}
+
+fn select_family_type_surfaces_for_paths(
+    report: &ScanReport,
+    paths: &[String],
+) -> Vec<ResearchSurface> {
+    select_research_surfaces_for_paths(report, paths, "type", |path| {
+        path.ends_with(".d.ts")
+            || path.ends_with("/types.ts")
+            || path.ends_with("/public-types.ts")
+            || path.ends_with("/typings.d.ts")
+    })
+}
+
+fn select_research_surfaces_for_paths(
+    report: &ScanReport,
+    paths: &[String],
+    surface_type: &str,
+    predicate: impl Fn(&str) -> bool,
+) -> Vec<ResearchSurface> {
+    paths
+        .iter()
+        .filter(|path| predicate(path))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(10)
+        .map(|path| build_research_surface(report, surface_type, &path))
+        .collect()
+}
+
+fn build_research_surface(report: &ScanReport, surface_type: &str, path: &str) -> ResearchSurface {
+    let title = path.rsplit('/').next().unwrap_or(path).to_string();
+    let anchor = match surface_type {
+        "docs-anchor" => path
+            .trim_end_matches(".md")
+            .trim_end_matches(".mdx")
+            .rsplit('/')
+            .next()
+            .unwrap_or(path)
+            .to_string(),
+        _ => title.clone(),
+    };
+    let summary = match surface_type {
+        "docs-anchor" => format!("文档入口 `{anchor}` 为当前知识域提供说明或导航。"),
+        "public-api" => format!("`{title}` 暴露公共 API、包入口或导出面。"),
+        "config" => format!("`{title}` 提供运行时、构建或扩展配置入口。"),
+        "type" => format!("`{title}` 暴露类型、schema 或契约定义。"),
+        _ => format!("`{title}` 属于 {surface_type} surface。"),
+    };
+
+    ResearchSurface {
+        surface_id: stable_id("surface", &format!("{surface_type}:{path}")),
+        surface_type: surface_type.to_string(),
+        source_id: report
+            .files
+            .iter()
+            .find(|file| file.path == path)
+            .map(|file| file.id.clone()),
+        path: path.to_string(),
+        title,
+        anchor,
+        summary,
+    }
 }

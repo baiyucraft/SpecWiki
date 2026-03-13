@@ -164,7 +164,12 @@ fn sync_detects_managed_drift() {
     // 修改 managed section 的正文（不删除 marker）
     let overview_path = repo_root.join(".wiki/项目概述.md");
     let content = fs::read_to_string(&overview_path).unwrap();
-    let modified = content.replace("## 简介\n\n", "## 简介\n\n我手工改了这段内容\n\n");
+    let marker_start = "<!-- wiki:managed:start";
+    let pos = content.find(marker_start).expect("should have managed start marker");
+    let body_start = content[pos..].find('\n').unwrap() + pos + 1;
+    let mut modified = content[..body_start].to_string();
+    modified.push_str("我手工改了这段内容\n\n");
+    modified.push_str(&content[body_start..]);
     fs::write(&overview_path, &modified).unwrap();
 
     let sync_result = run_sync(repo_root).unwrap();
