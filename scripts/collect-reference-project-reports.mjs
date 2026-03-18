@@ -38,9 +38,16 @@ import {
   runTaskPool,
   withTemporaryDevConfig,
 } from "./testing/helpers.mjs";
+import {
+  analyzeReferenceFidelity,
+  readMarkdownPages,
+} from "./testing/reference-fidelity.mjs";
+import {
+  inspectWikiRuntime,
+} from "./testing/wiki-runtime-inspection.mjs";
 
 const REFERENCE_DIR = path.join(TMP_DIR, "reference");
-const DEFAULT_CHANGE = "iteration-9-5-provider-first-research-evidence-and-unit-decomposition";
+const DEFAULT_CHANGE = "iteration-9-6-fidelity-gates-and-reference-report-hardening";
 const VALIDATION_PROJECTS = ["storybook", "dagger"];
 const REAL_REPO_MAP = {
   aLocal: "E:\\project\\aLocal",
@@ -725,7 +732,11 @@ function comparePagePair(referencePage, generatedPage, score) {
 function classificationCounts(comparisons) {
   const missingPages = comparisons.filter((item) => !item.matched).length;
   const collapsedPages = comparisons.filter((item) =>
-    item.matched && item.notes?.some((note) => COLLAPSE_NOTE_PATTERNS.includes(note))
+    item.matched
+      && (
+        (item.reuseCount ?? 1) > 1
+        || item.notes?.some((note) => COLLAPSE_NOTE_PATTERNS.includes(note))
+      )
   ).length;
   const lowFidelityMatchedPages = comparisons.filter((item) =>
     item.matched
@@ -904,117 +915,187 @@ function promptCount(usage, promptType) {
   return usage?.by_prompt_type?.find((bucket) => bucket.key === promptType)?.request_count ?? 0;
 }
 
-function collectProject(project, run) {
-  const projectRoot = path.join(TEST_DIR, project);
-  const generatedWikiDir = path.join(projectRoot, ".wiki");
-  const referenceWikiDir = path.join(REFERENCE_DIR, project, "content");
-  const generatedPages = listMarkdownFiles(generatedWikiDir).map((relativePath) =>
-    readPage(generatedWikiDir, relativePath)
-  );
-  const referencePages = listMarkdownFiles(referenceWikiDir).map((relativePath) =>
-    readPage(referenceWikiDir, relativePath)
-  );
+function computeOverallMatchRate(matchedCount, referencePageCount) {
+  if (referencePageCount === 0) {
+    return null;
+  }
+  return Number(((matchedCount / referencePageCount) * 100).toFixed(2));
+}
 
-  const comparisons = [];
-  const matchedGeneratedPaths = new Set();
+function buildStabilityMetrics(referenceWikiDir, generatedWikiDir, reruns) {
+  if (reruns <= 1) {
+    return null;
+  }
 
-  for (const referencePage of referencePages) {
-    const matched = chooseGeneratedCounterpart(referencePage, generatedPages);
-    if (!matched) {
-      comparisons.push({
-        referencePath: referencePage.relativePath,
-        referenceTitle: referencePage.title,
-        referenceCategory: referencePage.category,
-        referenceTopicLabel: referencePage.topicLabel,
-        decompositionSignals: {
-          reference: referencePage.decompositionSignals,
-          generated: [],
-        },
-        matched: false,
-        notes: ["缺少对应生成页面"],
-      });
-      continue;
-    }
-
-    matchedGeneratedPaths.add(matched.generatedPage.relativePath);
-    comparisons.push({
-      referencePath: referencePage.relativePath,
-      referenceTitle: referencePage.title,
-      matched: true,
-      ...comparePagePair(referencePage, matched.generatedPage, matched.score),
+  const runs = [];
+  for (let index = 0; index < reruns; index++) {
+    const rerun = analyzeReferenceFidelity({
+      referenceDir: referenceWikiDir,
+      generatedDir: generatedWikiDir,
+    });
+    runs.push({
+      label: `warm-rerun-${index + 1}`,
+      reuseOverage: rerun.reuseOverage,
+      medianSkeletonFidelity: rerun.medianSkeletonScore,
+      medianKeySourceCoverage: rerun.medianKeySourceCoverage,
     });
   }
 
-  const extraGeneratedPages = generatedPages
-    .filter((page) => !matchedGeneratedPaths.has(page.relativePath))
-    .map((page) => ({
-      relativePath: page.relativePath,
-      title: page.title,
-      lines: page.nonEmptyLines,
-    }));
+  const reuseValues = runs.map((item) => item.reuseOverage);
+  const skeletonValues = runs.map((item) => item.medianSkeletonFidelity ?? 0);
+  const keySourceValues = runs.map((item) => item.medianKeySourceCoverage ?? 0);
+  const deltas = {
+    reuseOverage: Math.max(...reuseValues) - Math.min(...reuseValues),
+    medianSkeletonFidelity: Number((Math.max(...skeletonValues) - Math.min(...skeletonValues)).toFixed(4)),
+    medianKeySourceCoverage: Number((Math.max(...keySourceValues) - Math.min(...keySourceValues)).toFixed(4)),
+  };
 
-  const matchedCount = comparisons.filter((item) => item.matched).length;
-  const missingCount = comparisons.length - matchedCount;
-  const reusedGeneratedPages = countReusedGeneratedPages(comparisons);
-  const coverage = summarizeCoverage(comparisons, generatedPages, referencePages);
-  const classifications = classificationCounts(comparisons);
+  return {
+    reruns: runs,
+    deltas,
+    stable:
+      deltas.reuseOverage <= 0
+      && deltas.medianSkeletonFidelity <= 0.02
+      && deltas.medianKeySourceCoverage <= 0.02,
+  };
+}
+
+/**
+ * 收集单个 reference 项目的 runtime、fidelity 与报告聚合结果。
+ *
+ * 这里先做 runtime gate，再决定是否进入 Markdown fidelity 分析；
+ * `runtime_incomplete` 必须直接 hard gate，不能继续伪装成低质量页面。
+ *
+ * @param project 测试项目名。
+ * @param run 本次 collect 对应的运行标签与 usage 摘要。
+ * @param options 额外控制项；用于区分 requested run mode 与 warm stability 次数。
+ * @returns 返回单项目的结构化报告快照。
+ */
+function collectProject(project, run, options = {}) {
+  const projectRoot = path.join(TEST_DIR, project);
+  const generatedWikiDir = path.join(projectRoot, ".wiki");
+  const referenceWikiDir = path.join(REFERENCE_DIR, project, "content");
+  const runtimeSnapshot = inspectWikiRuntime(generatedWikiDir);
+  const referencePages = readMarkdownPages(referenceWikiDir);
+  const stopReasons = readResearchStopMetrics(generatedWikiDir);
+  const run_metrics = {
+    run_mode: options.runMode ?? run.label,
+    run_label: run.label,
+    cache_mode: run.cacheMode,
+    usage: run.usage,
+    page_research_requests: promptCount(run.usage, "page_research"),
+    page_enrichment_requests: promptCount(run.usage, "page_enrichment"),
+  };
+  const runtime_metrics = {
+    runtime_state: runtimeSnapshot.runtimeState,
+    baseline_class: runtimeSnapshot.baselineClass,
+    incomplete_reason: runtimeSnapshot.incompleteReason,
+    db_counts: runtimeSnapshot.dbCounts,
+    checkpoint: runtimeSnapshot.checkpoint,
+    stop_reasons: stopReasons,
+  };
+
+  if (runtimeSnapshot.runtimeState !== "ready") {
+    return {
+      project,
+      status: "runtime_incomplete",
+      runLabel: run.label,
+      cacheMode: run.cacheMode,
+      usage: run.usage,
+      run_metrics,
+      runtime_metrics,
+      generatedPageCount: runtimeSnapshot.markdownPageCount,
+      referencePageCount: referencePages.length,
+      matchedCount: 0,
+      missingCount: 0,
+      extraGeneratedPages: [],
+      comparisons: [],
+      reusedGeneratedPages: [],
+      topReuseOffenders: [],
+      skeletonLowestPages: [],
+      keySourceLowestPages: [],
+      coverage: null,
+      classifications: null,
+      decomposition: null,
+      overallMatchRate: null,
+      fidelity_metrics: null,
+      stability: null,
+      commonGaps: [
+        `runtime 仍处于 ${runtimeSnapshot.runtimeState}，当前只能做诊断，不能纳入 fidelity 验收基线`,
+      ],
+    };
+  }
+
+  const generatedPages = readMarkdownPages(generatedWikiDir);
+  const fidelity = analyzeReferenceFidelity({
+    generatedPages,
+    referencePages,
+  });
+  const coverage = summarizeCoverage(fidelity.comparisons, generatedPages, referencePages);
+  const classifications = classificationCounts(fidelity.comparisons);
   const decomposition = summarizeDecompositionCoverage(
     generatedPages,
     referencePages,
-    comparisons,
+    fidelity.comparisons,
   );
-  const commonGaps = summarizeProjectGaps(comparisons, generatedPages, referencePages, coverage);
-  const stopReasons = readResearchStopMetrics(generatedWikiDir);
-  const overallMatchRate = Number(
-    (
-      (referencePages.length === 0 ? 0 : matchedCount / referencePages.length)
-      * 100
-    ).toFixed(2),
-  );
-
-  assertGeneratedWikiReady(project, generatedWikiDir, generatedPages, referencePages);
+  const overallMatchRate = computeOverallMatchRate(fidelity.matchedCount, referencePages.length);
+  const commonGaps = summarizeProjectGaps(fidelity.comparisons, generatedPages, referencePages, coverage);
 
   return {
     project,
+    status: "ready",
     runLabel: run.label,
     cacheMode: run.cacheMode,
     usage: run.usage,
+    run_metrics,
+    runtime_metrics,
     generatedPageCount: generatedPages.length,
     referencePageCount: referencePages.length,
-    matchedCount,
-    missingCount,
-    extraGeneratedPages,
-    comparisons,
-    reusedGeneratedPages,
+    matchedCount: fidelity.matchedCount,
+    missingCount: fidelity.missingCount,
+    extraGeneratedPages: fidelity.extraGeneratedPages,
+    comparisons: fidelity.comparisons,
+    reusedGeneratedPages: fidelity.topReuseOffenders,
+    topReuseOffenders: fidelity.topReuseOffenders,
+    skeletonLowestPages: fidelity.skeletonLowestPages,
+    keySourceLowestPages: fidelity.keySourceLowestPages,
     coverage,
     classifications,
     decomposition,
     overallMatchRate,
+    fidelity_metrics: {
+      overall_match_rate: overallMatchRate,
+      matched_pages: fidelity.matchedCount,
+      missing_pages: fidelity.missingCount,
+      collapsed_pages: fidelity.collapsedPages,
+      reuse_pages: fidelity.reusePages,
+      severe_reuse_pages: fidelity.severeReusePages,
+      reuse_overage: fidelity.reuseOverage,
+      low_fidelity_matched_pages: fidelity.lowFidelityMatchedPages,
+      median_skeleton_fidelity: fidelity.medianSkeletonScore,
+      median_key_source_coverage: fidelity.medianKeySourceCoverage,
+    },
+    stability:
+      (run.label === "warm" || run.label === "reuse")
+      && (options.stabilityReruns ?? 0) > 1
+        ? buildStabilityMetrics(referenceWikiDir, generatedWikiDir, options.stabilityReruns)
+        : null,
     commonGaps,
     stopReasons,
   };
 }
 
-function assertGeneratedWikiReady(project, generatedWikiDir, generatedPages, referencePages) {
-  if (generatedPages.length > 0 || referencePages.length === 0) {
-    return;
-  }
-
-  const cacheDbPath = path.join(generatedWikiDir, ".cache", "wiki-cache.db");
-  const checkpoint = readPipelineCheckpointSummary(path.dirname(generatedWikiDir));
-  if (!existsSync(cacheDbPath) && !checkpoint) {
-    return;
-  }
-
-  const checkpointSummary = checkpoint
-    ? ` stage=${checkpoint.stage || "unknown"} target=${checkpoint.targetId || "n/a"}`
-    : "";
-  throw new Error(
-    `${project} generated wiki is incomplete: no markdown pages found under ${generatedWikiDir}, but cache/checkpoint exists.${checkpointSummary}`,
-  );
-}
-
 function countReusedGeneratedPages(comparisons) {
+  const precomputed = comparisons
+    .filter((comparison) => comparison.matched && (comparison.reuseCount ?? 1) > 1)
+    .map((comparison) => ({
+      generatedPath: comparison.generatedPath,
+      count: comparison.reuseCount,
+    }));
+  if (precomputed.length > 0) {
+    return [...new Map(precomputed.map((item) => [item.generatedPath, item])).values()];
+  }
+
   const counts = new Map();
   for (const comparison of comparisons) {
     if (!comparison.matched) {
@@ -1090,6 +1171,7 @@ function summarizeCoverage(comparisons, generatedPages, referencePages) {
     matchedEvidenceShortfall: matched.filter((item) => item.generatedEvidence < item.referenceEvidence).length,
     matchedDiagramShortfall: matched.filter((item) => item.generatedMermaid < item.referenceMermaid).length,
     matchedOutlineShortfall: matched.filter((item) => item.notes.includes("主章节骨架偏离 reference")).length,
+    matchedKeySourceShortfall: matched.filter((item) => (item.keySource?.coverage ?? 1) < 0.7).length,
     matchedEnglishNamingShortfall: matched.filter((item) => item.notes.includes("文件名仍偏向英文 raw docs")).length,
     extraEnglishRawDocsPages: generatedPages.filter((page) =>
       page.englishRawDocsLike && !comparisons.some((comparison) => comparison.generatedPath === page.relativePath)
@@ -1242,168 +1324,332 @@ function ledgerEntry(kind, comparison) {
 }
 
 function buildGapLedger(result) {
-  const missingEntries = result.comparisons
-    .filter((comparison) => !comparison.matched)
-    .map((comparison) => ledgerEntry("missing", comparison));
-  const collapsedEntries = result.comparisons
-    .filter((comparison) =>
-      comparison.matched
-      && comparison.notes?.some((note) => COLLAPSE_NOTE_PATTERNS.includes(note))
-    )
-    .map((comparison) => ledgerEntry("collapsed", comparison));
-  const lowFidelityEntries = result.comparisons
-    .filter((comparison) =>
-      comparison.matched
-      && comparison.notes?.some((note) => LOW_FIDELITY_NOTE_PATTERNS.includes(note))
-    )
-    .map((comparison) => ledgerEntry("low_fidelity", comparison));
+  if (result.status !== "ready") {
+    return [{
+      symptom: "runtime_incomplete",
+      metric: [
+        `runtime_state=${result.runtime_metrics.runtime_state}`,
+        `reason=${result.runtime_metrics.incomplete_reason ?? "n/a"}`,
+        `knowledge_units=${result.runtime_metrics.db_counts.knowledge_units}`,
+        `research_cache=${result.runtime_metrics.db_counts.research_cache}`,
+        `wiki_pages=${result.runtime_metrics.db_counts.wiki_pages}`,
+      ].join(" / "),
+      offendingPages: [],
+      contractHypothesis: "assemble / runtime gate / pipeline checkpoint",
+    }];
+  }
+
+  const entries = [];
+  for (const comparison of result.comparisons) {
+    if (!comparison.matched) {
+      const entry = ledgerEntry("missing", comparison);
+      entries.push({
+        symptom: "missing_page",
+        metric: "missing_pages",
+        offendingPages: [comparison.referencePath],
+        contractHypothesis: entry.contract,
+      });
+      continue;
+    }
+
+    if ((comparison.reuseCount ?? 1) > 1) {
+      const entry = ledgerEntry("collapsed", comparison);
+      entries.push({
+        symptom: "many_to_one_reuse",
+        metric: `reuse_count=${comparison.reuseCount}`,
+        offendingPages: [comparison.referencePath, comparison.generatedPath],
+        contractHypothesis: entry.contract,
+      });
+    }
+    if ((comparison.skeletonScore ?? 1) < 0.8) {
+      entries.push({
+        symptom: "skeleton_shortfall",
+        metric: `skeleton_score=${Number(comparison.skeletonScore ?? 0).toFixed(2)}`,
+        offendingPages: [comparison.referencePath, comparison.generatedPath],
+        contractHypothesis: "renderer heading contract / compose section plan",
+      });
+    }
+    if ((comparison.keySource?.coverage ?? 1) < 0.7) {
+      entries.push({
+        symptom: "key_source_shortfall",
+        metric: `key_source_coverage=${Number(comparison.keySource?.coverage ?? 0).toFixed(2)}`,
+        offendingPages: [
+          comparison.referencePath,
+          comparison.generatedPath,
+          ...(comparison.keySource?.missingSources ?? []).slice(0, 5).map((item) => `missing:${item}`),
+        ],
+        contractHypothesis: "citation / evidence / compose source grounding",
+      });
+    }
+  }
+
+  return entries;
+}
+
+function formatPercent(value) {
+  return value == null ? "N/A" : `${Number(value).toFixed(2)}%`;
+}
+
+function formatRatio(value) {
+  return value == null ? "N/A" : Number(value).toFixed(2);
+}
+
+function gateDecision(result) {
+  if (result.status !== "ready") {
+    return {
+      label: "fail-hard",
+      reason: `runtime_state=${result.runtime_metrics.runtime_state}`,
+    };
+  }
+
+  const pass =
+    (result.fidelity_metrics?.overall_match_rate ?? 0) >= 95
+    && (result.fidelity_metrics?.reuse_overage ?? 0) === 0
+    && (result.fidelity_metrics?.median_skeleton_fidelity ?? 0) >= 0.8
+    && (result.fidelity_metrics?.median_key_source_coverage ?? 0) >= 0.7
+    && (result.stability?.stable ?? true);
+  return {
+    label: pass ? "pass-candidate" : "not-pass",
+    reason: [
+      `overall=${formatPercent(result.fidelity_metrics?.overall_match_rate ?? null)}`,
+      `reuse_overage=${result.fidelity_metrics?.reuse_overage ?? "N/A"}`,
+      `median_skeleton=${formatRatio(result.fidelity_metrics?.median_skeleton_fidelity ?? null)}`,
+      `median_key_source=${formatRatio(result.fidelity_metrics?.median_key_source_coverage ?? null)}`,
+      `warm_stable=${result.stability?.stable ?? "n/a"}`,
+    ].join(" / "),
+  };
+}
+
+function summarizeStabilitySeries(values) {
+  if (values.length === 0 || values.some((value) => value == null)) {
+    return {
+      min: null,
+      max: null,
+      delta: null,
+    };
+  }
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  return {
+    min: Number(min.toFixed(4)),
+    max: Number(max.toFixed(4)),
+    delta: Number((max - min).toFixed(4)),
+  };
+}
+
+/**
+ * 对同一批项目做 warm report 重跑，检查关键 fidelity 指标是否抖动。
+ *
+ * 这里复用 `collectProject()`，确保 stability 与正式报告走同一套 gate 和聚合口径。
+ *
+ * @param projects 需要重跑的项目列表。
+ * @param repeats 每个项目的 warm collect 次数。
+ * @returns 返回稳定性摘要；次数不足两次时返回 `null`。
+ */
+function buildWarmStability(projects, repeats) {
+  if (repeats < 2) {
+    return null;
+  }
+
+  const samplesByProject = new Map(projects.map((project) => [project, []]));
+  for (let index = 0; index < repeats; index++) {
+    for (const project of projects) {
+      const sample = collectProject(project, {
+        label: "warm-stability",
+        cacheMode: "preserve",
+        usage: null,
+      });
+      samplesByProject.get(project).push({
+        runtimeState: sample.runtime_metrics.runtime_state,
+        reuseOverage: sample.fidelity_metrics?.reuse_overage ?? null,
+        medianSkeletonFidelity: sample.fidelity_metrics?.median_skeleton_fidelity ?? null,
+        medianKeySourceCoverage: sample.fidelity_metrics?.median_key_source_coverage ?? null,
+      });
+    }
+  }
 
   return {
-    missingEntries,
-    collapsedEntries,
-    lowFidelityEntries,
+    repeats,
+    projects: projects.map((project) => {
+      const samples = samplesByProject.get(project) ?? [];
+      const reuse = summarizeStabilitySeries(samples.map((sample) => sample.reuseOverage));
+      const skeleton = summarizeStabilitySeries(samples.map((sample) => sample.medianSkeletonFidelity));
+      const keySource = summarizeStabilitySeries(samples.map((sample) => sample.medianKeySourceCoverage));
+      const stable =
+        samples.every((sample) => sample.runtimeState === "ready")
+        && (reuse.delta ?? Number.POSITIVE_INFINITY) <= 0
+        && (skeleton.delta ?? Number.POSITIVE_INFINITY) <= 0.02
+        && (keySource.delta ?? Number.POSITIVE_INFINITY) <= 0.02;
+      return {
+        project,
+        stable,
+        samples,
+        deltas: {
+          reuseOverage: reuse,
+          medianSkeletonFidelity: skeleton,
+          medianKeySourceCoverage: keySource,
+        },
+      };
+    }),
   };
 }
 
 function renderGapLedger(result) {
   const ledger = buildGapLedger(result);
   const lines = [
-    `# ${result.project} 95% 差距台账`,
+    `# ${result.project} Gap Ledger`,
     "",
-    "## 当前口径",
+    "## 当前状态",
     "",
-    `- overall_match_rate：${result.matchedCount}/${result.referencePageCount} = ${result.overallMatchRate}%`,
-    `- missing pages：${ledger.missingEntries.length}`,
-    `- collapsed pages：${ledger.collapsedEntries.length}`,
-    `- low-fidelity matched pages：${ledger.lowFidelityEntries.length}`,
-    `- extra generated pages：${result.extraGeneratedPages.length}`,
+    `- status：${result.status}`,
+    `- runtime_state：${result.runtime_metrics.runtime_state}`,
+    `- baseline_class：${result.runtime_metrics.baseline_class}`,
     "",
+    "| Symptom | Metric | Offending Pages | Contract Hypothesis |",
+    "| --- | --- | --- | --- |",
   ];
 
-  for (const [label, entries] of [
-    ["missing pages", ledger.missingEntries],
-    ["collapsed pages", ledger.collapsedEntries],
-    ["low-fidelity matched pages", ledger.lowFidelityEntries],
-  ]) {
-    lines.push(`## ${label}`);
-    lines.push("");
-    if (entries.length === 0) {
-      lines.push("- 当前没有该类差距。");
-      lines.push("");
-      continue;
-    }
-    for (const entry of entries) {
-      lines.push(`### ${entry.referencePath}`);
-      lines.push("");
-      lines.push(`- reference 标题：${entry.referenceTitle}`);
-      lines.push(`- 当前生成页：${entry.generatedPath}`);
-      lines.push(`- 建议承载 KnowledgeUnit：${entry.knowledgeUnit}`);
-      lines.push(`- 对应 ResearchProfile：${entry.researchProfile}`);
-      lines.push(`- 优先修复 contract：${entry.contract}`);
-      lines.push(`- Decomposition 信号：${entry.signal}`);
-      lines.push(`- 诊断：${entry.notes.join("；") || "无"}`);
-      lines.push("");
-    }
+  for (const entry of ledger) {
+    lines.push(
+      `| ${entry.symptom} | ${entry.metric} | ${entry.offendingPages.join("<br>") || "n/a"} | ${entry.contractHypothesis} |`,
+    );
   }
 
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * 将单项目快照渲染为 Markdown 报告。
+ *
+ * 报告必须先展示 run/runtime 两类指标，再决定是否进入 fidelity 结论，
+ * 避免把 warm usage、cache 历史和 runtime 完整性混成一栏。
+ *
+ * @param result 单项目结构化结果。
+ * @returns 返回项目 Markdown 报告。
+ */
 function renderProjectReport(result) {
   const lines = [
-    `# ${result.project} Reference 对比报告`,
+    `# ${result.project} Reference Fidelity Report`,
     "",
-    `生成页面：${result.generatedPageCount} 页`,
-    `reference 页面：${result.referencePageCount} 页`,
-    `命中对比：${result.matchedCount} 页`,
-    `缺失对比：${result.missingCount} 页`,
-    `总体对齐率：${result.overallMatchRate}%`,
-    `运行模式：${result.runLabel} (cache_mode=${result.cacheMode})`,
-    `LLM usage：requests=${result.usage?.request_count ?? 0}, total_tokens=${result.usage?.total_tokens ?? 0}, page_research=${promptCount(result.usage, "page_research")}, page_enrichment=${promptCount(result.usage, "page_enrichment")}`,
+    `- project：${result.project}`,
+    `- status：${result.status}`,
+    `- generated_pages：${result.generatedPageCount}`,
+    `- reference_pages：${result.referencePageCount}`,
     "",
-    "## 95% 验收口径",
+    "## Run Metrics",
     "",
-    `- overall_match_rate：${result.matchedCount}/${result.referencePageCount} = ${result.overallMatchRate}%`,
-    `- missing pages：${result.classifications.missingPages}`,
-    `- collapsed pages：${result.classifications.collapsedPages}`,
-    `- low-fidelity matched pages：${result.classifications.lowFidelityMatchedPages}`,
-    `- extra generated pages：${result.extraGeneratedPages.length}`,
-    `- provider-backed page research requests：${promptCount(result.usage, "page_research")}`,
-    `- budget stopped pages：${result.stopReasons.budgetStoppedPages}`,
-    `- stalled pages：${result.stopReasons.stalledPages}`,
-    `- invalid output pages：${result.stopReasons.invalidOutputPages}`,
-    `- provider failed pages：${result.stopReasons.providerFailedPages}`,
+    `- run_label：${result.run_metrics.run_label}`,
+    `- cache_mode：${result.run_metrics.cache_mode}`,
+    `- usage：requests=${result.run_metrics.usage?.request_count ?? 0}, total_tokens=${result.run_metrics.usage?.total_tokens ?? 0}, page_research=${result.run_metrics.page_research_requests}, page_enrichment=${result.run_metrics.page_enrichment_requests}`,
     "",
-    "## 覆盖统计",
+    "## Runtime Metrics",
     "",
-    `- 专题页覆盖：generated ${result.coverage.generatedTopicPages} / reference ${result.coverage.referenceTopicPages}（repo-archetype=${result.coverage.archetypeTopicPages}）`,
-    `- evidence 落页：generated ${result.coverage.generatedEvidencePages} / reference ${result.coverage.referenceEvidencePages}`,
-    `- citation 密度：generated ${result.coverage.generatedCitationDensity} / reference ${result.coverage.referenceCitationDensity}`,
-    `- 图表达覆盖：generated ${result.coverage.generatedDiagramPages} / reference ${result.coverage.referenceDiagramPages}`,
-    `- 主章节骨架短板：${result.coverage.matchedOutlineShortfall} 页`,
-    `- 英文 raw docs 命名残留：matched ${result.coverage.matchedEnglishNamingShortfall} / extra ${result.coverage.extraEnglishRawDocsPages}`,
-    `- page research 请求：${promptCount(result.usage, "page_research")}`,
-    `- page enrichment 请求：${promptCount(result.usage, "page_enrichment")}`,
-    `- stop reason 分布：${result.stopReasons.stopReasonCounts.map(([reason, count]) => `${reason}(${count})`).join("、") || "无"}`,
-    `- research session 聚合：turns=${result.stopReasons.aggregateStats.turnsUsed}, tool_calls=${result.stopReasons.aggregateStats.toolCalls}, delta_section=${result.stopReasons.aggregateStats.deltaSectionCount}, delta_evidence=${result.stopReasons.aggregateStats.deltaEvidenceCount}, delta_diagram=${result.stopReasons.aggregateStats.deltaDiagramCount}, child_digest=${result.stopReasons.aggregateStats.childDigestDelta}`,
-    `- 已规划专题类型：${result.coverage.topicLabels.slice(0, 6).map(([label, count]) => `${label}(${count})`).join("、") || "无"}`,
-    `- 高频缺失专题：${result.coverage.missingTopicLabels.slice(0, 6).map(([label, count]) => `${label}(${count})`).join("、") || "无"}`,
-    "",
-    "## Decomposition 命中",
-    "",
-    `- generated：${result.decomposition.generated.map(([label, count]) => `${label}(${count})`).join("、") || "无"}`,
-    `- reference：${result.decomposition.reference.map(([label, count]) => `${label}(${count})`).join("、") || "无"}`,
-    `- 高频缺口：${result.decomposition.missingSignals.slice(0, 6).map(([label, count]) => `${label}(${count})`).join("、") || "无"}`,
-    "",
-    "## 项目结论",
-    "",
+    `- runtime_state：${result.runtime_metrics.runtime_state}`,
+    `- baseline_class：${result.runtime_metrics.baseline_class}`,
+    `- incomplete_reason：${result.runtime_metrics.incomplete_reason ?? "n/a"}`,
+    `- db_counts：knowledge_units=${result.runtime_metrics.db_counts.knowledge_units}, knowledge_domains=${result.runtime_metrics.db_counts.knowledge_domains}, research_cache=${result.runtime_metrics.db_counts.research_cache}, page_digests=${result.runtime_metrics.db_counts.page_digests}, page_drafts=${result.runtime_metrics.db_counts.page_drafts}, wiki_pages=${result.runtime_metrics.db_counts.wiki_pages}, pipeline_checkpoint=${result.runtime_metrics.db_counts.pipeline_checkpoint}`,
+    `- stop_reasons：${result.runtime_metrics.stop_reasons.stopReasonCounts.map(([reason, count]) => `${reason}(${count})`).join("、") || "无"}`,
   ];
 
+  if (result.runtime_metrics.checkpoint) {
+    lines.push(
+      `- checkpoint：stage=${result.runtime_metrics.checkpoint.stage || "unknown"}, target=${result.runtime_metrics.checkpoint.targetId || "n/a"}`,
+    );
+  }
+  lines.push("");
+
+  if (result.status !== "ready") {
+    lines.push("## Fidelity Gate");
+    lines.push("");
+    lines.push("- 当前 runtime 不是 ready，本次报告只保留诊断摘要，不输出 overall / reuse / skeleton / key-source 汇总值。");
+    lines.push("");
+    lines.push("## 当前结论");
+    lines.push("");
+    for (const gap of result.commonGaps) {
+      lines.push(`- ${gap}`);
+    }
+    lines.push("");
+    return `${lines.join("\n")}\n`;
+  }
+
+  const gate = gateDecision(result);
+  lines.push("## Fidelity Gate");
+  lines.push("");
+  lines.push(`- decision：${gate.label}`);
+  lines.push(`- reason：${gate.reason}`);
+  lines.push(`- overall_match_rate：${formatPercent(result.fidelity_metrics.overall_match_rate)}`);
+  lines.push(`- reuse_overage：${result.fidelity_metrics.reuse_overage}`);
+  lines.push(`- median_skeleton_fidelity：${formatRatio(result.fidelity_metrics.median_skeleton_fidelity)}`);
+  lines.push(`- median_key_source_coverage：${formatRatio(result.fidelity_metrics.median_key_source_coverage)}`);
+  lines.push("");
+  lines.push("## 四个专项问题");
+  lines.push("");
+  lines.push(`- 页数是否接近 reference：matched ${result.fidelity_metrics.matched_pages}/${result.referencePageCount}，missing=${result.fidelity_metrics.missing_pages}`);
+  lines.push(`- 是否存在 coarse page reuse：reuse_pages=${result.fidelity_metrics.reuse_pages}，severe_reuse_pages=${result.fidelity_metrics.severe_reuse_pages}，reuse_overage=${result.fidelity_metrics.reuse_overage}`);
+  lines.push(`- docs-backed 页面是否具备 reference 式骨架：median=${formatRatio(result.fidelity_metrics.median_skeleton_fidelity)}，shortfall=${result.coverage?.matchedOutlineShortfall ?? 0}`);
+  lines.push(`- 正文是否覆盖关键文件：median=${formatRatio(result.fidelity_metrics.median_key_source_coverage)}，shortfall=${result.coverage?.matchedKeySourceShortfall ?? 0}`);
+  lines.push("");
+  lines.push("## Top Reuse Offenders");
+  lines.push("");
+  if (result.topReuseOffenders.length === 0) {
+    lines.push("- 当前没有 many-to-one reuse offender。");
+  } else {
+    for (const item of result.topReuseOffenders.slice(0, 10)) {
+      lines.push(`- ${item.generatedPath}：reuse_count=${item.count}`);
+    }
+  }
+  lines.push("");
+  lines.push("## Skeleton Lowest Pages");
+  lines.push("");
+  for (const item of result.skeletonLowestPages.slice(0, 5)) {
+    lines.push(`- ${item.referencePath} -> ${item.generatedPath}：skeleton=${formatRatio(item.skeletonScore)}`);
+  }
+  if (result.skeletonLowestPages.length === 0) {
+    lines.push("- 无");
+  }
+  lines.push("");
+  lines.push("## Key Source Lowest Pages");
+  lines.push("");
+  for (const item of result.keySourceLowestPages.slice(0, 5)) {
+    lines.push(`- ${item.referencePath} -> ${item.generatedPath}：coverage=${formatRatio(item.keySource.coverage)}，missing=${item.keySource.missingSources.slice(0, 6).join("、") || "无"}`);
+  }
+  if (result.keySourceLowestPages.length === 0) {
+    lines.push("- 无");
+  }
+
+  if (result.stability) {
+    lines.push("");
+    lines.push("## Warm Stability");
+    lines.push("");
+    lines.push(`- stable：${result.stability.stable}`);
+    lines.push(`- delta_reuse_overage：${result.stability.deltas.reuseOverage.delta ?? "N/A"}`);
+    lines.push(`- delta_median_skeleton：${formatRatio(result.stability.deltas.medianSkeletonFidelity.delta ?? null)}`);
+    lines.push(`- delta_median_key_source：${formatRatio(result.stability.deltas.medianKeySourceCoverage.delta ?? null)}`);
+  }
+
+  lines.push("");
+  lines.push("## 覆盖统计");
+  lines.push("");
+  lines.push(`- topic coverage：generated ${result.coverage.generatedTopicPages} / reference ${result.coverage.referenceTopicPages}`);
+  lines.push(`- evidence coverage：generated ${result.coverage.generatedEvidencePages} / reference ${result.coverage.referenceEvidencePages}`);
+  lines.push(`- citation density：generated ${result.coverage.generatedCitationDensity} / reference ${result.coverage.referenceCitationDensity}`);
+  lines.push(`- diagram coverage：generated ${result.coverage.generatedDiagramPages} / reference ${result.coverage.referenceDiagramPages}`);
+  lines.push(`- 高频缺失专题：${result.coverage.missingTopicLabels.slice(0, 6).map(([label, count]) => `${label}(${count})`).join("、") || "无"}`);
+
+  lines.push("");
+  lines.push("## Decomposition 命中");
+  lines.push("");
+  lines.push(`- generated：${result.decomposition.generated.map(([label, count]) => `${label}(${count})`).join("、") || "无"}`);
+  lines.push(`- reference：${result.decomposition.reference.map(([label, count]) => `${label}(${count})`).join("、") || "无"}`);
+  lines.push(`- 高频缺口：${result.decomposition.missingSignals.slice(0, 6).map(([label, count]) => `${label}(${count})`).join("、") || "无"}`);
+
+  lines.push("");
+  lines.push("## 项目结论");
+  lines.push("");
   for (const gap of result.commonGaps) {
     lines.push(`- ${gap}`);
   }
-  if (result.commonGaps.length === 0) {
-    lines.push("- 当前项目没有出现明显的结构性差距。");
-  }
-
-  if (result.reusedGeneratedPages.length > 0) {
-    lines.push("");
-    lines.push("## 多页折叠现象");
-    lines.push("");
-    for (const item of result.reusedGeneratedPages) {
-      lines.push(`- ${item.generatedPath} 被 ${item.count} 个 reference 页面共享映射`);
-    }
-  }
-
-  if (result.extraGeneratedPages.length > 0) {
-    lines.push("");
-    lines.push("## 额外生成页面");
-    lines.push("");
-    for (const page of result.extraGeneratedPages) {
-      lines.push(`- ${page.relativePath} (${page.title}, ${page.lines} 行)`);
-    }
-  }
-
-  lines.push("");
-  lines.push("## 逐文件对比");
-  lines.push("");
-  lines.push("| Reference | 生成页 | 行数(ref/gen) | 段落(ref/gen) | Evidence(ref/gen) | Mermaid(ref/gen) | 主要结论 |");
-  lines.push("| --- | --- | ---: | ---: | ---: | ---: | --- |");
-
-  for (const comparison of result.comparisons) {
-    if (!comparison.matched) {
-      lines.push(
-        `| ${comparison.referencePath} | 缺失 | - | - | - | - | ${comparison.notes.join("；")} |`,
-      );
-      continue;
-    }
-
-    const note = comparison.notes.length > 0 ? comparison.notes.join("；") : "基本可对应";
-    lines.push(
-      `| ${comparison.referencePath} | ${comparison.generatedPath} | ${comparison.referenceLines}/${comparison.generatedLines} | ${comparison.referenceProse}/${comparison.generatedProse} | ${comparison.referenceEvidence}/${comparison.generatedEvidence} | ${comparison.referenceMermaid}/${comparison.generatedMermaid} | ${note} |`,
-    );
-  }
-
   lines.push("");
   lines.push("## 逐文件详情");
   lines.push("");
@@ -1418,20 +1664,11 @@ function renderProjectReport(result) {
       lines.push("");
       continue;
     }
-
     lines.push(`- 生成页：${comparison.generatedPath}（${comparison.generatedTitle}）`);
-    lines.push(`- 匹配分数：${comparison.score}`);
-    lines.push(`- 页面类型：${comparison.referenceCategory} / ${comparison.generatedCategory}`);
-    lines.push(`- 行数：${comparison.referenceLines} / ${comparison.generatedLines}`);
-    lines.push(`- 段落行数：${comparison.referenceProse} / ${comparison.generatedProse}`);
-    lines.push(`- Evidence：${comparison.referenceEvidence} / ${comparison.generatedEvidence}`);
-    lines.push(`- Mermaid：${comparison.referenceMermaid} / ${comparison.generatedMermaid}`);
-    lines.push(
-      `- 文件提及重合：${comparison.overlappingBasenames.slice(0, 12).join("、") || "无"}`,
-    );
-    if (comparison.missingBasenames.length > 0) {
-      lines.push(`- reference 关键文件未覆盖：${comparison.missingBasenames.join("、")}`);
-    }
+    lines.push(`- reuse_count：${comparison.reuseCount}`);
+    lines.push(`- skeleton_score：${formatRatio(comparison.skeletonScore)}`);
+    lines.push(`- key_source_coverage：${formatRatio(comparison.keySource?.coverage ?? null)}`);
+    lines.push(`- missing_key_sources：${comparison.keySource?.missingSources?.join("、") || "无"}`);
     lines.push(`- 结论：${comparison.notes.join("；") || "基本可对应"}`);
     lines.push("");
   }
@@ -1439,19 +1676,30 @@ function renderProjectReport(result) {
   return `${lines.join("\n")}\n`;
 }
 
-function renderSummary(results) {
+/**
+ * 基于同一批 `results[]` 生成项目集摘要。
+ *
+ * @param results 单次 collect 的全部项目结果。
+ * @param meta 本次快照的元信息。
+ * @returns 返回 `_summary.md` 内容。
+ */
+function renderSummary(results, meta = {}) {
   const lines = [
     "# Reference 项目集汇总",
     "",
-    `生成时间：${new Date().toISOString()}`,
+    `生成时间：${meta.generatedAt ?? new Date().toISOString()}`,
+    `变更：${meta.change ?? DEFAULT_CHANGE}`,
+    `项目集：${(meta.projects ?? results.map((result) => result.project)).join("、") || "无"}`,
+    `requested_run_mode：${meta.runMode ?? "n/a"}`,
+    `skip_init：${meta.skipInit ?? false}`,
     "",
-    "| Project | generated | reference | matched | overall | missing | collapsed | low-fidelity | topic(gen/ref) | citation(gen/ref) | diagram(gen/ref) | extra generated | budget stop | stalled | invalid | provider failed |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| Project | Status | Runtime | overall | reuse_overage | median_skeleton | median_key_source | missing | collapsed | extra | warm_stable |",
+    "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
   ];
 
   for (const result of results) {
     lines.push(
-    `| ${result.project} | ${result.generatedPageCount} | ${result.referencePageCount} | ${result.matchedCount} | ${result.overallMatchRate}% | ${result.classifications.missingPages} | ${result.classifications.collapsedPages} | ${result.classifications.lowFidelityMatchedPages} | ${result.coverage.generatedTopicPages}/${result.coverage.referenceTopicPages} | ${result.coverage.generatedCitationDensity}/${result.coverage.referenceCitationDensity} | ${result.coverage.generatedDiagramPages}/${result.coverage.referenceDiagramPages} | ${result.extraGeneratedPages.length} | ${result.stopReasons.budgetStoppedPages} | ${result.stopReasons.stalledPages} | ${result.stopReasons.invalidOutputPages} | ${result.stopReasons.providerFailedPages} |`,
+    `| ${result.project} | ${result.status} | ${result.runtime_metrics.runtime_state} | ${formatPercent(result.fidelity_metrics?.overall_match_rate ?? null)} | ${result.fidelity_metrics?.reuse_overage ?? "N/A"} | ${formatRatio(result.fidelity_metrics?.median_skeleton_fidelity ?? null)} | ${formatRatio(result.fidelity_metrics?.median_key_source_coverage ?? null)} | ${result.fidelity_metrics?.missing_pages ?? "N/A"} | ${result.fidelity_metrics?.collapsed_pages ?? "N/A"} | ${result.extraGeneratedPages.length} | ${result.stability?.stable ?? "n/a"} |`,
     );
   }
 
@@ -1463,16 +1711,11 @@ function renderSummary(results) {
   }
 
   lines.push("");
-  lines.push("## 95% Gate");
+  lines.push("## Gate");
   lines.push("");
   for (const result of results) {
-    const pass =
-      result.overallMatchRate >= 95
-      && result.classifications.collapsedPages === 0
-      && result.extraGeneratedPages.length <= Math.max(5, Math.ceil(result.generatedPageCount * 0.08));
-    lines.push(
-      `- ${result.project}：${pass ? "通过候选" : "未通过"}，overall=${result.overallMatchRate}% / missing=${result.classifications.missingPages} / collapsed=${result.classifications.collapsedPages} / low-fidelity=${result.classifications.lowFidelityMatchedPages} / extra=${result.extraGeneratedPages.length}`,
-    );
+    const gate = gateDecision(result);
+    lines.push(`- ${result.project}：${gate.label}，${gate.reason}`);
   }
 
   lines.push("");
@@ -1482,123 +1725,140 @@ function renderSummary(results) {
     lines.push(`- ${gap}：${count} 个项目`);
   }
 
+  if (meta.stability) {
+    lines.push("");
+    lines.push("## Stability");
+    lines.push("");
+    for (const item of meta.stability.projects) {
+      lines.push(
+        `- ${item.project}：${item.stable ? "stable" : "unstable"}，reuse_delta=${item.deltas.reuseOverage.delta ?? "N/A"} / skeleton_delta=${item.deltas.medianSkeletonFidelity.delta ?? "N/A"} / key_source_delta=${item.deltas.medianKeySourceCoverage.delta ?? "N/A"}`,
+      );
+    }
+  }
+
   return `${lines.join("\n")}\n`;
 }
 
-function renderOptimizationNotes(results) {
+/**
+ * 汇总 9.6 当前样本的主问题，并标记本次快照是否具备基线资格。
+ *
+ * @param results 单次 collect 的全部项目结果。
+ * @param meta 本次快照的元信息。
+ * @returns 返回 `_optimization-notes.md` 内容。
+ */
+function renderOptimizationNotes(results, meta = {}) {
   const lines = [
     "# Reference 对比后的优化收敛",
     "",
     "## 当前收敛",
     "",
-    "这轮 9.5 的验收口径已经固定为 storybook + dagger，目标不是泛化地“更像 reference”，而是让两个样本都在最终 `.wiki/*.md` 上达到 `overall_match_rate >= 95%`，同时把差距拆成 missing / collapsed / low-fidelity 三类来收敛。",
+    `- ready 样本：${results.filter((result) => result.status === "ready").map((result) => result.project).join("、") || "无"}`,
+    `- runtime_incomplete 样本：${results.filter((result) => result.status !== "ready").map((result) => result.project).join("、") || "无"}`,
     "",
     "## 高频观察",
     "",
   ];
 
-  const topTopicGaps = new Map();
   for (const result of results) {
-    for (const [label, count] of result.coverage.missingTopicLabels.slice(0, 4)) {
-      topTopicGaps.set(label, (topTopicGaps.get(label) ?? 0) + count);
+    if (result.status !== "ready") {
+      lines.push(`- ${result.project}：runtime_incomplete，需先解决 ${result.runtime_metrics.incomplete_reason ?? "assemble 未完成"}`);
+      continue;
     }
+    lines.push(
+      `- ${result.project}：overall=${formatPercent(result.fidelity_metrics.overall_match_rate)} / reuse_overage=${result.fidelity_metrics.reuse_overage} / median_skeleton=${formatRatio(result.fidelity_metrics.median_skeleton_fidelity)} / median_key_source=${formatRatio(result.fidelity_metrics.median_key_source_coverage)}`,
+    );
   }
-
-  const projectsWithTopicPages = results.filter((result) => result.coverage.generatedTopicPages > 0).length;
-  const projectsWithEvidence = results.filter((result) => result.coverage.generatedEvidencePages > 0).length;
-  const projectsWithDiagrams = results.filter((result) => result.coverage.generatedDiagramPages > 0).length;
-  const avgGeneratedCitationDensity =
-    results.length === 0
-      ? 0
-      : Number(
-        (
-          results.reduce((sum, result) => sum + result.coverage.generatedCitationDensity, 0)
-          / results.length
-        ).toFixed(2),
-      );
-  const avgReferenceCitationDensity =
-    results.length === 0
-      ? 0
-      : Number(
-        (
-          results.reduce((sum, result) => sum + result.coverage.referenceCitationDensity, 0)
-          / results.length
-        ).toFixed(2),
-      );
-
-  lines.push(`- 已生成专题页的项目：${projectsWithTopicPages}/${results.length}`);
-  lines.push(`- 已落 evidence block 的项目：${projectsWithEvidence}/${results.length}`);
-  lines.push(`- 已落 Mermaid 图的项目：${projectsWithDiagrams}/${results.length}`);
-  lines.push(`- 平均 citation 密度：generated ${avgGeneratedCitationDensity} / reference ${avgReferenceCitationDensity}`);
-  lines.push(
-    `- 总体对齐率：${results.map((result) => `${result.project}=${result.overallMatchRate}%`).join("、") || "无"}`,
-  );
-  lines.push(
-    `- 三类差距：${results.map((result) => `${result.project}[missing=${result.classifications.missingPages}, collapse=${result.classifications.collapsedPages}, low-fidelity=${result.classifications.lowFidelityMatchedPages}]`).join("；") || "无"}`,
-  );
-  lines.push(
-    `- 高频缺失专题：${[...topTopicGaps.entries()].sort((left, right) => right[1] - left[1]).slice(0, 6).map(([label, count]) => `${label}(${count})`).join("、") || "无"}`,
-  );
-  lines.push(
-    `- 章节骨架短板：${results.map((result) => `${result.project}=${result.coverage.matchedOutlineShortfall}`).join("、") || "无"}`,
-  );
-  lines.push(
-    `- 英文 raw docs 残留：${results.map((result) => `${result.project}=matched ${result.coverage.matchedEnglishNamingShortfall} / extra ${result.coverage.extraEnglishRawDocsPages}`).join("、") || "无"}`,
-  );
-  lines.push(
-    `- extra generated：${results.map((result) => `${result.project}=${result.extraGeneratedPages.length}`).join("、") || "无"}`,
-  );
-  lines.push(
-    `- stop reasons：${results.map((result) => `${result.project}[budget=${result.stopReasons.budgetStoppedPages}, stalled=${result.stopReasons.stalledPages}, invalid=${result.stopReasons.invalidOutputPages}, failed=${result.stopReasons.providerFailedPages}]`).join("；") || "无"}`,
-  );
+  lines.push("");
+  lines.push("## 基线资格说明");
+  lines.push("");
+  if (meta.skipInit) {
+    lines.push("- 当前产物通过 `--skip-init` 从已有 runtime 读取；它本身只承担现状定位与 warm 稳定性对照，不单独替代 fresh init。若上游 runtime 已由同轮 fresh init 成功生成，则可与那批 fresh 产物一起构成 9.7-9.9 的验收基线。");
+  } else {
+    lines.push("- 当前产物来自 fresh run，可作为 9.6 的正式基线快照；若后续继续做 warm 对照，应与这批 fresh 产物保持同源。");
+  }
   lines.push("");
   lines.push("## 下一步建议");
   lines.push("");
-  if (results.some((result) => result.classifications.missingPages > 0)) {
-    lines.push("- 先补 missing pages：把缺失主题继续映射回独立 KnowledgeUnit，避免再被概览页或大模块页吞并。");
+  if (results.some((result) => result.status !== "ready")) {
+    lines.push("- 先解决 runtime_incomplete，避免把 assemble 缺口误判成页面质量问题。");
   }
-  if (
-    results.some((result) => result.classifications.collapsedPages > 0)
-    || results.some((result) => result.commonGaps.includes("仍存在明显 page collapse，同一生成页承担多个 reference 页面"))
-  ) {
-    lines.push("- 继续回收 page collapse：父页只能消费 child digest，禁止大页继续吸收多个 reference 主题。");
+  if (results.some((result) => (result.fidelity_metrics?.reuse_overage ?? 0) > 0)) {
+    lines.push("- 优先回收 many-to-one reuse，父页只能消费 child digest，不应继续吞并多个 reference 主题。");
   }
-  if (results.some((result) => result.classifications.lowFidelityMatchedPages > 0)) {
-    lines.push("- 继续压低 low-fidelity：优先补 citation 密度、Mermaid 覆盖率和关键文件提及，避免只命中结构不命中正文。");
+  if (results.some((result) => (result.fidelity_metrics?.median_skeleton_fidelity ?? 1) < 0.8)) {
+    lines.push("- 继续收敛 docs-backed 页面骨架，保证 section plan 真正落到最终 Markdown。");
   }
-  if (results.some((result) => result.stopReasons.budgetStoppedPages > 0 || result.stopReasons.stalledPages > 0)) {
-    lines.push("- 继续按 stop reason 收敛 research：预算截断优先调 budget / decomposition，stalled 优先补 delta 线索和 tool/evidence 输入。");
-  }
-  if (results.some((result) => result.stopReasons.invalidOutputPages > 0 || result.stopReasons.providerFailedPages > 0)) {
-    lines.push("- 把 invalid_output / provider_error 单独排查，避免把 provider 失败误判成页面内容质量问题。");
-  }
-  if (
-    results.some((result) => result.coverage.matchedOutlineShortfall > 0)
-    || results.some((result) => result.coverage.matchedEnglishNamingShortfall > 0)
-    || results.some((result) => result.coverage.extraEnglishRawDocsPages > 0)
-  ) {
-    lines.push("- docs-backed 页面继续按 reference 骨架和本地化命名收敛，避免回退到英文 raw docs 标题或目录。");
-  }
-  if (results.some((result) => result.extraGeneratedPages.length > Math.max(5, Math.ceil(result.generatedPageCount * 0.08)))) {
-    lines.push("- 若 overall 已稳定，优先回收拆分阈值和派生页面预算，先压 extra generated pages，再做尾差润色。");
+  if (results.some((result) => (result.fidelity_metrics?.median_key_source_coverage ?? 1) < 0.7)) {
+    lines.push("- 继续提升 citation / key source grounding，避免只命中结构不命中关键文件。");
   }
   if (lines.at(-1) === "") {
-    lines.push("- 当前两项目主要指标已收敛，可继续进入 archive 前的收尾验证。");
+    lines.push("- 当前指标已满足 9.6 的基础验收条件，可继续进入 warm stability 验证。");
   }
 
   return `${lines.join("\n")}\n`;
 }
 
-function writeReports(results, reportDir, summaryPath, optimizationNotesPath) {
+function renderStability(stability) {
+  const lines = [
+    "# Warm Stability",
+    "",
+    `repeats：${stability.repeats}`,
+    "",
+    "| Project | Stable | reuse_delta | skeleton_delta | key_source_delta |",
+    "| --- | --- | ---: | ---: | ---: |",
+  ];
+
+  for (const item of stability.projects) {
+    lines.push(
+      `| ${item.project} | ${item.stable ? "yes" : "no"} | ${item.deltas.reuseOverage.delta ?? "N/A"} | ${item.deltas.medianSkeletonFidelity.delta ?? "N/A"} | ${item.deltas.medianKeySourceCoverage.delta ?? "N/A"} |`,
+    );
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * 将单次 collect 的原子快照一次性落盘成 JSON 与 Markdown 报告集合。
+ *
+ * 这里强制 `_snapshot.json`、`_summary.md`、项目报告与 gap ledger 共用同一批 `results[]`，
+ * 避免 partial rerun 只覆写其中一部分后造成口径漂移。
+ *
+ * @param results 单次 collect 的全部项目结果。
+ * @param reportDir 报告输出目录。
+ * @param summaryPath `_summary.md` 输出路径。
+ * @param optimizationNotesPath `_optimization-notes.md` 输出路径。
+ * @param snapshotPath `_snapshot.json` 输出路径。
+ * @param meta 本次快照的元信息。
+ */
+function writeReports(results, reportDir, summaryPath, optimizationNotesPath, snapshotPath, meta) {
   ensureDir(reportDir);
+  writeFileSync(snapshotPath, `${JSON.stringify({
+    generated_at: meta.generatedAt,
+    change: meta.change,
+    requested_run_mode: meta.runMode,
+    skip_init: meta.skipInit,
+    projects: meta.projects,
+    source_roots: meta.sourceRoots,
+    stability: meta.stability ?? null,
+    results,
+  }, null, 2)}\n`);
   for (const result of results) {
     writeFileSync(path.join(reportDir, `${result.project}.md`), renderProjectReport(result));
     writeFileSync(path.join(reportDir, `${result.project}-gap-ledger.md`), renderGapLedger(result));
   }
-  writeFileSync(summaryPath, renderSummary(results));
-  writeFileSync(optimizationNotesPath, renderOptimizationNotes(results));
+  writeFileSync(summaryPath, renderSummary(results, meta));
+  writeFileSync(optimizationNotesPath, renderOptimizationNotes(results, meta));
+  if (meta.stability) {
+    writeFileSync(path.join(reportDir, "_stability.md"), renderStability(meta.stability));
+  }
 }
 
+/**
+ * 解析 CLI 参数，区分 init 模式、专项项目集与 warm stability 配置。
+ *
+ * @param argv 原始命令行参数。
+ * @returns 返回脚本运行所需的标准化参数。
+ */
 function parseCliArgs(argv) {
   const names = [];
   let jobs;
@@ -1606,6 +1866,7 @@ function parseCliArgs(argv) {
   let change = DEFAULT_CHANGE;
   let skipInit = false;
   let initTimeoutMinutes = DEFAULT_INIT_TIMEOUT_MS / 60000;
+  let warmReruns = null;
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -1633,16 +1894,33 @@ function parseCliArgs(argv) {
       index++;
       continue;
     }
+    if (arg === "--warm-reruns") {
+      warmReruns = argv[index + 1] || warmReruns;
+      index++;
+      continue;
+    }
     names.push(arg);
   }
 
   const parsedTimeoutMinutes = Number(initTimeoutMinutes);
+  const parsedWarmReruns = Number(warmReruns);
   const initTimeoutMs =
     Number.isFinite(parsedTimeoutMinutes) && parsedTimeoutMinutes > 0
       ? Math.floor(parsedTimeoutMinutes * 60_000)
       : DEFAULT_INIT_TIMEOUT_MS;
 
-  return { change, initTimeoutMs, jobs, names, runMode, skipInit };
+  return {
+    change,
+    initTimeoutMs,
+    jobs,
+    names,
+    runMode,
+    skipInit,
+    warmReruns:
+      Number.isFinite(parsedWarmReruns) && parsedWarmReruns > 0
+        ? Math.floor(parsedWarmReruns)
+        : null,
+  };
 }
 
 async function main(argv) {
@@ -1650,8 +1928,12 @@ async function main(argv) {
   const reportDir = path.join(changeDir, "reference-project-reports");
   const summaryPath = path.join(reportDir, "_summary.md");
   const optimizationNotesPath = path.join(reportDir, "_optimization-notes.md");
+  const snapshotPath = path.join(reportDir, "_snapshot.json");
   const projects = argv.names.length > 0 ? argv.names : discoverProjects();
   const jobs = argv.jobs == null ? 1 : resolveProjectJobs(argv.jobs, projects.length);
+  const stabilityReruns =
+    argv.warmReruns
+    ?? ((argv.runMode === "warm" || argv.skipInit) ? 2 : 0);
   const results = await runTaskPool(projects, jobs, async (project, index) => {
     const progressPrinter = createProjectProgressPrinter(project, argv.runMode);
     progressPrinter.info(`queue ${index + 1}/${projects.length}`);
@@ -1662,47 +1944,81 @@ async function main(argv) {
           usage: null,
         }
       : await runInitForProject(project, progressPrinter, argv.runMode, argv.initTimeoutMs);
-    const result = collectProject(project, run);
+    const result = collectProject(project, run, {
+      runMode: argv.runMode,
+      stabilityReruns,
+    });
     progressPrinter.info(
-      `report ready: generated=${result.generatedPageCount}, reference=${result.referencePageCount}, matched=${result.matchedCount}, missing=${result.missingCount}, total_tokens=${run.usage?.total_tokens ?? 0}`,
+      `report ready: status=${result.status}, overall=${result.fidelity_metrics?.overall_match_rate ?? "N/A"}, reuse=${result.fidelity_metrics?.reuse_overage ?? "N/A"}, skeleton=${formatRatio(result.fidelity_metrics?.median_skeleton_fidelity ?? null)}, key-source=${formatRatio(result.fidelity_metrics?.median_key_source_coverage ?? null)}`,
     );
     return result;
   });
+  const stability = buildWarmStability(projects, stabilityReruns);
+  if (stability) {
+    const stabilityByProject = new Map(stability.projects.map((item) => [item.project, item]));
+    for (const result of results) {
+      result.stability = stabilityByProject.get(result.project) ?? null;
+    }
+  }
 
-  writeReports(results, reportDir, summaryPath, optimizationNotesPath);
+  const generatedAt = new Date().toISOString();
+  writeReports(
+    results,
+    reportDir,
+    summaryPath,
+    optimizationNotesPath,
+    snapshotPath,
+    {
+      generatedAt,
+      change: argv.change,
+      projects,
+      runMode: argv.runMode,
+      skipInit: argv.skipInit,
+      stability,
+      sourceRoots: {
+        testDir: TEST_DIR,
+        referenceDir: REFERENCE_DIR,
+      },
+    },
+  );
   process.stdout.write(`${JSON.stringify({
     change: argv.change,
     reportDir,
     summaryPath,
     optimizationNotesPath,
+    snapshotPath,
     jobs,
     initTimeoutMs: argv.initTimeoutMs,
     runMode: argv.runMode,
     projects: results.map((result) => ({
       project: result.project,
+      status: result.status,
       runMode: result.runLabel,
       generatedPageCount: result.generatedPageCount,
       referencePageCount: result.referencePageCount,
-      matchedCount: result.matchedCount,
-      overallMatchRate: result.overallMatchRate,
-      missingCount: result.missingCount,
-      collapsedPages: result.classifications.collapsedPages,
-      lowFidelityMatchedPages: result.classifications.lowFidelityMatchedPages,
+      overallMatchRate: result.fidelity_metrics?.overall_match_rate ?? null,
+      missingCount: result.fidelity_metrics?.missing_pages ?? null,
+      collapsedPages: result.fidelity_metrics?.collapsed_pages ?? null,
+      reuseOverage: result.fidelity_metrics?.reuse_overage ?? null,
+      medianSkeletonFidelity: result.fidelity_metrics?.median_skeleton_fidelity ?? null,
+      medianKeySourceCoverage: result.fidelity_metrics?.median_key_source_coverage ?? null,
+      lowFidelityMatchedPages: result.fidelity_metrics?.low_fidelity_matched_pages ?? null,
       extraGeneratedPages: result.extraGeneratedPages.length,
-      budgetStoppedPages: result.stopReasons.budgetStoppedPages,
-      stalledPages: result.stopReasons.stalledPages,
-      invalidOutputPages: result.stopReasons.invalidOutputPages,
-      providerFailedPages: result.stopReasons.providerFailedPages,
-      generatedTopicPages: result.coverage.generatedTopicPages,
-      generatedEvidencePages: result.coverage.generatedEvidencePages,
-      generatedDiagramPages: result.coverage.generatedDiagramPages,
+      budgetStoppedPages: result.runtime_metrics.stop_reasons.budgetStoppedPages,
+      stalledPages: result.runtime_metrics.stop_reasons.stalledPages,
+      invalidOutputPages: result.runtime_metrics.stop_reasons.invalidOutputPages,
+      providerFailedPages: result.runtime_metrics.stop_reasons.providerFailedPages,
+      generatedTopicPages: result.coverage?.generatedTopicPages ?? null,
+      generatedEvidencePages: result.coverage?.generatedEvidencePages ?? null,
+      generatedDiagramPages: result.coverage?.generatedDiagramPages ?? null,
       totalTokens: result.usage?.total_tokens ?? 0,
       pageResearchRequests: promptCount(result.usage, "page_research"),
+      stability: result.stability ?? null,
     })),
   }, null, 2)}\n`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main(parseCliArgs(process.argv.slice(2)));
 }
 

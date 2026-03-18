@@ -1,6 +1,7 @@
 //! 9.4 之后，页面规划的验收重点转为 Knowledge Planning 层。
 //! 这组测试覆盖 storybook / dagger archetype 的知识域发现与知识单元规划。
 
+use std::collections::BTreeSet;
 use std::fs;
 use tempfile::TempDir;
 use wiki_core::domain::knowledge::{DecompositionProfile, DomainType, UnitType};
@@ -12,6 +13,32 @@ use wiki_core::generation::knowledge_planner::{
 use wiki_core::repo::hierarchy::build_module_tree;
 use wiki_core::repo::scanner::scan_repo;
 use wiki_core::repo::symbol_graph::GraphSummary;
+use wiki_core::storage::sqlite_store;
+
+fn assert_units_have_resolvable_parents(
+    units: &[wiki_core::domain::knowledge::KnowledgeUnit],
+) {
+    let ids: BTreeSet<&str> = units.iter().map(|unit| unit.id.as_str()).collect();
+    for unit in units {
+        if let Some(parent_id) = unit.parent_unit_id.as_deref() {
+            assert!(
+                ids.contains(parent_id),
+                "unit `{}` points to missing parent `{}`; units={:?}",
+                unit.title,
+                parent_id,
+                units
+                    .iter()
+                    .map(|candidate| {
+                        format!(
+                            "{}:{} -> {:?}",
+                            candidate.title, candidate.id, candidate.parent_unit_id
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
 
 fn make_storybook_like_repo() -> TempDir {
     let repo = tempfile::tempdir().unwrap();
@@ -1243,6 +1270,7 @@ fn docs_backed_units_route_into_generic_domains_and_preserve_parent_chain() {
         setup.relative_path,
         "概念指南/get-started/advanced/Setup.md"
     );
+    assert_units_have_resolvable_parents(&units);
     assert!(
         !units
             .iter()
@@ -1640,6 +1668,7 @@ fn localized_docs_overlay_prunes_shadowed_source_units_and_domain_indexes() {
     assert!(!units
         .iter()
         .any(|unit| unit.relative_path == "故障排除/故障排除.md"));
+    assert_units_have_resolvable_parents(&units);
 }
 
 #[test]
@@ -2017,6 +2046,36 @@ fn docs_backed_shadow_pages_are_pruned_when_structural_page_exists() {
             .any(|unit| unit.relative_path == "概念指南/BuildSrc.md"),
         "docs-backed shadow page should be removed when structural page already owns the topic"
     );
+    assert_units_have_resolvable_parents(&units);
+}
+
+#[test]
+fn localized_docs_overlay_units_still_write_to_sqlite_after_shadow_pruning() {
+    let repo = make_localized_docs_overlay_repo();
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let domains = discover_knowledge_domains(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &GraphSummary::default(),
+        &SteeringConfig::default(),
+    );
+    let units = plan_knowledge_units(
+        &domains,
+        &tree,
+        &report,
+        &mod_ctxs,
+        &SteeringConfig::default(),
+    );
+    assert_units_have_resolvable_parents(&units);
+
+    let conn = sqlite_store::open_db(repo.path()).unwrap();
+    sqlite_store::write_knowledge_domains(&conn, &domains).unwrap();
+    sqlite_store::write_knowledge_units(&conn, &units).unwrap();
 }
 
 #[test]

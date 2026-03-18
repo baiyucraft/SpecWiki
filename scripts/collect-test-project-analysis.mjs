@@ -1,103 +1,46 @@
 /**
- * 汇总测试项目集的 `.wiki`、SQLite 与 query 指标，供 OpenSpec 分析报告复用。
+ * 汇总测试项目集的 `.wiki` runtime、2.0 SQLite 数据面与 reference 对照指标。
  *
- * 只读取 `tmp/test/*` 与 `tmp/reference/*`，不修改仓库内容。
- *
- * 用法：
- *   node scripts/collect-test-project-analysis.mjs
- *   node scripts/collect-test-project-analysis.mjs axum chi
+ * 该脚本只读取 `tmp/test/*` 与 `tmp/reference/*` 的现有产物，
+ * 用于验证 runtime 是否 ready、KnowledgeUnit/Research/Compose/Assemble 各层是否对齐。
  */
 
-import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
+  parseSqliteNumber,
+  querySqliteRows,
+  querySqliteValue,
   ROOT_DIR,
   TEST_DIR,
   TMP_DIR,
-  callCore,
-  countFilesWithMarker,
-  countMdFiles,
 } from "./testing/helpers.mjs";
+import { readMarkdownPages } from "./testing/reference-fidelity.mjs";
+import { inspectWikiRuntime, listMarkdownFiles } from "./testing/wiki-runtime-inspection.mjs";
 
 const REFERENCE_DIR = path.join(TMP_DIR, "reference");
 const REPORT_PATH = path.join(ROOT_DIR, "test-project-analysis.md");
-const CORE_PAGE_TITLES = {
-  overview: "项目概述",
-  architecture: "系统架构",
-  workflow: "工作流与部署",
-};
-const GRAPH_FACT_LINE_PATTERN =
-  /(关系：|跨模块关系|流程：|检测到流程|社区：|循环：|循环依赖：|循环提示|图热点：)/;
-const EVIDENCE_HEADING_PATTERN = /\*\*[^*\n]*(来源|证据)[^*\n]*\*\*/g;
-const TOPIC_PAGE_PATTERN =
-  /(专题\/|主题：|流程主题|机制|能力|routing|extract|response|middleware|handler|router)/i;
 
-/**
- * 读取 sqlite 单值查询结果。
- *
- * @param dbPath SQLite 文件路径。
- * @param sql 需要执行的查询语句。
- * @returns 去掉首尾空白后的结果文本。
- */
-function querySqlite(dbPath, sql) {
-  const rows = querySqliteLines(dbPath, sql);
-  return rows.at(-1) ?? "";
+function round(value) {
+  return Number(value.toFixed(2));
 }
 
-function querySqliteLines(dbPath, sql) {
-  const statement = `PRAGMA busy_timeout=30000; ${sql}`;
-  let lastError = null;
-
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      const output = execFileSync("sqlite3", [dbPath, statement], {
-        encoding: "utf-8",
-        timeout: 35_000,
-      })
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean);
-      if (output[0] === "30000") {
-        output.shift();
-      }
-      return output;
-    } catch (error) {
-      lastError = error;
-      if (!String(error.stderr || error.message || "").includes("database is locked")) {
-        throw error;
-      }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-    }
+function discoverProjects() {
+  if (!existsSync(TEST_DIR)) {
+    return [];
   }
-
-  throw lastError;
+  return readdirSync(TEST_DIR)
+    .filter((entry) => statSync(path.join(TEST_DIR, entry)).isDirectory())
+    .sort();
 }
 
 /**
- * 读取 sqlite 表格查询结果。
+ * 读取 reference 页面清单，作为项目分析里的页数对照基线。
  *
- * @param dbPath SQLite 文件路径。
- * @param sql 需要执行的查询语句。
- * @returns 按行切分后的结果。
- */
-function querySqliteRows(dbPath, sql) {
-  return querySqliteLines(dbPath, sql);
-}
-
-/**
- * 在没有 reference 的情况下保持输出结构一致。
- *
- * @param project 项目名。
- * @returns reference 摘要。
+ * @param project 测试项目名。
+ * @returns 返回 reference 是否存在及其页面列表。
  */
 function collectReference(project) {
   const contentDir = path.join(REFERENCE_DIR, project, "content");
@@ -111,613 +54,252 @@ function collectReference(project) {
 
   return {
     hasReference: true,
-    pageCount: countMdFiles(contentDir),
+    pageCount: listMarkdownFiles(contentDir).length,
     pageNames: listMarkdownFiles(contentDir),
   };
 }
 
-function listMarkdownFiles(dir) {
-  if (!existsSync(dir)) {
-    return [];
-  }
-
-  const files = [];
-  const walk = (currentDir) => {
-    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
-      const fullPath = path.join(currentDir, entry.name);
-      if (entry.isDirectory()) {
-        walk(fullPath);
-        continue;
-      }
-      if (entry.name.endsWith(".md")) {
-        files.push(path.relative(dir, fullPath).replaceAll("\\", "/"));
-      }
-    }
-  };
-
-  walk(dir);
-  return files.sort();
-}
-
-function readWikiPages(wikiDir) {
-  return listMarkdownFiles(wikiDir).map((relativePath) => {
-    const fullPath = path.join(wikiDir, relativePath);
-    const content = readFileSync(fullPath, "utf-8");
-    const lines = content.split(/\r?\n/);
-    const title =
-      lines.find((line) => line.startsWith("# "))?.replace(/^#\s+/, "").trim()
-      || path.basename(relativePath, ".md");
-    let bulletLines = 0;
-    let proseLines = 0;
-    let graphFactLines = 0;
-    let headingLines = 0;
-    let markerLines = 0;
-    let mermaidBlocks = 0;
-    let evidenceBlocks = 0;
-    let nonEmptyLines = 0;
-    let inCodeFence = false;
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-
-      nonEmptyLines += 1;
-      if (trimmed.startsWith("<!-- wiki:managed:")) {
-        markerLines += 1;
-        continue;
-      }
-      if (trimmed.startsWith("```")) {
-        if (trimmed === "```mermaid") {
-          mermaidBlocks += 1;
-        }
-        inCodeFence = !inCodeFence;
-        continue;
-      }
-      if (inCodeFence) {
-        continue;
-      }
-      if (trimmed.startsWith("#")) {
-        headingLines += 1;
-        continue;
-      }
-      if (trimmed.startsWith("- ")) {
-        bulletLines += 1;
-      } else {
-        proseLines += 1;
-      }
-      if (GRAPH_FACT_LINE_PATTERN.test(trimmed)) {
-        graphFactLines += 1;
-      }
-    }
-
-    evidenceBlocks = [...content.matchAll(EVIDENCE_HEADING_PATTERN)].length;
-
+function groupedCounts(dbPath, table, column) {
+  return querySqliteRows(
+    dbPath,
+    `select coalesce(${column}, '(null)') || char(9) || count(*) from ${table} group by ${column} order by count(*) desc, ${column} asc;`,
+  ).map((row) => {
+    const [name = "", count = "0"] = row.split("\t");
     return {
-      title,
-      relativePath,
-      bulletLines,
-      proseLines,
-      graphFactLines,
-      headingLines,
-      markerLines,
-      mermaidBlocks,
-      evidenceBlocks,
-      nonEmptyLines,
-      isTopicPage: TOPIC_PAGE_PATTERN.test(`${relativePath} ${title}`),
+      name,
+      count: parseSqliteNumber(count),
     };
   });
 }
 
-function pickPageByTitle(pages, title) {
-  return pages.find((page) => page.title === title) ?? null;
-}
-
-function round(value) {
-  return Number(value.toFixed(1));
-}
-
-function buildPageMetrics(wikiDir) {
-  const pages = readWikiPages(wikiDir);
+/**
+ * 基于最终 `.wiki/*.md` 统计页面层指标。
+ *
+ * 只有 runtime ready 时才读取页面内容，避免把 assemble 未完成的项目误报成“空页面质量”。
+ *
+ * @param wikiDir `.wiki` 目录。
+ * @param runtimeSnapshot runtime 检查结果。
+ * @returns 返回页面层聚合指标。
+ */
+function buildPageMetrics(wikiDir, runtimeSnapshot) {
+  const pages = runtimeSnapshot.runtimeState === "ready" ? readMarkdownPages(wikiDir) : [];
   const totalNonEmptyLines = pages.reduce((sum, page) => sum + page.nonEmptyLines, 0);
-  const totalBulletLines = pages.reduce((sum, page) => sum + page.bulletLines, 0);
   const totalProseLines = pages.reduce((sum, page) => sum + page.proseLines, 0);
-  const totalGraphFactLines = pages.reduce((sum, page) => sum + page.graphFactLines, 0);
   const totalMermaidBlocks = pages.reduce((sum, page) => sum + page.mermaidBlocks, 0);
   const totalEvidenceBlocks = pages.reduce((sum, page) => sum + page.evidenceBlocks, 0);
-  const graphLandingPages = pages.filter((page) => page.graphFactLines > 0).length;
-  const topicPages = pages.filter((page) => page.isTopicPage).length;
-  const evidenceLandingPages = pages.filter((page) => page.evidenceBlocks > 0).length;
+  const topicPages = pages.filter((page) => page.category === "topic").length;
+  const evidenceLandingPages = pages.filter((page) => page.evidenceBlocks > 0 || page.citations.length > 0).length;
   const mermaidLandingPages = pages.filter((page) => page.mermaidBlocks > 0).length;
-  const densestPage = pages.reduce(
-    (best, page) => (page.nonEmptyLines > best.nonEmptyLines ? page : best),
-    pages[0] ?? {
-      title: "n/a",
-      relativePath: "",
-      nonEmptyLines: 0,
-      graphFactLines: 0,
-    },
-  );
+  const decompositionCounts = new Map();
 
-  const overviewPage = pickPageByTitle(pages, CORE_PAGE_TITLES.overview);
-  const architecturePage = pickPageByTitle(pages, CORE_PAGE_TITLES.architecture);
-  const workflowPage = pickPageByTitle(pages, CORE_PAGE_TITLES.workflow);
+  for (const page of pages) {
+    for (const signal of page.decompositionSignals) {
+      decompositionCounts.set(signal, (decompositionCounts.get(signal) ?? 0) + 1);
+    }
+  }
 
   return {
-    pages,
     totalNonEmptyLines,
-    totalBulletLines,
     totalProseLines,
-    totalGraphFactLines,
     totalMermaidBlocks,
     totalEvidenceBlocks,
-    graphLandingPages,
     topicPages,
     evidenceLandingPages,
     mermaidLandingPages,
-    avgNonEmptyLinesPerPage: round(totalNonEmptyLines / Math.max(pages.length, 1)),
-    avgBulletLinesPerPage: round(totalBulletLines / Math.max(pages.length, 1)),
-    avgProseLinesPerPage: round(totalProseLines / Math.max(pages.length, 1)),
-    densestPage: {
-      title: densestPage.title,
-      relativePath: densestPage.relativePath,
-      nonEmptyLines: densestPage.nonEmptyLines,
-      graphFactLines: densestPage.graphFactLines,
-    },
-    corePages: {
-      overview: overviewPage,
-      architecture: architecturePage,
-      workflow: workflowPage,
-    },
+    avgNonEmptyLinesPerPage: pages.length === 0 ? 0 : round(totalNonEmptyLines / pages.length),
+    avgProseLinesPerPage: pages.length === 0 ? 0 : round(totalProseLines / pages.length),
+    decompositionCounts: [...decompositionCounts.entries()].sort((left, right) => right[1] - left[1]),
   };
 }
 
-function buildContextMetrics(dbPath) {
-  if (!existsSync(dbPath)) {
-    return {
-      cachedPageContexts: 0,
-      sectionPlanPages: 0,
-      overviewResearchHit: false,
-      architectureResearchHit: false,
-      archetypeTopicPages: 0,
-      preciseEvidenceItems: 0,
-      totalEvidenceItems: 0,
-      preciseEvidenceDensity: 0,
-    };
-  }
-
-  const cachedPageContexts = Number(querySqlite(dbPath, "select count(*) from page_context_cache;") || "0");
-  const sectionPlanPages = Number(
-    querySqlite(
-      dbPath,
-      [
-        "select count(*)",
-        "from page_context_cache",
-        "where coalesce(json_array_length(json_extract(context, '$.research_result.section_plan')), 0) > 0;",
-      ].join(" "),
-    ) || "0",
+/**
+ * 从 2.0 SQLite 数据面提取 planning/research/compose/assemble 聚合指标。
+ *
+ * @param runtimeSnapshot runtime 检查结果。
+ * @param dbPath runtime SQLite 路径。
+ * @returns 返回 KnowledgeUnit 主线的各层统计。
+ */
+function buildKnowledgeMetrics(runtimeSnapshot, dbPath) {
+  const knowledgeUnitCount = runtimeSnapshot.dbCounts.knowledge_units;
+  const knowledgeDomainCount = runtimeSnapshot.dbCounts.knowledge_domains;
+  const unitResearchRows = parseSqliteNumber(
+    querySqliteValue(dbPath, "select count(*) from research_cache where research_type = 'unit';"),
   );
-  const overviewResearchHit = Number(
-    querySqlite(
-      dbPath,
-      [
-        "select count(*)",
-        "from page_context_cache",
-        "where json_extract(context, '$.page_type') = 'overview'",
-        "and json_type(json_extract(context, '$.research_result')) = 'object';",
-      ].join(" "),
-    ) || "0",
-  ) > 0;
-  const architectureResearchHit = Number(
-    querySqlite(
-      dbPath,
-      [
-        "select count(*)",
-        "from page_context_cache",
-        "where json_extract(context, '$.page_type') = 'architecture'",
-        "and json_type(json_extract(context, '$.research_result')) = 'object';",
-      ].join(" "),
-    ) || "0",
-  ) > 0;
-  const archetypeTopicPages = Number(
-    querySqlite(
-      dbPath,
-      [
-        "select count(*)",
-        "from page_context_cache",
-        "where json_extract(context, '$.page_type') = 'topic'",
-        "and json_extract(context, '$.topic_dossier.topic_kind') = 'repo-archetype';",
-      ].join(" "),
-    ) || "0",
+  const domainResearchRows = parseSqliteNumber(
+    querySqliteValue(dbPath, "select count(*) from research_cache where research_type = 'domain';"),
   );
-  const totalEvidenceItems = Number(
-    querySqlite(
-      dbPath,
-      [
-        "select count(*)",
-        "from page_context_cache",
-        "join json_each(page_context_cache.context, '$.evidence_groups') as evidence_group",
-        "join json_each(evidence_group.value, '$.items') as evidence_item;",
-      ].join(" "),
-    ) || "0",
+  const systemResearchRows = parseSqliteNumber(
+    querySqliteValue(dbPath, "select count(*) from research_cache where research_type = 'system';"),
   );
-  const preciseEvidenceItems = Number(
-    querySqlite(
+  const sectionPlanUnits = parseSqliteNumber(
+    querySqliteValue(
       dbPath,
       [
         "select count(*)",
-        "from page_context_cache",
-        "join json_each(page_context_cache.context, '$.evidence_groups') as evidence_group",
-        "join json_each(evidence_group.value, '$.items') as evidence_item",
-        "where coalesce(json_extract(evidence_item.value, '$.start_line'), 0) > 0",
-        "and coalesce(json_extract(evidence_item.value, '$.end_line'), 0) >= coalesce(json_extract(evidence_item.value, '$.start_line'), 0);",
+        "from research_cache",
+        "where research_type = 'unit'",
+        "and coalesce(json_array_length(json_extract(result, '$.section_plan')), 0) > 0;",
       ].join(" "),
-    ) || "0",
+    ),
   );
 
   return {
-    cachedPageContexts,
-    sectionPlanPages,
-    overviewResearchHit,
-    architectureResearchHit,
-    archetypeTopicPages,
-    preciseEvidenceItems,
-    totalEvidenceItems,
-    preciseEvidenceDensity:
-      totalEvidenceItems === 0 ? 0 : round(preciseEvidenceItems / totalEvidenceItems),
+    knowledgeUnitCount,
+    knowledgeDomainCount,
+    unitResearchRows,
+    domainResearchRows,
+    systemResearchRows,
+    sectionPlanUnits,
+    pageDigestCount: runtimeSnapshot.dbCounts.page_digests,
+    pageDraftCount: runtimeSnapshot.dbCounts.page_drafts,
+    wikiPageCount: runtimeSnapshot.dbCounts.wiki_pages,
+    markdownPageCount: runtimeSnapshot.markdownPageCount,
+    researchCoverage: knowledgeUnitCount === 0 ? 0 : round(unitResearchRows / knowledgeUnitCount),
+    composeCoverage: knowledgeUnitCount === 0 ? 0 : round(runtimeSnapshot.dbCounts.page_drafts / knowledgeUnitCount),
+    assembleCoverage: knowledgeUnitCount === 0 ? 0 : round(runtimeSnapshot.dbCounts.wiki_pages / knowledgeUnitCount),
+    unitTypeCounts: groupedCounts(dbPath, "knowledge_units", "unit_type"),
+    domainTypeCounts: groupedCounts(dbPath, "knowledge_domains", "domain_type"),
+    researchTypeCounts: groupedCounts(dbPath, "research_cache", "research_type"),
+    wikiPageTypeCounts: groupedCounts(dbPath, "wiki_pages", "page_type"),
   };
 }
 
-function describeDensity(metrics) {
-  if (metrics.avgNonEmptyLinesPerPage >= 80) {
-    return "高";
-  }
-  if (metrics.avgNonEmptyLinesPerPage >= 35) {
-    return "中";
-  }
-  return "低";
-}
-
-function describeReferenceDelta(result) {
-  if (!result.reference.hasReference) {
-    return "无 reference，对照以 query 与 graph 命中为主。";
-  }
-
-  const delta = result.pageCount - result.reference.pageCount;
-  const ratio = result.reference.pageCount === 0 ? 0 : result.pageCount / result.reference.pageCount;
-  if (ratio < 0.25) {
-    return `与 reference 相比明显压缩（${result.pageCount} vs ${result.reference.pageCount}，${delta} 页），当前仍以 repo 级总览 + 模块页为主。`;
-  }
-  if (ratio > 1.25) {
-    return `比 reference 更展开（${result.pageCount} vs ${result.reference.pageCount}，+${delta} 页），页面拆分已经超过参考样例。`;
-  }
-  return `与 reference 接近（${result.pageCount} vs ${result.reference.pageCount}，${delta >= 0 ? "+" : ""}${delta} 页）。`;
-}
-
-function describeEnhancementObservation(result) {
-  const { contextMetrics, pageMetrics } = result;
-  if (contextMetrics.sectionPlanPages > 0) {
-    return [
-      `已有 ${contextMetrics.sectionPlanPages} 页缓存了 section plan；`,
-      `overview research=${contextMetrics.overviewResearchHit ? "命中" : "未命中"}，`,
-      `architecture research=${contextMetrics.architectureResearchHit ? "命中" : "未命中"}。`,
-    ].join("");
-  }
-  if (
-    pageMetrics.totalMermaidBlocks > 0
-    || pageMetrics.totalEvidenceBlocks > 0
-    || pageMetrics.topicPages > 0
-    || pageMetrics.avgProseLinesPerPage >= 6
-  ) {
-    return "项目集页面已经出现专题页、evidence block 或 Mermaid，说明 9.1 的结构增强进入了正式产物。";
-  }
-
-  return [
-    "项目集仍以 deterministic fallback 页面为主，段落化增强和 Mermaid 没有在这条验证路径中出现；",
-    "这通常意味着目标 repo 没有提供可用的 provider 直连配置，同时脚本本身也没有协商 Agent LLM bridge。",
-  ].join("");
-}
-
-function formatQuerySummary(result) {
-  if (!result.querySummary) {
-    return "无可用符号 query 样本。";
-  }
-
-  return [
-    `符号 query 以 \`${result.querySummary.term}\` 为样本，`,
-    `命中 ${result.querySummary.matchedSymbols} 个符号、${result.querySummary.matchedPages} 个页面；`,
-    `图 query 以 \`${result.graphQuerySummary?.term ?? "n/a"}\` 为样本，`,
-    `扩展 ${result.graphQuerySummary?.matchedGraphEdges ?? 0} 条图边、`,
-    `${result.graphQuerySummary?.matchedCommunities ?? 0} 个社区、`,
-    `${result.graphQuerySummary?.matchedProcesses ?? 0} 个流程。`,
-  ].join("");
-}
-
 /**
- * 列出适合做 query 验证的候选符号。
+ * 汇总单个测试项目的 runtime、2.0 数据面和 reference 对照摘要。
  *
- * 优先唯一、长度适中且更像真实业务名的定义，后续再逐个试探 query 命中。
+ * 返回值同时保留结构化层级视图和兼容当前脚本消费的聚合块；
+ * 本轮只补注释，不收缩字段，避免在 9.6 收尾阶段引入额外契约变化。
  *
- * @param dbPath SQLite 文件路径。
- * @returns 候选符号名列表。
+ * @param project 测试项目名。
+ * @returns 返回单项目分析结果。
  */
-function listRepresentativeSymbols(dbPath) {
-  return querySqliteRows(
-    dbPath,
-    [
-      "select name",
-      "from symbols",
-      "where length(name) >= 6",
-      "and name glob '[A-Za-z_]*'",
-      "and name not glob '[A-Z0-9_]*'",
-      "group by name",
-      "having count(*) = 1",
-      "order by",
-      "max(is_exported) desc,",
-      "case label",
-      "when 'function' then 0",
-      "when 'class' then 1",
-      "when 'struct' then 2",
-      "when 'interface' then 3",
-      "when 'trait' then 4",
-      "when 'enum' then 5",
-      "when 'method' then 6",
-      "when 'type' then 7",
-      "else 8 end,",
-      "case",
-      "when length(name) between 8 and 24 then 0",
-      "when length(name) between 25 and 40 then 1",
-      "else 2",
-      "end,",
-      "length(name) asc,",
-      "name asc",
-      "limit 24;",
-    ].join(" "),
-  );
-}
-
-function listRepresentativeGraphSymbols(dbPath) {
-  return querySqliteRows(
-    dbPath,
-    [
-      "select s.name",
-      "from edges e",
-      "join symbols s on s.id = e.source_id",
-      "where length(s.name) >= 6",
-      "and s.name glob '[A-Za-z_]*'",
-      "and s.name not glob '[A-Z0-9_]*'",
-      "group by s.name",
-      "having count(*) = 1",
-      "order by max(s.is_exported) desc, count(*) desc, length(s.name) asc, s.name asc",
-      "limit 24;",
-    ].join(" "),
-  );
-}
-
-/**
- * 把 `key|value` 风格的 sqlite group by 结果转成对象数组。
- *
- * @param {string[]} rows sqlite 返回的行集合。
- * @returns {{name: string, count: number}[]} 解析后的条目。
- */
-function parseGroupedRows(rows) {
-  return rows.map((row) => {
-    const [name, count] = row.split("|");
-    return {
-      name,
-      count: Number(count),
-    };
-  });
-}
-
-/**
- * 收集单个项目的验证指标。
- *
- * @param project 项目名。
- * @returns 结构化分析结果。
- */
-function collectProject(project) {
+export function collectProject(project) {
   const repoRoot = path.join(TEST_DIR, project);
   const wikiDir = path.join(repoRoot, ".wiki");
   const dbPath = path.join(wikiDir, ".cache", "wiki-cache.db");
-  const metadataPath = path.join(wikiDir, "wiki.metadata.json");
-  const metadata = JSON.parse(readFileSync(metadataPath, "utf-8"));
-  const pageMetrics = buildPageMetrics(wikiDir);
-  const contextMetrics = buildContextMetrics(dbPath);
-
-  const pageCount = countMdFiles(wikiDir);
-  const markerCount = countFilesWithMarker(wikiDir);
-  const moduleCount = metadata.modules?.length ?? 0;
-  const sourceCount = metadata.source_files?.length ?? 0;
-  const symbolCount = Number(querySqlite(dbPath, "select count(*) from symbols;") || "0");
-  const exportedSymbolCount = Number(
-    querySqlite(dbPath, "select count(*) from symbols where is_exported = 1;") || "0",
-  );
-  const edgeCount = Number(querySqlite(dbPath, "select count(*) from edges;") || "0");
-  const communityCount = Number(querySqlite(dbPath, "select count(*) from communities;") || "0");
-  const processCount = Number(querySqlite(dbPath, "select count(*) from processes;") || "0");
-  const languageBreakdown = parseGroupedRows(
-    querySqliteRows(
-      dbPath,
-      "select language, count(*) from symbols group by language order by count(*) desc, language asc;",
-    ),
-  );
-  const labelBreakdown = parseGroupedRows(
-    querySqliteRows(
-      dbPath,
-      "select label, count(*) from symbols group by label order by count(*) desc, label asc limit 6;",
-    ),
-  );
-  const representativeSymbols = listRepresentativeSymbols(dbPath);
-  const representativeGraphSymbols = listRepresentativeGraphSymbols(dbPath);
-  const llmPromptBreakdown = parseGroupedRows(
-    querySqliteRows(
-      dbPath,
-      "select prompt_type, count(*) from llm_cache group by prompt_type order by count(*) desc, prompt_type asc;",
-    ),
-  );
-
-  let representativeSymbol = "";
-  let querySummary = null;
-  let fallbackQuerySummary = null;
-  for (const candidate of representativeSymbols) {
-    const query = callCore({
-      action: "query",
-      repoRoot: path.relative(process.cwd(), repoRoot).replaceAll("\\", "/"),
-      term: candidate,
-    });
-    if (!query.ok) {
-      throw new Error(`${project} query failed: ${query.error ?? "unknown error"}`);
-    }
-
-    const report = query.data;
-    const exactSymbol = report.matched_symbols.find((symbol) => symbol.name === candidate) ?? null;
-    representativeSymbol = candidate;
-    const summary = {
-      term: candidate,
-      matchedSymbols: report.matched_symbols.length,
-      matchedPages: report.matched_pages.length,
-      matchedSources: report.matched_sources.length,
-      exactSymbolMatched: Boolean(exactSymbol),
-      exactSymbol: exactSymbol
-        ? {
-            name: exactSymbol.name,
-            label: exactSymbol.label,
-            filePath: exactSymbol.file_path,
-          }
-        : null,
-      topPage: report.matches[0]
-        ? {
-            title: report.matches[0].title,
-            reasons: report.matches[0].reasons,
-          }
-        : null,
-    };
-    fallbackQuerySummary ??= summary;
-    if (summary.exactSymbolMatched) {
-      querySummary = summary;
-      break;
-    }
-  }
-  querySummary ??= fallbackQuerySummary;
-
-  let graphQuerySummary = null;
-  let fallbackGraphQuerySummary = null;
-  for (const candidate of representativeGraphSymbols) {
-    const query = callCore({
-      action: "query",
-      repoRoot: path.relative(process.cwd(), repoRoot).replaceAll("\\", "/"),
-      term: candidate,
-    });
-    if (!query.ok) {
-      throw new Error(`${project} graph query failed: ${query.error ?? "unknown error"}`);
-    }
-
-    const report = query.data;
-    const summary = {
-      term: candidate,
-      matchedGraphEdges: report.matched_symbol_edges?.length ?? 0,
-      matchedProcesses: report.matched_processes?.length ?? 0,
-      matchedCommunities: report.matched_communities?.length ?? 0,
-      provenanceSummary: report.provenance_summary ?? "",
-    };
-    fallbackGraphQuerySummary ??= summary;
-    if (
-      summary.matchedGraphEdges > 0
-      || summary.matchedProcesses > 0
-      || summary.matchedCommunities > 0
-    ) {
-      graphQuerySummary = summary;
-      break;
-    }
-  }
-  graphQuerySummary ??= fallbackGraphQuerySummary;
+  const runtimeSnapshot = inspectWikiRuntime(wikiDir);
+  const pageMetrics = buildPageMetrics(wikiDir, runtimeSnapshot);
+  const knowledgeMetrics = buildKnowledgeMetrics(runtimeSnapshot, dbPath);
 
   return {
     project,
-    pageCount,
-    markerCount,
-    moduleCount,
-    sourceCount,
-    symbolCount,
-    exportedSymbolCount,
-    edgeCount,
-    communityCount,
-    processCount,
-    languageBreakdown,
-    labelBreakdown,
-    representativeSymbol,
-    querySummary,
-    graphQuerySummary,
-    llmPromptBreakdown,
-    contextMetrics,
+    runtimeState: runtimeSnapshot.runtimeState,
+    baselineClass: runtimeSnapshot.baselineClass,
+    incompleteReason: runtimeSnapshot.incompleteReason,
+    runtimeSnapshot,
+    runtime: {
+      runtimeState: runtimeSnapshot.runtimeState,
+      baselineClass: runtimeSnapshot.baselineClass,
+      incompleteReason: runtimeSnapshot.incompleteReason,
+      dbCounts: runtimeSnapshot.dbCounts,
+    },
+    metadataSummary: {
+      moduleCount: runtimeSnapshot.metadata?.modules?.length ?? 0,
+      sourceCount: runtimeSnapshot.metadata?.source_files?.length ?? 0,
+    },
+    symbolCount: parseSqliteNumber(querySqliteValue(dbPath, "select count(*) from symbols;")),
+    edgeCount: parseSqliteNumber(querySqliteValue(dbPath, "select count(*) from edges;")),
+    communityCount: parseSqliteNumber(querySqliteValue(dbPath, "select count(*) from communities;")),
+    processCount: parseSqliteNumber(querySqliteValue(dbPath, "select count(*) from processes;")),
+    languageBreakdown: groupedCounts(dbPath, "symbols", "language"),
+    labelBreakdown: groupedCounts(dbPath, "symbols", "label").slice(0, 8),
     pageMetrics,
+    planning: {
+      knowledgeUnitCount: knowledgeMetrics.knowledgeUnitCount,
+      knowledgeDomainCount: knowledgeMetrics.knowledgeDomainCount,
+      unitTypeBreakdown: knowledgeMetrics.unitTypeCounts,
+      domainTypeBreakdown: knowledgeMetrics.domainTypeCounts,
+    },
+    research: {
+      unitResearchCount: knowledgeMetrics.unitResearchRows,
+      domainResearchCount: knowledgeMetrics.domainResearchRows,
+      systemResearchCount: knowledgeMetrics.systemResearchRows,
+      unitSectionPlanCount: knowledgeMetrics.sectionPlanUnits,
+      coverage: knowledgeMetrics.researchCoverage,
+      researchTypeBreakdown: knowledgeMetrics.researchTypeCounts,
+    },
+    compose: {
+      pageDigestCount: knowledgeMetrics.pageDigestCount,
+      pageDraftCount: knowledgeMetrics.pageDraftCount,
+      coverage: knowledgeMetrics.composeCoverage,
+    },
+    assemble: {
+      wikiPageCount: knowledgeMetrics.wikiPageCount,
+      markdownPageCount: knowledgeMetrics.markdownPageCount,
+      coverage: knowledgeMetrics.assembleCoverage,
+      wikiPageTypeBreakdown: knowledgeMetrics.wikiPageTypeCounts,
+    },
+    pages: {
+      pageCount: runtimeSnapshot.markdownPageCount,
+      topicPageCount: pageMetrics.topicPages,
+      evidencePageCount: pageMetrics.evidenceLandingPages,
+      mermaidPageCount: pageMetrics.mermaidLandingPages,
+      avgNonEmptyLinesPerPage: pageMetrics.avgNonEmptyLinesPerPage,
+      avgProseLinesPerPage: pageMetrics.avgProseLinesPerPage,
+      decompositionBreakdown: pageMetrics.decompositionCounts,
+    },
+    knowledgeMetrics,
     reference: collectReference(project),
   };
 }
 
-function discoverProjects() {
-  if (!existsSync(TEST_DIR)) return [];
-  return readdirSync(TEST_DIR)
-    .filter((entry) => statSync(path.join(TEST_DIR, entry)).isDirectory())
-    .sort();
+function describeReferenceDelta(result) {
+  if (!result.reference.hasReference) {
+    return "无 reference。";
+  }
+
+  const delta = result.runtimeSnapshot.markdownPageCount - result.reference.pageCount;
+  if (result.runtimeState !== "ready") {
+    return `reference=${result.reference.pageCount}，当前 runtime=${result.runtimeState}，不能直接做页级 fidelity。`;
+  }
+  return `generated=${result.runtimeSnapshot.markdownPageCount} / reference=${result.reference.pageCount}（delta=${delta >= 0 ? "+" : ""}${delta}）`;
 }
 
+/**
+ * 将项目分析结果渲染为 Markdown 报告。
+ *
+ * @param results 项目分析结果数组。
+ * @returns 返回 Markdown 文本。
+ */
 function toMarkdown(results) {
   const lines = [
     "# Test Project Analysis",
     "",
     `生成时间：${new Date().toISOString()}`,
-    "基线命令：`node scripts/run-test-projects.mjs --jobs 1`",
-    "说明：项目集脚本当前直接调用 release binary，不会协商 Agent LLM bridge；如果目标 repo 根存在可用的 `wiki.dev.yaml` provider 配置，core 会优先走 provider 直连。这份报告按当前 `tmp/test/*/.wiki` 实际产物统计 section plan、research 命中、精准 evidence 与 reference 差异。",
+    "说明：当前报告只基于 2.0 的 `knowledge_units / research_cache / page_drafts / wiki_pages` 与最终 `.wiki/*.md` 读取，不再依赖旧 `page_context_cache.context.research_result` 或 `topic_dossier`。",
     "",
     "## 总览",
     "",
-    "| Project | Pages | Avg lines/page | Avg prose/page | Topic pages | Section-plan pages | Core research | Precise evidence | Mermaid | Reference delta |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- |",
+    "| Project | Runtime | Pages | KnowledgeUnits | UnitResearch | SectionPlan | PageDrafts | WikiPages | TopicPages | Reference Delta |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
   ];
 
   for (const result of results) {
-    const referenceDelta = result.reference.hasReference
-      ? `${result.pageCount - result.reference.pageCount >= 0 ? "+" : ""}${result.pageCount - result.reference.pageCount}`
-      : "n/a";
     lines.push(
-      `| ${result.project} | ${result.pageCount} | ${result.pageMetrics.avgNonEmptyLinesPerPage} | ${result.pageMetrics.avgProseLinesPerPage} | ${result.pageMetrics.topicPages} | ${result.contextMetrics.sectionPlanPages} | ${result.contextMetrics.overviewResearchHit ? "overview" : "-"}${result.contextMetrics.architectureResearchHit ? "/architecture" : ""} | ${result.contextMetrics.preciseEvidenceItems}/${result.contextMetrics.totalEvidenceItems} | ${result.pageMetrics.totalMermaidBlocks} | ${referenceDelta} |`,
+      `| ${result.project} | ${result.runtimeState} | ${result.runtimeSnapshot.markdownPageCount} | ${result.knowledgeMetrics.knowledgeUnitCount} | ${result.knowledgeMetrics.unitResearchRows} | ${result.knowledgeMetrics.sectionPlanUnits} | ${result.knowledgeMetrics.pageDraftCount} | ${result.knowledgeMetrics.wikiPageCount} | ${result.pageMetrics.topicPages} | ${describeReferenceDelta(result)} |`,
     );
   }
 
   lines.push("");
 
   for (const result of results) {
-    const density = describeDensity(result.pageMetrics);
-    const architecturePage = result.pageMetrics.corePages.architecture;
-    const workflowPage = result.pageMetrics.corePages.workflow;
-    const overviewPage = result.pageMetrics.corePages.overview;
-
     lines.push(`## ${result.project}`);
     lines.push("");
-    lines.push(
-      `- 页面密度：${result.pageCount} 页，平均 ${result.pageMetrics.avgNonEmptyLinesPerPage} 行/页（密度${density}），其中段落 ${result.pageMetrics.avgProseLinesPerPage} 行/页、列表 ${result.pageMetrics.avgBulletLinesPerPage} 行/页；最长页面是 \`${result.pageMetrics.densestPage.title}\`（${result.pageMetrics.densestPage.nonEmptyLines} 行）。`,
-    );
-    lines.push(
-      `- 主题与 evidence：专题页 ${result.pageMetrics.topicPages} 个，evidence 落页 ${result.pageMetrics.evidenceLandingPages} 页/${result.pageCount} 页，总计 ${result.pageMetrics.totalEvidenceBlocks} 个 evidence block。`,
-    );
-    lines.push(
-      `- Research 命中：section-plan 页 ${result.contextMetrics.sectionPlanPages} 个，overview=${result.contextMetrics.overviewResearchHit ? "命中" : "未命中"}，architecture=${result.contextMetrics.architectureResearchHit ? "命中" : "未命中"}，repo-archetype 专题 ${result.contextMetrics.archetypeTopicPages} 个。`,
-    );
-    lines.push(
-      `- 精准 evidence：${result.contextMetrics.preciseEvidenceItems}/${result.contextMetrics.totalEvidenceItems} 条 evidence 带真实行号，密度 ${result.contextMetrics.preciseEvidenceDensity}。`,
-    );
-    lines.push(
-      `- 图事实落页：${result.pageMetrics.graphLandingPages}/${result.pageCount} 页面包含 graph facts，总计 ${result.pageMetrics.totalGraphFactLines} 行；概述=${overviewPage?.graphFactLines ?? 0}、架构=${architecturePage?.graphFactLines ?? 0}、工作流=${workflowPage?.graphFactLines ?? 0}，Mermaid ${result.pageMetrics.totalMermaidBlocks} 个，落在 ${result.pageMetrics.mermaidLandingPages} 页。`,
-    );
-    lines.push(`- Query/图验证：${formatQuerySummary(result)}`);
-    lines.push(
-      `- LLM cache：${result.llmPromptBreakdown.map((item) => `${item.name}(${item.count})`).join("、") || "无"}`,
-    );
-    lines.push(`- Reference 对照：${describeReferenceDelta(result)}`);
-    lines.push(`- 增强观测：${describeEnhancementObservation(result)}`);
+    lines.push(`- runtime：${result.runtimeState} / ${result.baselineClass} / ${result.incompleteReason ?? "ready"}`);
+    lines.push(`- 2.0 pipeline：knowledge_units=${result.knowledgeMetrics.knowledgeUnitCount}，knowledge_domains=${result.knowledgeMetrics.knowledgeDomainCount}，unit_research=${result.knowledgeMetrics.unitResearchRows}，section_plan_units=${result.knowledgeMetrics.sectionPlanUnits}，page_drafts=${result.knowledgeMetrics.pageDraftCount}，wiki_pages=${result.knowledgeMetrics.wikiPageCount}，markdown=${result.knowledgeMetrics.markdownPageCount}`);
+    lines.push(`- 覆盖率：research=${result.knowledgeMetrics.researchCoverage}，compose=${result.knowledgeMetrics.composeCoverage}，assemble=${result.knowledgeMetrics.assembleCoverage}`);
+    lines.push(`- UnitType：${result.knowledgeMetrics.unitTypeCounts.slice(0, 8).map((item) => `${item.name}(${item.count})`).join("、") || "无"}`);
+    lines.push(`- DomainType：${result.knowledgeMetrics.domainTypeCounts.slice(0, 8).map((item) => `${item.name}(${item.count})`).join("、") || "无"}`);
+    lines.push(`- ResearchType：${result.knowledgeMetrics.researchTypeCounts.map((item) => `${item.name}(${item.count})`).join("、") || "无"}`);
+    if (result.runtimeState === "ready") {
+      lines.push(`- 页面质量：topic_pages=${result.pageMetrics.topicPages}，evidence_pages=${result.pageMetrics.evidenceLandingPages}，mermaid_pages=${result.pageMetrics.mermaidLandingPages}，avg_lines=${result.pageMetrics.avgNonEmptyLinesPerPage}，avg_prose=${result.pageMetrics.avgProseLinesPerPage}`);
+      lines.push(`- 页面分解信号：${result.pageMetrics.decompositionCounts.slice(0, 8).map(([name, count]) => `${name}(${count})`).join("、") || "无"}`);
+    } else {
+      lines.push("- 页面质量：runtime 尚未 ready，本轮只输出 DB 诊断，不给页级质量结论。");
+    }
+    lines.push(`- 图事实/符号：symbols=${result.symbolCount}，edges=${result.edgeCount}，communities=${result.communityCount}，processes=${result.processCount}`);
+    lines.push(`- 语言分布：${result.languageBreakdown.slice(0, 8).map((item) => `${item.name}(${item.count})`).join("、") || "无"}`);
+    lines.push(`- reference：${describeReferenceDelta(result)}`);
     lines.push("");
   }
 
@@ -760,6 +342,6 @@ function main(argv) {
   process.stdout.write(output);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2));
 }

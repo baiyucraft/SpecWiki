@@ -243,6 +243,79 @@ export function removePathWithRetry(
 }
 
 // -------------------------------------------------------------------------
+// SQLite
+// -------------------------------------------------------------------------
+
+/**
+ * 读取 sqlite 查询结果，并在数据库短暂锁表时自动重试。
+ *
+ * @param dbPath SQLite 文件路径。
+ * @param sql 要执行的 SQL 语句。
+ * @param options 运行选项；支持覆盖超时和缓冲区。
+ * @returns 返回去掉空行后的文本结果。
+ */
+export function querySqliteRows(
+  dbPath,
+  sql,
+  { timeout = 35_000, maxBuffer = 64 * 1024 * 1024 } = {},
+) {
+  if (!existsSync(dbPath)) {
+    return [];
+  }
+
+  const statement = `PRAGMA busy_timeout=30000; ${sql}`;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const output = execFileSync("sqlite3", [dbPath, statement], {
+        encoding: "utf-8",
+        timeout,
+        maxBuffer,
+      })
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (output[0] === "30000") {
+        output.shift();
+      }
+      return output;
+    } catch (error) {
+      lastError = error;
+      if (!String(error.stderr || error.message || "").includes("database is locked")) {
+        throw error;
+      }
+      sleepSync(250);
+    }
+  }
+
+  throw lastError;
+}
+
+/**
+ * 读取 sqlite 单值查询结果。
+ *
+ * @param dbPath SQLite 文件路径。
+ * @param sql 要执行的 SQL 语句。
+ * @returns 返回最后一行结果；若无结果则返回空字符串。
+ */
+export function querySqliteValue(dbPath, sql) {
+  const rows = querySqliteRows(dbPath, sql);
+  return rows.at(-1) ?? "";
+}
+
+/**
+ * 把 sqlite 文本结果安全转成数字。
+ *
+ * @param value sqlite 返回值。
+ * @returns 返回有限数字；无效值统一退回 0。
+ */
+export function parseSqliteNumber(value) {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// -------------------------------------------------------------------------
 // JSON IPC
 // -------------------------------------------------------------------------
 

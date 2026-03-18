@@ -1341,7 +1341,10 @@ pub fn plan_knowledge_units(
     }
 
     // 4. 建立父子关系
+    let original_parent_by_id = snapshot_parent_links(&units);
     prune_shadowed_docs_backed_units(&mut units);
+    let domain_index_by_domain = collect_domain_index_by_domain(&units);
+    repair_orphan_parent_links(&mut units, &original_parent_by_id, &domain_index_by_domain);
     establish_parent_child_links(&mut units);
 
     units
@@ -3301,7 +3304,10 @@ where
     }
 
     assign_docs_unit_parents(&mut units);
-    dedup_units_by_relative_path(units)
+    let original_parent_by_id = snapshot_parent_links(&units);
+    let mut units = dedup_units_by_relative_path(units);
+    repair_orphan_parent_links(&mut units, &original_parent_by_id, &BTreeMap::new());
+    units
 }
 
 fn select_preferred_docs_paths(paths: &[String]) -> Vec<String> {
@@ -3587,6 +3593,68 @@ fn dedup_units_by_relative_path(units: Vec<KnowledgeUnit>) -> Vec<KnowledgeUnit>
         .into_iter()
         .filter(|unit| seen.insert(unit.relative_path.clone()))
         .collect()
+}
+
+fn snapshot_parent_links(units: &[KnowledgeUnit]) -> BTreeMap<String, Option<String>> {
+    units
+        .iter()
+        .map(|unit| (unit.id.clone(), unit.parent_unit_id.clone()))
+        .collect()
+}
+
+fn collect_domain_index_by_domain(units: &[KnowledgeUnit]) -> BTreeMap<String, String> {
+    units
+        .iter()
+        .filter(|unit| unit.unit_type == UnitType::DomainIndex)
+        .map(|unit| (unit.domain_id.clone(), unit.id.clone()))
+        .collect()
+}
+
+fn repair_orphan_parent_links(
+    units: &mut Vec<KnowledgeUnit>,
+    original_parent_by_id: &BTreeMap<String, Option<String>>,
+    domain_index_by_domain: &BTreeMap<String, String>,
+) {
+    let existing_ids: BTreeSet<String> = units.iter().map(|unit| unit.id.clone()).collect();
+
+    for unit in units.iter_mut() {
+        // 父引用收敛后统一重建 child_unit_ids，避免保留被裁剪节点留下的旧 child link。
+        unit.child_unit_ids.clear();
+        unit.parent_unit_id = resolve_surviving_parent(
+            unit,
+            &existing_ids,
+            original_parent_by_id,
+            domain_index_by_domain,
+        );
+    }
+}
+
+fn resolve_surviving_parent(
+    unit: &KnowledgeUnit,
+    existing_ids: &BTreeSet<String>,
+    original_parent_by_id: &BTreeMap<String, Option<String>>,
+    domain_index_by_domain: &BTreeMap<String, String>,
+) -> Option<String> {
+    let mut cursor = unit.parent_unit_id.clone();
+    let mut visited = BTreeSet::new();
+
+    while let Some(parent_id) = cursor {
+        if !visited.insert(parent_id.clone()) {
+            break;
+        }
+        if existing_ids.contains(&parent_id) && parent_id != unit.id {
+            return Some(parent_id);
+        }
+        cursor = original_parent_by_id.get(&parent_id).cloned().flatten();
+    }
+
+    if let Some(domain_index_id) = domain_index_by_domain.get(&unit.domain_id) {
+        if domain_index_id != &unit.id && existing_ids.contains(domain_index_id) {
+            return Some(domain_index_id.clone());
+        }
+    }
+
+    None
 }
 
 fn estimate_file_depth(paths: &[String]) -> u32 {
