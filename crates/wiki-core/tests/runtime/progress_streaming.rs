@@ -2,7 +2,9 @@ use std::fs;
 use std::path::Path;
 
 use tempfile::tempdir;
-use wiki_core::debug_trace::{clear_startup_options, set_startup_options, StartupDebugTraceOptions};
+use wiki_core::debug_trace::{
+    clear_startup_options, set_startup_options, StartupDebugTraceOptions,
+};
 use wiki_core::transport::dto::CoreEvent;
 use wiki_core::transport::json_rpc::{handle_json_stream, should_stream};
 use wiki_core::workflows::progress::{ProgressSink, WorkflowProgressEvent};

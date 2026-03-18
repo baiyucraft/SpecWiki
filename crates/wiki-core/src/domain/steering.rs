@@ -140,12 +140,16 @@ pub struct LlmConfig {
     pub enabled: bool,
     /// 当前 workflow 使用的模型选择，格式为 `provider/model`。
     pub model: String,
+    /// provider 直连路径允许的最大并行请求数。
+    pub parallel_requests: usize,
     /// 单次 workflow 允许的真实调用上限。
     pub max_calls: usize,
     /// Research 阶段允许的最大 LLM 调用次数。
     pub max_research_calls: usize,
     /// Compose 阶段允许的最大 LLM 调用次数。
     pub max_compose_calls: usize,
+    /// 单页 provider research session 允许的最大轮次数。
+    pub page_research_max_turns: usize,
     /// prompt 级缓存 TTL（秒）。
     pub cache_ttl_seconds: u64,
     /// LLM cache 生命周期模式。
@@ -184,6 +188,17 @@ pub enum LlmToolsMode {
     NoTools,
 }
 
+/// `LlmProviderRequestFormat` 表示 provider HTTP 请求使用的 API 形态。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmProviderRequestFormat {
+    /// 默认走 OpenAI-compatible `/v1/chat/completions`。
+    #[default]
+    ChatCompletions,
+    /// 显式启用 `/v1/responses`。
+    Responses,
+}
+
 /// LLM provider 直连配置。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -206,6 +221,9 @@ pub struct LlmProviderConfig {
     /// provider 瞬时失败时线性退避的基础毫秒数。
     #[serde(alias = "retryBackoffMs")]
     pub retry_backoff_ms: u64,
+    /// provider HTTP 请求 API 形态；默认 `chat_completions`。
+    #[serde(alias = "requestFormat", alias = "apiFormat")]
+    pub request_format: LlmProviderRequestFormat,
     /// provider 级默认模型名；当顶层 `llm.model` 为空时可作为回退。
     #[serde(alias = "defaultModel")]
     pub default_model: String,
@@ -336,9 +354,11 @@ struct RawDebugConfig {
 struct RawLlmConfig {
     enabled: Option<bool>,
     model: Option<String>,
+    parallel_requests: Option<usize>,
     max_calls: Option<usize>,
     max_research_calls: Option<usize>,
     max_compose_calls: Option<usize>,
+    page_research_max_turns: Option<usize>,
     cache_ttl_seconds: Option<u64>,
     cache_mode: Option<LlmCacheMode>,
     allow_mermaid: Option<bool>,
@@ -360,6 +380,8 @@ struct RawLlmProviderConfig {
     max_retries: Option<usize>,
     #[serde(alias = "retryBackoffMs")]
     retry_backoff_ms: Option<u64>,
+    #[serde(alias = "requestFormat", alias = "apiFormat")]
+    request_format: Option<LlmProviderRequestFormat>,
     #[serde(alias = "defaultModel")]
     default_model: Option<String>,
     capabilities: Option<RawLlmProviderCapabilitiesConfig>,
@@ -406,9 +428,11 @@ impl Default for LlmConfig {
         Self {
             enabled: false,
             model: String::new(),
-            max_calls: 24,
-            max_research_calls: 50,
-            max_compose_calls: 100,
+            parallel_requests: 3,
+            max_calls: 48,
+            max_research_calls: 256,
+            max_compose_calls: 160,
+            page_research_max_turns: 10,
             cache_ttl_seconds: 60 * 60 * 24 * 7,
             cache_mode: LlmCacheMode::Preserve,
             allow_mermaid: true,
@@ -426,6 +450,7 @@ impl Default for LlmProviderConfig {
             timeout_seconds: 90,
             max_retries: 3,
             retry_backoff_ms: 400,
+            request_format: LlmProviderRequestFormat::ChatCompletions,
             default_model: String::new(),
             capabilities: LlmProviderCapabilitiesConfig::default(),
             models: BTreeMap::new(),
@@ -538,21 +563,24 @@ impl LlmConfig {
 
     /// 返回 provider 直连路径可用的安全并行度。
     pub fn provider_parallel_requests(&self) -> usize {
-        3
+        self.parallel_requests.max(1)
     }
 }
 
 impl LlmProviderConfig {
-    /// 解析 openai-compatible `/chat/completions` 端点。
+    /// 解析当前 provider 请求端点。
     pub fn endpoint_url(&self) -> Option<String> {
         let api_base = self.api_base.trim().trim_end_matches('/');
         if api_base.is_empty() {
             return None;
         }
-        if api_base.ends_with("/chat/completions") {
+        if api_base.ends_with("/chat/completions") || api_base.ends_with("/responses") {
             return Some(api_base.to_string());
         }
-        Some(format!("{api_base}/chat/completions"))
+        Some(format!(
+            "{api_base}/{}",
+            self.request_format.endpoint_suffix()
+        ))
     }
 
     /// 解析 provider API key；优先使用显式值，再回退环境变量。
@@ -575,6 +603,16 @@ impl LlmProviderCapabilitiesConfig {
     /// 解析当前 provider 的显式工具模式。
     pub fn tools_mode(&self) -> LlmToolsMode {
         self.tools_mode
+    }
+}
+
+impl LlmProviderRequestFormat {
+    /// 返回请求端点后缀。
+    pub fn endpoint_suffix(&self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "chat/completions",
+            Self::Responses => "responses",
+        }
     }
 }
 
@@ -675,6 +713,9 @@ fn apply_raw_llm_config(config: &mut LlmConfig, raw: RawLlmConfig) {
     if let Some(model) = raw.model {
         config.model = model;
     }
+    if let Some(parallel_requests) = raw.parallel_requests {
+        config.parallel_requests = parallel_requests;
+    }
     if let Some(max_calls) = raw.max_calls {
         config.max_calls = max_calls;
     }
@@ -683,6 +724,9 @@ fn apply_raw_llm_config(config: &mut LlmConfig, raw: RawLlmConfig) {
     }
     if let Some(max_compose_calls) = raw.max_compose_calls {
         config.max_compose_calls = max_compose_calls;
+    }
+    if let Some(page_research_max_turns) = raw.page_research_max_turns {
+        config.page_research_max_turns = page_research_max_turns;
     }
     if let Some(cache_ttl_seconds) = raw.cache_ttl_seconds {
         config.cache_ttl_seconds = cache_ttl_seconds;
@@ -719,6 +763,9 @@ fn apply_raw_llm_provider_config(config: &mut LlmProviderConfig, raw: RawLlmProv
     }
     if let Some(retry_backoff_ms) = raw.retry_backoff_ms {
         config.retry_backoff_ms = retry_backoff_ms;
+    }
+    if let Some(request_format) = raw.request_format {
+        config.request_format = request_format;
     }
     if let Some(default_model) = raw.default_model {
         config.default_model = default_model;
@@ -820,11 +867,20 @@ fn normalize_debug_config(config: &mut DebugConfig) {
 
 fn normalize_llm_config(config: &mut LlmConfig) {
     config.model = config.model.trim().to_string();
+    if config.parallel_requests == 0 {
+        config.parallel_requests = LlmConfig::default().parallel_requests;
+    }
+    if config.max_calls == 0 {
+        config.max_calls = LlmConfig::default().max_calls;
+    }
     if config.max_research_calls == 0 {
         config.max_research_calls = LlmConfig::default().max_research_calls;
     }
     if config.max_compose_calls == 0 {
         config.max_compose_calls = LlmConfig::default().max_compose_calls;
+    }
+    if config.page_research_max_turns == 0 {
+        config.page_research_max_turns = LlmConfig::default().page_research_max_turns;
     }
 
     let mut normalized_providers = BTreeMap::new();
@@ -964,7 +1020,8 @@ where
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let content = serde_yaml::to_string(value).map_err(|error| io::Error::other(error.to_string()))?;
+    let content =
+        serde_yaml::to_string(value).map_err(|error| io::Error::other(error.to_string()))?;
     let tmp_path = path.with_extension("tmp");
     fs::write(&tmp_path, content)?;
     fs::rename(tmp_path, path)

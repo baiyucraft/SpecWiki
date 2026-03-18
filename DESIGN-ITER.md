@@ -4,7 +4,7 @@
 
 迭代 0-5 期间经历过五次重排（详见 git 历史）。迭代 5 完成后，DESIGN-CORE.md 基于四个上游项目（GitNexus、codewiki、deepwiki-rs、deepwiki-open）源码实际阅读进行了完全重写，核心架构从文件级扫描升级为三层解析（文件扫描 → 符号解析 → 图分析），存储从 JSON 文件迁移到 SQLite，搜索从结构化查询升级为 BM25 + 图查询 + 混合搜索。迭代 9.4 完成后，基于 storybook/dagger 两个验收样本的 reference 深度对比和四个上游项目源码的再次深入阅读，核心设计升级为 DESIGN-CORE2.0.md，pipeline 从三段式（Facts → Planner → Renderer）重构为四层式（Facts → Knowledge Planning → Research → Compose），引入知识单元抽象、research-first composition 和 leaf-first/parent-consume-child 模式。
 
-迭代 6 完成了基础 SQLite 迁移（kv_store + page cache）、Steering 配置、页面拓扑稳定和 section 模板丰富。随后插入的迭代 6.5 已完成并归档，补齐了完整关系型 schema、FilePurpose 分类和 FTS5 搜索；迭代 7 现已完成并归档；迭代 8、8.5、9、9.1、9.2 也均已完成并归档，后续迭代从 10 开始。
+迭代 6 完成了基础 SQLite 迁移（kv_store + page cache）、Steering 配置、页面拓扑稳定和 section 模板丰富。随后插入的迭代 6.5 已完成并归档，补齐了完整关系型 schema、FilePurpose 分类和 FTS5 搜索；迭代 7 现已完成并归档；迭代 8、8.5、9、9.1、9.2 也均已完成并归档。当前 9.3-9.5 已把主链推进到 `Facts -> Knowledge Planning -> Research -> Compose`、provider-first research、final markdown evidence/citation/diagram contract 和 reference 专项收敛；后续新增迭代从 9.6 开始，优先解决 `overall=100%` 但 `low-fidelity=全量` 的验收与内容保真问题。
 
 ## 依赖关系
 
@@ -24,6 +24,16 @@
 迭代 9.1: Topic Planner + Evidence Layer（已完成）
     ↓
 迭代 9.2: Dossier + Research Session + Budget/Usage（已完成）
+    ↓
+迭代 9.3-9.5: 2.0 主链重构 + provider-first/evidence/decomposition 专项收口（进行中）
+    ↓
+迭代 9.6: Fidelity Gates & Reference Report Hardening
+    ↓
+迭代 9.7: Deterministic Ownership & KnowledgeUnit Refinement
+    ↓
+迭代 9.8: PageResearchPacket & Child Digest Utilization
+    ↓
+迭代 9.9: Compose Contract Tightening & Fidelity Convergence
     ↓
 迭代 10: Agent 消费层（TOON + RAG）
     ↓
@@ -322,6 +332,216 @@ LLM 内容增强：
 - provider-first 路径下的 dossier / research session / tool loop / budget / usage 能稳定运行。
 - cold run 与 warm run 能明确区分，并且 warm cache 实际减少请求与 token。
 - reference 对比和 trace 复盘能说明剩余差距主要在 dossier 精度、session 深度和 renderer 消费方式，而不是“是否已接上大模型”。
+
+## 迭代 9.6：Fidelity Gates & Reference Report Hardening
+
+状态：未开始
+
+目标：先把“什么叫像 reference 的可读页面”定义清楚。`9.6-9.9` 的总体目标不是继续堆指标或补索引能力，而是把 `.wiki/` 收敛成真正接近 reference 的可读文档：页数基本一致、主题页为主、docs-backed 页面稳定输出 `cite -> 目录 -> 简介 -> 项目结构 -> 核心组件 -> 架构总览 -> 详细组件分析 -> 依赖关系分析 -> 性能考量 -> 故障排查指南 -> 结论 -> 附录` 这样的主章节骨架，让人打开就能看懂，而不是只看到一堆索引和聚合页。本迭代先把 `storybook + dagger` 专项验收口径变成稳定、可复现、可定位的工程指标，优先修复“`overall_match_rate = 100%` 但 `low-fidelity = 全量`”与“reuse 严重但 `collapsed = 0`”这类报告口径失真问题；本迭代只升级报告与验证，不改 core 生成主链。
+
+范围：
+
+报告口径硬化：
+
+- 升级 `scripts/collect-reference-project-reports.mjs`，把最终对比表中的 `reference -> generated` 匹配对显式保留为正式分析输入，而不是只在中间选择器阶段短暂存在。
+- 新增 `many_to_one reuse` 一级指标：
+  - `reuse_count(page)`
+  - `reuse_pages`
+  - `severe_reuse_pages`
+  - `reuse_overage`
+- 新增 `skeleton fidelity` 一级指标：
+  - 从最终 `.wiki/*.md` 与 reference markdown 提取 H2/H3 heading
+  - 忽略 `目录`、`附录`、`章节结构图` 与空标题 cite preamble
+  - 做 normalize 后基于 LCS 计算 `skeleton_score`
+- 新增 `key source coverage` 一级指标：
+  - 优先提取 `file://` citation 链接
+  - 再 fallback 到 file mention regex
+  - 计算 generated/reference 的关键文件集合重合率
+- 保留 `overall_match_rate`，但降级为一级门槛，不再单独作为完成判据。
+
+报告定位能力：
+
+- 在项目报告中新增：
+  - `reuse reverse index top offenders`
+  - `skeleton lowest pages`
+  - `key-source lowest pages`
+- 把 `symptom -> metric -> offending pages -> contract hypothesis` 串成正式 gap ledger，而不是只给总分。
+
+稳定性验证：
+
+- 对同一项目执行 warm report 至少两次，验证 `reuse_overage / median skeleton / median key-source` 的波动在可接受范围内。
+- 为 heading normalize / ignore list / key-source extraction 增加脚本级测试，避免 renderer 自动块导致指标抖动。
+
+不在本迭代处理：
+
+- 不修改 `wiki-core` 的 planner / research / compose 主链。
+- 不引入新 evidence 数据模型。
+- 不调整 citation 下限、diagram fallback 或 provider 行为。
+
+完成标准：
+
+- `storybook + dagger` 的专项报告不再只给 `overall_match_rate`，而会明确回答：
+  - 生成页数是否接近 reference
+  - 是否存在“一个生成页对应多个 reference 页”的粗页/复用问题
+  - docs-backed 页面是否具备 reference 式章节骨架
+  - 页面正文是否真正提到了 reference 中的关键文件
+- `reuse` 成为与 `missing / collapsed / low-fidelity / extra generated` 并列的正式专项指标。
+- `skeleton fidelity` 与 `key source coverage` 能直接从最终 Markdown 计算，并稳定进入项目报告。
+- 报告能够定位最严重的 reuse page、骨架偏差页和关键文件缺失页，而不是只输出汇总数字。
+- 对 `storybook` 与 `dagger` 的 warm report 重跑后，新指标波动可控，可作为后续 9.7-9.9 的验收基线。
+
+## 迭代 9.7：Deterministic Ownership & KnowledgeUnit Refinement
+
+状态：未开始
+
+目标：把“少量粗页”和“过多噪声页”一起压下去，让页面数量和 page tree 先长对。在不引入 LLM 细分的前提下，把 coarse-page / reuse-page 的主要根因收回到 deterministic planner，建立 KnowledgeUnit 的 owner contract、路径归属上下文与有边界的局部 refinement。最终要让 `.wiki/` 更接近 reference 的页数和页树形态，并减少“看起来像目录，不像文档”的页面。
+
+范围：
+
+Facts/Planning 基础设施：
+
+- 引入 `PathOwnershipContext` / `ImportResolutionContext` 一类的 deterministic 归属上下文，供 planner / research / query 共享只读结果。
+- 归属上下文优先覆盖：
+  - docs corpus ownership
+  - module path ownership
+  - config surface ownership
+- 不在本迭代把 `calls / process / community` 全面 confidence 化；仅允许在 ownership 判断上增加 deterministic 信心分级。
+
+KnowledgeUnit owner contract：
+
+- 为 `KnowledgeUnit` 引入可检查的 owner/intention 结构，而不是单句描述，至少回答：
+  - 它承载的知识意图是什么
+  - 为什么由它而不是兄弟页承载
+  - 它明确排除什么内容
+- owner contract 要能被 planner、report 和后续 research packet 一致消费。
+
+Deterministic refinement：
+
+- refinement 不允许 LLM 参与，只允许根据 repo 自身 facts/signals 触发。
+- 首批允许的触发条件：
+  - 单个 unit 同时命中多个互斥 decomposition profile
+  - 同一 unit 内 docs anchors 形成多个顶层 skeleton cluster
+  - key source files 在 path ownership 上形成多个低交集簇
+- refinement 输出必须重新落回正式 `KnowledgeUnit[]`，重新 build `KnowledgeTree.processing_order`，正常写库与缓存。
+- 限制 refinement 只做一层局部细分，并引入页面预算守卫，避免 extra generated pages 反向失控。
+
+Pruning/Ownership 收口：
+
+- 延续并统一当前已有的 docs corpus 选择、meta docs 过滤、root README 回收、thin domain synthetic index 回收逻辑。
+- 把这类规则正式归类为 ownership/pruning contract，而不是继续散落成样本收口经验。
+
+完成标准：
+
+- planner 能基于 deterministic 规则识别 coarse-page 候选并触发局部 refinement。
+- `.wiki/` 中的低价值噪声页明显减少，不再靠索引页和派生页充数。
+- `storybook + dagger` 上：
+  - 生成页数更接近 reference
+  - “一个页面复用多个 reference 页”的现象明显下降
+  - 以可读主题页为主，不再由少量 overview/index 页承担大部分内容
+- owner contract 与 refinement 输出都能稳定落库，进入后续 research/compose 输入。
+
+## 迭代 9.8：PageResearchPacket & Child Digest Utilization
+
+状态：未开始
+
+目标：让 research 真正围绕“可读页面”产出内容，而不是只给摘要和索引。把 research contract 从“section plan + summary + evidence clusters”升级为更强的页面级研究包，并让 `parent-consume-child` 从架构描述变成可统计、可验收的正式 contract。重点是让 docs-backed 页面开始稳定长成 reference 式目录骨架，而不是继续生成“看起来像索引”的说明页。
+
+范围：
+
+Research packet 升级：
+
+- 在现有 `UnitResearch` 基础上演化出 `PageResearchPacket`，至少包含：
+  - `packet_version`
+  - `unit_intent`
+  - `topic_claims`
+  - `section_blueprints`
+  - `key_file_agenda`
+  - `open_questions`
+- packet schema 要进入 `research_cache` 的 input hash contract，并有长度上限与版本号。
+- 不重做 evidence 底座；继续沿用现有 `SourceCitation`，必要时只做增量字段扩展。
+
+Docs-backed 页面研究收口：
+
+- 把 docs-backed 页面明确拆成两部分：
+  - skeleton preservation
+  - narrative enrichment
+- 先固定主章节骨架，再为每章补 claims / citations / child inputs，避免 compose 重新泛化成通用模板。
+
+Child digest utilization：
+
+- 为 `PageDigest` 引入结构化 `claims`。
+- `section_blueprints` 显式列出 `child_claim_refs`。
+- renderer 将 child claim 的使用落成结构化标记，供 report 聚合，不允许仅靠 LLM 自述“我用了子页结果”。
+- 新增 `child_digest_utilization` 指标，只对有 child units 的页面统计。
+
+关键文件提及前移：
+
+- 把“关键文件提及”从 report 事后诊断前移为 research packet 的正式 contract。
+- `key_file_agenda` 必须能被 compose/renderer 落到最终页面，并被后续 report 验证。
+
+完成标准：
+
+- `PageResearchPacket` 能稳定缓存、聚合和恢复，不破坏现有 provider/session contract。
+- docs-backed 页面在 research 阶段就能明确主章节骨架，而不是到 compose 时再临时组织。
+- 页面会显式围绕关键文件、关键组件、关键关系展开，不再只停留在泛化摘要。
+- 父页会真正吸收子页结论，页面之间开始形成清晰分工，减少“大页重新包一遍所有内容”。
+- `parent-consume-child` 在最终页面中有可统计痕迹，而不是只存在于中间内存或 prompt。
+- `child_digest_utilization` 和 `key source coverage` 能在 `storybook + dagger` 上形成正向相关提升。
+
+## 迭代 9.9：Compose Contract Tightening & Fidelity Convergence
+
+状态：未开始
+
+目标：把最终 `.wiki/*.md` 收敛成真正可读、接近 reference 的页面。在 9.6-9.8 的新指标和新 contract 基础上，收紧 compose/assemble 的质量边界，把当前“靠 citation/diagram fallback 保底”的状态推进到“由 research packet 主导页面 fidelity”的状态，并完成 `storybook + dagger` 的专项收敛。最终要让用户打开页面时，看到的是接近 reference 的完整文档，而不是“有很多结构块，但读起来还是像系统产物”。
+
+范围：
+
+Compose contract 收紧：
+
+- compose 主输入收敛为：
+  - `PageResearchPacket`
+  - `child digests / child claims`
+  - `citation materialization`
+- citation/diagram fallback 保留，但降级为兜底，不再承担主要质量来源。
+- explanation density 不再用 citation 数近似，而改由：
+  - section claims 是否被展开
+  - key files 是否被解释
+  - child digests 是否被实际吸收
+ 共同约束。
+
+专项收敛：
+
+- 以 `storybook + dagger` 为固定专项样本，围绕：
+  - `reuse`
+  - `skeleton fidelity`
+  - `key source coverage`
+  - `child digest utilization`
+  逐轮收敛。
+- `extra generated pages` 继续作为反向约束，防止靠盲目增页换 fidelity。
+- provider stability 与 content fidelity 分离验收：
+  - runtime/provider 问题单独记为稳定性 gate
+  - 页面质量问题单独记为内容 gate
+
+报告与 gate 收口：
+
+- 把 9.6 引入的指标正式纳入专项完成条件，而不是只作为观察项。
+- 报告输出统一按 `symptom -> layer -> contract -> fix path` 组织。
+
+不在本迭代处理：
+
+- 不把 query/runtime/session 混入 core fidelity 收敛。
+- 不新增样本专有 planner / renderer 分支。
+
+完成标准：
+
+- `storybook + dagger` 的最终 `.wiki/*.md` 同时满足：
+  - 页数与 reference 基本接近
+  - 页面主要由可读主题页构成，而不是索引页主导
+  - docs-backed 页面稳定输出 reference 式主章节骨架
+  - 页面正文能围绕关键组件、关键文件、依赖关系和排障内容展开
+- `storybook + dagger` 不再出现“`overall=100%` 但 `low-fidelity=全量`”的假通过状态。
+- compose 质量提升能够通过 `reuse/skeleton/key-source/child-digest` 四组指标共同反映，而不是靠单个统计数字。
+- citation / diagram 继续稳定存在，但不再是页面唯一可见价值，也不再是报告中的主要短板。
 
 ## 迭代 10：Agent Query Surface & Consumption Layer
 

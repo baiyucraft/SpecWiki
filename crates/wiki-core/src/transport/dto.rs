@@ -63,8 +63,12 @@ impl CoreResponse {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CoreEvent {
     Progress(WorkflowProgressEvent),
-    LlmRequest { request: LlmPromptRequest },
-    AgentSessionStart { request: LlmPromptRequest },
+    LlmRequest {
+        request: LlmPromptRequest,
+    },
+    AgentSessionStart {
+        request: LlmPromptRequest,
+    },
     AgentMessage {
         #[serde(rename = "requestId")]
         request_id: String,
@@ -90,8 +94,12 @@ pub enum CoreEvent {
         request_id: String,
         reason: String,
     },
-    Result { response: CoreResponse },
-    Error { response: CoreResponse },
+    Result {
+        response: CoreResponse,
+    },
+    Error {
+        response: CoreResponse,
+    },
 }
 
 impl CoreEvent {

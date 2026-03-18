@@ -71,7 +71,10 @@ pub fn remove_runtime(repo_root: &Path) -> io::Result<()> {
 }
 
 /// 在重新 init / rebuild 前清理 runtime，并按 cache mode 处理 LLM cache。
-pub fn remove_runtime_with_cache_mode(repo_root: &Path, cache_mode: LlmCacheMode) -> io::Result<()> {
+pub fn remove_runtime_with_cache_mode(
+    repo_root: &Path,
+    cache_mode: LlmCacheMode,
+) -> io::Result<()> {
     let wiki_root = wiki_root(repo_root);
     let preserved_llm_cache = match cache_mode {
         LlmCacheMode::Preserve | LlmCacheMode::Refresh => {

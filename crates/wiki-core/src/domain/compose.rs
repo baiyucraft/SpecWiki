@@ -30,6 +30,10 @@ pub struct ComposeSectionDraft {
     pub citations: Vec<SourceCitation>,
     #[serde(default)]
     pub managed: bool,
+    /// 为 true 时表示正文已经来自 reference 风格的原始 Markdown。
+    /// renderer 不应再追加通用证据块或模板章节。
+    #[serde(default)]
+    pub preserve_source_markdown: bool,
 }
 
 // ─── DiagramDraft ───────────────────────────────────────────
@@ -40,5 +44,7 @@ pub struct DiagramDraft {
     pub diagram_id: String,
     pub diagram_type: String,
     pub title: String,
+    #[serde(default)]
+    pub description: String,
     pub content: String,
 }

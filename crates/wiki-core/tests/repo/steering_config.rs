@@ -4,7 +4,9 @@
 use std::fs;
 
 use tempfile::TempDir;
-use wiki_core::domain::steering::{load_steering_config, SteeringConfig};
+use wiki_core::domain::steering::{
+    load_steering_config, LlmProviderConfig, LlmProviderRequestFormat, SteeringConfig,
+};
 
 fn make_repo() -> TempDir {
     let dir = TempDir::new().unwrap();
@@ -39,7 +41,11 @@ fn missing_file_returns_defaults() {
     assert!(config.debug.trace_dir.is_empty());
     assert!(!config.debug.echo_to_stderr);
     assert!(config.llm.providers.is_empty());
-    assert_eq!(config.llm.max_research_calls, 50);
+    assert_eq!(config.llm.parallel_requests, 3);
+    assert_eq!(config.llm.max_calls, 48);
+    assert_eq!(config.llm.max_research_calls, 256);
+    assert_eq!(config.llm.max_compose_calls, 160);
+    assert_eq!(config.llm.page_research_max_turns, 10);
 }
 
 #[test]
@@ -192,7 +198,11 @@ fn default_config_is_sane() {
     assert!(config.debug.trace_dir.is_empty());
     assert!(!config.debug.echo_to_stderr);
     assert!(config.llm.providers.is_empty());
-    assert_eq!(config.llm.max_research_calls, 50);
+    assert_eq!(config.llm.parallel_requests, 3);
+    assert_eq!(config.llm.max_calls, 48);
+    assert_eq!(config.llm.max_research_calls, 256);
+    assert_eq!(config.llm.max_compose_calls, 160);
+    assert_eq!(config.llm.page_research_max_turns, 10);
 }
 
 #[test]
@@ -239,6 +249,7 @@ llm:
 
     assert!(config.llm.enabled);
     assert_eq!(config.llm.model, "dev/dev-model");
+    assert_eq!(config.llm.parallel_requests, 5);
     assert_eq!(config.llm.max_calls, 9);
     assert!(!config.llm.allow_mermaid);
     assert_eq!(selected.provider_name, "dev");
@@ -248,6 +259,7 @@ llm:
     assert_eq!(selected.provider.timeout_seconds, 45);
     assert_eq!(selected.provider.max_retries, 3);
     assert_eq!(selected.provider.retry_backoff_ms, 400);
+    assert_eq!(config.llm.provider_parallel_requests(), 5);
     assert_eq!(
         selected.model.resolved_model_id(selected.model_name),
         "gpt-dev"
@@ -299,7 +311,44 @@ llm:
 
     let config = load_steering_config(repo.path());
 
-    assert_eq!(config.llm.max_research_calls, 50);
+    assert_eq!(config.llm.max_research_calls, 256);
+}
+
+#[test]
+fn zero_max_calls_and_page_turns_fall_back_to_defaults() {
+    let repo = make_repo();
+    write_steering(
+        &repo,
+        r#"
+llm:
+  enabled: true
+  max_calls: 0
+  page_research_max_turns: 0
+"#,
+    );
+
+    let config = load_steering_config(repo.path());
+
+    assert_eq!(config.llm.max_calls, 48);
+    assert_eq!(config.llm.page_research_max_turns, 10);
+}
+
+#[test]
+fn zero_parallel_requests_falls_back_to_default() {
+    let repo = make_repo();
+    write_steering(
+        &repo,
+        r#"
+llm:
+  enabled: true
+  parallel_requests: 0
+"#,
+    );
+
+    let config = load_steering_config(repo.path());
+
+    assert_eq!(config.llm.parallel_requests, 3);
+    assert_eq!(config.llm.provider_parallel_requests(), 3);
 }
 
 #[test]
@@ -366,6 +415,70 @@ llm:
     let selected = config.llm.resolve_selected_model().unwrap();
 
     assert_eq!(selected.provider.retry_backoff_ms, 250);
+}
+
+#[test]
+fn provider_request_format_defaults_to_chat_completions() {
+    let config = LlmProviderConfig::default();
+    let configured = LlmProviderConfig {
+        api_base: "https://api.openai.com/v1".to_string(),
+        ..LlmProviderConfig::default()
+    };
+
+    assert_eq!(
+        config.request_format,
+        LlmProviderRequestFormat::ChatCompletions
+    );
+    assert_eq!(config.endpoint_url(), None);
+    assert_eq!(
+        configured.endpoint_url(),
+        Some("https://api.openai.com/v1/chat/completions".to_string())
+    );
+}
+
+#[test]
+fn provider_request_format_can_enable_responses_endpoint() {
+    let repo = make_repo();
+    write_steering(
+        &repo,
+        r#"
+llm:
+  enabled: true
+  model: "proxy/provider-model"
+  providers:
+    proxy:
+      api_base: "https://proxy.example/v1"
+      request_format: responses
+      models:
+        provider-model: {}
+"#,
+    );
+
+    let config = load_steering_config(repo.path());
+    let selected = config.llm.resolve_selected_model().unwrap();
+
+    assert_eq!(
+        selected.provider.request_format,
+        LlmProviderRequestFormat::Responses
+    );
+    assert_eq!(
+        selected.provider.endpoint_url(),
+        Some("https://proxy.example/v1/responses".to_string())
+    );
+}
+
+#[test]
+fn provider_request_format_preserves_explicit_endpoint_suffix() {
+    let config = LlmProviderConfig {
+        api_base: "https://proxy.example/v1/responses".to_string(),
+        request_format: LlmProviderRequestFormat::ChatCompletions,
+        ..LlmProviderConfig::default()
+    };
+
+    assert_eq!(
+        config.endpoint_url(),
+        Some("https://proxy.example/v1/responses".to_string())
+    );
 }
 
 #[test]

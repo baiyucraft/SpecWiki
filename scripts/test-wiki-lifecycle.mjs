@@ -5,6 +5,7 @@
 //   node scripts/test-wiki-lifecycle.mjs --list-phases
 //   node scripts/test-wiki-lifecycle.mjs --phase bootstrap
 //   node scripts/test-wiki-lifecycle.mjs --phase steady axum zustand
+//   node scripts/test-wiki-lifecycle.mjs --phase steady --timeout-minutes 120 dagger
 //   node scripts/test-wiki-lifecycle.mjs --phase mutation
 //   node scripts/test-wiki-lifecycle.mjs --phase rebuild
 //   node scripts/test-wiki-lifecycle.mjs --jobs 6
@@ -184,7 +185,10 @@ async function initViaRealRepo(proj, realRepo, ctx) {
   const wikiInReal = path.join(realRepo, ".wiki");
   const result = await callCoreStreaming(
     { action: "init", repoRoot: realRepo },
-    { onProgress: (event) => ctx.progressLogger?.onProgress(event) },
+    {
+      onProgress: (event) => ctx.progressLogger?.onProgress(event),
+      timeoutMs: ctx.timeoutMs,
+    },
   );
   if (!result.response.ok) {
     throw new Error(result.response.error || `${proj} init failed`);
@@ -524,6 +528,7 @@ function findTrackedSourceFile(ctx) {
 async function runStreamingCommand(ctx, command, usageLabel) {
   const result = await callCoreStreaming(command, {
     onProgress: (event) => ctx.progressLogger?.onProgress(event),
+    timeoutMs: ctx.timeoutMs,
   });
 
   const usage = summarizeProgressUsage(result.progressEvents);
@@ -801,6 +806,7 @@ async function runLifecycleProject(proj, options = {}) {
         wikiDir,
         cacheMode: run.cacheMode,
         runLabel: run.label,
+        timeoutMs: options.timeoutMs,
         usageSummary: createEmptyUsageSnapshot(),
         progressLogger: createLifecycleProgressLogger(proj, run.label),
       };
@@ -856,11 +862,17 @@ function printLifecycleProjectResult(result, index, total, phase) {
   }
 }
 
-async function runLifecycleProjectInChild(proj, phase, runMode) {
+async function runLifecycleProjectInChild(proj, phase, runMode, timeoutMs) {
+  const childArgs = [SCRIPT_PATH, "--child-json", "--phase", phase, "--run-mode", runMode, "--no-build"];
+  if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    childArgs.push("--timeout-minutes", String(Math.ceil(timeoutMs / 60_000)));
+  }
+  childArgs.push(proj);
+
   for (let attempt = 0; attempt < 3; attempt++) {
     const child = await runCommandCapture(
       process.execPath,
-      [SCRIPT_PATH, "--child-json", "--phase", phase, "--run-mode", runMode, "--no-build", proj],
+      childArgs,
       { cwd: ROOT_DIR },
     );
 
@@ -900,7 +912,12 @@ export async function runLifecycleTests(names, options = {}) {
 
   const results = useParallel
     ? await runTaskPool(projects, jobs, async (proj, index) => {
-      const result = await runLifecycleProjectInChild(proj, phase, options.runMode || "cold");
+      const result = await runLifecycleProjectInChild(
+        proj,
+        phase,
+        options.runMode || "cold",
+        options.timeoutMs,
+      );
       printLifecycleProjectResult(result, index, total, phase);
       return result;
     })
@@ -909,6 +926,7 @@ export async function runLifecycleTests(names, options = {}) {
       const result = await runLifecycleProject(proj, {
         phase,
         runMode: options.runMode || "cold",
+        timeoutMs: options.timeoutMs,
       });
       for (const run of result.runs ?? []) {
         console.log(
@@ -939,7 +957,7 @@ function printPhaseList() {
   }
 }
 
-function parseCliArgs(argv) {
+export function parseCliArgs(argv) {
   const names = [];
   let phase = "full";
   let listPhases = false;
@@ -947,6 +965,7 @@ function parseCliArgs(argv) {
   let childMode = false;
   let ensureFresh = true;
   let runMode = "cold";
+  let timeoutMs;
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -969,6 +988,14 @@ function parseCliArgs(argv) {
       index++;
       continue;
     }
+    if (arg === "--timeout-minutes") {
+      const timeoutMinutes = Number(argv[index + 1]);
+      if (Number.isFinite(timeoutMinutes) && timeoutMinutes > 0) {
+        timeoutMs = Math.round(timeoutMinutes * 60_000);
+      }
+      index++;
+      continue;
+    }
     if (arg === "--child-json") {
       childMode = true;
       continue;
@@ -980,10 +1007,12 @@ function parseCliArgs(argv) {
     names.push(arg);
   }
 
-  return { childMode, ensureFresh, jobs, listPhases, names, phase, runMode };
+  return { childMode, ensureFresh, jobs, listPhases, names, phase, runMode, timeoutMs };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+const entryHref = process.argv[1] ? pathToFileURL(process.argv[1]).href : null;
+
+if (entryHref && import.meta.url === entryHref) {
   const { listPhases, names, phase } = parseCliArgs(process.argv.slice(2));
   if (listPhases) {
     printPhaseList();
@@ -1006,6 +1035,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     jobs: args.jobs,
     phase: args.phase,
     runMode: args.runMode,
+    timeoutMs: args.timeoutMs,
   });
   if (!ok) process.exit(1);
 }

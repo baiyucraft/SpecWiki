@@ -1,7 +1,7 @@
 //! `llm` 模块负责承载可选的 LLM 辅助层。
 //! 它只消费已经稳定的事实输入，负责 prompt 组装、缓存、预算控制和输出校验，
 //! 不直接接触文件系统扫描、模块树持久化或 Agent 宿主实现。
-
+//! It does not directly touch repository scanning, module persistence, or agent hosts.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
@@ -23,15 +23,14 @@ use crate::domain::context::{
     PageResearchSessionState, PageResearchTurn, PageToolArtifactRef, RepoContext, TargetedSnippet,
 };
 use crate::domain::module_tree::ModuleTree;
+use crate::domain::research::{ResearchSessionStats, ResearchStopReason};
 use crate::domain::stable_id::stable_id;
 use crate::domain::steering::{
     persist_learned_tools_mode, resolve_learned_tools_mode, LlmCacheMode, LlmConfig,
-    LlmProviderConfig, LlmToolsMode,
+    LlmProviderConfig, LlmProviderRequestFormat, LlmToolsMode,
 };
 use crate::generation::planner::PlannedPage;
-use crate::generation::sections::{
-    section_key_for_title, section_title_for_key, section_titles_for_page_type,
-};
+use crate::generation::sections::{section_key_for_title, section_titles_for_page_type};
 use crate::repo::fingerprint::fingerprint_bytes;
 use crate::repo::scanner::FilePurpose;
 use crate::repo::symbol_graph::{GraphAnalysisSnapshot, ResolvedGraphSnapshot};
@@ -103,11 +102,9 @@ impl LlmBridgeConfig {
         )
     }
 }
-
 fn default_llm_bridge_protocol() -> String {
     LLM_REQUEST_PROTOCOL.to_string()
 }
-
 /// `PromptType` 表示当前 LLM 请求属于哪一类辅助任务。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptType {
@@ -144,10 +141,10 @@ impl PromptType {
 
 const TOP_LEVEL_PROMPT_VERSION_FIXTURE: &str = TOP_LEVEL_PROMOTION_PROMPT_VERSION;
 
-/// `LlmPromptRequest` 是 core -> Agent 的结构化请求。
+/// `LlmPromptRequest` �?core -> Agent 的结构化请求。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LlmPromptRequest {
-    /// 单次请求的稳定 ID。
+    /// 单次请求的稳�?ID。
     pub request_id: String,
     /// prompt 类别。
     pub prompt_type: String,
@@ -180,20 +177,20 @@ pub struct LlmPromptRequest {
     pub session: Option<PageResearchSessionState>,
 }
 
-/// `LlmCompletion` 是 Agent -> core 的结构化响应。
+/// `LlmCompletion` �?Agent -> core 的结构化响应。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LlmCompletion {
-    /// 模型输出的 JSON 结果。
+    /// 模型输出�?JSON 结果。
     pub output: Value,
     /// 实际使用的模型标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// 当前请求的 usage 统计。
+    /// 当前请求�?usage 统计。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<LlmUsage>,
 }
 
-/// 单次 LLM 请求的 token 统计。
+/// 单次 LLM 请求�?token 统计。
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct LlmUsage {
     pub request_count: usize,
@@ -203,7 +200,7 @@ pub struct LlmUsage {
     pub source: String,
 }
 
-/// provider/model 或 prompt_type 维度的 usage bucket。
+/// provider/model �?prompt_type 维度�?usage bucket。
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct LlmUsageBucket {
     pub key: String,
@@ -226,12 +223,12 @@ pub struct LlmUsageSnapshot {
     pub by_provider_model: Vec<LlmUsageBucket>,
 }
 
-/// `LlmService` 抽象 transport 之外的真实 LLM 调用通道。
+/// `LlmService` 抽象 transport 之外的真�?LLM 调用通道。
 pub trait LlmService {
     /// 发起一次结构化 LLM 请求。
     ///
     /// # 参数
-    /// - `request`：当前 prompt 的完整协议对象。
+    /// - `request`：当�?prompt 的完整协议对象。
     ///
     /// # 返回
     /// - 成功时返回结构化 JSON 输出。
@@ -291,7 +288,7 @@ struct ProviderToolFunction {
 }
 
 impl ProviderApiLlmService {
-    /// 基于 steering 配置构造 provider 直连 service。
+    /// 基于 steering 配置构�?provider 直连 service。
     fn from_config(config: &LlmConfig) -> io::Result<Self> {
         let selected = config.resolve_selected_model().ok_or_else(|| {
             io::Error::other("provider direct call requires llm.model=provider/model")
@@ -343,30 +340,60 @@ impl ProviderApiLlmService {
         include_response_format: bool,
     ) -> io::Result<Value> {
         let model = self.request_model()?;
-        let mut body = json!({
-            "model": model,
-            "temperature": 0,
-            "messages": messages,
+        let response_format = include_response_format.then(|| {
+            request
+                .response_format
+                .as_ref()
+                .map(normalize_provider_response_format)
+                .unwrap_or_else(|| build_provider_response_format(&request.response_schema))
         });
+        let mut body = match self.provider.request_format {
+            LlmProviderRequestFormat::ChatCompletions => json!({
+                "model": model,
+                "temperature": 0,
+                "messages": messages,
+            }),
+            LlmProviderRequestFormat::Responses => json!({
+                "model": model,
+                "temperature": 0,
+                "input": build_provider_response_input(messages),
+            }),
+        };
         if !request.tools.is_empty() {
             body["tools"] = Value::Array(
                 request
                     .tools
                     .iter()
-                    .map(normalize_provider_tool_definition)
+                    .map(|tool| match self.provider.request_format {
+                        LlmProviderRequestFormat::ChatCompletions => {
+                            normalize_provider_tool_definition(tool)
+                        }
+                        LlmProviderRequestFormat::Responses => {
+                            normalize_provider_response_tool_definition(tool)
+                        }
+                    })
                     .collect(),
             );
         }
         if let Some(tool_choice) = &request.tool_choice {
-            body["tool_choice"] = tool_choice.clone();
+            body["tool_choice"] = match self.provider.request_format {
+                LlmProviderRequestFormat::ChatCompletions => tool_choice.clone(),
+                LlmProviderRequestFormat::Responses => {
+                    normalize_provider_response_tool_choice(tool_choice)
+                }
+            };
         }
-        if include_response_format {
-            let response_format = request
-                .response_format
-                .as_ref()
-                .map(normalize_provider_response_format)
-                .unwrap_or_else(|| build_provider_response_format(&request.response_schema));
-            body["response_format"] = response_format;
+        if let Some(response_format) = response_format {
+            match self.provider.request_format {
+                LlmProviderRequestFormat::ChatCompletions => {
+                    body["response_format"] = response_format;
+                }
+                LlmProviderRequestFormat::Responses => {
+                    body["text"] = json!({
+                        "format": normalize_provider_responses_text_format(&response_format)
+                    });
+                }
+            }
         }
         Ok(body)
     }
@@ -512,7 +539,7 @@ impl ProviderApiLlmService {
         let response_json = match self.send_request(request, &request_body) {
             Ok(response) => response,
             Err(error)
-                if request_body.get("response_format").is_some()
+                if provider_request_uses_response_format(&request_body)
                     && is_response_format_transport_error(&error) =>
             {
                 let retry_body = self.request_body_with_messages(request, messages, false)?;
@@ -520,12 +547,20 @@ impl ProviderApiLlmService {
             }
             Err(error) => return Err(error),
         };
-        parse_provider_chat_response(
-            request,
-            self.request_model()?,
-            &response_json,
-            &request_body,
-        )
+        match self.provider.request_format {
+            LlmProviderRequestFormat::ChatCompletions => parse_provider_chat_response(
+                request,
+                self.request_model()?,
+                &response_json,
+                &request_body,
+            ),
+            LlmProviderRequestFormat::Responses => parse_provider_responses_response(
+                request,
+                self.request_model()?,
+                &response_json,
+                &request_body,
+            ),
+        }
     }
 }
 
@@ -579,7 +614,7 @@ impl LlmService for ProviderApiLlmService {
 pub struct FilePurposeAssistInput {
     /// 当前文件的仓库内相对路径。
     pub path: String,
-    /// scanner 已经判定出的粗粒度 kind。
+    /// scanner 已经判定出的粗粒�?kind。
     pub kind: String,
     /// 当前文件语言。
     pub language: String,
@@ -663,12 +698,15 @@ pub struct PageResearchInput {
     pub title: String,
     /// 页面作用域。
     pub scope: String,
-    /// 当前页面的稳定 facts。
+    /// 当前页面的稳�?facts。
     pub facts: Vec<String>,
     /// 当前页面的补充摘要输入。
     pub summary_inputs: Vec<String>,
     /// 当前页面 steering hints。
     pub hints: Vec<String>,
+    /// 当前页面允许的受控章节槽位；为空时再退�?page_type 默认模板。
+    #[serde(default)]
+    pub allowed_section_slots: Vec<PageResearchSectionSlot>,
     /// 稳定 evidence groups。
     #[serde(default)]
     pub evidence_groups: Vec<PageEvidenceGroup>,
@@ -678,6 +716,12 @@ pub struct PageResearchInput {
     /// session 当前压缩状态。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<PageResearchSessionState>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PageResearchSectionSlot {
+    pub section_key: String,
+    pub section_title: String,
 }
 
 impl PageResearchInput {
@@ -690,10 +734,27 @@ impl PageResearchInput {
             facts: context.facts.clone(),
             summary_inputs: context.summary_inputs.clone(),
             hints: context.hints.clone(),
+            allowed_section_slots: section_titles_for_page_type(&page.page_type)
+                .into_iter()
+                .map(|title| PageResearchSectionSlot {
+                    section_key: section_key_for_title(&page.page_type, title),
+                    section_title: title.to_string(),
+                })
+                .collect(),
             evidence_groups: context.evidence_groups.clone(),
             diagram_inputs: context.diagram_inputs.clone(),
             session: None,
         }
+    }
+
+    pub fn with_allowed_sections(
+        mut self,
+        allowed_section_slots: Vec<PageResearchSectionSlot>,
+    ) -> Self {
+        if !allowed_section_slots.is_empty() {
+            self.allowed_section_slots = allowed_section_slots;
+        }
+        self
     }
 }
 
@@ -708,6 +769,7 @@ pub struct PageResearchRuntimeContext<'a> {
     pub symbol_snapshot: &'a ParsedSymbolsSnapshot,
     pub resolved_graph: &'a ResolvedGraphSnapshot,
     pub graph_analysis: &'a GraphAnalysisSnapshot,
+    pub allowed_section_slots: &'a [PageResearchSectionSlot],
 }
 
 /// 单页 research session 的结构化输出。
@@ -717,9 +779,87 @@ pub struct PageResearchSessionOutput {
     pub session: PageResearchSessionState,
 }
 
+/// 单页 research session 的停止结果。
+#[derive(Debug, Clone)]
+pub struct PageResearchSessionResult {
+    pub output: Option<PageResearchSessionOutput>,
+    pub stop_reason: ResearchStopReason,
+    pub stats: ResearchSessionStats,
+}
+
+impl PageResearchSessionResult {
+    pub fn is_some(&self) -> bool {
+        self.output.is_some()
+    }
+
+    pub fn is_none(&self) -> bool {
+        self.output.is_none()
+    }
+
+    pub fn expect(self, message: &str) -> PageResearchSessionOutput {
+        self.output.expect(message)
+    }
+
+    fn not_run() -> Self {
+        Self {
+            output: None,
+            stop_reason: ResearchStopReason::NotRun,
+            stats: ResearchSessionStats::default(),
+        }
+    }
+
+    fn call_budget_rejected() -> Self {
+        Self {
+            output: None,
+            stop_reason: ResearchStopReason::CallBudgetRejected,
+            stats: ResearchSessionStats::default(),
+        }
+    }
+
+    fn invalid_output(stats: ResearchSessionStats) -> Self {
+        Self {
+            output: None,
+            stop_reason: ResearchStopReason::InvalidOutput,
+            stats,
+        }
+    }
+
+    fn no_meaningful_delta(stats: ResearchSessionStats) -> Self {
+        Self {
+            output: None,
+            stop_reason: ResearchStopReason::NoMeaningfulDelta,
+            stats,
+        }
+    }
+
+    fn turn_budget_exhausted(stats: ResearchSessionStats) -> Self {
+        Self {
+            output: None,
+            stop_reason: ResearchStopReason::TurnBudgetExhausted,
+            stats,
+        }
+    }
+
+    fn completed(
+        output: PageResearchSessionOutput,
+        stop_reason: ResearchStopReason,
+        stats: ResearchSessionStats,
+    ) -> Self {
+        Self {
+            output: Some(output),
+            stop_reason,
+            stats,
+        }
+    }
+}
+
 impl PageResearchResult {
-    /// 对 research 结果做轻量结构校验，避免污染 deterministic renderer。
-    pub fn sanitize_for_context(mut self, context: &PageContext) -> Option<Self> {
+    /// �?research 结果做轻量结构校验，避免污染 deterministic renderer。
+    pub fn sanitize_for_context(
+        mut self,
+        context: &PageContext,
+        allowed_section_slots: &[PageResearchSectionSlot],
+    ) -> Option<Self> {
         self.summary = normalize_sentence(&self.summary);
         self.page_positioning = normalize_sentence(&self.page_positioning);
         self.open_questions = dedupe_non_empty(self.open_questions)
@@ -738,7 +878,26 @@ impl PageResearchResult {
             .map(|diagram| diagram.diagram_id.clone())
             .collect::<BTreeSet<_>>();
         let allowed_children = BTreeSet::<String>::new();
-        let max_section_count = section_titles_for_page_type(&context.page_type).len();
+        let allowed_slots = if allowed_section_slots.is_empty() {
+            section_titles_for_page_type(&context.page_type)
+                .into_iter()
+                .map(|title| PageResearchSectionSlot {
+                    section_key: section_key_for_title(&context.page_type, title),
+                    section_title: title.to_string(),
+                })
+                .collect::<Vec<_>>()
+        } else {
+            allowed_section_slots.to_vec()
+        };
+        let allowed_slot_keys = allowed_slots
+            .iter()
+            .map(|slot| (slot.section_key.clone(), slot.section_title.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let allowed_slot_titles = allowed_slots
+            .iter()
+            .map(|slot| (slot.section_title.clone(), slot.section_key.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let max_section_count = allowed_slots.len();
 
         let mut seen_section_keys = BTreeSet::new();
         self.section_plan = self
@@ -746,12 +905,16 @@ impl PageResearchResult {
             .into_iter()
             .filter_map(|mut section| {
                 let normalized_key = if section.section_key.trim().is_empty() {
-                    section_key_for_title(&context.page_type, &section.section_title)
+                    allowed_slot_titles
+                        .get(section.section_title.trim())
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            section_key_for_title(&context.page_type, &section.section_title)
+                        })
                 } else {
                     section.section_key.trim().to_string()
                 };
-                let section_title =
-                    section_title_for_key(&context.page_type, &normalized_key)?.to_string();
+                let section_title = allowed_slot_keys.get(&normalized_key)?.to_string();
                 if !seen_section_keys.insert(normalized_key.clone()) {
                     return None;
                 }
@@ -877,7 +1040,7 @@ pub struct LlmRuntime<'cfg, 'svc> {
 }
 
 impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
-    /// 创建当前 workflow 使用的 LLM runtime。
+    /// 创建当前 workflow 使用�?LLM runtime。
     pub fn new(
         repo_root: &'cfg Path,
         config: &'cfg LlmConfig,
@@ -916,7 +1079,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         }
     }
 
-    /// 注册普通模式下的实时 usage 回调。
+    /// 注册普通模式下的实�?usage 回调。
     pub fn set_usage_reporter(
         &mut self,
         reporter: Option<Box<dyn FnMut(LlmUsageSnapshot) + 'svc>>,
@@ -924,7 +1087,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         self.usage_reporter = reporter;
     }
 
-    /// 当前 workflow 是否真正具备可用的 LLM 请求路径。
+    /// 当前 workflow 是否真正具备可用�?LLM 请求路径。
     pub fn service_available(&self) -> bool {
         self.config.enabled && self.service.is_some()
     }
@@ -962,12 +1125,12 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         }
     }
 
-    /// 当前 workflow 是否允许读已有 LLM cache。
+    /// 当前 workflow 是否允许读已�?LLM cache。
     pub fn cache_reads_enabled(&self) -> bool {
         self.config.cache_mode != LlmCacheMode::Refresh
     }
 
-    /// 当前 workflow 的 cache mode。
+    /// 当前 workflow �?cache mode。
     pub fn cache_mode(&self) -> LlmCacheMode {
         self.config.cache_mode
     }
@@ -1104,7 +1267,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         .map(|result: Option<Output>| result.and_then(|output| parse_file_purpose(&output.purpose)))
     }
 
-    /// 按批次判断一组 `FilePurpose::Utility` 兜底文件。
+    /// 按批次判断一�?`FilePurpose::Utility` 兜底文件。
     /// 每个文件仍按单条输入命中/写入缓存，只是把未命中的候选合并成更少的真实请求。
     pub fn classify_file_purposes(
         &mut self,
@@ -1173,7 +1336,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                 &format!(
                     concat!(
                         "对输入 items 中的每个文件判断最可能的稳定角色。",
-                        "返回 `items` 数组；每项必须保留原始 `path`，并且 `purpose` 只能从以下稳定枚举中选择：{}。",
+                        "返回 `items` 数组；每项必须保留原 `path`，并且 `purpose` 只能从以下稳定枚举中选择：{}。",
                         "不要返回中文描述、解释句或额外字段。"
                     ),
                     FILE_PURPOSE_ALLOWED_VALUES.join(", ")
@@ -1275,7 +1438,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             PromptType::TopLevelPromotion,
             input,
             "你是 Repo Wiki 的模块边界辅助模型，只能做保守的是/否判断。",
-            "判断该顶层目录是否值得提升为独立模块，只返回 promote 布尔值。",
+            "判断该顶层目录是否值得提升为独立模块，只返回 `promote` 布尔值。",
             json!({
                 "type": "object",
                 "required": ["promote"],
@@ -1353,7 +1516,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                 &batch_input_hash,
                 model.clone(),
                 "你是 Repo Wiki 的模块边界辅助模型，只能做保守的是/否判断。",
-                "判断每个顶层目录是否值得提升为独立模块，返回 `items` 数组；每项必须保留原始 `root_path` 和 `promote` 布尔值。",
+                "判断每个顶层目录是否值得提升为独立模块，返回 `items` 数组；每项必须保留原 `root_path` 和 `promote` 布尔值。",
                 &prepared.input,
                 json!({
                     "type": "object",
@@ -1418,7 +1581,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         Ok(results)
     }
 
-    /// 为 `module_kind` 兜底分支提供可选判断。
+    /// �?`module_kind` 兜底分支提供可选判断。
     pub fn classify_module_kind(
         &mut self,
         input: &ModuleKindAssistInput,
@@ -1432,7 +1595,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             PromptType::ModuleKind,
             input,
             "你是 Repo Wiki 的模块分类辅助模型，只能在既有 kind 集合内做保守判断。",
-            "判断该模块更适合的 kind，只返回 kind 字段。",
+            "判断该模块更适合作为哪种 kind，只返回 `kind` 字段。",
             json!({
                 "type": "object",
                 "required": ["kind"],
@@ -1458,7 +1621,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             PromptType::DependencyEdge,
             input,
             "你是 Repo Wiki 的关系辅助模型，只能判断该关系是否值得保留。",
-            "根据 source/target 路径和模块名判断这条低置信度关系是否应保留，只返回 keep 布尔值。",
+            "根据 source/target 路径和模块名判断这条低置信度关系是否应保留，只返回 `keep` 布尔值。",
             json!({
                 "type": "object",
                 "required": ["keep"],
@@ -1598,29 +1761,24 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         Ok(results)
     }
 
-    /// 对 research 支持页面执行 bounded provider research session。
+    /// �?research 支持页面执行 bounded provider research session。
     pub fn research_page(
         &mut self,
         input: &PageResearchInput,
         runtime: &PageResearchRuntimeContext<'_>,
-    ) -> io::Result<Option<PageResearchSessionOutput>> {
+    ) -> io::Result<PageResearchSessionResult> {
         if !matches!(
             input.page_type.as_str(),
-            "overview"
-                | "architecture"
-                | "module"
-                | "topic"
-                | "family-index"
-                | "family-child"
+            "overview" | "architecture" | "module" | "topic" | "family-index" | "family-child"
         ) || !(self.service_available() && self.config.enabled)
         {
-            return Ok(None);
+            return Ok(PageResearchSessionResult::not_run());
         }
         let Some(RuntimeLlmService::Provider(_)) = self.service.as_ref() else {
-            return Ok(None);
+            return Ok(PageResearchSessionResult::not_run());
         };
         if !self.try_consume_budget(PromptType::PageResearch, Some(input.page_type.as_str())) {
-            return Ok(None);
+            return Ok(PageResearchSessionResult::call_budget_rejected());
         }
 
         let model = self.model_id().map(str::to_string);
@@ -1637,10 +1795,14 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                 model.as_deref(),
             )? {
                 if is_negative_cache_payload(&cached.response) {
-                    return Ok(None);
+                    return Ok(PageResearchSessionResult::invalid_output(
+                        ResearchSessionStats::default(),
+                    ));
                 }
                 if let Ok(parsed) = serde_json::from_str::<PageResearchResult>(&cached.response) {
-                    if let Some(result) = parsed.sanitize_for_context(runtime.page_context) {
+                    if let Some(result) = parsed
+                        .sanitize_for_context(runtime.page_context, runtime.allowed_section_slots)
+                    {
                         let mut session =
                             input
                                 .session
@@ -1652,7 +1814,12 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                                     tool_artifact_refs: Vec::new(),
                                 });
                         session.session_summary = result.summary.clone();
-                        return Ok(Some(PageResearchSessionOutput { session, result }));
+                        let stats = Self::build_result_session_stats(0, 0, &result);
+                        return Ok(PageResearchSessionResult::completed(
+                            PageResearchSessionOutput { session, result },
+                            ResearchStopReason::Completed,
+                            stats,
+                        ));
                     }
                 }
             }
@@ -1689,7 +1856,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             explicit_tools_mode
         };
 
-        let result = match effective_tools_mode {
+        let session_result = match effective_tools_mode {
             LlmToolsMode::NativeTools => self.run_provider_research_with_fallback(
                 &mut request,
                 runtime,
@@ -1705,16 +1872,22 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             }
         };
 
-        let Some(output) = result else {
-            self.write_negative_cached_response(
-                PromptType::PageResearch,
-                input_hash,
-                model,
-                None,
-                "invalid_output",
-            )?;
-            return Ok(None);
-        };
+        if session_result.output.is_none() {
+            if session_result.stop_reason == ResearchStopReason::InvalidOutput {
+                self.write_negative_cached_response(
+                    PromptType::PageResearch,
+                    input_hash,
+                    model,
+                    None,
+                    "invalid_output",
+                )?;
+            }
+            return Ok(session_result);
+        }
+        let output = session_result
+            .output
+            .as_ref()
+            .expect("session output should exist");
         self.write_cached_response(
             PromptType::PageResearch,
             input_hash,
@@ -1732,7 +1905,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             ),
             &output.result,
         )?;
-        Ok(Some(output))
+        Ok(session_result)
     }
 
     fn run_provider_research_with_fallback(
@@ -1740,7 +1913,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         request: &mut LlmPromptRequest,
         runtime: &PageResearchRuntimeContext<'_>,
         mode: LlmToolsMode,
-    ) -> io::Result<Option<PageResearchSessionOutput>> {
+    ) -> io::Result<PageResearchSessionResult> {
         let result = match mode {
             LlmToolsMode::NativeTools => self.run_provider_research_native_tools(request, runtime),
             LlmToolsMode::EmulatedTools => {
@@ -1784,36 +1957,52 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         &mut self,
         request: &LlmPromptRequest,
         runtime: &PageResearchRuntimeContext<'_>,
-    ) -> io::Result<Option<PageResearchSessionOutput>> {
+    ) -> io::Result<PageResearchSessionResult> {
         let completion = match self.service.as_mut() {
             Some(RuntimeLlmService::Provider(service)) => service.request(request)?,
-            _ => return Ok(None),
+            _ => return Ok(PageResearchSessionResult::not_run()),
         };
         self.record_completion_usage(PromptType::PageResearch, &completion);
         let Some(result) = parse_page_research_output(completion.output, runtime.page_context)
+            .and_then(|result| {
+                result.sanitize_for_context(runtime.page_context, runtime.allowed_section_slots)
+            })
         else {
-            return Ok(None);
+            return Ok(PageResearchSessionResult::invalid_output(
+                ResearchSessionStats {
+                    turns_used: 1,
+                    ..ResearchSessionStats::default()
+                },
+            ));
         };
-        Ok(Some(PageResearchSessionOutput {
-            session: finalize_research_session(
-                &runtime.page.id,
-                request.session.as_ref(),
-                &result,
-                vec![PageResearchTurn {
-                    role: "assistant".to_string(),
-                    content: result.summary.clone(),
-                }],
-                Vec::new(),
-            ),
-            result,
-        }))
+        let stats = Self::build_result_session_stats(1, 0, &result);
+        if !Self::page_research_result_is_minimally_complete(&result) {
+            return Ok(PageResearchSessionResult::invalid_output(stats));
+        }
+        Ok(PageResearchSessionResult::completed(
+            PageResearchSessionOutput {
+                session: finalize_research_session(
+                    &runtime.page.id,
+                    request.session.as_ref(),
+                    &result,
+                    vec![PageResearchTurn {
+                        role: "assistant".to_string(),
+                        content: result.summary.clone(),
+                    }],
+                    Vec::new(),
+                ),
+                result,
+            },
+            ResearchStopReason::NoFurtherToolCalls,
+            stats,
+        ))
     }
 
     fn run_provider_research_native_tools(
         &mut self,
         request: &mut LlmPromptRequest,
         runtime: &PageResearchRuntimeContext<'_>,
-    ) -> io::Result<Option<PageResearchSessionOutput>> {
+    ) -> io::Result<PageResearchSessionResult> {
         request.tools = research_tool_definitions();
         request.tool_choice = Some(json!("auto"));
         self.run_provider_research_loop(request, runtime, false)
@@ -1823,7 +2012,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         &mut self,
         request: &mut LlmPromptRequest,
         runtime: &PageResearchRuntimeContext<'_>,
-    ) -> io::Result<Option<PageResearchSessionOutput>> {
+    ) -> io::Result<PageResearchSessionResult> {
         request.tools = research_tool_definitions();
         request.tool_choice = Some(json!("auto"));
         self.run_provider_research_loop(request, runtime, true)
@@ -1834,7 +2023,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         request: &LlmPromptRequest,
         runtime: &PageResearchRuntimeContext<'_>,
         emulated_tools: bool,
-    ) -> io::Result<Option<PageResearchSessionOutput>> {
+    ) -> io::Result<PageResearchSessionResult> {
         let mut messages = ProviderApiLlmService::default_messages(request);
         let mut recent_turns = request
             .session
@@ -1846,13 +2035,17 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             .as_ref()
             .map(|session| session.tool_artifact_refs.clone())
             .unwrap_or_default();
-        let max_turns = 6_usize.clamp(4, 8);
+        let max_turns = self.config.page_research_max_turns.clamp(4, 16);
+        let mut tool_call_count = 0usize;
+        let mut no_delta_rounds = 0usize;
+        let mut seen_tool_signatures = BTreeSet::new();
 
         if emulated_tools {
             messages[1]["content"] = Value::String(build_emulated_tool_user_message(request));
         }
 
-        for _ in 0..max_turns {
+        for turn_index in 0..max_turns {
+            let turns_used = turn_index + 1;
             debug_trace::record_json(
                 "llm_research_session_turn",
                 &json!({
@@ -1867,7 +2060,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                 Some(RuntimeLlmService::Provider(service)) => {
                     service.request_chat_with_messages(request, &messages)?
                 }
-                _ => return Ok(None),
+                _ => return Ok(PageResearchSessionResult::not_run()),
             };
             self.record_chat_usage(PromptType::PageResearch, &chat);
             if !chat.tool_calls.is_empty() {
@@ -1881,6 +2074,8 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                     role: "assistant".to_string(),
                     content: "tool_call".to_string(),
                 });
+                let mut new_tool_signatures = 0usize;
+                let mut new_artifacts = 0usize;
                 for tool_call in assistant_message
                     .get("tool_calls")
                     .and_then(Value::as_array)
@@ -1889,8 +2084,13 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                 {
                     let parsed = serde_json::from_value::<ProviderToolCall>(tool_call)
                         .map_err(|error| io::Error::other(error.to_string()))?;
+                    tool_call_count += 1;
+                    if seen_tool_signatures.insert(Self::tool_call_signature(&parsed)) {
+                        new_tool_signatures += 1;
+                    }
                     let (result, artifact_ref) = execute_research_tool(&parsed, runtime)?;
                     if let Some(artifact_ref) = artifact_ref {
+                        new_artifacts += 1;
                         tool_artifact_refs.push(artifact_ref);
                     }
                     messages.push(json!({
@@ -1904,6 +2104,20 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                         content: parsed.function.name,
                     });
                 }
+                if new_tool_signatures == 0 && new_artifacts == 0 {
+                    no_delta_rounds += 1;
+                } else {
+                    no_delta_rounds = 0;
+                }
+                if no_delta_rounds >= 2 {
+                    return Ok(PageResearchSessionResult::no_meaningful_delta(
+                        ResearchSessionStats {
+                            turns_used,
+                            tool_calls: tool_call_count,
+                            ..ResearchSessionStats::default()
+                        },
+                    ));
+                }
                 continue;
             }
 
@@ -1911,7 +2125,15 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                 if emulated_tools {
                     let value = match parse_provider_json_output(content) {
                         Ok(value) => value,
-                        Err(_) => return Ok(None),
+                        Err(_) => {
+                            return Ok(PageResearchSessionResult::invalid_output(
+                                ResearchSessionStats {
+                                    turns_used,
+                                    tool_calls: tool_call_count,
+                                    ..ResearchSessionStats::default()
+                                },
+                            ))
+                        }
                     };
                     if let Some(tool_calls) = value.get("tool_calls").and_then(Value::as_array) {
                         let assistant_message = json!({
@@ -1920,12 +2142,19 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                             "tool_calls": tool_calls.clone(),
                         });
                         messages.push(assistant_message);
+                        let mut new_tool_signatures = 0usize;
+                        let mut new_artifacts = 0usize;
                         for tool_call in tool_calls {
                             let parsed =
                                 serde_json::from_value::<ProviderToolCall>(tool_call.clone())
                                     .map_err(|error| io::Error::other(error.to_string()))?;
+                            tool_call_count += 1;
+                            if seen_tool_signatures.insert(Self::tool_call_signature(&parsed)) {
+                                new_tool_signatures += 1;
+                            }
                             let (result, artifact_ref) = execute_research_tool(&parsed, runtime)?;
                             if let Some(artifact_ref) = artifact_ref {
+                                new_artifacts += 1;
                                 tool_artifact_refs.push(artifact_ref);
                             }
                             messages.push(json!({
@@ -1935,6 +2164,20 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                                 "content": serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()),
                             }));
                         }
+                        if new_tool_signatures == 0 && new_artifacts == 0 {
+                            no_delta_rounds += 1;
+                        } else {
+                            no_delta_rounds = 0;
+                        }
+                        if no_delta_rounds >= 2 {
+                            return Ok(PageResearchSessionResult::no_meaningful_delta(
+                                ResearchSessionStats {
+                                    turns_used,
+                                    tool_calls: tool_call_count,
+                                    ..ResearchSessionStats::default()
+                                },
+                            ));
+                        }
                         continue;
                     }
                     let final_result = value
@@ -1943,10 +2186,28 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                         .or_else(|| value.get("output").cloned())
                         .unwrap_or(value);
                     let Some(result) =
-                        parse_page_research_output(final_result, runtime.page_context)
+                        parse_page_research_output(final_result, runtime.page_context).and_then(
+                            |result| {
+                                result.sanitize_for_context(
+                                    runtime.page_context,
+                                    runtime.allowed_section_slots,
+                                )
+                            },
+                        )
                     else {
-                        return Ok(None);
+                        return Ok(PageResearchSessionResult::invalid_output(
+                            ResearchSessionStats {
+                                turns_used,
+                                tool_calls: tool_call_count,
+                                ..ResearchSessionStats::default()
+                            },
+                        ));
                     };
+                    let stats =
+                        Self::build_result_session_stats(turns_used, tool_call_count, &result);
+                    if !Self::page_research_result_is_minimally_complete(&result) {
+                        return Ok(PageResearchSessionResult::invalid_output(stats));
+                    }
                     debug_trace::record_json(
                         "llm_research_session_final",
                         &json!({
@@ -1955,27 +2216,63 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                             "emulated_tools": true,
                             "recent_turns": recent_turns,
                             "tool_artifact_refs": tool_artifact_refs,
+                            "stop_reason": ResearchStopReason::Completed.as_str(),
+                            "stats": stats,
                             "result": result,
                         }),
                     );
-                    return Ok(Some(PageResearchSessionOutput {
-                        session: finalize_research_session(
-                            &runtime.page.id,
-                            request.session.as_ref(),
-                            &result,
-                            recent_turns,
-                            tool_artifact_refs,
-                        ),
-                        result,
-                    }));
+                    return Ok(PageResearchSessionResult::completed(
+                        PageResearchSessionOutput {
+                            session: finalize_research_session(
+                                &runtime.page.id,
+                                request.session.as_ref(),
+                                &result,
+                                recent_turns,
+                                tool_artifact_refs,
+                            ),
+                            result,
+                        },
+                        ResearchStopReason::Completed,
+                        stats,
+                    ));
                 }
 
                 let value = match parse_provider_json_output(content) {
                     Ok(value) => value,
-                    Err(_) => return Ok(None),
+                    Err(_) => {
+                        return Ok(PageResearchSessionResult::invalid_output(
+                            ResearchSessionStats {
+                                turns_used,
+                                tool_calls: tool_call_count,
+                                ..ResearchSessionStats::default()
+                            },
+                        ))
+                    }
                 };
-                let Some(result) = parse_page_research_output(value, runtime.page_context) else {
-                    return Ok(None);
+                let Some(result) = parse_page_research_output(value, runtime.page_context)
+                    .and_then(|result| {
+                        result.sanitize_for_context(
+                            runtime.page_context,
+                            runtime.allowed_section_slots,
+                        )
+                    })
+                else {
+                    return Ok(PageResearchSessionResult::invalid_output(
+                        ResearchSessionStats {
+                            turns_used,
+                            tool_calls: tool_call_count,
+                            ..ResearchSessionStats::default()
+                        },
+                    ));
+                };
+                let stats = Self::build_result_session_stats(turns_used, tool_call_count, &result);
+                if !Self::page_research_result_is_minimally_complete(&result) {
+                    return Ok(PageResearchSessionResult::invalid_output(stats));
+                }
+                let stop_reason = if tool_call_count > 0 {
+                    ResearchStopReason::Completed
+                } else {
+                    ResearchStopReason::NoFurtherToolCalls
                 };
                 debug_trace::record_json(
                     "llm_research_session_final",
@@ -1985,23 +2282,80 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                         "emulated_tools": false,
                         "recent_turns": recent_turns,
                         "tool_artifact_refs": tool_artifact_refs,
+                        "stop_reason": stop_reason.as_str(),
+                        "stats": stats,
                         "result": result,
                     }),
                 );
-                return Ok(Some(PageResearchSessionOutput {
-                    session: finalize_research_session(
-                        &runtime.page.id,
-                        request.session.as_ref(),
-                        &result,
-                        recent_turns,
-                        tool_artifact_refs,
-                    ),
-                    result,
-                }));
+                return Ok(PageResearchSessionResult::completed(
+                    PageResearchSessionOutput {
+                        session: finalize_research_session(
+                            &runtime.page.id,
+                            request.session.as_ref(),
+                            &result,
+                            recent_turns,
+                            tool_artifact_refs,
+                        ),
+                        result,
+                    },
+                    stop_reason,
+                    stats,
+                ));
+            }
+
+            no_delta_rounds += 1;
+            if no_delta_rounds >= 2 {
+                return Ok(PageResearchSessionResult::no_meaningful_delta(
+                    ResearchSessionStats {
+                        turns_used,
+                        tool_calls: tool_call_count,
+                        ..ResearchSessionStats::default()
+                    },
+                ));
             }
         }
 
-        Ok(None)
+        Ok(PageResearchSessionResult::turn_budget_exhausted(
+            ResearchSessionStats {
+                turns_used: max_turns,
+                tool_calls: tool_call_count,
+                ..ResearchSessionStats::default()
+            },
+        ))
+    }
+
+    fn build_result_session_stats(
+        turns_used: usize,
+        tool_calls: usize,
+        result: &PageResearchResult,
+    ) -> ResearchSessionStats {
+        ResearchSessionStats {
+            turns_used,
+            tool_calls,
+            delta_evidence_count: result.evidence_rollup.len(),
+            delta_section_count: result.section_plan.len(),
+            delta_diagram_count: result.diagram_rollup.len(),
+            child_digest_delta: result
+                .section_plan
+                .iter()
+                .map(|section| section.child_refs.len())
+                .sum(),
+        }
+    }
+
+    fn page_research_result_is_minimally_complete(result: &PageResearchResult) -> bool {
+        (!result.summary.trim().is_empty() || !result.page_positioning.trim().is_empty())
+            && (!result.section_plan.is_empty()
+                || !result.evidence_rollup.is_empty()
+                || !result.diagram_rollup.is_empty())
+    }
+
+    fn tool_call_signature(tool_call: &ProviderToolCall) -> String {
+        format!(
+            "{}:{}",
+            tool_call.function.name.trim(),
+            tool_call.function.arguments.trim()
+        )
     }
 
     fn request_structured<TInput, TOutput>(
@@ -2090,10 +2444,6 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
     }
 
     fn budget_available(&self, prompt_type: PromptType) -> bool {
-        if self.real_calls >= self.config.max_calls {
-            return false;
-        }
-
         match prompt_type {
             PromptType::PageResearch => false,
             _ => self.uncertainty_calls < self.max_uncertainty_calls(),
@@ -2101,7 +2451,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
     }
 
     fn page_budget_available(&self, page_type: Option<&str>) -> bool {
-        if self.real_calls >= self.config.max_calls {
+        if self.page_calls >= self.max_page_calls() {
             return false;
         }
 
@@ -2159,7 +2509,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
     }
 
     fn max_page_calls(&self) -> usize {
-        reserved_enrichment_call_budget(self.config.max_calls)
+        self.config.max_research_calls
     }
 
     fn reserved_core_page_calls(&self) -> usize {
@@ -2167,9 +2517,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
     }
 
     fn max_uncertainty_calls(&self) -> usize {
-        self.config
-            .max_calls
-            .saturating_sub(self.max_page_calls())
+        self.config.max_calls
     }
 
     fn write_cached_response<TOutput>(
@@ -2333,9 +2681,9 @@ fn estimate_payload_tokens(input: &Value, session: Option<&PageResearchSessionSt
 
 fn trim_session_state(
     mut state: PageResearchSessionState,
-    _config: &LlmConfig,
+    config: &LlmConfig,
 ) -> PageResearchSessionState {
-    let max_turns = 6_usize.clamp(4, 8);
+    let max_turns = config.page_research_max_turns.clamp(4, 16);
     if state.recent_turns.len() > max_turns {
         state.recent_turns = state
             .recent_turns
@@ -2382,11 +2730,7 @@ fn apply_prompt_budget_trim(
     if let Some(object) = input.as_object_mut() {
         match prompt_type {
             PromptType::PageResearch => {
-                trim_named_array_field(
-                    object,
-                    &["evidence_groups", "diagram_inputs"],
-                    6,
-                );
+                trim_named_array_field(object, &["evidence_groups", "diagram_inputs"], 6);
                 trim_named_array_field(object, &["summary_inputs", "hints", "facts"], 10);
                 trim_named_array_field(
                     object,
@@ -2866,21 +3210,12 @@ fn select_runtime_service<'svc>(
     agent_service.map(RuntimeLlmService::Agent)
 }
 
-fn reserved_enrichment_call_budget(max_calls: usize) -> usize {
-    match max_calls {
-        0 => 0,
-        1..=3 => 1,
-        4..=6 => 2,
-        7..=12 => 4,
-        _ => (max_calls / 3).clamp(4, 12),
-    }
-}
-
 fn reserved_core_page_call_budget(max_page_calls: usize) -> usize {
     match max_page_calls {
         0 => 0,
         1..=2 => 1,
-        _ => 2,
+        3..=8 => 2,
+        _ => 3,
     }
 }
 
@@ -2914,6 +3249,25 @@ fn normalize_provider_response_format(response_format: &Value) -> Value {
     normalized
 }
 
+fn normalize_provider_responses_text_format(response_format: &Value) -> Value {
+    let normalized = normalize_provider_response_format(response_format);
+    let Some(mut object) = normalized.as_object().cloned() else {
+        return normalized;
+    };
+    if let Some(Value::Object(json_schema)) = object.remove("json_schema") {
+        object.extend(json_schema);
+    }
+    if let Some(schema) = object.get_mut("schema") {
+        *schema = normalize_provider_json_schema(schema);
+    }
+    if object.get("type").and_then(Value::as_str) == Some("json_schema")
+        && !object.contains_key("name")
+    {
+        object.insert("name".to_string(), json!("repo_wiki_response"));
+    }
+    Value::Object(object)
+}
+
 fn normalize_provider_tool_definition(tool_definition: &Value) -> Value {
     let mut normalized = tool_definition.clone();
     if let Some(parameters) = normalized
@@ -2924,6 +3278,42 @@ fn normalize_provider_tool_definition(tool_definition: &Value) -> Value {
         *parameters = normalize_provider_json_schema(parameters);
     }
     normalized
+}
+
+fn normalize_provider_response_tool_definition(tool_definition: &Value) -> Value {
+    let normalized = normalize_provider_tool_definition(tool_definition);
+    let Some(function) = normalized.get("function").and_then(Value::as_object) else {
+        return normalized;
+    };
+
+    let mut response_tool = Map::new();
+    response_tool.insert("type".to_string(), json!("function"));
+    if let Some(name) = function.get("name") {
+        response_tool.insert("name".to_string(), name.clone());
+    }
+    if let Some(description) = function.get("description") {
+        response_tool.insert("description".to_string(), description.clone());
+    }
+    if let Some(parameters) = function.get("parameters") {
+        response_tool.insert("parameters".to_string(), parameters.clone());
+    }
+    Value::Object(response_tool)
+}
+
+fn normalize_provider_response_tool_choice(tool_choice: &Value) -> Value {
+    let Some(object) = tool_choice.as_object() else {
+        return tool_choice.clone();
+    };
+    let Some(function) = object.get("function").and_then(Value::as_object) else {
+        return tool_choice.clone();
+    };
+
+    let mut normalized = Map::new();
+    normalized.insert("type".to_string(), json!("function"));
+    if let Some(name) = function.get("name") {
+        normalized.insert("name".to_string(), name.clone());
+    }
+    Value::Object(normalized)
 }
 
 fn normalize_provider_json_schema(schema: &Value) -> Value {
@@ -3042,6 +3432,80 @@ fn build_provider_user_message(request: &LlmPromptRequest) -> String {
     .unwrap_or_else(|_| request.instruction.clone())
 }
 
+fn build_provider_response_input(messages: &[Value]) -> Value {
+    Value::Array(
+        messages
+            .iter()
+            .flat_map(build_provider_response_input_items)
+            .collect(),
+    )
+}
+
+fn build_provider_response_input_items(message: &Value) -> Vec<Value> {
+    let role = message
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("user")
+        .to_string();
+    let mut items = Vec::new();
+    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+        for tool_call in tool_calls {
+            let call_id = tool_call
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let function = tool_call.get("function").and_then(Value::as_object);
+            let name = function
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let arguments = function
+                .and_then(|function| function.get("arguments"))
+                .and_then(Value::as_str)
+                .unwrap_or("{}");
+            if !name.is_empty() {
+                items.push(json!({
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": arguments,
+                }));
+            }
+        }
+    }
+    if role == "tool" {
+        let call_id = message
+            .get("tool_call_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let output = message
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("{}");
+        if !call_id.is_empty() {
+            items.push(json!({
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": output,
+            }));
+        }
+        return items;
+    }
+    if let Some(content) = extract_provider_content_from_message(message) {
+        if !content.trim().is_empty() {
+            items.push(json!({
+                "role": role,
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": content,
+                    }
+                ],
+            }));
+        }
+    }
+    items
+}
 fn parse_provider_chat_response(
     request: &LlmPromptRequest,
     fallback_model: &str,
@@ -3066,6 +3530,38 @@ fn parse_provider_chat_response(
         .or_else(|| Some(fallback_model.to_string()));
     debug_trace::record_json(
         "llm_provider_chat_completion",
+        &json!({
+            "request_id": request.request_id,
+            "tool_calls": tool_calls,
+            "content": content,
+            "usage": usage,
+        }),
+    );
+
+    Ok(ProviderChatResponse {
+        model,
+        content,
+        tool_calls,
+        usage,
+    })
+}
+
+fn parse_provider_responses_response(
+    request: &LlmPromptRequest,
+    fallback_model: &str,
+    response: &Value,
+    request_body: &Value,
+) -> io::Result<ProviderChatResponse> {
+    let content = extract_provider_content_from_responses_output(response);
+    let tool_calls = extract_provider_tool_calls_from_responses_output(response)?;
+    let usage = extract_provider_usage(response, request_body, content.as_deref());
+    let model = response
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| Some(fallback_model.to_string()));
+    debug_trace::record_json(
+        "llm_provider_responses_completion",
         &json!({
             "request_id": request.request_id,
             "tool_calls": tool_calls,
@@ -3110,6 +3606,73 @@ fn extract_provider_tool_calls(message: &Value) -> io::Result<Vec<ProviderToolCa
         .map_err(|error| io::Error::other(error.to_string()))
 }
 
+fn extract_provider_content_from_responses_output(response: &Value) -> Option<String> {
+    if let Some(output_text) = response.get("output_text").and_then(Value::as_str) {
+        if !output_text.trim().is_empty() {
+            return Some(output_text.to_string());
+        }
+    }
+    let output = response.get("output").and_then(Value::as_array)?;
+    let content = output
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|part| {
+            part.get("text").and_then(Value::as_str).or_else(|| {
+                part.get("content")
+                    .and_then(Value::as_array)
+                    .and_then(|nested| nested.first())
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(Value::as_str)
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!content.trim().is_empty()).then_some(content)
+}
+
+fn extract_provider_tool_calls_from_responses_output(
+    response: &Value,
+) -> io::Result<Vec<ProviderToolCall>> {
+    let Some(output) = response.get("output").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut tool_calls = Vec::new();
+    for item in output {
+        if item.get("type").and_then(Value::as_str) != Some("function_call") {
+            continue;
+        }
+        let name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let id = item
+            .get("call_id")
+            .or_else(|| item.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let arguments = item
+            .get("arguments")
+            .map(|arguments| match arguments {
+                Value::String(value) => value.clone(),
+                other => serde_json::to_string(other).unwrap_or_else(|_| "{}".to_string()),
+            })
+            .unwrap_or_else(|| "{}".to_string());
+        tool_calls.push(ProviderToolCall {
+            id,
+            r#type: default_function_type(),
+            function: ProviderToolFunction { name, arguments },
+        });
+    }
+    Ok(tool_calls)
+}
+
 fn parse_provider_json_output(content: &str) -> io::Result<Value> {
     let trimmed = content.trim();
     let stripped = trimmed
@@ -3127,7 +3690,7 @@ fn parse_provider_json_output(content: &str) -> io::Result<Value> {
     serde_json::from_str(stripped).map_err(|error| io::Error::other(error.to_string()))
 }
 
-fn parse_page_research_output(value: Value, context: &PageContext) -> Option<PageResearchResult> {
+fn parse_page_research_output(value: Value, _context: &PageContext) -> Option<PageResearchResult> {
     let object = value.as_object()?;
     let required = [
         "summary",
@@ -3140,20 +3703,24 @@ fn parse_page_research_output(value: Value, context: &PageContext) -> Option<Pag
     if !required.iter().all(|key| object.contains_key(*key)) {
         return None;
     }
-    serde_json::from_value::<PageResearchResult>(Value::Object(object.clone()))
-        .ok()
-        .and_then(|result| result.sanitize_for_context(context))
+    serde_json::from_value::<PageResearchResult>(Value::Object(object.clone())).ok()
 }
 
 fn build_page_research_instruction(input: &PageResearchInput) -> String {
-    let allowed_sections = section_titles_for_page_type(&input.page_type)
+    let allowed_sections = if input.allowed_section_slots.is_empty() {
+        section_titles_for_page_type(&input.page_type)
+            .into_iter()
+            .map(|title| PageResearchSectionSlot {
+                section_key: section_key_for_title(&input.page_type, title),
+                section_title: title.to_string(),
+            })
+            .collect::<Vec<_>>()
+    } else {
+        input.allowed_section_slots.clone()
+    };
+    let allowed_sections = allowed_sections
         .into_iter()
-        .map(|title| {
-            format!(
-                "{} ({title})",
-                section_key_for_title(&input.page_type, title)
-            )
-        })
+        .map(|slot| format!("{} ({})", slot.section_key, slot.section_title))
         .collect::<Vec<_>>()
         .join("、");
     format!(
@@ -3173,7 +3740,8 @@ fn build_page_research_instruction(input: &PageResearchInput) -> String {
             "6. `diagram_rollup` 只能引用 deterministic 已存在的 diagram inputs。\n",
             "7. 若信息不足，可提出 `open_questions`，但不得凭空捏造事实。\n",
             "8. 若工具调用有帮助，可以先调用工具，再返回最终结构化结果。\n",
-            "9. 不要返回自由新章节；重点是决定受控 section 槽位的顺序、重点和支撑材料。"
+            "9. 不要返回自由新章节；重点是决定受控 section 槽位的顺序、重点和支撑材料。\n",
+            "10. 页面拆分与章节骨架以 facts/planner 预先给出的 contract 为准；LLM 只能在现有 contract 内补充优先级、摘要与证据组织，不能自由发明新的页树或章节体系。"
         ),
         page_type = input.page_type,
         title = input.title,
@@ -3816,7 +4384,13 @@ fn is_provider_tools_unsupported(error: &io::Error) -> bool {
         || message.contains("tool_choice")
         || message.contains("unsupported")
 }
-
+fn provider_request_uses_response_format(request_body: &Value) -> bool {
+    request_body.get("response_format").is_some()
+        || request_body
+            .get("text")
+            .and_then(Value::as_object)
+            .is_some_and(|text| text.contains_key("format"))
+}
 fn extract_provider_usage(
     response: &Value,
     request_body: &Value,
@@ -3909,5 +4483,19 @@ fn is_response_format_transport_error(error: &io::Error) -> bool {
     let message = error.to_string().to_ascii_lowercase();
     message.contains("response_format")
         || message.contains("json_schema")
+        || message.contains("text.format")
+        || message.contains("text format")
         || message.contains("unsupported")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reserved_core_page_call_budget;
+    use crate::domain::steering::LlmConfig;
+
+    #[test]
+    fn higher_default_budget_scales_page_research_slots() {
+        assert_eq!(LlmConfig::default().max_research_calls, 256);
+        assert_eq!(reserved_core_page_call_budget(256), 3);
+    }
 }

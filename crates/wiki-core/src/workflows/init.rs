@@ -18,7 +18,6 @@ use crate::domain::steering::load_steering_config;
 use crate::generation::context::{build_module_contexts_with_graph, build_repo_context_with_graph};
 use crate::generation::renderer::render_page_draft;
 use crate::llm::{LlmRuntime, LlmService};
-use crate::workflows::page_render::run_compose_pipeline;
 use crate::repo::git::{current_branch, current_commit};
 use crate::repo::hierarchy::build_module_tree_with_graph_and_llm;
 use crate::repo::scanner::scan_repo_with_boundary_and_llm;
@@ -31,9 +30,11 @@ use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite_store;
 use crate::storage::state_store::write_state_with_symbol_graph;
 use crate::storage::wiki_fs::{remove_runtime_with_cache_mode, write_page};
+use crate::workflows::page_render::run_compose_pipeline;
 use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
 };
+use crate::workflows::research_provider::select_runtime_research_provider;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -165,26 +166,33 @@ pub fn run_init_with_progress_and_llm_as<'a>(
     reporter.phase("knowledge_planning", "知识域发现与单元规划");
     reporter.phase("research", "执行分层研究");
     reporter.phase("compose", "组合生成页面内容");
-    let research_provider =
-        crate::generation::research_engine::StructuralResearchProvider;
+    let research_provider = select_runtime_research_provider(&steering, &mut llm_runtime);
+    reporter.phase(
+        "research_provider",
+        format!(
+            "{} (mode={})",
+            research_provider.summary, research_provider.mode
+        ),
+    );
     let pipeline = run_compose_pipeline(
         repo_root,
         &scan_report,
         &module_tree,
         &repo_context,
         &module_contexts,
+        &symbol_snapshot,
+        &resolved_graph,
+        &analysis,
         &graph_summary,
         &steering,
-        &research_provider,
+        research_provider.provider.as_ref(),
     )?;
     let page_drafts = pipeline.page_drafts;
     let _digests = pipeline.digests;
     let knowledge_tree = pipeline.knowledge_tree;
     let pages = pipeline.planned_pages;
-    let pages_by_id: BTreeMap<String, _> = pages
-        .iter()
-        .map(|p| (p.id.clone(), p.clone()))
-        .collect();
+    let pages_by_id: BTreeMap<String, _> =
+        pages.iter().map(|p| (p.id.clone(), p.clone())).collect();
 
     ensure_cache_dir(repo_root)?;
     ensure_page_cache_dirs(repo_root)?;
@@ -207,8 +215,7 @@ pub fn run_init_with_progress_and_llm_as<'a>(
         let page_path = format!(".wiki/{}", draft.relative_path);
         generated_pages.push(page_path);
 
-        let content_hash =
-            crate::repo::fingerprint::fingerprint_bytes(rendered.content.as_bytes());
+        let content_hash = crate::repo::fingerprint::fingerprint_bytes(rendered.content.as_bytes());
 
         let planned_page = find_or_build_planned_page(draft, &pages_by_id);
         let page_context = build_minimal_page_context(draft, &knowledge_tree);

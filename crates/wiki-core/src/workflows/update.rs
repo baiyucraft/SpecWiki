@@ -42,14 +42,16 @@ use crate::storage::sqlite_store;
 use crate::storage::state_store::write_state_with_symbol_graph_for_files;
 use crate::storage::wiki_fs::{resolve_page_path, write_page};
 use crate::workflows::init::{
-    ancestor_ids_for_page, build_minimal_page_context, current_timestamp, find_or_build_planned_page,
-    page_provenance, run_init_with_progress_and_llm_as, source_paths_for_page,
+    ancestor_ids_for_page, build_minimal_page_context, current_timestamp,
+    find_or_build_planned_page, page_provenance, run_init_with_progress_and_llm_as,
+    source_paths_for_page,
 };
 use crate::workflows::page_render::run_compose_pipeline;
 use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
 };
 use crate::workflows::rebuild::run_rebuild_with_progress_and_llm_as;
+use crate::workflows::research_provider::select_runtime_research_provider;
 
 const LOCAL_UPDATE_MAX_FILES: usize = 32;
 
@@ -292,17 +294,26 @@ fn apply_incremental_update<'a>(
     reporter.phase("knowledge_planning", "知识域发现与单元规划");
     reporter.phase("research", "执行分层研究");
     reporter.phase("compose", "组合生成页面内容");
-    let research_provider =
-        crate::generation::research_engine::StructuralResearchProvider;
+    let research_provider = select_runtime_research_provider(&steering, &mut llm_runtime);
+    reporter.phase(
+        "research_provider",
+        format!(
+            "{} (mode={})",
+            research_provider.summary, research_provider.mode
+        ),
+    );
     let pipeline = run_compose_pipeline(
         repo_root,
         &scan_report,
         &module_tree,
         &repo_context,
         &module_contexts,
+        &full_symbol_snapshot,
+        &full_resolved_graph,
+        &analysis,
         &graph_summary,
         &steering,
-        &research_provider,
+        research_provider.provider.as_ref(),
     )?;
     let page_drafts = pipeline.page_drafts;
     let digests = pipeline.digests;

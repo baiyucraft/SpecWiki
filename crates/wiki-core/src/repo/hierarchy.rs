@@ -960,7 +960,10 @@ fn build_cross_module_edges(
             })
             .unwrap_or_else(|| vec![Some(true); pending_heuristic_edges.len()]);
 
-        for (candidate, keep) in pending_heuristic_edges.into_iter().zip(keep_results.into_iter()) {
+        for (candidate, keep) in pending_heuristic_edges
+            .into_iter()
+            .zip(keep_results.into_iter())
+        {
             if keep.unwrap_or(true) {
                 merge_relation_edge(&mut edges, candidate.edge);
             }

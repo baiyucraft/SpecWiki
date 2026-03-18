@@ -106,7 +106,11 @@ pub fn render_managed_block(section_id: &str, title: &str, body: &str) -> String
         MARKER_START_PREFIX, section_id, title, MARKER_VERSION
     );
     let end = format!("{} id={} -->", MARKER_END_PREFIX, section_id);
-    format!("{start}\n## {title}\n\n{body}\n{end}")
+    if title.trim().is_empty() {
+        format!("{start}\n{body}\n{end}")
+    } else {
+        format!("{start}\n## {title}\n\n{body}\n{end}")
+    }
 }
 
 /// 把整页（标题 + 区段序列）组装成最终 Markdown。
@@ -578,5 +582,32 @@ fn flush_legacy_section(
                 }));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_with_markers, render_managed_block};
+
+    #[test]
+    fn render_managed_block_omits_heading_for_empty_title() {
+        let rendered = render_managed_block("section:preamble", "", "<cite>\nbody\n</cite>");
+
+        assert!(!rendered.contains("\n## \n"));
+        assert!(rendered.contains("<cite>"));
+    }
+
+    #[test]
+    fn parse_with_markers_preserves_empty_title_preamble() {
+        let page = "# 示例页\n\n<!-- wiki:managed:start id=section:preamble title=\"\" version=1 -->\n<cite>\nbody\n</cite>\n<!-- wiki:managed:end id=section:preamble -->";
+        let parsed = parse_with_markers(page);
+
+        assert_eq!(parsed.blocks.len(), 1);
+        let block = match &parsed.blocks[0] {
+            super::PageBlock::Managed(block) => block,
+            _ => panic!("expected managed block"),
+        };
+        assert!(block.title.is_empty());
+        assert!(block.body.contains("<cite>"));
     }
 }

@@ -9,9 +9,9 @@ use rusqlite::{
     params, params_from_iter, types::Value, Connection, OpenFlags, OptionalExtension, ToSql,
     Transaction,
 };
+use std::time::Duration;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
-use std::time::Duration;
 
 use crate::domain::metadata::DirtyState;
 use crate::domain::module_tree::ModuleNode;
@@ -2681,7 +2681,15 @@ pub fn read_pipeline_checkpoint(
                 interrupted_target_id, error_message
          FROM pipeline_checkpoint LIMIT 1",
         [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
     )
     .optional()
     .map_err(|e| io::Error::other(format!("read_pipeline_checkpoint: {e}")))

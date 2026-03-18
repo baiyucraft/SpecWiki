@@ -3,9 +3,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::domain::context::{
-    ModuleContext, PageContext,
-    PageDiagramEdge, PageDiagramInput, PageDiagramNode, PageEvidenceGroup, PageEvidenceItem,
-    RepoContext, ResearchSurface, TopicSeed,
+    ModuleContext, PageContext, PageDiagramEdge, PageDiagramInput, PageDiagramNode,
+    PageEvidenceGroup, PageEvidenceItem, RepoContext, ResearchSurface, TopicSeed,
 };
 use crate::domain::module_tree::{ModuleNode, ModuleTree};
 use crate::domain::stable_id::stable_id;
@@ -885,7 +884,10 @@ pub fn build_page_context_with_graph_inputs(
             for module_id in &page.module_ids {
                 summary_inputs.push(format!("关联模块：{}", module_name(module_tree, module_id)));
             }
-            for path in select_paths_for_source_ids(report, &page.source_ids).into_iter().take(6) {
+            for path in select_paths_for_source_ids(report, &page.source_ids)
+                .into_iter()
+                .take(6)
+            {
                 summary_inputs.push(format!("关键源码：{path}"));
             }
             if let Some(group) = build_evidence_group(
@@ -1050,7 +1052,6 @@ pub fn build_page_context_with_graph_inputs(
         diagram_inputs,
     }
 }
-
 
 #[derive(Debug, Clone, Copy)]
 struct SpanHint {
@@ -1639,10 +1640,7 @@ fn select_family_config_surfaces(
     select_family_config_surfaces_for_paths(report, &paths)
 }
 
-fn select_family_type_surfaces(
-    report: &ScanReport,
-    source_ids: &[String],
-) -> Vec<ResearchSurface> {
+fn select_family_type_surfaces(report: &ScanReport, source_ids: &[String]) -> Vec<ResearchSurface> {
     let paths = report
         .files
         .iter()

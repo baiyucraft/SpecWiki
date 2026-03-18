@@ -464,11 +464,8 @@ pub fn plan_pages_with_graph(
         let family_page_id = family_index.id.clone();
         pages.push(family_index);
         for child in candidate.children {
-            let family_child = build_family_child_page(
-                &child,
-                &family_page_id,
-                120 + family_priority,
-            );
+            let family_child =
+                build_family_child_page(&child, &family_page_id, 120 + family_priority);
             family_priority += 1;
             let family_child_id = family_child.id.clone();
             pages.push(family_child);
@@ -1003,14 +1000,25 @@ fn docs_platform_profile() -> RepoArchetypeProfile {
             },
             SignalGroupSpec {
                 selectors: vec![
-                    prefixes(&["code/addons/", "code/frameworks/", "code/builders/", "code/presets/"]),
+                    prefixes(&[
+                        "code/addons/",
+                        "code/frameworks/",
+                        "code/builders/",
+                        "code/presets/",
+                    ]),
                     prefixes(&["packages/"]),
                 ],
             },
             SignalGroupSpec {
                 selectors: vec![
                     prefixes(&["docs/api/", "docs/get-started/", "docs/configure/"]),
-                    names(&["main.ts", "preview.ts", "manager.ts", "manager.tsx", "public-types.ts"]),
+                    names(&[
+                        "main.ts",
+                        "preview.ts",
+                        "manager.ts",
+                        "manager.tsx",
+                        "public-types.ts",
+                    ]),
                 ],
             },
         ],
@@ -1047,7 +1055,8 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
             family_key: "concept",
             family_directory: "核心概念",
             title: "核心概念",
-            summary: "该 family 聚焦文档平台仓库中的 stories、CSF、preview/manager 与全局状态模型。",
+            summary:
+                "该 family 聚焦文档平台仓库中的 stories、CSF、preview/manager 与全局状态模型。",
             sort_key: 0,
             children: vec![
                 child_profile(
@@ -1066,7 +1075,12 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
                     "该子页聚焦 CSF、story annotations 与 story store 规范。",
                     vec![
                         prefixes(&["docs/api/csf/"]),
-                        contains(&["/preview-api/modules/store/csf/", "csf-factory", "processCSFFile", "composeConfigs"]),
+                        contains(&[
+                            "/preview-api/modules/store/csf/",
+                            "csf-factory",
+                            "processCSFFile",
+                            "composeConfigs",
+                        ]),
                     ],
                 ),
                 child_profile(
@@ -1074,7 +1088,13 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
                     "装饰器和全局状态",
                     "该子页聚焦 decorators、globals 与 addons hooks 的运行时约定。",
                     vec![
-                        contains(&["/preview-api/modules/addons/", "/preview/globals/", "/toolbar/", "globals.ts", "make-decorator"]),
+                        contains(&[
+                            "/preview-api/modules/addons/",
+                            "/preview/globals/",
+                            "/toolbar/",
+                            "globals.ts",
+                            "make-decorator",
+                        ]),
                         names(&["preview.ts", "manager.tsx"]),
                     ],
                 ),
@@ -1083,7 +1103,13 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
                     "预览和管理界面",
                     "该子页聚焦 preview、manager、channel 与 manager-api 的核心实现。",
                     vec![
-                        contains(&["/manager-api/", "/preview-api/", "/channels/", "/manager/", "/preview/"]),
+                        contains(&[
+                            "/manager-api/",
+                            "/preview-api/",
+                            "/channels/",
+                            "/manager/",
+                            "/preview/",
+                        ]),
                         names(&["main.ts", "preview.ts", "manager.ts", "manager.tsx"]),
                     ],
                 ),
@@ -1097,13 +1123,61 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
             summary: "该 family 聚焦插件系统、扩展入口与插件能力边界。",
             sort_key: 1,
             children: vec![
-                child_profile("overview", "Addons概览", "该子页聚焦插件系统的文档入口与全局概览。", vec![prefixes(&["docs/addons/"])]),
-                child_profile("a11y", "A11y Addon（可访问性测试）", "该子页聚焦可访问性插件的 manager / preview / preset 与测试入口。", vec![prefixes(&["code/addons/a11y/", "docs/writing-tests/", "docs/_snippets/addon-a11y"])]),
-                child_profile("docs", "Docs Addon（文档生成）", "该子页聚焦文档插件、Doc Blocks 与自动文档生成能力。", vec![prefixes(&["code/addons/docs/", "docs/writing-docs/"])]),
-                child_profile("links", "Links Addon（故事导航）", "该子页聚焦故事导航与链接型插件能力。", vec![prefixes(&["code/addons/links/"])]),
-                child_profile("themes", "Themes Addon（主题切换）", "该子页聚焦主题切换、装饰器与外观扩展。", vec![prefixes(&["code/addons/themes/", "docs/configure/user-interface/theming.mdx"])]),
-                child_profile("tooling", "辅助工具 Addons（扩展工具）", "该子页聚焦 pseudo-states、onboarding 等辅助型扩展。", vec![prefixes(&["code/addons/pseudo-states/", "code/addons/onboarding/"])]),
-                child_profile("vitest", "Vitest Addon（测试集成）", "该子页聚焦测试面板和 Vitest 插件能力。", vec![prefixes(&["code/addons/vitest/", "docs/writing-tests/integrations/vitest-addon/"])]),
+                child_profile(
+                    "overview",
+                    "Addons概览",
+                    "该子页聚焦插件系统的文档入口与全局概览。",
+                    vec![prefixes(&["docs/addons/"])],
+                ),
+                child_profile(
+                    "a11y",
+                    "A11y Addon（可访问性测试）",
+                    "该子页聚焦可访问性插件的 manager / preview / preset 与测试入口。",
+                    vec![prefixes(&[
+                        "code/addons/a11y/",
+                        "docs/writing-tests/",
+                        "docs/_snippets/addon-a11y",
+                    ])],
+                ),
+                child_profile(
+                    "docs",
+                    "Docs Addon（文档生成）",
+                    "该子页聚焦文档插件、Doc Blocks 与自动文档生成能力。",
+                    vec![prefixes(&["code/addons/docs/", "docs/writing-docs/"])],
+                ),
+                child_profile(
+                    "links",
+                    "Links Addon（故事导航）",
+                    "该子页聚焦故事导航与链接型插件能力。",
+                    vec![prefixes(&["code/addons/links/"])],
+                ),
+                child_profile(
+                    "themes",
+                    "Themes Addon（主题切换）",
+                    "该子页聚焦主题切换、装饰器与外观扩展。",
+                    vec![prefixes(&[
+                        "code/addons/themes/",
+                        "docs/configure/user-interface/theming.mdx",
+                    ])],
+                ),
+                child_profile(
+                    "tooling",
+                    "辅助工具 Addons（扩展工具）",
+                    "该子页聚焦 pseudo-states、onboarding 等辅助型扩展。",
+                    vec![prefixes(&[
+                        "code/addons/pseudo-states/",
+                        "code/addons/onboarding/",
+                    ])],
+                ),
+                child_profile(
+                    "vitest",
+                    "Vitest Addon（测试集成）",
+                    "该子页聚焦测试面板和 Vitest 插件能力。",
+                    vec![prefixes(&[
+                        "code/addons/vitest/",
+                        "docs/writing-tests/integrations/vitest-addon/",
+                    ])],
+                ),
             ],
         },
         FamilyProfile {
@@ -1114,12 +1188,65 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
             summary: "该 family 聚焦多框架适配器、renderers 与运行时入口。",
             sort_key: 2,
             children: vec![
-                child_profile("angular", "Angular框架支持", "该子页聚焦 Angular 适配器、builder 与 compodoc 集成。", vec![prefixes(&["code/frameworks/angular/", "docs/configure/integration/frameworks.mdx", "docs/_snippets/angular-"])]),
-                child_profile("html", "HTML框架支持", "该子页聚焦 HTML renderer 与 html-vite 适配路径。", vec![prefixes(&["code/frameworks/html-vite/", "code/renderers/html/"])]),
-                child_profile("react", "React框架支持", "该子页聚焦 React / Next.js 适配器与 React renderer。", vec![prefixes(&["code/frameworks/react-vite/", "code/frameworks/react-webpack5/", "code/frameworks/nextjs/", "code/frameworks/nextjs-vite/", "code/renderers/react/"])]),
-                child_profile("svelte", "Svelte框架支持", "该子页聚焦 Svelte / SvelteKit 适配器与 Svelte renderer。", vec![prefixes(&["code/frameworks/svelte-vite/", "code/frameworks/sveltekit/", "code/renderers/svelte/"])]),
-                child_profile("vue3", "Vue 3框架支持", "该子页聚焦 Vue 3 适配器与 Vue 3 renderer。", vec![prefixes(&["code/frameworks/vue3-vite/", "code/renderers/vue3/"])]),
-                child_profile("web-components", "Web Components框架支持", "该子页聚焦 Web Components 适配器与 renderer。", vec![prefixes(&["code/frameworks/web-components-vite/", "code/renderers/web-components/"])]),
+                child_profile(
+                    "angular",
+                    "Angular框架支持",
+                    "该子页聚焦 Angular 适配器、builder 与 compodoc 集成。",
+                    vec![prefixes(&[
+                        "code/frameworks/angular/",
+                        "docs/configure/integration/frameworks.mdx",
+                        "docs/_snippets/angular-",
+                    ])],
+                ),
+                child_profile(
+                    "html",
+                    "HTML框架支持",
+                    "该子页聚焦 HTML renderer 与 html-vite 适配路径。",
+                    vec![prefixes(&[
+                        "code/frameworks/html-vite/",
+                        "code/renderers/html/",
+                    ])],
+                ),
+                child_profile(
+                    "react",
+                    "React框架支持",
+                    "该子页聚焦 React / Next.js 适配器与 React renderer。",
+                    vec![prefixes(&[
+                        "code/frameworks/react-vite/",
+                        "code/frameworks/react-webpack5/",
+                        "code/frameworks/nextjs/",
+                        "code/frameworks/nextjs-vite/",
+                        "code/renderers/react/",
+                    ])],
+                ),
+                child_profile(
+                    "svelte",
+                    "Svelte框架支持",
+                    "该子页聚焦 Svelte / SvelteKit 适配器与 Svelte renderer。",
+                    vec![prefixes(&[
+                        "code/frameworks/svelte-vite/",
+                        "code/frameworks/sveltekit/",
+                        "code/renderers/svelte/",
+                    ])],
+                ),
+                child_profile(
+                    "vue3",
+                    "Vue 3框架支持",
+                    "该子页聚焦 Vue 3 适配器与 Vue 3 renderer。",
+                    vec![prefixes(&[
+                        "code/frameworks/vue3-vite/",
+                        "code/renderers/vue3/",
+                    ])],
+                ),
+                child_profile(
+                    "web-components",
+                    "Web Components框架支持",
+                    "该子页聚焦 Web Components 适配器与 renderer。",
+                    vec![prefixes(&[
+                        "code/frameworks/web-components-vite/",
+                        "code/renderers/web-components/",
+                    ])],
+                ),
             ],
         },
         FamilyProfile {
@@ -1130,9 +1257,34 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
             summary: "该 family 聚焦 builders、presets 与构建配置边界。",
             sort_key: 3,
             children: vec![
-                child_profile("vite", "Vite构建器详解", "该子页聚焦 builder-vite 的配置、插件与 dev server 入口。", vec![prefixes(&["code/builders/builder-vite/", "docs/builders/vite.mdx"])]),
-                child_profile("webpack", "Webpack构建器详解", "该子页聚焦 builder-webpack5 与 webpack preview 入口。", vec![prefixes(&["code/builders/builder-webpack5/", "docs/builders/webpack.mdx"])]),
-                child_profile("presets", "预设配置", "该子页聚焦 presets、common preset 与 framework preset 配置面。", vec![prefixes(&["code/presets/", "code/core/src/core-server/presets/", "docs/addons/writing-presets.mdx"])]),
+                child_profile(
+                    "vite",
+                    "Vite构建器详解",
+                    "该子页聚焦 builder-vite 的配置、插件与 dev server 入口。",
+                    vec![prefixes(&[
+                        "code/builders/builder-vite/",
+                        "docs/builders/vite.mdx",
+                    ])],
+                ),
+                child_profile(
+                    "webpack",
+                    "Webpack构建器详解",
+                    "该子页聚焦 builder-webpack5 与 webpack preview 入口。",
+                    vec![prefixes(&[
+                        "code/builders/builder-webpack5/",
+                        "docs/builders/webpack.mdx",
+                    ])],
+                ),
+                child_profile(
+                    "presets",
+                    "预设配置",
+                    "该子页聚焦 presets、common preset 与 framework preset 配置面。",
+                    vec![prefixes(&[
+                        "code/presets/",
+                        "code/core/src/core-server/presets/",
+                        "docs/addons/writing-presets.mdx",
+                    ])],
+                ),
             ],
         },
         FamilyProfile {
@@ -1143,9 +1295,40 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
             summary: "该 family 聚焦 CLI、开发 API 与类型定义入口。",
             sort_key: 4,
             children: vec![
-                child_profile("cli", "CLI命令参考", "该子页聚焦 CLI、dispatcher 与 create 命令入口。", vec![contains(&["/cli-sb/", "/src/bin/"]), prefixes(&["docs/api/"]), names(&["cli-options.mdx"])]),
-                child_profile("dev-api", "开发API参考", "该子页聚焦 addons、manager-api、preview-api 与公开开发 API。", vec![contains(&["/manager-api/", "/preview-api/", "/addons/", "get-addon-annotations", "get-addon-names"]), prefixes(&["docs/api/"])]),
-                child_profile("types", "类型定义参考", "该子页聚焦 public-types、types 与 typings 定义面。", vec![names(&["public-types.ts", "types.ts", "typings.d.ts"]), contains(&["/src/types.ts", "/src/typings.d.ts"])]),
+                child_profile(
+                    "cli",
+                    "CLI命令参考",
+                    "该子页聚焦 CLI、dispatcher 与 create 命令入口。",
+                    vec![
+                        contains(&["/cli-sb/", "/src/bin/"]),
+                        prefixes(&["docs/api/"]),
+                        names(&["cli-options.mdx"]),
+                    ],
+                ),
+                child_profile(
+                    "dev-api",
+                    "开发API参考",
+                    "该子页聚焦 addons、manager-api、preview-api 与公开开发 API。",
+                    vec![
+                        contains(&[
+                            "/manager-api/",
+                            "/preview-api/",
+                            "/addons/",
+                            "get-addon-annotations",
+                            "get-addon-names",
+                        ]),
+                        prefixes(&["docs/api/"]),
+                    ],
+                ),
+                child_profile(
+                    "types",
+                    "类型定义参考",
+                    "该子页聚焦 public-types、types 与 typings 定义面。",
+                    vec![
+                        names(&["public-types.ts", "types.ts", "typings.d.ts"]),
+                        contains(&["/src/types.ts", "/src/typings.d.ts"]),
+                    ],
+                ),
             ],
         },
         FamilyProfile {
@@ -1156,11 +1339,55 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
             summary: "该 family 聚焦 main / preview / manager / preset 配置入口。",
             sort_key: 5,
             children: vec![
-                child_profile("main", "main.js配置", "该子页聚焦 main 配置、stories 匹配与 addons 注册入口。", vec![names(&["main.ts", "main.js"]), prefixes(&["docs/api/main-config/"]), contains(&["load-main-config"])]),
-                child_profile("preview", "preview.js配置", "该子页聚焦 preview 配置、全局参数、decorators 与 preview 注解。", vec![names(&["preview.ts", "preview.js"]), contains(&["process-preview-annotation", "preview-annotations"]), prefixes(&["docs/api/main-config/"])]),
-                child_profile("manager", "manager.js配置", "该子页聚焦 manager 入口、manager-head 与 UI 配置面。", vec![names(&["manager.ts", "manager.js", "manager.tsx"]), prefixes(&["docs/api/main-config/"]), contains(&["manager-head", "/manager/"])]),
-                child_profile("builder-config", "构建器配置", "该子页聚焦 builder 与 build-config 的配置入口。", vec![names(&["build-config.ts"]), prefixes(&["code/builders/", "docs/builders/"])]),
-                child_profile("preset-config", "预设配置", "该子页聚焦 preset.ts、preset.js 与 common preset 体系。", vec![names(&["preset.ts", "preset.js"]), prefixes(&["code/presets/", "docs/addons/"]), contains(&["common-preset", "preview-preset"])]),
+                child_profile(
+                    "main",
+                    "main.js配置",
+                    "该子页聚焦 main 配置、stories 匹配与 addons 注册入口。",
+                    vec![
+                        names(&["main.ts", "main.js"]),
+                        prefixes(&["docs/api/main-config/"]),
+                        contains(&["load-main-config"]),
+                    ],
+                ),
+                child_profile(
+                    "preview",
+                    "preview.js配置",
+                    "该子页聚焦 preview 配置、全局参数、decorators 与 preview 注解。",
+                    vec![
+                        names(&["preview.ts", "preview.js"]),
+                        contains(&["process-preview-annotation", "preview-annotations"]),
+                        prefixes(&["docs/api/main-config/"]),
+                    ],
+                ),
+                child_profile(
+                    "manager",
+                    "manager.js配置",
+                    "该子页聚焦 manager 入口、manager-head 与 UI 配置面。",
+                    vec![
+                        names(&["manager.ts", "manager.js", "manager.tsx"]),
+                        prefixes(&["docs/api/main-config/"]),
+                        contains(&["manager-head", "/manager/"]),
+                    ],
+                ),
+                child_profile(
+                    "builder-config",
+                    "构建器配置",
+                    "该子页聚焦 builder 与 build-config 的配置入口。",
+                    vec![
+                        names(&["build-config.ts"]),
+                        prefixes(&["code/builders/", "docs/builders/"]),
+                    ],
+                ),
+                child_profile(
+                    "preset-config",
+                    "预设配置",
+                    "该子页聚焦 preset.ts、preset.js 与 common preset 体系。",
+                    vec![
+                        names(&["preset.ts", "preset.js"]),
+                        prefixes(&["code/presets/", "docs/addons/"]),
+                        contains(&["common-preset", "preview-preset"]),
+                    ],
+                ),
             ],
         },
         FamilyProfile {
@@ -1171,8 +1398,24 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
             summary: "该 family 聚焦主题系统、外观配置与 UI 定制能力。",
             sort_key: 6,
             children: vec![
-                child_profile("theme-system", "主题系统概览", "该子页聚焦 theme、backgrounds、toolbar 与 UI 外观能力。", vec![contains(&["theme", "backgrounds", "toolbar"]), prefixes(&["docs/configure/user-interface/", "docs/sharing/"])]),
-                child_profile("custom-theme", "自定义主题开发", "该子页聚焦自定义主题、theme switcher 与主题装饰器扩展。", vec![prefixes(&["code/addons/themes/"]), contains(&["theme-switcher"])]),
+                child_profile(
+                    "theme-system",
+                    "主题系统概览",
+                    "该子页聚焦 theme、backgrounds、toolbar 与 UI 外观能力。",
+                    vec![
+                        contains(&["theme", "backgrounds", "toolbar"]),
+                        prefixes(&["docs/configure/user-interface/", "docs/sharing/"]),
+                    ],
+                ),
+                child_profile(
+                    "custom-theme",
+                    "自定义主题开发",
+                    "该子页聚焦自定义主题、theme switcher 与主题装饰器扩展。",
+                    vec![
+                        prefixes(&["code/addons/themes/"]),
+                        contains(&["theme-switcher"]),
+                    ],
+                ),
             ],
         },
         FamilyProfile {
@@ -1183,10 +1426,49 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
             summary: "该 family 聚焦高阶扩展、工具集成、性能观测与自定义渲染能力。",
             sort_key: 7,
             children: vec![
-                child_profile("presets", "预设配置", "该子页聚焦 preset、common preset 与高阶扩展配置。", vec![prefixes(&["code/presets/", "docs/addons/"]), contains(&["writing-presets", "common-preset", "preview-preset"])]),
-                child_profile("custom-renderers", "自定义渲染器", "该子页聚焦 renderers、自定义 renderer 扩展与框架渲染接入点。", vec![prefixes(&["code/renderers/"]), contains(&["renderer", "renderToCanvas"])]),
-                child_profile("tooling", "工具集成", "该子页聚焦 codemod、ESLint、IDE、CI 与外围工具接入。", vec![prefixes(&["scripts/", ".github/", ".circleci/", "code/lib/"]), contains(&["codemod", "eslint", "ide", "workflow", "chromatic", "telejson"])]),
-                child_profile("performance", "性能监控", "该子页聚焦性能测量、bench、telemetry 与运行时观测点。", vec![contains(&["performance", "benchmark", "bench", "telemetry", "profiler"]), prefixes(&["code/core/", "scripts/bench/"])]),
+                child_profile(
+                    "presets",
+                    "预设配置",
+                    "该子页聚焦 preset、common preset 与高阶扩展配置。",
+                    vec![
+                        prefixes(&["code/presets/", "docs/addons/"]),
+                        contains(&["writing-presets", "common-preset", "preview-preset"]),
+                    ],
+                ),
+                child_profile(
+                    "custom-renderers",
+                    "自定义渲染器",
+                    "该子页聚焦 renderers、自定义 renderer 扩展与框架渲染接入点。",
+                    vec![
+                        prefixes(&["code/renderers/"]),
+                        contains(&["renderer", "renderToCanvas"]),
+                    ],
+                ),
+                child_profile(
+                    "tooling",
+                    "工具集成",
+                    "该子页聚焦 codemod、ESLint、IDE、CI 与外围工具接入。",
+                    vec![
+                        prefixes(&["scripts/", ".github/", ".circleci/", "code/lib/"]),
+                        contains(&[
+                            "codemod",
+                            "eslint",
+                            "ide",
+                            "workflow",
+                            "chromatic",
+                            "telejson",
+                        ]),
+                    ],
+                ),
+                child_profile(
+                    "performance",
+                    "性能监控",
+                    "该子页聚焦性能测量、bench、telemetry 与运行时观测点。",
+                    vec![
+                        contains(&["performance", "benchmark", "bench", "telemetry", "profiler"]),
+                        prefixes(&["code/core/", "scripts/bench/"]),
+                    ],
+                ),
             ],
         },
         FamilyProfile {
@@ -1197,9 +1479,45 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
             summary: "该 family 聚焦调试、配置问题与运行时错误定位。",
             sort_key: 8,
             children: vec![
-                child_profile("faq", "调试工具和技巧", "该子页聚焦调试、错误处理与本地排查入口。", vec![contains(&["ERRORS.md", "error", "debug", "faq"]), prefixes(&["docs/"])]),
-                child_profile("runtime-errors", "运行时错误", "该子页聚焦 preview/manager/core-server 运行时错误与边界处理。", vec![contains(&["Error", "errors", "error-boundary", "preview-errors", "server-errors"]), prefixes(&["code/core/src/"])]),
-                child_profile("config-errors", "配置错误", "该子页聚焦配置装载、main/preview 冲突与 builder 配置问题。", vec![contains(&["load-main-config", "setup-addon-in-config", "sync-main-preview-addons", "vite-config", "iframe-webpack.config"]), prefixes(&["docs/configure/"])]),
+                child_profile(
+                    "faq",
+                    "调试工具和技巧",
+                    "该子页聚焦调试、错误处理与本地排查入口。",
+                    vec![
+                        contains(&["ERRORS.md", "error", "debug", "faq"]),
+                        prefixes(&["docs/"]),
+                    ],
+                ),
+                child_profile(
+                    "runtime-errors",
+                    "运行时错误",
+                    "该子页聚焦 preview/manager/core-server 运行时错误与边界处理。",
+                    vec![
+                        contains(&[
+                            "Error",
+                            "errors",
+                            "error-boundary",
+                            "preview-errors",
+                            "server-errors",
+                        ]),
+                        prefixes(&["code/core/src/"]),
+                    ],
+                ),
+                child_profile(
+                    "config-errors",
+                    "配置错误",
+                    "该子页聚焦配置装载、main/preview 冲突与 builder 配置问题。",
+                    vec![
+                        contains(&[
+                            "load-main-config",
+                            "setup-addon-in-config",
+                            "sync-main-preview-addons",
+                            "vite-config",
+                            "iframe-webpack.config",
+                        ]),
+                        prefixes(&["docs/configure/"]),
+                    ],
+                ),
             ],
         },
         FamilyProfile {
@@ -1210,10 +1528,46 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
             summary: "该 family 聚焦 Vitest、Playwright、组件测试与可访问性测试能力。",
             sort_key: 9,
             children: vec![
-                child_profile("vitest", "Vitest集成", "该子页聚焦 addon-vitest、vitest 配置与 test provider 能力。", vec![contains(&["vitest", "test-provider", "vitest-plugin"]), prefixes(&["docs/writing-tests/"])]),
-                child_profile("playwright", "Playwright测试", "该子页聚焦 Playwright 组件测试与 portable stories 测试入口。", vec![contains(&["playwright", "component-testing.spec", "portable-stories-playwright"]), prefixes(&["docs/writing-tests/"])]),
-                child_profile("component-testing", "组件测试", "该子页聚焦 component-testing 模块与测试运行时。", vec![contains(&["component-testing", "portable-stories", "component-tests"]), prefixes(&["docs/writing-tests/"])]),
-                child_profile("a11y", "可访问性测试", "该子页聚焦 addon-a11y、test-runner a11y 与可访问性测试入口。", vec![contains(&["a11y", "accessibility", "axe-playwright"]), prefixes(&["docs/writing-tests/"])]),
+                child_profile(
+                    "vitest",
+                    "Vitest集成",
+                    "该子页聚焦 addon-vitest、vitest 配置与 test provider 能力。",
+                    vec![
+                        contains(&["vitest", "test-provider", "vitest-plugin"]),
+                        prefixes(&["docs/writing-tests/"]),
+                    ],
+                ),
+                child_profile(
+                    "playwright",
+                    "Playwright测试",
+                    "该子页聚焦 Playwright 组件测试与 portable stories 测试入口。",
+                    vec![
+                        contains(&[
+                            "playwright",
+                            "component-testing.spec",
+                            "portable-stories-playwright",
+                        ]),
+                        prefixes(&["docs/writing-tests/"]),
+                    ],
+                ),
+                child_profile(
+                    "component-testing",
+                    "组件测试",
+                    "该子页聚焦 component-testing 模块与测试运行时。",
+                    vec![
+                        contains(&["component-testing", "portable-stories", "component-tests"]),
+                        prefixes(&["docs/writing-tests/"]),
+                    ],
+                ),
+                child_profile(
+                    "a11y",
+                    "可访问性测试",
+                    "该子页聚焦 addon-a11y、test-runner a11y 与可访问性测试入口。",
+                    vec![
+                        contains(&["a11y", "accessibility", "axe-playwright"]),
+                        prefixes(&["docs/writing-tests/"]),
+                    ],
+                ),
             ],
         },
         FamilyProfile {
@@ -1224,9 +1578,43 @@ fn docs_platform_family_profiles() -> Vec<FamilyProfile> {
             summary: "该 family 聚焦发布、Chromatic 与 CI/CD 流水线。",
             sort_key: 10,
             children: vec![
-                child_profile("chromatic", "Chromatic集成", "该子页聚焦 chromatic 配置、自动化脚本与发布集成。", vec![contains(&["chromatic", "ui-review", "build-storybook"]), prefixes(&["docs/sharing/"])]),
-                child_profile("ci-cd", "CI_CD集成", "该子页聚焦 GitHub Actions、CircleCI 与测试流水线入口。", vec![prefixes(&[".github/", ".circleci/", "scripts/ci/", "scripts/ecosystem-ci/"]), contains(&["workflow", "e2e-tests-build", "test-runner-build", "chromatic.ts"])]),
-                child_profile("static-deploy", "静态部署", "该子页聚焦 build-static、静态发布与产物部署流程。", vec![contains(&["build-static", "build-storybook"]), prefixes(&["docs/sharing/"])]),
+                child_profile(
+                    "chromatic",
+                    "Chromatic集成",
+                    "该子页聚焦 chromatic 配置、自动化脚本与发布集成。",
+                    vec![
+                        contains(&["chromatic", "ui-review", "build-storybook"]),
+                        prefixes(&["docs/sharing/"]),
+                    ],
+                ),
+                child_profile(
+                    "ci-cd",
+                    "CI_CD集成",
+                    "该子页聚焦 GitHub Actions、CircleCI 与测试流水线入口。",
+                    vec![
+                        prefixes(&[
+                            ".github/",
+                            ".circleci/",
+                            "scripts/ci/",
+                            "scripts/ecosystem-ci/",
+                        ]),
+                        contains(&[
+                            "workflow",
+                            "e2e-tests-build",
+                            "test-runner-build",
+                            "chromatic.ts",
+                        ]),
+                    ],
+                ),
+                child_profile(
+                    "static-deploy",
+                    "静态部署",
+                    "该子页聚焦 build-static、静态发布与产物部署流程。",
+                    vec![
+                        contains(&["build-static", "build-storybook"]),
+                        prefixes(&["docs/sharing/"]),
+                    ],
+                ),
             ],
         },
     ]
@@ -1267,8 +1655,18 @@ fn build_family_candidate(
         family_key: family.family_key.to_string(),
         family_directory: family.family_directory.to_string(),
         title: family.title.to_string(),
-        source_ids: dedupe_vec(children.iter().flat_map(|child| child.source_ids.clone()).collect()),
-        module_ids: dedupe_vec(children.iter().flat_map(|child| child.module_ids.clone()).collect()),
+        source_ids: dedupe_vec(
+            children
+                .iter()
+                .flat_map(|child| child.source_ids.clone())
+                .collect(),
+        ),
+        module_ids: dedupe_vec(
+            children
+                .iter()
+                .flat_map(|child| child.module_ids.clone())
+                .collect(),
+        ),
         relation_ids: Vec::new(),
         children,
     })
@@ -1285,7 +1683,10 @@ fn build_family_child_candidate(
         return None;
     }
     let source_ids = files.iter().map(|file| file.id.clone()).collect::<Vec<_>>();
-    let paths = files.iter().map(|file| file.path.clone()).collect::<Vec<_>>();
+    let paths = files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
     let leaves = build_family_leaf_candidates(report, module_tree, family, child, &files);
     Some(FamilyChildCandidate {
         family_kind: family.family_kind.to_string(),
@@ -1345,17 +1746,19 @@ fn build_family_leaf_candidates(
 
     groups
         .into_iter()
-        .map(|(leaf_key, title, _summary, paths, source_ids)| FamilyLeafCandidate {
-            family_kind: family.family_kind.to_string(),
-            child_key: child.family_key.to_string(),
-            leaf_key,
-            family_directory: family.family_directory.to_string(),
-            child_title: child.title.to_string(),
-            title,
-            module_ids: collect_module_ids_for_paths(module_tree, &paths),
-            relation_ids: Vec::new(),
-            source_ids,
-        })
+        .map(
+            |(leaf_key, title, _summary, paths, source_ids)| FamilyLeafCandidate {
+                family_kind: family.family_kind.to_string(),
+                child_key: child.family_key.to_string(),
+                leaf_key,
+                family_directory: family.family_directory.to_string(),
+                child_title: child.title.to_string(),
+                title,
+                module_ids: collect_module_ids_for_paths(module_tree, &paths),
+                relation_ids: Vec::new(),
+                source_ids,
+            },
+        )
         .collect()
 }
 
@@ -1364,7 +1767,11 @@ fn cluster_leaf_groups_from_docs(
 ) -> Vec<(String, String, String, Vec<String>, Vec<String>)> {
     let mut groups = BTreeMap::<String, (String, String, Vec<String>, Vec<String>)>::new();
 
-    for file in files.iter().copied().filter(|file| is_doc_leaf_path(&file.path)) {
+    for file in files
+        .iter()
+        .copied()
+        .filter(|file| is_doc_leaf_path(&file.path))
+    {
         let Some((leaf_key, title)) = doc_leaf_cluster_descriptor(&file.path) else {
             continue;
         };
@@ -1380,7 +1787,13 @@ fn cluster_leaf_groups_from_docs(
         .into_iter()
         .filter(|(_, (_, _, paths, source_ids))| paths.len() >= 2 && source_ids.len() >= 2)
         .map(|(leaf_key, (title, summary, paths, source_ids))| {
-            (leaf_key, title, summary, dedupe_vec(paths), dedupe_vec(source_ids))
+            (
+                leaf_key,
+                title,
+                summary,
+                dedupe_vec(paths),
+                dedupe_vec(source_ids),
+            )
         })
         .take(8)
         .collect()
@@ -1397,7 +1810,10 @@ fn cluster_leaf_groups_from_surfaces(
             continue;
         };
         let leaf_key = format!("{}-{}", surface_kind, cluster_key);
-        let summary = format!("该叶子页聚焦 `{}` 的{}入口与关键实现。", title, surface_kind);
+        let summary = format!(
+            "该叶子页聚焦 `{}` 的{}入口与关键实现。",
+            title, surface_kind
+        );
         let entry = groups
             .entry(leaf_key)
             .or_insert_with(|| (title, summary, Vec::new(), Vec::new()));
@@ -1409,7 +1825,13 @@ fn cluster_leaf_groups_from_surfaces(
         .into_iter()
         .filter(|(_, (_, _, paths, source_ids))| paths.len() >= 2 && source_ids.len() >= 2)
         .map(|(leaf_key, (title, summary, paths, source_ids))| {
-            (leaf_key, title, summary, dedupe_vec(paths), dedupe_vec(source_ids))
+            (
+                leaf_key,
+                title,
+                summary,
+                dedupe_vec(paths),
+                dedupe_vec(source_ids),
+            )
         })
         .take(6)
         .collect()
@@ -1480,13 +1902,28 @@ fn surface_leaf_descriptor(path: &str) -> Option<(&'static str, String)> {
         return None;
     }
 
-    if lower.contains("config") || matches!(lower.as_str(), "main.ts" | "main.js" | "preview.ts" | "preview.js" | "manager.ts" | "manager.js" | "preset.ts" | "preset.js" | "build-config.ts") {
+    if lower.contains("config")
+        || matches!(
+            lower.as_str(),
+            "main.ts"
+                | "main.js"
+                | "preview.ts"
+                | "preview.js"
+                | "manager.ts"
+                | "manager.js"
+                | "preset.ts"
+                | "preset.js"
+                | "build-config.ts"
+        )
+    {
         return Some(("config", stem.to_string()));
     }
     if lower.contains("types") || lower.contains("typing") || lower.ends_with(".d.ts") {
         return Some(("type", stem.to_string()));
     }
-    if matches!(lower.as_str(), "index.ts" | "index.js" | "public-types.ts") || path.contains("/src/") {
+    if matches!(lower.as_str(), "index.ts" | "index.js" | "public-types.ts")
+        || path.contains("/src/")
+    {
         return Some(("api", stem.to_string()));
     }
 
@@ -1611,7 +2048,10 @@ fn humanize_leaf_title(value: &str) -> String {
         .replace(['_', '-'], " ")
         .split_whitespace()
         .map(|segment| {
-            if segment.chars().all(|character| character.is_ascii_uppercase()) {
+            if segment
+                .chars()
+                .all(|character| character.is_ascii_uppercase())
+            {
                 segment.to_string()
             } else if segment.contains('.') {
                 segment.to_string()
@@ -1700,9 +2140,7 @@ fn leaf_title_duplicates_child(child_title: &str, leaf_title: &str) -> bool {
     if child_slug.is_empty() || leaf_slug.is_empty() {
         return false;
     }
-    child_slug == leaf_slug
-        || child_slug.contains(&leaf_slug)
-        || leaf_slug.contains(&child_slug)
+    child_slug == leaf_slug || child_slug.contains(&leaf_slug) || leaf_slug.contains(&child_slug)
 }
 
 fn child_profile(
@@ -1759,7 +2197,6 @@ fn select_files<'a>(
     dedupe_files_by_id_v2(files)
 }
 
-
 fn dedupe_files_by_id_v2<'a>(
     files: Vec<&'a crate::repo::scanner::ScannedFile>,
 ) -> Vec<&'a crate::repo::scanner::ScannedFile> {
@@ -1812,7 +2249,8 @@ fn collect_module_ids_for_paths(module_tree: &ModuleTree, paths: &[String]) -> V
         .iter()
         .filter(|module| {
             module.root_paths.iter().any(|root| {
-                paths.iter()
+                paths
+                    .iter()
                     .any(|path| path.starts_with(root.as_str()) || root.starts_with(path.as_str()))
             })
         })
@@ -1823,15 +2261,25 @@ fn collect_module_ids_for_paths(module_tree: &ModuleTree, paths: &[String]) -> V
 }
 
 fn dedupe_vec(items: Vec<String>) -> Vec<String> {
-    items.into_iter().collect::<BTreeSet<_>>().into_iter().collect()
+    items
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn family_index_page_id(family: &FamilyCandidate) -> String {
-    stable_id("page", &format!("family:index:{}:{}", family.family_kind, family.family_key))
+    stable_id(
+        "page",
+        &format!("family:index:{}:{}", family.family_kind, family.family_key),
+    )
 }
 
 fn family_child_page_id(child: &FamilyChildCandidate) -> String {
-    stable_id("page", &format!("family:child:{}:{}", child.family_kind, child.family_key))
+    stable_id(
+        "page",
+        &format!("family:child:{}:{}", child.family_kind, child.family_key),
+    )
 }
 
 fn family_leaf_page_id(leaf: &FamilyLeafCandidate) -> String {
@@ -1903,7 +2351,13 @@ fn discover_root_doc_pages(
         .iter()
         .enumerate()
         .filter_map(|(index, root_doc)| {
-            build_root_doc_page(report, module_tree, overview_id, base_priority + index, root_doc)
+            build_root_doc_page(
+                report,
+                module_tree,
+                overview_id,
+                base_priority + index,
+                root_doc,
+            )
         })
         .collect()
 }
@@ -1921,7 +2375,10 @@ fn build_root_doc_page(
         return None;
     }
     let source_ids = files.iter().map(|file| file.id.clone()).collect::<Vec<_>>();
-    let paths = files.iter().map(|file| file.path.clone()).collect::<Vec<_>>();
+    let paths = files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
 
     Some(PlannedPage {
         id: stable_id("page", &format!("root-doc:{}", root_doc.topic_key)),

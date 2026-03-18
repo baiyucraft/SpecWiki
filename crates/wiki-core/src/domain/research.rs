@@ -1,5 +1,87 @@
 use serde::{Deserialize, Serialize};
 
+use crate::domain::knowledge::DecompositionProfile;
+
+// ─── ResearchProfile ───────────────────────────────────────
+
+/// Research 层的研究画像。
+/// 它与 decomposition profile 对齐，但用于控制 section plan 与 evidence 表达。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchProfile {
+    Runtime,
+    ApiSurface,
+    ConfigSurface,
+    DocsGuide,
+    Testing,
+    ExampleTutorial,
+    Troubleshooting,
+    IntegrationPlatform,
+    CompilerPipeline,
+}
+
+impl ResearchProfile {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Runtime => "runtime",
+            Self::ApiSurface => "api_surface",
+            Self::ConfigSurface => "config_surface",
+            Self::DocsGuide => "docs_guide",
+            Self::Testing => "testing",
+            Self::ExampleTutorial => "example_tutorial",
+            Self::Troubleshooting => "troubleshooting",
+            Self::IntegrationPlatform => "integration_platform",
+            Self::CompilerPipeline => "compiler_pipeline",
+        }
+    }
+}
+
+/// provider-backed research session 的停止原因。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchStopReason {
+    NotRun,
+    Completed,
+    NoFurtherToolCalls,
+    NoMeaningfulDelta,
+    TurnBudgetExhausted,
+    CallBudgetRejected,
+    ProviderError,
+    InvalidOutput,
+}
+
+impl ResearchStopReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NotRun => "not_run",
+            Self::Completed => "completed",
+            Self::NoFurtherToolCalls => "no_further_tool_calls",
+            Self::NoMeaningfulDelta => "no_meaningful_delta",
+            Self::TurnBudgetExhausted => "turn_budget_exhausted",
+            Self::CallBudgetRejected => "call_budget_rejected",
+            Self::ProviderError => "provider_error",
+            Self::InvalidOutput => "invalid_output",
+        }
+    }
+}
+
+/// provider-backed research session 的观测指标。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResearchSessionStats {
+    #[serde(default)]
+    pub turns_used: usize,
+    #[serde(default)]
+    pub tool_calls: usize,
+    #[serde(default)]
+    pub delta_evidence_count: usize,
+    #[serde(default)]
+    pub delta_section_count: usize,
+    #[serde(default)]
+    pub delta_diagram_count: usize,
+    #[serde(default)]
+    pub child_digest_delta: usize,
+}
+
 // ─── SystemResearch ─────────────────────────────────────────
 
 /// R1: 全局系统研究结果——从 FactsSnapshot 全量中提取的项目级理解。
@@ -40,6 +122,10 @@ pub struct DomainResearch {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UnitResearch {
     pub unit_id: String,
+    #[serde(default)]
+    pub decomposition_profile: Option<DecompositionProfile>,
+    #[serde(default)]
+    pub research_profile: Option<ResearchProfile>,
     pub positioning: String,
     pub summary: String,
     pub section_plan: Vec<PlannedSection>,
@@ -48,6 +134,10 @@ pub struct UnitResearch {
     pub diagram_suggestions: Vec<DiagramSuggestion>,
     #[serde(default)]
     pub key_sources: Vec<String>,
+    #[serde(default)]
+    pub provider_stop_reason: Option<ResearchStopReason>,
+    #[serde(default)]
+    pub provider_session_stats: Option<ResearchSessionStats>,
     #[serde(default)]
     pub input_hash: String,
 }
@@ -62,9 +152,15 @@ pub struct PlannedSection {
     pub title: String,
     pub intent: String,
     #[serde(default)]
+    pub section_summary: String,
+    #[serde(default)]
     pub evidence_cluster_keys: Vec<String>,
     #[serde(default)]
     pub child_digest_slot: bool,
+    /// 当 section 直接承接 docs/rdb 原始 Markdown 时为 true。
+    /// renderer/compose 需要据此保留 reference 章节骨架，避免再补通用 filler。
+    #[serde(default)]
+    pub preserve_source_markdown: bool,
 }
 
 // ─── EvidenceCluster ────────────────────────────────────────
@@ -129,9 +225,15 @@ pub struct PageDigest {
     pub unit_id: String,
     pub page_id: String,
     pub title: String,
+    #[serde(default)]
+    pub decomposition_profile: Option<DecompositionProfile>,
+    #[serde(default)]
+    pub research_profile: Option<ResearchProfile>,
     pub summary: String,
     #[serde(default)]
     pub key_topics: Vec<String>,
     #[serde(default)]
     pub key_sources: Vec<String>,
+    #[serde(default)]
+    pub citations: Vec<SourceCitation>,
 }

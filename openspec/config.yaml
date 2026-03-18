@@ -8,6 +8,7 @@ rules:
     - 提案时必须参考 DESIGN-CORE.md 和 DESIGN.md。
   design: 
     - 设计时必须参考 AGENTS.md 中的 “开发参考” 部分。
+    - 设计时，必须召唤一个言辞犀利、标准很高的资深工程师 reviewer（gpt-5.4 xhigh subagent）。参考相关项目与现有代码，对设计进行全面评估，只有设计被审核通过了，才可以继续执行下一步。
   tasks:
     - 任务时必须参考 AGENTS.md 中的 “实施约定” 和 “测试与变更” 部分。
   apply:

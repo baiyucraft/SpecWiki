@@ -35,7 +35,11 @@ fn write_storybook_like_repo(repo_root: &Path) {
     )
     .unwrap();
     fs::write(repo_root.join("docs/addons/index.md"), "# Addons\n").unwrap();
-    fs::write(repo_root.join("docs/get-started/index.md"), "# Get Started\n").unwrap();
+    fs::write(
+        repo_root.join("docs/get-started/index.md"),
+        "# Get Started\n",
+    )
+    .unwrap();
 }
 
 /// 8.1 WikiState -> MetadataMapper -> WikiMetadata 的 roundtrip 一致性。
@@ -260,8 +264,7 @@ fn init_persists_compose_plan_in_page_context_cache() {
         .expect("should have at least one domain-index or module page");
 
     // 新 pipeline 的 page context cache 使用最小 PageContext
-    let context_cache =
-        read_page_context_cache(repo_root, &domain_or_module_page.page_id).unwrap();
+    let context_cache = read_page_context_cache(repo_root, &domain_or_module_page.page_id).unwrap();
     assert_eq!(
         context_cache.page_id, domain_or_module_page.page_id,
         "page context cache page_id should match"

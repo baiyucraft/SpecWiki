@@ -1,6 +1,8 @@
 //! section 生成层负责把页面上下文拆成稳定章节草稿。
 //! 它不做写盘，只负责为 renderer、state 和 cache 提供可复用的 section 粒度产物。
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 use crate::domain::context::{
@@ -48,9 +50,10 @@ pub fn section_titles_for_page_type(page_type: &str) -> Vec<&'static str> {
 }
 
 pub fn section_key_for_title(page_type: &str, title: &str) -> String {
+    let normalized_title = normalize_requested_section_title(page_type, title);
     section_slots_for_page_type(page_type)
         .into_iter()
-        .find(|slot| slot.title == title)
+        .find(|slot| slot.title == normalized_title)
         .map(|slot| slot.key.to_string())
         .unwrap_or_else(|| slug_key(title))
 }
@@ -92,10 +95,7 @@ pub fn build_section_drafts(page: &PlannedPage, context: &PageContext) -> Vec<Se
 }
 
 /// 在 renderer 前显式生成 compose 计划。
-pub fn build_page_compose_plan(
-    page: &PlannedPage,
-    context: &PageContext,
-) -> PageComposePlan {
+pub fn build_page_compose_plan(page: &PlannedPage, context: &PageContext) -> PageComposePlan {
     let templates = section_templates_for_page(page.page_type.as_str(), context);
     let sections = ordered_section_templates(page.page_type.as_str(), &templates, context)
         .into_iter()
@@ -193,24 +193,48 @@ fn section_slots_for_page_type(page_type: &str) -> Vec<SectionSlot> {
         ],
         "module" => vec![
             SectionSlot {
+                key: "toc",
+                title: "目录",
+            },
+            SectionSlot {
                 key: "module-intro",
-                title: "模块说明",
-            },
-            SectionSlot {
-                key: "key-sources",
-                title: "关键源码",
-            },
-            SectionSlot {
-                key: "dependencies",
-                title: "依赖关系",
-            },
-            SectionSlot {
-                key: "module-facts",
-                title: "模块事实",
+                title: "简介",
             },
             SectionSlot {
                 key: "child-overview",
-                title: "子模块概述",
+                title: "项目结构",
+            },
+            SectionSlot {
+                key: "key-sources",
+                title: "核心组件",
+            },
+            SectionSlot {
+                key: "module-architecture",
+                title: "架构总览",
+            },
+            SectionSlot {
+                key: "module-facts",
+                title: "详细组件分析",
+            },
+            SectionSlot {
+                key: "dependencies",
+                title: "依赖关系分析",
+            },
+            SectionSlot {
+                key: "module-performance",
+                title: "性能考量",
+            },
+            SectionSlot {
+                key: "module-troubleshooting",
+                title: "故障排查指南",
+            },
+            SectionSlot {
+                key: "module-conclusion",
+                title: "结论",
+            },
+            SectionSlot {
+                key: "module-appendix",
+                title: "附录",
             },
         ],
         "workflow" => vec![
@@ -233,74 +257,186 @@ fn section_slots_for_page_type(page_type: &str) -> Vec<SectionSlot> {
         ],
         "topic" => vec![
             SectionSlot {
+                key: "toc",
+                title: "目录",
+            },
+            SectionSlot {
                 key: "topic-intro",
-                title: "主题说明",
+                title: "简介",
+            },
+            SectionSlot {
+                key: "topic-structure",
+                title: "项目结构",
             },
             SectionSlot {
                 key: "topic-evidence",
-                title: "关键证据",
+                title: "核心组件",
             },
             SectionSlot {
                 key: "topic-diagram",
-                title: "结构图",
+                title: "架构总览",
             },
             SectionSlot {
                 key: "topic-related",
-                title: "关联模块",
+                title: "详细组件分析",
+            },
+            SectionSlot {
+                key: "topic-dependencies",
+                title: "依赖关系分析",
+            },
+            SectionSlot {
+                key: "topic-performance",
+                title: "性能考量",
+            },
+            SectionSlot {
+                key: "topic-troubleshooting",
+                title: "故障排查指南",
+            },
+            SectionSlot {
+                key: "topic-conclusion",
+                title: "结论",
+            },
+            SectionSlot {
+                key: "topic-appendix",
+                title: "附录",
             },
         ],
         "family-index" => vec![
             SectionSlot {
-                key: "family-overview",
-                title: "知识域概览",
+                key: "toc",
+                title: "目录",
             },
             SectionSlot {
-                key: "family-scope",
-                title: "Docs / API / 配置面",
+                key: "family-overview",
+                title: "简介",
             },
             SectionSlot {
                 key: "family-children",
-                title: "子页结构",
+                title: "项目结构",
+            },
+            SectionSlot {
+                key: "family-scope",
+                title: "核心组件",
+            },
+            SectionSlot {
+                key: "family-architecture",
+                title: "架构总览",
             },
             SectionSlot {
                 key: "family-evidence",
-                title: "关键来源",
+                title: "详细组件分析",
+            },
+            SectionSlot {
+                key: "family-related",
+                title: "依赖关系分析",
+            },
+            SectionSlot {
+                key: "family-performance",
+                title: "性能考量",
+            },
+            SectionSlot {
+                key: "family-troubleshooting",
+                title: "故障排查指南",
+            },
+            SectionSlot {
+                key: "family-conclusion",
+                title: "结论",
+            },
+            SectionSlot {
+                key: "family-appendix",
+                title: "附录",
             },
         ],
         "family-child" => vec![
             SectionSlot {
+                key: "toc",
+                title: "目录",
+            },
+            SectionSlot {
                 key: "family-child-intro",
-                title: "主题定位",
+                title: "简介",
+            },
+            SectionSlot {
+                key: "family-child-structure",
+                title: "项目结构",
             },
             SectionSlot {
                 key: "family-child-surfaces",
-                title: "API / 配置面",
+                title: "核心组件",
+            },
+            SectionSlot {
+                key: "family-child-architecture",
+                title: "架构总览",
             },
             SectionSlot {
                 key: "family-child-sources",
-                title: "关键源码",
+                title: "详细组件分析",
             },
             SectionSlot {
                 key: "family-child-related",
-                title: "关联结果",
+                title: "依赖关系分析",
+            },
+            SectionSlot {
+                key: "family-child-performance",
+                title: "性能考量",
+            },
+            SectionSlot {
+                key: "family-child-troubleshooting",
+                title: "故障排查指南",
+            },
+            SectionSlot {
+                key: "family-child-conclusion",
+                title: "结论",
+            },
+            SectionSlot {
+                key: "family-child-appendix",
+                title: "附录",
             },
         ],
         "family-leaf-doc" => vec![
             SectionSlot {
+                key: "toc",
+                title: "目录",
+            },
+            SectionSlot {
                 key: "family-leaf-intro",
-                title: "叶子主题",
+                title: "简介",
+            },
+            SectionSlot {
+                key: "family-leaf-structure",
+                title: "项目结构",
             },
             SectionSlot {
                 key: "family-leaf-surfaces",
-                title: "命中面",
+                title: "核心组件",
+            },
+            SectionSlot {
+                key: "family-leaf-architecture",
+                title: "架构总览",
             },
             SectionSlot {
                 key: "family-leaf-sources",
-                title: "关键来源",
+                title: "详细组件分析",
             },
             SectionSlot {
                 key: "family-leaf-related",
-                title: "上游与关联结果",
+                title: "依赖关系分析",
+            },
+            SectionSlot {
+                key: "family-leaf-performance",
+                title: "性能考量",
+            },
+            SectionSlot {
+                key: "family-leaf-troubleshooting",
+                title: "故障排查指南",
+            },
+            SectionSlot {
+                key: "family-leaf-conclusion",
+                title: "结论",
+            },
+            SectionSlot {
+                key: "family-leaf-appendix",
+                title: "附录",
             },
         ],
         _ => vec![SectionSlot {
@@ -329,6 +465,39 @@ fn section_templates_for_page(
             "由 codebuddy-wiki 自动生成。".to_string(),
         )],
     }
+}
+
+fn reference_outline_templates(
+    sections: Vec<(&str, &str, String)>,
+) -> Vec<(String, String, String)> {
+    let toc_titles = sections
+        .iter()
+        .filter_map(|(_, title, _)| {
+            let title = title.trim();
+            (!title.is_empty() && title != "目录").then_some(title.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    sections
+        .into_iter()
+        .map(|(key, title, content)| {
+            let content = if title == "目录" && content.trim().is_empty() {
+                render_static_outline_toc(&toc_titles)
+            } else {
+                content
+            };
+            (key.to_string(), title.to_string(), content)
+        })
+        .collect()
+}
+
+fn render_static_outline_toc(titles: &[String]) -> String {
+    titles
+        .iter()
+        .enumerate()
+        .map(|(index, title)| format!("{}. [{}](#{title})", index + 1, title))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn overview_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
@@ -387,33 +556,39 @@ fn architecture_section_templates(context: &PageContext) -> Vec<(String, String,
 }
 
 fn module_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
-    vec![
+    reference_outline_templates(vec![
+        ("toc", "目录", String::new()),
+        ("module-intro", "简介", module_intro(context)),
         (
-            "module-intro".to_string(),
-            "模块说明".to_string(),
-            module_intro(context),
+            "child-overview",
+            "项目结构",
+            module_structure_section(context),
+        ),
+        ("key-sources", "核心组件", source_section(context)),
+        (
+            "module-architecture",
+            "架构总览",
+            module_architecture_section(context),
+        ),
+        ("module-facts", "详细组件分析", module_fact_section(context)),
+        ("dependencies", "依赖关系分析", dependency_section(context)),
+        (
+            "module-performance",
+            "性能考量",
+            performance_considerations_section(context),
         ),
         (
-            "key-sources".to_string(),
-            "关键源码".to_string(),
-            source_section(context),
+            "module-troubleshooting",
+            "故障排查指南",
+            troubleshooting_section(context),
         ),
         (
-            "dependencies".to_string(),
-            "依赖关系".to_string(),
-            dependency_section(context),
+            "module-conclusion",
+            "结论",
+            module_conclusion_section(context),
         ),
-        (
-            "module-facts".to_string(),
-            "模块事实".to_string(),
-            module_fact_section(context),
-        ),
-        (
-            "child-overview".to_string(),
-            "子模块概述".to_string(),
-            child_module_section(context),
-        ),
-    ]
+        ("module-appendix", "附录", appendix_section(context)),
+    ])
 }
 
 fn workflow_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
@@ -442,103 +617,191 @@ fn workflow_section_templates(context: &PageContext) -> Vec<(String, String, Str
 }
 
 fn topic_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
-    vec![
+    reference_outline_templates(vec![
+        ("toc", "目录", String::new()),
+        ("topic-intro", "简介", topic_intro(context)),
         (
-            "topic-intro".to_string(),
-            "主题说明".to_string(),
-            topic_intro(context),
+            "topic-structure",
+            "项目结构",
+            topic_structure_section(context),
         ),
         (
-            "topic-evidence".to_string(),
-            "关键证据".to_string(),
+            "topic-evidence",
+            "核心组件",
             topic_evidence_section(context),
         ),
         (
-            "topic-diagram".to_string(),
-            "结构图".to_string(),
-            topic_diagram_section(context),
+            "topic-diagram",
+            "架构总览",
+            topic_architecture_section(context),
         ),
         (
-            "topic-related".to_string(),
-            "关联模块".to_string(),
+            "topic-related",
+            "详细组件分析",
+            topic_detailed_analysis_section(context),
+        ),
+        (
+            "topic-dependencies",
+            "依赖关系分析",
             topic_related_section(context),
         ),
-    ]
+        (
+            "topic-performance",
+            "性能考量",
+            performance_considerations_section(context),
+        ),
+        (
+            "topic-troubleshooting",
+            "故障排查指南",
+            troubleshooting_section(context),
+        ),
+        (
+            "topic-conclusion",
+            "结论",
+            topic_conclusion_section(context),
+        ),
+        ("topic-appendix", "附录", appendix_section(context)),
+    ])
 }
 
 fn family_index_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
-    vec![
+    reference_outline_templates(vec![
+        ("toc", "目录", String::new()),
+        ("family-overview", "简介", family_index_intro(context)),
         (
-            "family-overview".to_string(),
-            "知识域概览".to_string(),
-            family_index_intro(context),
-        ),
-        (
-            "family-scope".to_string(),
-            "Docs / API / 配置面".to_string(),
-            family_scope_section(context),
-        ),
-        (
-            "family-children".to_string(),
-            "子页结构".to_string(),
+            "family-children",
+            "项目结构",
             family_children_section(context),
         ),
+        ("family-scope", "核心组件", family_scope_section(context)),
         (
-            "family-evidence".to_string(),
-            "关键来源".to_string(),
+            "family-architecture",
+            "架构总览",
+            family_architecture_section(context),
+        ),
+        (
+            "family-evidence",
+            "详细组件分析",
             family_evidence_section(context),
         ),
-    ]
+        (
+            "family-related",
+            "依赖关系分析",
+            family_related_section(context),
+        ),
+        (
+            "family-performance",
+            "性能考量",
+            performance_considerations_section(context),
+        ),
+        (
+            "family-troubleshooting",
+            "故障排查指南",
+            troubleshooting_section(context),
+        ),
+        (
+            "family-conclusion",
+            "结论",
+            family_conclusion_section(context),
+        ),
+        ("family-appendix", "附录", appendix_section(context)),
+    ])
 }
 
 fn family_child_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
-    vec![
+    reference_outline_templates(vec![
+        ("toc", "目录", String::new()),
+        ("family-child-intro", "简介", family_child_intro(context)),
         (
-            "family-child-intro".to_string(),
-            "主题定位".to_string(),
-            family_child_intro(context),
+            "family-child-structure",
+            "项目结构",
+            family_children_section(context),
         ),
         (
-            "family-child-surfaces".to_string(),
-            "API / 配置面".to_string(),
+            "family-child-surfaces",
+            "核心组件",
             family_scope_section(context),
         ),
         (
-            "family-child-sources".to_string(),
-            "关键源码".to_string(),
+            "family-child-architecture",
+            "架构总览",
+            family_architecture_section(context),
+        ),
+        (
+            "family-child-sources",
+            "详细组件分析",
             family_sources_section(context),
         ),
         (
-            "family-child-related".to_string(),
-            "关联结果".to_string(),
+            "family-child-related",
+            "依赖关系分析",
             family_related_section(context),
         ),
-    ]
+        (
+            "family-child-performance",
+            "性能考量",
+            performance_considerations_section(context),
+        ),
+        (
+            "family-child-troubleshooting",
+            "故障排查指南",
+            troubleshooting_section(context),
+        ),
+        (
+            "family-child-conclusion",
+            "结论",
+            family_conclusion_section(context),
+        ),
+        ("family-child-appendix", "附录", appendix_section(context)),
+    ])
 }
 
 fn family_leaf_section_templates(context: &PageContext) -> Vec<(String, String, String)> {
-    vec![
+    reference_outline_templates(vec![
+        ("toc", "目录", String::new()),
+        ("family-leaf-intro", "简介", family_leaf_intro(context)),
         (
-            "family-leaf-intro".to_string(),
-            "叶子主题".to_string(),
-            family_leaf_intro(context),
+            "family-leaf-structure",
+            "项目结构",
+            family_children_section(context),
         ),
         (
-            "family-leaf-surfaces".to_string(),
-            "命中面".to_string(),
+            "family-leaf-surfaces",
+            "核心组件",
             family_leaf_surface_section(context),
         ),
         (
-            "family-leaf-sources".to_string(),
-            "关键来源".to_string(),
+            "family-leaf-architecture",
+            "架构总览",
+            family_architecture_section(context),
+        ),
+        (
+            "family-leaf-sources",
+            "详细组件分析",
             family_sources_section(context),
         ),
         (
-            "family-leaf-related".to_string(),
-            "上游与关联结果".to_string(),
+            "family-leaf-related",
+            "依赖关系分析",
             family_leaf_related_section(context),
         ),
-    ]
+        (
+            "family-leaf-performance",
+            "性能考量",
+            performance_considerations_section(context),
+        ),
+        (
+            "family-leaf-troubleshooting",
+            "故障排查指南",
+            troubleshooting_section(context),
+        ),
+        (
+            "family-leaf-conclusion",
+            "结论",
+            family_conclusion_section(context),
+        ),
+        ("family-leaf-appendix", "附录", appendix_section(context)),
+    ])
 }
 
 fn ordered_section_templates(
@@ -565,6 +828,74 @@ fn slug_key(value: &str) -> String {
         .collect::<String>()
         .trim_matches('-')
         .to_ascii_lowercase()
+}
+
+fn normalize_requested_section_title<'a>(page_type: &str, title: &'a str) -> Cow<'a, str> {
+    let trimmed = title.trim();
+    let normalized = match (page_type, trimmed) {
+        ("module", "模块说明") => Some("简介"),
+        ("module", "关键源码") => Some("核心组件"),
+        ("module", "依赖关系") => Some("依赖关系分析"),
+        ("module", "模块事实") => Some("详细组件分析"),
+        ("module", "子模块概述") => Some("项目结构"),
+        ("topic", "主题说明") => Some("简介"),
+        ("topic", "关键证据") => Some("核心组件"),
+        ("topic", "结构图") => Some("架构总览"),
+        ("topic", "关联模块") => Some("依赖关系分析"),
+        ("family-index", "知识域概览") => Some("简介"),
+        ("family-index", "Docs / API / 配置面") => Some("核心组件"),
+        ("family-index", "子页结构") => Some("项目结构"),
+        ("family-index", "关键来源") => Some("详细组件分析"),
+        ("family-child", "主题定位") => Some("简介"),
+        ("family-child", "API / 配置面") => Some("核心组件"),
+        ("family-child", "关键源码") => Some("详细组件分析"),
+        ("family-child", "关联结果") => Some("依赖关系分析"),
+        ("family-leaf-doc", "叶子主题") => Some("简介"),
+        ("family-leaf-doc", "命中面") => Some("核心组件"),
+        ("family-leaf-doc", "关键来源") => Some("详细组件分析"),
+        ("family-leaf-doc", "上游与关联结果") => Some("依赖关系分析"),
+        _ => None,
+    };
+
+    normalized
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|| Cow::Borrowed(trimmed))
+}
+
+fn canonical_outline_title(title: &str) -> &str {
+    match title.trim() {
+        "模块说明" | "主题说明" | "知识域概览" | "主题定位" | "叶子主题" | "简介" => {
+            "简介"
+        }
+        "子模块概述" | "子页结构" | "项目结构" | "知识域结构" => "项目结构",
+        "关键源码"
+        | "关键证据"
+        | "Docs / API / 配置面"
+        | "API / 配置面"
+        | "命中面"
+        | "核心组件" => "核心组件",
+        "结构图" | "架构概览" | "架构总览" => "架构总览",
+        "模块事实" | "关键来源" | "家族来源" | "叶子来源" | "详细组件分析" => {
+            "详细组件分析"
+        }
+        "依赖关系" | "关联模块" | "关联结果" | "上游与关联结果" | "依赖关系分析" => {
+            "依赖关系分析"
+        }
+        "性能考量" => "性能考量",
+        "故障排查指南" => "故障排查指南",
+        "结论" => "结论",
+        "附录" => "附录",
+        "目录" => "目录",
+        _ => title.trim(),
+    }
+}
+
+fn section_titles_equivalent(left: &str, right: &str) -> bool {
+    let left = left.trim();
+    let right = right.trim();
+    !left.is_empty()
+        && !right.is_empty()
+        && (left == right || canonical_outline_title(left) == canonical_outline_title(right))
 }
 
 /// 把字符串列表渲染成 Markdown 项目符号列表。
@@ -802,6 +1133,31 @@ fn module_intro(context: &PageContext) -> String {
     paragraph_lines(&sentences, "该页面围绕单个模块整理其边界、入口和依赖。")
 }
 
+fn module_structure_section(context: &PageContext) -> String {
+    let mut lines = Vec::new();
+    if let Some(module_root) = fact_value(&context.facts, "模块根路径") {
+        lines.push(format!("模块根路径：`{module_root}`"));
+    }
+    if let Some(entry) = fact_value(&context.facts, "入口文件").filter(|entry| *entry != "无")
+    {
+        lines.push(format!("入口文件：`{entry}`"));
+    }
+    if let Some(source_count) = fact_value(&context.facts, "源文件数") {
+        lines.push(format!("源文件规模：{source_count}"));
+    }
+    lines.extend(
+        prefixed_values(&context.summary_inputs, "子模块")
+            .into_iter()
+            .map(|line| format!("子模块：{line}")),
+    );
+
+    if lines.is_empty() {
+        "当前没有更多可稳定归纳的模块结构线索。".to_string()
+    } else {
+        bullet_lines(&lines)
+    }
+}
+
 fn source_section(context: &PageContext) -> String {
     prefixed_bullets(
         &context.summary_inputs,
@@ -816,6 +1172,28 @@ fn dependency_section(context: &PageContext) -> String {
         "依赖",
         "当前未识别出稳定的跨模块依赖。",
     )
+}
+
+fn module_architecture_section(context: &PageContext) -> String {
+    let mut blocks = Vec::new();
+    if let Some(block) = grouped_bullet_block(
+        "模块角色",
+        &prefixed_values(&context.summary_inputs, "模块角色"),
+    ) {
+        blocks.push(block);
+    }
+    if let Some(block) = grouped_bullet_block(
+        "协作边界",
+        &prefixed_values(&context.summary_inputs, "依赖"),
+    ) {
+        blocks.push(block);
+    }
+
+    if blocks.is_empty() {
+        "当前未识别出稳定的模块架构边界，可结合关键源码继续展开。".to_string()
+    } else {
+        blocks.join("\n\n")
+    }
 }
 
 fn module_fact_section(context: &PageContext) -> String {
@@ -840,17 +1218,24 @@ fn module_fact_section(context: &PageContext) -> String {
         blocks.push(block);
     }
 
-    blocks.join("
+    blocks.join(
+        "
 
-")
+",
+    )
 }
 
-fn child_module_section(context: &PageContext) -> String {
-    prefixed_bullets(
-        &context.summary_inputs,
-        "子模块",
-        "当前没有独立展开的子模块。",
-    )
+fn module_conclusion_section(context: &PageContext) -> String {
+    let module_name = fact_value(&context.facts, "模块名称").unwrap_or("当前模块");
+    let roles = prefixed_values(&context.summary_inputs, "模块角色");
+    if roles.is_empty() {
+        format!("`{module_name}` 当前主要作为独立模块承接仓库中的一部分核心职责。")
+    } else {
+        format!(
+            "`{module_name}` 当前主要承担 {}，并通过上面的结构和依赖关系与其余模块协作。",
+            roles.join("、")
+        )
+    }
 }
 
 fn workflow_overview(context: &PageContext) -> String {
@@ -904,6 +1289,28 @@ fn topic_evidence_section(context: &PageContext) -> String {
     }
 }
 
+fn topic_structure_section(context: &PageContext) -> String {
+    let mut blocks = Vec::new();
+    if let Some(block) = grouped_bullet_block(
+        "关键实现落点",
+        &prefixed_values(&context.summary_inputs, "关键源码"),
+    ) {
+        blocks.push(block);
+    }
+    if let Some(block) = grouped_bullet_block(
+        "关联模块",
+        &prefixed_values(&context.summary_inputs, "关联模块"),
+    ) {
+        blocks.push(block);
+    }
+
+    if blocks.is_empty() {
+        "当前专题还没有稳定的结构落点可供展开。".to_string()
+    } else {
+        blocks.join("\n\n")
+    }
+}
+
 fn topic_diagram_section(context: &PageContext) -> String {
     if context
         .diagram_inputs
@@ -916,12 +1323,46 @@ fn topic_diagram_section(context: &PageContext) -> String {
     }
 }
 
+fn topic_architecture_section(context: &PageContext) -> String {
+    let mut blocks = vec![topic_diagram_section(context)];
+    let related_modules = prefixed_values(&context.summary_inputs, "关联模块");
+    if !related_modules.is_empty() {
+        blocks.push(format!(
+            "当前主题主要与 {} 保持直接协作。",
+            related_modules.join("、")
+        ));
+    }
+    blocks.join("\n\n")
+}
+
 fn topic_related_section(context: &PageContext) -> String {
     let related_modules = prefixed_values(&context.summary_inputs, "关联模块");
     if related_modules.is_empty() {
         "当前专题页没有额外的关联模块线索。".to_string()
     } else {
         grouped_bullet_block("关联模块", &related_modules).unwrap_or_else(|| "- 无".to_string())
+    }
+}
+
+fn topic_detailed_analysis_section(context: &PageContext) -> String {
+    let mut blocks = vec![topic_evidence_section(context)];
+    let topic_summary = prefixed_values(&context.summary_inputs, "主题摘要");
+    if let Some(summary) = topic_summary.first() {
+        blocks.push(summary.clone());
+    }
+    blocks.join("\n\n")
+}
+
+fn topic_conclusion_section(context: &PageContext) -> String {
+    let topic_title = fact_value(&context.facts, "主题标题").unwrap_or("当前主题");
+    let related_modules = prefixed_values(&context.summary_inputs, "关联模块");
+    if related_modules.is_empty() {
+        format!("`{topic_title}` 已形成可独立阅读的专题单元，可继续结合核心组件章节向下追踪。")
+    } else {
+        format!(
+            "`{topic_title}` 当前与 {} 形成最直接的协作边界，适合作为后续深入阅读的入口。",
+            related_modules.join("、")
+        )
     }
 }
 
@@ -941,20 +1382,56 @@ fn family_index_intro(context: &PageContext) -> String {
     if let Some(summary) = summary.first() {
         sentences.push(summary.clone());
     }
-    sentences.push(format!("当前索引页直接聚合 {source_count} 份源码、文档或配置线索。"));
+    sentences.push(format!(
+        "当前索引页直接聚合 {source_count} 份源码、文档或配置线索。"
+    ));
     paragraph_lines(&sentences, "该页面用于汇总某个稳定知识域。")
 }
 
-fn family_scope_section(_context: &PageContext) -> String {
-    "当前知识域尚未命中稳定的 docs / API / 配置面。".to_string()
+fn family_scope_section(context: &PageContext) -> String {
+    let mut blocks = Vec::new();
+    if let Some(block) = grouped_bullet_block(
+        "Docs Anchor",
+        &prefixed_values(&context.summary_inputs, "Docs Anchor"),
+    ) {
+        blocks.push(block);
+    }
+    if let Some(block) = grouped_bullet_block(
+        "Public API",
+        &prefixed_values(&context.summary_inputs, "Public API"),
+    ) {
+        blocks.push(block);
+    }
+    if let Some(block) = grouped_bullet_block(
+        "Config Surface",
+        &prefixed_values(&context.summary_inputs, "Config Surface"),
+    ) {
+        blocks.push(block);
+    }
+    if let Some(block) = grouped_bullet_block(
+        "Type Surface",
+        &prefixed_values(&context.summary_inputs, "Type Surface"),
+    ) {
+        blocks.push(block);
+    }
+
+    if blocks.is_empty() {
+        "当前知识域尚未命中稳定的 docs / API / 配置面。".to_string()
+    } else {
+        blocks.join("\n\n")
+    }
 }
 
-fn family_children_section(_context: &PageContext) -> String {
-    "当前知识域尚未拆出稳定子页。".to_string()
+fn family_children_section(context: &PageContext) -> String {
+    if context.child_summaries.is_empty() {
+        "当前知识域尚未拆出稳定子页。".to_string()
+    } else {
+        bullet_lines(&context.child_summaries)
+    }
 }
 
-fn family_evidence_section(_context: &PageContext) -> String {
-    "当前知识域还没有稳定的关键来源上卷。".to_string()
+fn family_evidence_section(context: &PageContext) -> String {
+    family_sources_section(context)
 }
 
 fn family_child_intro(context: &PageContext) -> String {
@@ -965,20 +1442,33 @@ fn family_child_intro(context: &PageContext) -> String {
     let family_title = fact_value(&context.facts, "知识域标题").unwrap_or("当前知识域子页");
     let family_kind = fact_value(&context.facts, "知识域类别").unwrap_or("family");
     let summary = prefixed_values(&context.summary_inputs, "知识域摘要");
-    let mut sentences =
-        vec![format!("`{family_title}` 聚焦一个 {family_kind} 主题子域。")];
+    let mut sentences = vec![format!(
+        "`{family_title}` 聚焦一个 {family_kind} 主题子域。"
+    )];
     if let Some(summary) = summary.first() {
         sentences.push(summary.clone());
     }
     paragraph_lines(&sentences, "该页面用于解释知识域中的单个高信号子主题。")
 }
 
-fn family_sources_section(_context: &PageContext) -> String {
-    "当前知识域子页尚未命中高信号源码。".to_string()
+fn family_sources_section(context: &PageContext) -> String {
+    let appendix_lines = appendix_reference_lines(context);
+    if appendix_lines.is_empty() {
+        "当前知识域子页尚未命中高信号源码。".to_string()
+    } else {
+        bullet_lines(&appendix_lines)
+    }
 }
 
-fn family_related_section(_context: &PageContext) -> String {
-    "当前知识域子页没有更多关联结果。".to_string()
+fn family_related_section(context: &PageContext) -> String {
+    if context.child_summaries.is_empty() {
+        "当前知识域子页没有更多关联结果。".to_string()
+    } else {
+        format!(
+            "当前知识域主要通过以下子页或子单元形成协作边界：\n{}",
+            bullet_lines(&context.child_summaries)
+        )
+    }
 }
 
 fn family_leaf_intro(context: &PageContext) -> String {
@@ -995,7 +1485,8 @@ fn family_leaf_intro(context: &PageContext) -> String {
     if let Some(summary) = summary.first() {
         sentences.push(summary.clone());
     }
-    sentences.push("该页优先承接一手 docs / API / 配置 / 类型入口，而不是继续充当索引页。".to_string());
+    sentences
+        .push("该页优先承接一手 docs / API / 配置 / 类型入口，而不是继续充当索引页。".to_string());
     paragraph_lines(&sentences, "该页面聚焦一个更细粒度的叶子主题。")
 }
 
@@ -1005,6 +1496,105 @@ fn family_leaf_surface_section(_context: &PageContext) -> String {
 
 fn family_leaf_related_section(_context: &PageContext) -> String {
     "当前叶子主题没有更多上游或关联结果。".to_string()
+}
+
+fn family_architecture_section(context: &PageContext) -> String {
+    let child_count = context.child_summaries.len();
+    let surface_count = prefixed_values(&context.summary_inputs, "Docs Anchor").len()
+        + prefixed_values(&context.summary_inputs, "Public API").len()
+        + prefixed_values(&context.summary_inputs, "Config Surface").len()
+        + prefixed_values(&context.summary_inputs, "Type Surface").len();
+
+    match (child_count, surface_count) {
+        (0, 0) => "当前知识域尚未沉淀出稳定的骨架信号。".to_string(),
+        (0, _) => format!("当前知识域主要围绕 {surface_count} 类高信号 surface 组织内容。"),
+        (_, 0) => format!("当前知识域已拆出 {child_count} 个稳定子单元，可继续按页面树向下展开。"),
+        _ => format!(
+            "当前知识域同时聚合了 {surface_count} 组高信号 surface，并拆出 {child_count} 个稳定子单元承接细节。"
+        ),
+    }
+}
+
+fn family_conclusion_section(context: &PageContext) -> String {
+    let family_title = fact_value(&context.facts, "知识域标题").unwrap_or("当前知识域");
+    if context.child_summaries.is_empty() {
+        format!(
+            "`{family_title}` 当前更适合作为单页知识入口，后续可继续沿 docs 或 API surface 深挖。"
+        )
+    } else {
+        format!(
+            "`{family_title}` 当前已经形成稳定的知识域页树，推荐优先沿项目结构和详细组件分析两条路径继续阅读。"
+        )
+    }
+}
+
+fn performance_considerations_section(context: &PageContext) -> String {
+    let mut blocks = Vec::new();
+    if let Some(block) = grouped_bullet_block(
+        "关键调用热点",
+        &prefixed_values(&context.summary_inputs, "图热点"),
+    ) {
+        blocks.push(block);
+    }
+    if let Some(block) = grouped_bullet_block(
+        "循环提示",
+        &prefixed_values(&context.summary_inputs, "循环"),
+    ) {
+        blocks.push(block);
+    }
+
+    if blocks.is_empty() {
+        "当前未识别出足以单独展开的性能热点，后续可优先检查调用热点、配置面和构建链。".to_string()
+    } else {
+        blocks.join("\n\n")
+    }
+}
+
+fn troubleshooting_section(context: &PageContext) -> String {
+    let mut blocks = Vec::new();
+    if let Some(block) = grouped_bullet_block(
+        "循环提示",
+        &prefixed_values(&context.summary_inputs, "循环"),
+    ) {
+        blocks.push(block);
+    }
+    if let Some(block) = grouped_bullet_block(
+        "相关文档入口",
+        &prefixed_values(&context.summary_inputs, "Docs Anchor"),
+    ) {
+        blocks.push(block);
+    }
+
+    if blocks.is_empty() {
+        "当前未沉淀出专门的排障线索；建议从简介、项目结构和附录中的源码入口开始定位。".to_string()
+    } else {
+        blocks.join("\n\n")
+    }
+}
+
+fn appendix_section(context: &PageContext) -> String {
+    let appendix_lines = appendix_reference_lines(context);
+    if appendix_lines.is_empty() {
+        "补充引用和扩展材料会在最终渲染阶段继续汇总到本节。".to_string()
+    } else {
+        bullet_lines(&appendix_lines)
+    }
+}
+
+fn appendix_reference_lines(context: &PageContext) -> Vec<String> {
+    [
+        "源码",
+        "关键源码",
+        "Docs Anchor",
+        "Public API",
+        "Config Surface",
+        "Type Surface",
+        "关联模块",
+    ]
+    .into_iter()
+    .flat_map(|prefix| prefixed_values(&context.summary_inputs, prefix))
+    .take(10)
+    .collect()
 }
 
 fn render_module_tree_markdown(lines: &[String]) -> String {
@@ -1063,7 +1653,7 @@ fn append_supporting_blocks(
             if !planned_evidence_refs.is_empty() {
                 return planned_evidence_refs.contains(&group.group_id);
             }
-            group.section_title == title
+            section_titles_equivalent(&group.section_title, title)
                 || group.items.iter().any(|item| {
                     item.section_refs
                         .iter()
@@ -1079,7 +1669,7 @@ fn append_supporting_blocks(
             if !planned_diagram_refs.is_empty() {
                 return planned_diagram_refs.contains(&diagram.diagram_id);
             }
-            diagram.section_title == title
+            section_titles_equivalent(&diagram.section_title, title)
         })
         .filter_map(render_diagram_block)
         .collect::<Vec<_>>();

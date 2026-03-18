@@ -129,12 +129,7 @@ impl<'a> WorkflowReporter<'a> {
     }
 
     /// 输出带 usage 快照的进度事件。
-    pub fn usage(
-        &mut self,
-        phase: &str,
-        message: impl Into<String>,
-        usage: LlmUsageSnapshot,
-    ) {
+    pub fn usage(&mut self, phase: &str, message: impl Into<String>, usage: LlmUsageSnapshot) {
         self.emit(phase, message.into(), None, None, Some(usage));
     }
 

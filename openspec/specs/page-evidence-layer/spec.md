@@ -4,17 +4,12 @@
 定义 Repo Wiki 页面上下文、正式渲染和 LLM 增强共享的 evidence layer 约束。
 ## Requirements
 ### Requirement: 页面上下文必须提供稳定的 evidence layer
-系统 MUST 为正式页面和 managed sections 提供结构化 evidence layer。evidence layer MUST 至少包含关键来源文件、证据分组、真实来源跨度和稳定 evidence identity，而不是只把这些信息压平成字符串 facts。每条 evidence MUST 至少记录 `path`、`source_id`、`start_line`、`end_line`、`evidence_type`、`section_refs` 和 `note`，并可同时服务 renderer、runtime、LLM research 输入和 reference 验证。
+系统 MUST 为正式页面、managed sections、renderer 和验证脚本提供统一的 evidence layer。evidence layer 除了在页面上下文中保持结构化外，还 MUST 能被 renderer 映射成最终 Markdown 中可统计、可追溯的 citation / evidence block。每条 evidence MUST 至少记录 `path`、`source_id`、`start_line`、`end_line`、`evidence_type`、`section_refs` 和 `note`，并支持最终页面中的稳定引用格式。
 
-#### Scenario: 页面上下文输出带行号的关键来源文件块
-- **WHEN** 系统为 `overview`、`architecture`、模块页或专题页构建页面上下文
-- **THEN** 页面上下文 MUST 提供带 `path + line span` 的稳定关键来源集合
-- **THEN** renderer MUST 能把这些来源文件落为正式页面中的 evidence block，并保留可追溯来源信息
-
-#### Scenario: evidence identity 在重复生成时保持稳定
-- **WHEN** 同一页面在 evidence 集合未变化的情况下被重复生成
-- **THEN** 相同 evidence 条目的稳定标识 MUST 保持不变
-- **THEN** runtime 不得因为正文改写而重新生成一套无关的 evidence identity
+#### Scenario: 最终页面可追溯到结构化 evidence
+- **WHEN** 系统为页面构建了结构化 evidence layer 并完成正式渲染
+- **THEN** 最终 `.wiki/*.md` MUST 保留可回溯到对应 evidence identity 的 citation / evidence block
+- **THEN** reference 报告和 lifecycle 验证 MUST 能从最终 Markdown 识别这些引用
 
 ### Requirement: evidence layer 必须限制粒度并保持可读性
 系统 MUST 控制 evidence layer 的粒度，使其既能表达出处，又不会退化为完整文件列表转储。每个核心 section 的 evidence block MUST 优先呈现 3 到 8 个高信号来源，并允许按机制、能力或流程主题分组。若当前语言或解析能力不足以提供精确行号，系统 MUST 显式标记为 coarse span，而不是伪造精确行号。
@@ -44,10 +39,23 @@
 - **THEN** runtime 不得因正文调整而重建无关的 evidence 身份
 
 ### Requirement: evidence layer 必须支持 section-scoped citation
-系统 MUST 让 evidence layer 可以按 section 作用域被 compose / renderer 精确引用，而不是只按页面作用域附着。evidence 对象除 `page scope` 外，还 MUST 支持稳定的 `section refs` 与 `child digest refs`。
+系统 MUST 让 evidence layer 可以按 section 作用域被 compose / renderer 精确引用，而不是只按页面作用域附着。renderer MUST 仅在命中该 `section_refs` 的 section 内输出对应 citation / evidence block，不得把整页 evidence 机械平铺到所有 section。
 
-#### Scenario: section 只消费自己的 evidence
+#### Scenario: section 只落自己的 evidence
 - **WHEN** compose 计划中某个 section 只命中了部分 evidence groups
 - **THEN** renderer MUST 只在该 section 输出这些 evidence
 - **THEN** 未命中的 section 不得自动复用同组 evidence block
+
+### Requirement: diagram draft 必须与 evidence contract 一起正式落页
+系统 MUST 让 Research/Compose 产出的 `DiagramSuggestion / DiagramDraft` 通过统一 contract 落成最终 Markdown 中的 Mermaid fenced block，并与对应 section 的 evidence / citation 共同成为正式验收对象。若 diagram 未通过结构守卫，系统 MUST 丢弃该图，但不得伪造图结构。
+
+#### Scenario: diagram 通过守卫后以 Mermaid block 落页
+- **WHEN** 某个 section 具备合法的 diagram draft 且通过结构守卫
+- **THEN** renderer MUST 在最终 Markdown 中输出对应的 ` ```mermaid ` block
+- **THEN** reference 报告脚本 MUST 能从最终页面统计到该图表达
+
+#### Scenario: diagram 无效时只保留文本与 evidence
+- **WHEN** diagram draft 未通过结构守卫或缺少必要节点/边
+- **THEN** renderer MUST 丢弃该图并继续写出正文与 evidence
+- **THEN** 系统不得把无效图结构写入正式页面
 

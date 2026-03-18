@@ -87,6 +87,40 @@ impl UnitType {
     }
 }
 
+// ─── DecompositionProfile ──────────────────────────────────
+
+/// 知识单元的中粒度拆分画像。
+/// 它描述 planner 是按哪类信号把当前单元从域内拆出来。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecompositionProfile {
+    Runtime,
+    ApiSurface,
+    ConfigSurface,
+    DocsGuide,
+    Testing,
+    ExampleTutorial,
+    Troubleshooting,
+    IntegrationPlatform,
+    CompilerPipeline,
+}
+
+impl DecompositionProfile {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Runtime => "runtime",
+            Self::ApiSurface => "api_surface",
+            Self::ConfigSurface => "config_surface",
+            Self::DocsGuide => "docs_guide",
+            Self::Testing => "testing",
+            Self::ExampleTutorial => "example_tutorial",
+            Self::Troubleshooting => "troubleshooting",
+            Self::IntegrationPlatform => "integration_platform",
+            Self::CompilerPipeline => "compiler_pipeline",
+        }
+    }
+}
+
 // ─── DomainEvidence ─────────────────────────────────────────
 
 /// 知识域被发现时的证据，记录哪些模块/文件/锚点触发了该域的识别。
@@ -186,6 +220,8 @@ pub struct UnitScope {
 pub struct KnowledgeUnit {
     pub id: String,
     pub unit_type: UnitType,
+    #[serde(default)]
+    pub decomposition_profile: Option<DecompositionProfile>,
     pub title: String,
     pub domain_id: String,
     pub parent_unit_id: Option<String>,
@@ -206,10 +242,14 @@ impl KnowledgeUnit {
         let title = title.into();
         let domain_id = domain_id.into();
         let relative_path = relative_path.into();
-        let id = stable_id("unit", format!("{}:{}:{}", unit_type.as_str(), &domain_id, &title));
+        let id = stable_id(
+            "unit",
+            format!("{}:{}:{}", unit_type.as_str(), &domain_id, &title),
+        );
         Self {
             id,
             unit_type,
+            decomposition_profile: None,
             title,
             domain_id,
             parent_unit_id: None,
@@ -281,18 +321,27 @@ impl KnowledgeTree {
             visited.insert(unit_id.to_string());
 
             if let Some(unit) = units.get(unit_id) {
-                for child_id in &unit.child_unit_ids {
-                    dfs(child_id, units, order, visited);
+                let mut child_ids = unit.child_unit_ids.clone();
+                child_ids.sort_by(|left, right| compare_unit_priority(right, left, units));
+                for child_id in child_ids {
+                    dfs(&child_id, units, order, visited);
                 }
             }
             order.push(unit_id.to_string());
         }
 
-        dfs(&self.overview_unit_id.clone(), &self.units, &mut order, &mut visited);
+        dfs(
+            &self.overview_unit_id.clone(),
+            &self.units,
+            &mut order,
+            &mut visited,
+        );
 
-        for unit_id in self.units.keys() {
-            if !visited.contains(unit_id) {
-                dfs(unit_id, &self.units, &mut order, &mut visited);
+        let mut remaining_unit_ids = self.units.keys().cloned().collect::<Vec<_>>();
+        remaining_unit_ids.sort_by(|left, right| compare_unit_priority(right, left, &self.units));
+        for unit_id in remaining_unit_ids {
+            if !visited.contains(unit_id.as_str()) {
+                dfs(unit_id.as_str(), &self.units, &mut order, &mut visited);
             }
         }
 
@@ -309,5 +358,81 @@ impl KnowledgeTree {
 
     pub fn domain_count(&self) -> usize {
         self.domains.len()
+    }
+}
+
+fn compare_unit_priority(
+    left_id: &str,
+    right_id: &str,
+    units: &BTreeMap<String, KnowledgeUnit>,
+) -> std::cmp::Ordering {
+    let left_priority = units
+        .get(left_id)
+        .map(|unit| unit.priority)
+        .unwrap_or_default();
+    let right_priority = units
+        .get(right_id)
+        .map(|unit| unit.priority)
+        .unwrap_or_default();
+    left_priority
+        .partial_cmp(&right_priority)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| left_id.cmp(right_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KnowledgeTree, KnowledgeUnit, UnitType};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn processing_order_prefers_high_priority_leaves_before_parents() {
+        let mut tree = KnowledgeTree::new("overview".to_string());
+
+        let mut overview =
+            KnowledgeUnit::new(UnitType::Overview, "项目概述", "system", "项目概述.md");
+        overview.id = "overview".to_string();
+
+        let mut low = KnowledgeUnit::new(UnitType::ModuleDoc, "low", "domain", "low.md");
+        low.id = "low".to_string();
+        low.priority = 0.2;
+        low.parent_unit_id = Some(overview.id.clone());
+
+        let mut high = KnowledgeUnit::new(UnitType::ModuleDoc, "high", "domain", "high.md");
+        high.id = "high".to_string();
+        high.priority = 0.9;
+        high.parent_unit_id = Some(overview.id.clone());
+
+        let mut high_leaf = KnowledgeUnit::new(
+            UnitType::ConceptGuide,
+            "high-leaf",
+            "domain",
+            "high-leaf.md",
+        );
+        high_leaf.id = "high-leaf".to_string();
+        high_leaf.priority = 1.0;
+        high_leaf.parent_unit_id = Some(high.id.clone());
+
+        overview.child_unit_ids = vec![low.id.clone(), high.id.clone()];
+        high.child_unit_ids = vec![high_leaf.id.clone()];
+
+        tree.units = BTreeMap::from([
+            (overview.id.clone(), overview),
+            (low.id.clone(), low),
+            (high.id.clone(), high),
+            (high_leaf.id.clone(), high_leaf),
+        ]);
+
+        tree.build_processing_order();
+
+        assert_eq!(
+            tree.processing_order,
+            vec![
+                "high-leaf".to_string(),
+                "high".to_string(),
+                "low".to_string(),
+                "overview".to_string(),
+            ]
+        );
     }
 }

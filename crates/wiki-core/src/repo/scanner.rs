@@ -499,6 +499,9 @@ fn should_ignore_dir(path: &Path) -> bool {
             | ".idea"
             | ".vscode"
             | ".cursor"
+            | ".qoder"
+            | ".codex"
+            | ".serena"
             | ".venv"
             | "venv"
             // per-language 默认忽略（安全地无条件排除）
@@ -533,14 +536,7 @@ fn should_ignore_dir(path: &Path) -> bool {
     // 非代码产物目录排除
     if matches!(
         dir_name,
-        "openspec"
-            | ".github"
-            | ".gitlab"
-            | ".circleci"
-            | ".husky"
-            | "coverage"
-            | ".nyc_output"
-            | "examples"
+        "openspec" | ".github" | ".gitlab" | ".circleci" | ".husky" | "coverage" | ".nyc_output"
     ) {
         return true;
     }
@@ -702,7 +698,7 @@ fn classify_file_kind(path: &str) -> String {
         return "config".to_string();
     }
 
-    if path.ends_with(".md") {
+    if path.ends_with(".md") || path.ends_with(".mdx") {
         return "docs".to_string();
     }
 
@@ -1494,4 +1490,40 @@ fn is_test_path(path: &str) -> bool {
     segments
         .iter()
         .any(|seg| matches!(*seg, "tests" | "test" | "spec" | "__tests__" | "__test__"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scan_repo;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn scan_repo_ignores_hidden_agent_runtime_dirs() {
+        let repo = tempdir().unwrap();
+        fs::create_dir_all(repo.path().join("docs")).unwrap();
+        fs::create_dir_all(repo.path().join(".qoder/repowiki/zh/content")).unwrap();
+        fs::write(repo.path().join("docs/get-started.md"), "# Get Started\n").unwrap();
+        fs::write(
+            repo.path().join(".qoder/repowiki/zh/content/快速开始.md"),
+            "# 快速开始\n",
+        )
+        .unwrap();
+
+        let report = scan_repo(repo.path(), &[]).unwrap();
+        let paths = report
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(paths.contains(&"docs/get-started.md"));
+        assert!(
+            !paths
+                .iter()
+                .any(|path| path.starts_with(".qoder/") || path.contains("/repowiki/")),
+            "hidden runtime corpus should stay out of scan report: {:?}",
+            paths
+        );
+    }
 }

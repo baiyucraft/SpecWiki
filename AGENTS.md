@@ -1,20 +1,19 @@
 
-
-# Repository Guidelines
-
-## 需要遵守
+# 必须遵守
 
 1. 用中文沟通；
 2. 目前处于测试开发阶段，不需要考虑旧版本的兼容性，兼容性代码可以全部删除；
+3. 在生成具体改动方案时，要召唤一个言辞犀利、标准很高的资深工程师 reviewer（gpt-5.4 xhigh subagent）。参考相关项目与现有代码，对方案进行全面评估，只有方案被审核通过了，才可以被实施；
+4. 在沟通过程中，可以肆无忌惮的召唤 subagent 来协助你、替你头脑风暴、分析最佳解决方案。记住你不只是执行者，还是项目的管理主导者；
 
-## 项目目标
+# 项目目标
 
 目标是构建一个 Repo Wiki Core + Agents 体系：自动扫描代码仓库，生成并持续更新 `.wiki/`，让人和 Agent 都能共享同一层项目知识。
 
 设计与边界优先看 [DESIGN2.0.md](E:/project/!byAI/spec-wiki/DESIGN2.0.md) 和 [DESIGN-CORE2.0.md](E:/project/!byAI/spec-wiki/DESIGN-CORE2.0.md)。
 代码注释规范单独见 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md)。
 
-## 开发参考
+# 开发参考
 
 开发过程中需要优先参考以下本地仓库路径，而不是只看远程项目名：
 
@@ -25,7 +24,7 @@
 
 引用这些参考实现时，以当前仓库的 [DESIGN2.0.md](E:/project/!byAI/spec-wiki/DESIGN2.0.md) 和 [DESIGN-CORE2.0.md](E:/project/!byAI/spec-wiki/DESIGN-CORE2.0.md) 为最终边界，不直接照搬其产品形态或目录结构。
 
-## 当前核心设计约束
+# 当前核心设计约束
 
 - 当前 `wiki-core` 主路径以 [DESIGN-CORE2.0.md](E:/project/!byAI/spec-wiki/DESIGN-CORE2.0.md) 为准：
   - `Facts -> Knowledge Planning -> Research -> Compose -> Assemble`
@@ -39,7 +38,7 @@
   - `GitNexus` 的厚 facts / 图事实层
 - `deepwiki-open` 只用于 query / RAG / session / 消费层参考，不作为 core 生成主链模板。
 
-## 当前验收约束
+# 当前验收约束
 
 - 当前阶段的页面质量专项验收样本是：
   - `storybook`
@@ -53,7 +52,7 @@
   - `citation / diagram / compose policy`
 - 不允许新增“为了某个样本过测试”的专有 planner / renderer 分支。
 
-## 目录通配
+# 目录通配
 
 - `crates/*`
   - Rust 包。`crates/wiki-core/**` 持有 repo facts、runtime、workflow、metadata、query。
@@ -68,7 +67,7 @@
 - `*.config.mjs` / `tsconfig*.json`
   - 共享工具链配置。TypeScript 与 ESLint 统一从根目录继承。
 
-## 分层规则
+# 分层规则
 
 - 命名统一使用 `Agents`，不要回退到 `Adapters`。
 - `.wiki/*.md`、`.wiki/wiki.metadata.json`、`.wiki/.cache/**` 是三层 runtime，职责不能混用。
@@ -81,7 +80,7 @@
 - 根级 `package.json`
   - 只保留总入口：`build`、`lint`、`test`、`publish`。
 
-## 实施约定
+# 实施约定
 
 - 优先修改已有模块，不平行复制实现。
 - `*.ts` 使用根级 `tsconfig.base.json` 和 `eslint.config.mjs`。
@@ -91,7 +90,7 @@
 - 当前阶段不要求保留旧实现兼容层；如果 2.0 主线已经成立，旧字段、旧流程、旧 fallback 可以直接删除。
 - 优先把局部修补收回通用抽象；不要把样本仓库经验直接落成硬编码规则。
 
-## 测试与变更
+# 测试与变更
 
 - Rust 测试放 `crates/*/tests/`，Agent 测试放 `agents/*/src/*.test.ts`，跨模块测试放 `scripts/tests/*.test.ts`。
 - 任何行为变化都要补对应层级的测试。

@@ -170,9 +170,7 @@ fn incremental_update_only_touches_related_pages() {
         .pages
         .iter()
         .find(|page| {
-            page.source_paths
-                .iter()
-                .any(|p| p.contains("packages/app"))
+            page.source_paths.iter().any(|p| p.contains("packages/app"))
                 && page.page_type != "overview"
                 && page.page_type != "architecture"
         })
@@ -253,7 +251,10 @@ fn update_adds_and_removes_pages_after_structural_changes() {
                 .iter()
                 .any(|p| p.contains("packages/shared"))
         });
-    assert!(shared_page.is_some(), "shared module page should exist after add");
+    assert!(
+        shared_page.is_some(),
+        "shared module page should exist after add"
+    );
 
     fs::remove_dir_all(repo_root.join("packages/shared")).unwrap();
 
@@ -307,9 +308,7 @@ fn update_rebuilds_topic_page_and_parent_pages_when_topic_sources_change() {
         .pages
         .iter()
         .find(|page| {
-            page.source_paths
-                .iter()
-                .any(|p| p.contains("router.ts"))
+            page.source_paths.iter().any(|p| p.contains("router.ts"))
                 && page.page_type != "overview"
                 && page.page_type != "architecture"
         })
@@ -392,9 +391,7 @@ fn update_marks_storybook_family_parent_pages_dirty_when_family_child_sources_ch
         .pages
         .iter()
         .find(|page| {
-            page.source_paths
-                .iter()
-                .any(|p| p.contains("addons/a11y"))
+            page.source_paths.iter().any(|p| p.contains("addons/a11y"))
                 && page.page_type != "overview"
                 && page.page_type != "architecture"
         })
@@ -477,11 +474,15 @@ fn create_storybook_like_repo(repo_root: &Path) {
         "export type A11yOptions = { enabled: boolean };\n",
     );
     write_file(
-        repo_root.join("code/frameworks/react-vite/src/index.ts").as_path(),
+        repo_root
+            .join("code/frameworks/react-vite/src/index.ts")
+            .as_path(),
         "export const reactVite = true;\n",
     );
     write_file(
-        repo_root.join("code/builders/builder-vite/src/index.ts").as_path(),
+        repo_root
+            .join("code/builders/builder-vite/src/index.ts")
+            .as_path(),
         "export const builderVite = true;\n",
     );
     write_file(
@@ -492,7 +493,10 @@ fn create_storybook_like_repo(repo_root: &Path) {
         repo_root.join("code/core/src/public-types.ts").as_path(),
         "export type StorybookConfig = { stories: string[] };\n",
     );
-    write_file(repo_root.join("docs/addons/index.md").as_path(), "# Addons\n");
+    write_file(
+        repo_root.join("docs/addons/index.md").as_path(),
+        "# Addons\n",
+    );
     write_file(
         repo_root.join("docs/get-started/index.md").as_path(),
         "# Get Started\n",

@@ -250,7 +250,7 @@ where
                             "reason": &reason,
                         }),
                     );
-                    return Err(io::Error::other(format!("llm unavailable: {reason}")))
+                    return Err(io::Error::other(format!("llm unavailable: {reason}")));
                 }
                 CoreSessionInput::LlmResponse { .. } | CoreSessionInput::LlmUnavailable { .. } => {
                     return Err(io::Error::other(
