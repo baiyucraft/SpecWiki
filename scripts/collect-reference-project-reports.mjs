@@ -992,6 +992,9 @@ function collectProject(project, run, options = {}) {
     incomplete_reason: runtimeSnapshot.incompleteReason,
     db_counts: runtimeSnapshot.dbCounts,
     checkpoint: runtimeSnapshot.checkpoint,
+    runtime_summary: runtimeSnapshot.runtimeSummary,
+    gate_summary: runtimeSnapshot.runtimeGateSummary,
+    parent_contract: runtimeSnapshot.parentContract,
     stop_reasons: stopReasons,
   };
 
@@ -1020,6 +1023,7 @@ function collectProject(project, run, options = {}) {
       overallMatchRate: null,
       fidelity_metrics: null,
       stability: null,
+      page_runtime: runtimeSnapshot.pageRuntimeByPath,
       commonGaps: [
         `runtime 仍处于 ${runtimeSnapshot.runtimeState}，当前只能做诊断，不能纳入 fidelity 验收基线`,
       ],
@@ -1063,6 +1067,7 @@ function collectProject(project, run, options = {}) {
     classifications,
     decomposition,
     overallMatchRate,
+    page_runtime: runtimeSnapshot.pageRuntimeByPath,
     fidelity_metrics: {
       overall_match_rate: overallMatchRate,
       matched_pages: fidelity.matchedCount,
@@ -1083,6 +1088,20 @@ function collectProject(project, run, options = {}) {
     commonGaps,
     stopReasons,
   };
+}
+
+function describeKnowledgeUnitBinding(result, generatedPath) {
+  const binding = result.page_runtime?.[generatedPath];
+  if (!binding) {
+    return "n/a";
+  }
+  return [
+    `unit_id=${binding.unitId ?? "n/a"}`,
+    `unit_type=${binding.unitType ?? "n/a"}`,
+    `domain_id=${binding.domainId ?? "n/a"}`,
+    `readiness=${binding.readinessStatus || "n/a"}`,
+    `child_digests=${binding.childDigestCount ?? 0}`,
+  ].join(", ");
 }
 
 function countReusedGeneratedPages(comparisons) {
@@ -1548,7 +1567,10 @@ function renderProjectReport(result) {
     `- runtime_state：${result.runtime_metrics.runtime_state}`,
     `- baseline_class：${result.runtime_metrics.baseline_class}`,
     `- incomplete_reason：${result.runtime_metrics.incomplete_reason ?? "n/a"}`,
-    `- db_counts：knowledge_units=${result.runtime_metrics.db_counts.knowledge_units}, knowledge_domains=${result.runtime_metrics.db_counts.knowledge_domains}, research_cache=${result.runtime_metrics.db_counts.research_cache}, page_digests=${result.runtime_metrics.db_counts.page_digests}, page_drafts=${result.runtime_metrics.db_counts.page_drafts}, wiki_pages=${result.runtime_metrics.db_counts.wiki_pages}, pipeline_checkpoint=${result.runtime_metrics.db_counts.pipeline_checkpoint}`,
+    `- db_counts：knowledge_units=${result.runtime_metrics.db_counts.knowledge_units}, knowledge_domains=${result.runtime_metrics.db_counts.knowledge_domains}, research_cache=${result.runtime_metrics.db_counts.research_cache}, page_digests=${result.runtime_metrics.db_counts.page_digests}, page_drafts=${result.runtime_metrics.db_counts.page_drafts}, unit_runtime_gates=${result.runtime_metrics.db_counts.unit_runtime_gates}, wiki_pages=${result.runtime_metrics.db_counts.wiki_pages}, pipeline_checkpoint=${result.runtime_metrics.db_counts.pipeline_checkpoint}`,
+    `- pipeline_runtime_summary：state=${result.runtime_metrics.runtime_summary?.runtime_state ?? "missing"}, researched=${result.runtime_metrics.runtime_summary?.researched_units ?? 0}, compose_ready=${result.runtime_metrics.runtime_summary?.compose_ready_units ?? 0}, composed=${result.runtime_metrics.runtime_summary?.composed_units ?? 0}, assembled=${result.runtime_metrics.runtime_summary?.assembled_pages ?? 0}`,
+    `- unit_runtime_gates：total=${result.runtime_metrics.gate_summary?.total ?? 0}, compose_ready=${result.runtime_metrics.gate_summary?.composeReady ?? 0}, compose_pending=${result.runtime_metrics.gate_summary?.composePending ?? 0}, compose_blocked=${result.runtime_metrics.gate_summary?.composeBlocked ?? 0}, assemble_done=${result.runtime_metrics.gate_summary?.assembleDone ?? 0}`,
+    `- parent_contract：parents=${result.runtime_metrics.parent_contract?.parentPages ?? 0}, compose_ready_parents=${result.runtime_metrics.parent_contract?.composeReadyParents ?? 0}, child_digest_parents=${result.runtime_metrics.parent_contract?.childDigestParents ?? 0}, missing_readiness_parents=${result.runtime_metrics.parent_contract?.missingReadinessParents ?? 0}`,
     `- stop_reasons：${result.runtime_metrics.stop_reasons.stopReasonCounts.map(([reason, count]) => `${reason}(${count})`).join("、") || "无"}`,
   ];
 
@@ -1596,7 +1618,7 @@ function renderProjectReport(result) {
     lines.push("- 当前没有 many-to-one reuse offender。");
   } else {
     for (const item of result.topReuseOffenders.slice(0, 10)) {
-      lines.push(`- ${item.generatedPath}：reuse_count=${item.count}`);
+      lines.push(`- ${item.generatedPath}：reuse_count=${item.count}；${describeKnowledgeUnitBinding(result, item.generatedPath)}`);
     }
   }
   lines.push("");
@@ -1665,6 +1687,7 @@ function renderProjectReport(result) {
       continue;
     }
     lines.push(`- 生成页：${comparison.generatedPath}（${comparison.generatedTitle}）`);
+    lines.push(`- KnowledgeUnit：${describeKnowledgeUnitBinding(result, comparison.generatedPath)}`);
     lines.push(`- reuse_count：${comparison.reuseCount}`);
     lines.push(`- skeleton_score：${formatRatio(comparison.skeletonScore)}`);
     lines.push(`- key_source_coverage：${formatRatio(comparison.keySource?.coverage ?? null)}`);
@@ -2008,6 +2031,10 @@ async function main(argv) {
       stalledPages: result.runtime_metrics.stop_reasons.stalledPages,
       invalidOutputPages: result.runtime_metrics.stop_reasons.invalidOutputPages,
       providerFailedPages: result.runtime_metrics.stop_reasons.providerFailedPages,
+      pipelineRuntimeState: result.runtime_metrics.runtime_summary?.runtime_state ?? null,
+      unitRuntimeGates: result.runtime_metrics.gate_summary?.total ?? 0,
+      composeBlockedUnits: result.runtime_metrics.gate_summary?.composeBlocked ?? 0,
+      parentContractPages: result.runtime_metrics.parent_contract?.parentPages ?? 0,
       generatedTopicPages: result.coverage?.generatedTopicPages ?? null,
       generatedEvidencePages: result.coverage?.generatedEvidencePages ?? null,
       generatedDiagramPages: result.coverage?.generatedDiagramPages ?? null,

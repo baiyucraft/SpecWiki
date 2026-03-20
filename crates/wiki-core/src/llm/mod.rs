@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -44,9 +44,12 @@ const DEPENDENCY_PROMPT_VERSION: &str = "dependency-edge/v1";
 const PAGE_RESEARCH_PROMPT_VERSION: &str = "page-research/v1";
 const LLM_REQUEST_PROTOCOL: &str = "agent_session_v1";
 const LEGACY_LLM_REQUEST_PROTOCOL: &str = "ndjson_session_v1";
-const FILE_PURPOSE_BATCH_SIZE: usize = 8;
+const FILE_PURPOSE_BATCH_SIZE: usize = 16;
 const TOP_LEVEL_PROMOTION_BATCH_SIZE: usize = 8;
 const DEPENDENCY_EDGE_BATCH_SIZE: usize = 8;
+const PAGE_RESEARCH_EVIDENCE_ITEM_LIMIT: usize = 6;
+const PAGE_RESEARCH_DIAGRAM_NODE_LIMIT: usize = 8;
+const PAGE_RESEARCH_DIAGRAM_EDGE_LIMIT: usize = 8;
 const PROVIDER_TOOLS_TTL_HOURS: u64 = 24 * 7;
 const NEGATIVE_LLM_CACHE_STATUS: &str = "negative";
 const FILE_PURPOSE_ALLOWED_VALUES: [&str; 24] = [
@@ -698,13 +701,13 @@ pub struct PageResearchInput {
     pub title: String,
     /// 页面作用域。
     pub scope: String,
-    /// 当前页面的稳�?facts。
+    /// 当前页面的稳定 facts。
     pub facts: Vec<String>,
     /// 当前页面的补充摘要输入。
     pub summary_inputs: Vec<String>,
     /// 当前页面 steering hints。
     pub hints: Vec<String>,
-    /// 当前页面允许的受控章节槽位；为空时再退�?page_type 默认模板。
+    /// 当前页面允许的受控章节槽位；为空时再退回 page_type 默认模板。
     #[serde(default)]
     pub allowed_section_slots: Vec<PageResearchSectionSlot>,
     /// 稳定 evidence groups。
@@ -716,12 +719,22 @@ pub struct PageResearchInput {
     /// session 当前压缩状态。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<PageResearchSessionState>,
+    /// request 级工具上限；只允许收窄为 `NoTools`，不放大全局 provider 能力。
+    #[serde(default)]
+    pub force_no_tools: bool,
+    /// 当前请求是否已在 provider 首次调用前做过 canonical pre-trim。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub retry_input_applied: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PageResearchSectionSlot {
     pub section_key: String,
     pub section_title: String,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl PageResearchInput {
@@ -744,6 +757,8 @@ impl PageResearchInput {
             evidence_groups: context.evidence_groups.clone(),
             diagram_inputs: context.diagram_inputs.clone(),
             session: None,
+            force_no_tools: false,
+            retry_input_applied: false,
         }
     }
 
@@ -754,6 +769,16 @@ impl PageResearchInput {
         if !allowed_section_slots.is_empty() {
             self.allowed_section_slots = allowed_section_slots;
         }
+        self
+    }
+
+    pub fn force_no_tools(mut self) -> Self {
+        self.force_no_tools = true;
+        self
+    }
+
+    pub fn with_retry_input_applied(mut self, retry_input_applied: bool) -> Self {
+        self.retry_input_applied = retry_input_applied;
         self
     }
 }
@@ -1267,7 +1292,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         .map(|result: Option<Output>| result.and_then(|output| parse_file_purpose(&output.purpose)))
     }
 
-    /// 按批次判断一�?`FilePurpose::Utility` 兜底文件。
+    /// 按批次判断一批 `FilePurpose::Utility` 兜底文件。
     /// 每个文件仍按单条输入命中/写入缓存，只是把未命中的候选合并成更少的真实请求。
     pub fn classify_file_purposes(
         &mut self,
@@ -1316,8 +1341,11 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         }
 
         let mut pending_batches = Vec::<PendingPromptBatch<FilePurposeAssistInput>>::new();
+        let planned_batches = pending.len().div_ceil(FILE_PURPOSE_BATCH_SIZE);
+        let mut budget_rejected = false;
         for chunk in pending.chunks(FILE_PURPOSE_BATCH_SIZE) {
             if !self.try_consume_budget(PromptType::FilePurpose, None) {
+                budget_rejected = true;
                 break;
             }
 
@@ -1350,6 +1378,16 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                 request,
             });
         }
+        debug_trace::record_json(
+            "file_purpose_budget",
+            &json!({
+                "file_purpose_candidates": inputs.len(),
+                "file_purpose_pending_uncached": pending.len(),
+                "file_purpose_batches_requested": planned_batches,
+                "file_purpose_batches_executed": pending_batches.len(),
+                "file_purpose_budget_rejected": budget_rejected,
+            }),
+        );
 
         let mut completions = vec![None; pending_batches.len()];
         let parallel_requests = self.uncertainty_parallel_requests();
@@ -1781,6 +1819,32 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             return Ok(PageResearchSessionResult::call_budget_rejected());
         }
 
+        let research_started_at = Instant::now();
+        let explicit_tools_mode = self
+            .config
+            .resolve_selected_model()
+            .map(|selected| selected.provider.capabilities.tools_mode())
+            .unwrap_or(LlmToolsMode::NoTools);
+        let configured_tools_mode = if explicit_tools_mode == LlmToolsMode::Auto {
+            self.config
+                .resolve_selected_model()
+                .and_then(|selected| {
+                    resolve_learned_tools_mode(
+                        selected.provider_name,
+                        selected.provider,
+                        selected.model_name,
+                    )
+                })
+                .unwrap_or(LlmToolsMode::NativeTools)
+        } else {
+            explicit_tools_mode
+        };
+        let effective_tools_mode = if input.force_no_tools {
+            LlmToolsMode::NoTools
+        } else {
+            configured_tools_mode
+        };
+
         let model = self.model_id().map(str::to_string);
         let prepared =
             self.prepare_prompt_payload(PromptType::PageResearch, input, input.session.clone())?;
@@ -1796,7 +1860,13 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             )? {
                 if is_negative_cache_payload(&cached.response) {
                     return Ok(PageResearchSessionResult::invalid_output(
-                        ResearchSessionStats::default(),
+                        Self::finalize_page_research_stats(
+                            ResearchSessionStats::default(),
+                            research_started_at.elapsed(),
+                            true,
+                            effective_tools_mode,
+                            Some(input.retry_input_applied),
+                        ),
                     ));
                 }
                 if let Ok(parsed) = serde_json::from_str::<PageResearchResult>(&cached.response) {
@@ -1814,7 +1884,13 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                                     tool_artifact_refs: Vec::new(),
                                 });
                         session.session_summary = result.summary.clone();
-                        let stats = Self::build_result_session_stats(0, 0, &result);
+                        let stats = Self::finalize_page_research_stats(
+                            Self::build_result_session_stats(0, 0, &result),
+                            research_started_at.elapsed(),
+                            true,
+                            effective_tools_mode,
+                            Some(input.retry_input_applied),
+                        );
                         return Ok(PageResearchSessionResult::completed(
                             PageResearchSessionOutput { session, result },
                             ResearchStopReason::Completed,
@@ -1836,27 +1912,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
             prepared.session,
         );
 
-        let explicit_tools_mode = self
-            .config
-            .resolve_selected_model()
-            .map(|selected| selected.provider.capabilities.tools_mode())
-            .unwrap_or(LlmToolsMode::NoTools);
-        let effective_tools_mode = if explicit_tools_mode == LlmToolsMode::Auto {
-            self.config
-                .resolve_selected_model()
-                .and_then(|selected| {
-                    resolve_learned_tools_mode(
-                        selected.provider_name,
-                        selected.provider,
-                        selected.model_name,
-                    )
-                })
-                .unwrap_or(LlmToolsMode::NativeTools)
-        } else {
-            explicit_tools_mode
-        };
-
-        let session_result = match effective_tools_mode {
+        let mut session_result = match effective_tools_mode {
             LlmToolsMode::NativeTools => self.run_provider_research_with_fallback(
                 &mut request,
                 runtime,
@@ -1871,6 +1927,13 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                 self.run_provider_research_no_tools(&request, runtime)?
             }
         };
+        session_result.stats = Self::finalize_page_research_stats(
+            session_result.stats,
+            research_started_at.elapsed(),
+            false,
+            effective_tools_mode,
+            Some(input.retry_input_applied),
+        );
 
         if session_result.output.is_none() {
             if session_result.stop_reason == ResearchStopReason::InvalidOutput {
@@ -2324,6 +2387,30 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         ))
     }
 
+    /// 为 page research stop result 补齐 request 级最小观测字段。
+    fn finalize_page_research_stats(
+        mut stats: ResearchSessionStats,
+        elapsed: Duration,
+        cache_hit: bool,
+        tools_mode: LlmToolsMode,
+        retry_input_applied: Option<bool>,
+    ) -> ResearchSessionStats {
+        stats.elapsed_ms = Some(elapsed.as_millis().min(u64::MAX as u128) as u64);
+        stats.cache_hit = Some(cache_hit);
+        stats.tools_mode = Some(Self::tools_mode_label(tools_mode).to_string());
+        stats.retry_input_applied = retry_input_applied;
+        stats
+    }
+
+    fn tools_mode_label(mode: LlmToolsMode) -> &'static str {
+        match mode {
+            LlmToolsMode::Auto => "auto",
+            LlmToolsMode::NativeTools => "native_tools",
+            LlmToolsMode::EmulatedTools => "emulated_tools",
+            LlmToolsMode::NoTools => "no_tools",
+        }
+    }
+
     fn build_result_session_stats(
         turns_used: usize,
         tool_calls: usize,
@@ -2340,6 +2427,7 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                 .iter()
                 .map(|section| section.child_refs.len())
                 .sum(),
+            ..ResearchSessionStats::default()
         }
     }
 
@@ -2746,6 +2834,24 @@ fn apply_prompt_budget_trim(
                     ],
                     8,
                 );
+                trim_nested_array_field(
+                    object,
+                    "evidence_groups",
+                    "items",
+                    PAGE_RESEARCH_EVIDENCE_ITEM_LIMIT,
+                );
+                trim_nested_array_field(
+                    object,
+                    "diagram_inputs",
+                    "nodes",
+                    PAGE_RESEARCH_DIAGRAM_NODE_LIMIT,
+                );
+                trim_nested_array_field(
+                    object,
+                    "diagram_inputs",
+                    "edges",
+                    PAGE_RESEARCH_DIAGRAM_EDGE_LIMIT,
+                );
             }
             PromptType::FilePurpose => {
                 trim_named_array_field(object, &["items"], FILE_PURPOSE_BATCH_SIZE);
@@ -2825,6 +2931,32 @@ fn trim_named_array_field(
         };
         if array.len() > keep {
             array.truncate(keep);
+        }
+    }
+}
+
+/// 对 page research 的嵌套数组做 deterministic 裁剪，优先保留前面的稳定证据和图节点。
+fn trim_nested_array_field(
+    object: &mut serde_json::Map<String, Value>,
+    parent_field: &str,
+    nested_field: &str,
+    keep: usize,
+) {
+    let Some(items) = object.get_mut(parent_field).and_then(Value::as_array_mut) else {
+        return;
+    };
+    for item in items {
+        let Some(item_object) = item.as_object_mut() else {
+            continue;
+        };
+        let Some(nested_items) = item_object
+            .get_mut(nested_field)
+            .and_then(Value::as_array_mut)
+        else {
+            continue;
+        };
+        if nested_items.len() > keep {
+            nested_items.truncate(keep);
         }
     }
 }
@@ -4017,7 +4149,7 @@ fn execute_research_tool(
         .iter()
         .map(|symbol| (symbol.symbol_id.clone(), symbol))
         .collect::<BTreeMap<_, _>>();
-    let snippet_pool = collect_research_snippets(runtime.page_context);
+    let snippet_pool = collect_research_snippets(runtime.page_context, runtime.scan_report);
     match tool_call.function.name.as_str() {
         "read_source_snippets" => {
             let source_ids = args
@@ -4168,8 +4300,36 @@ fn execute_research_tool(
             Ok((process, None))
         }
         "get_page_children" => {
-            let children = Vec::<Value>::new();
-            Ok((json!({ "children": children }), None))
+            let page_id = args
+                .get("page_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let children = if page_id == runtime.page.id {
+                collect_page_children(runtime.page_context)
+                    .into_iter()
+                    .map(|child| {
+                        json!({
+                            "child_index": child.child_index,
+                            "child_unit_id": child.child_unit_id,
+                            "child_page_id": child.child_page_id,
+                            "child_digest_id": child.child_digest_id,
+                            "summary": child.summary,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            Ok((
+                json!({
+                    "page_id": runtime.page.id,
+                    "readiness_status": runtime.page_context.readiness_status,
+                    "citation_digest_refs": stable_sorted_strings(&runtime.page_context.citation_digest_refs),
+                    "diagram_digest_refs": stable_sorted_strings(&runtime.page_context.diagram_digest_refs),
+                    "children": children,
+                }),
+                None,
+            ))
         }
         "get_evidence_group" => {
             let page_id = args
@@ -4261,8 +4421,108 @@ fn execute_research_tool(
     }
 }
 
-fn collect_research_snippets(_context: &PageContext) -> Vec<TargetedSnippet> {
-    Vec::new()
+fn collect_research_snippets(
+    context: &PageContext,
+    scan_report: &crate::repo::scanner::ScanReport,
+) -> Vec<TargetedSnippet> {
+    let mut snippets = context
+        .evidence_groups
+        .iter()
+        .flat_map(|group| group.items.iter())
+        .filter_map(|item| {
+            let snippet_kind = if item.evidence_type.trim().is_empty() {
+                "evidence"
+            } else {
+                item.evidence_type.trim()
+            };
+            let mut snippet = read_tool_snippet(
+                scan_report,
+                &item.path,
+                item.start_line.max(1),
+                item.end_line.max(item.start_line.max(1)),
+                snippet_kind,
+                Vec::new(),
+                item.source_id.clone(),
+            )?;
+            snippet.score = snippet_score_for_evidence(item);
+            Some(snippet)
+        })
+        .collect::<Vec<_>>();
+    snippets.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.start_line.cmp(&right.start_line))
+            .then_with(|| left.end_line.cmp(&right.end_line))
+            .then_with(|| left.snippet_id.cmp(&right.snippet_id))
+    });
+    snippets.dedup_by(|left, right| left.snippet_id == right.snippet_id);
+    snippets
+}
+
+fn snippet_score_for_evidence(item: &crate::domain::context::PageEvidenceItem) -> i32 {
+    let mut score = 0;
+    if item.source_id.is_some() {
+        score += 1;
+    }
+    if !item.coarse_span {
+        score += 1;
+    }
+    score
+}
+
+fn stable_sorted_strings(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+#[derive(Debug)]
+struct PageChildToolEntry {
+    child_index: usize,
+    child_unit_id: Option<String>,
+    child_page_id: Option<String>,
+    child_digest_id: Option<String>,
+    summary: String,
+}
+
+fn collect_page_children(context: &PageContext) -> Vec<PageChildToolEntry> {
+    let child_count = [
+        context.child_summaries.len(),
+        context.child_unit_ids.len(),
+        context.child_page_ids.len(),
+        context.child_digest_ids.len(),
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or_default();
+    (0..child_count)
+        .filter_map(|index| {
+            let child_unit_id = context.child_unit_ids.get(index).cloned();
+            let child_page_id = context.child_page_ids.get(index).cloned();
+            let child_digest_id = context.child_digest_ids.get(index).cloned();
+            let summary = context
+                .child_summaries
+                .get(index)
+                .cloned()
+                .unwrap_or_default();
+            (child_unit_id.is_some()
+                || child_page_id.is_some()
+                || child_digest_id.is_some()
+                || !summary.is_empty())
+            .then_some(PageChildToolEntry {
+                child_index: index,
+                child_unit_id,
+                child_page_id,
+                child_digest_id,
+                summary,
+            })
+        })
+        .collect()
 }
 
 fn resolve_tool_snippet(
@@ -4490,12 +4750,84 @@ fn is_response_format_transport_error(error: &io::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::reserved_core_page_call_budget;
+    use super::{
+        apply_prompt_budget_trim, reserved_core_page_call_budget, PromptType,
+        PAGE_RESEARCH_DIAGRAM_EDGE_LIMIT, PAGE_RESEARCH_DIAGRAM_NODE_LIMIT,
+        PAGE_RESEARCH_EVIDENCE_ITEM_LIMIT,
+    };
     use crate::domain::steering::LlmConfig;
+    use serde_json::json;
 
     #[test]
     fn higher_default_budget_scales_page_research_slots() {
         assert_eq!(LlmConfig::default().max_research_calls, 256);
         assert_eq!(reserved_core_page_call_budget(256), 3);
+    }
+
+    #[test]
+    fn page_research_trim_crops_nested_evidence_and_diagram_arrays() {
+        let oversized_text = "fact-1".repeat(20_000);
+        let mut input = json!({
+            "facts": [oversized_text],
+            "summary_inputs": ["summary-1"],
+            "hints": ["hint-1"],
+            "evidence_groups": [{
+                "group_id": "group-a",
+                "section_title": "概述",
+                "title": "关键证据",
+                "summary": "",
+                "items": (0..12).map(|index| json!({
+                    "source_id": format!("source-{index}"),
+                    "path": format!("src/file-{index}.rs"),
+                    "start_line": index + 1,
+                    "end_line": index + 2,
+                    "note": "evidence",
+                    "coarse_span": false,
+                })).collect::<Vec<_>>(),
+            }],
+            "diagram_inputs": [{
+                "diagram_id": "diagram-a",
+                "section_title": "概述",
+                "diagram_type": "flow",
+                "title": "流程图",
+                "summary": "",
+                "nodes": (0..16).map(|index| json!({
+                    "node_id": format!("node-{index}"),
+                    "label": format!("Node {index}"),
+                })).collect::<Vec<_>>(),
+                "edges": (0..16).map(|index| json!({
+                    "source": format!("node-{index}"),
+                    "target": format!("node-{}", index + 1),
+                    "label": format!("edge-{index}"),
+                })).collect::<Vec<_>>(),
+            }],
+        });
+        let mut session = None;
+        let config = LlmConfig::default();
+
+        apply_prompt_budget_trim(PromptType::PageResearch, &mut input, &mut session, &config);
+
+        assert_eq!(
+            input["evidence_groups"][0]["items"]
+                .as_array()
+                .map(Vec::len),
+            Some(PAGE_RESEARCH_EVIDENCE_ITEM_LIMIT)
+        );
+        assert_eq!(
+            input["diagram_inputs"][0]["nodes"].as_array().map(Vec::len),
+            Some(PAGE_RESEARCH_DIAGRAM_NODE_LIMIT)
+        );
+        assert_eq!(
+            input["diagram_inputs"][0]["edges"].as_array().map(Vec::len),
+            Some(PAGE_RESEARCH_DIAGRAM_EDGE_LIMIT)
+        );
+        assert_eq!(
+            input["evidence_groups"][0]["items"][0]["source_id"].as_str(),
+            Some("source-0")
+        );
+        assert_eq!(
+            input["diagram_inputs"][0]["nodes"][0]["node_id"].as_str(),
+            Some("node-0")
+        );
     }
 }

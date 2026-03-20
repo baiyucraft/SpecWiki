@@ -79,6 +79,68 @@ impl PipelineCheckpoint {
     }
 }
 
+/// workflow 级 runtime readiness 摘要。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PipelineRuntimeSummary {
+    pub facts_input_hash: String,
+    #[serde(default)]
+    pub workflow_action: String,
+    #[serde(default)]
+    pub runtime_state: String,
+    #[serde(default)]
+    pub researched_units: usize,
+    #[serde(default)]
+    pub compose_ready_units: usize,
+    #[serde(default)]
+    pub composed_units: usize,
+    #[serde(default)]
+    pub assembled_pages: usize,
+    #[serde(default)]
+    pub blocked_units: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_ready_stage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_interrupted_stage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_reason: Option<String>,
+    /// 当前正在 research 的 unit，帮助脚本区分“还在排队”还是“某个 unit 已经跑很久”。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_research_unit_id: Option<String>,
+    /// 当前 research unit 的稳定类型，便于按 unit 语义聚合慢点。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_research_unit_type: Option<String>,
+    /// 当前 research unit 开始时间戳；只在 `runtime_state=researching` 时有意义。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_research_started_at: Option<String>,
+    /// 最近一个完成 research 的 unit，帮助专项报告判断吞吐推进到了哪里。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_researched_unit_id: Option<String>,
+    /// 最近一个完成 research 的 unit 耗时，帮助区分 provider 延迟与纯排队。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_research_elapsed_ms: Option<u64>,
+}
+
+/// unit 级 runtime gate 状态。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UnitRuntimeGate {
+    pub unit_id: String,
+    pub unit_type: String,
+    #[serde(default)]
+    pub research_status: String,
+    #[serde(default)]
+    pub compose_status: String,
+    #[serde(default)]
+    pub assemble_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_ready_stage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+    #[serde(default)]
+    pub missing_dependencies: Vec<String>,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
 /// 计算 facts 层输入的哈希值——基于 ScanReport + ModuleTree fingerprint。
 pub fn compute_facts_input_hash(
     scan_report: &crate::repo::scanner::ScanReport,

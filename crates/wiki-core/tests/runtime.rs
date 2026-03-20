@@ -15,6 +15,8 @@ mod query_sync_rebuild;
 mod section_template_integration;
 #[path = "runtime/sqlite_lifecycle.rs"]
 mod sqlite_lifecycle;
+#[path = "runtime/sqlite_runtime_gates.rs"]
+mod sqlite_runtime_gates;
 #[path = "runtime/sqlite_storage.rs"]
 mod sqlite_storage;
 #[path = "runtime/state_kernel.rs"]

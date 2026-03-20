@@ -1,6 +1,7 @@
 //! cache 存储层负责 `.wiki/.cache/` 下各类运行时缓存的读写与失效。
 //! 所有缓存通过 SQLite 统一存储，不再使用散落的 JSON 文件。
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -210,6 +211,28 @@ pub fn missing_incremental_cache_components(repo_root: &Path, state: &WikiState)
         missing.push("wiki-state".to_string());
     }
 
+    if sqlite_store::runtime_meta_get(&conn, "pipeline_runtime_summary")
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        missing.push("pipeline-runtime-summary".to_string());
+    }
+
+    let runtime_gates = sqlite_store::read_unit_runtime_gates(&conn).unwrap_or_default();
+    if runtime_gates.is_empty() {
+        missing.push("unit-runtime-gates".to_string());
+    }
+    let gated_unit_ids = runtime_gates
+        .into_iter()
+        .map(|gate| gate.unit_id)
+        .collect::<BTreeSet<_>>();
+    let parent_page_ids = state
+        .pages
+        .iter()
+        .filter_map(|page| page.parent_id.clone())
+        .collect::<BTreeSet<_>>();
+
     for page in &state.pages {
         if !sqlite_store::page_sections_exist(&conn, &page.page_id).unwrap_or(false) {
             missing.push(format!("page-sections:{}", page.page_id));
@@ -221,6 +244,48 @@ pub fn missing_incremental_cache_components(repo_root: &Path, state: &WikiState)
 
         if !sqlite_store::page_generation_exists(&conn, &page.page_id).unwrap_or(false) {
             missing.push(format!("page-generation:{}", page.page_id));
+        }
+
+        let page_context = match sqlite_store::read_page_context(&conn, &page.page_id) {
+            Ok(Some((_input_hash, context_json))) => {
+                match serde_json::from_str::<PageContext>(&context_json) {
+                    Ok(context) => Some(context),
+                    Err(_) => {
+                        missing.push(format!("page-context-payload:{}", page.page_id));
+                        None
+                    }
+                }
+            }
+            Ok(None) => None,
+            Err(_) => {
+                missing.push(format!("page-context-read:{}", page.page_id));
+                None
+            }
+        };
+        let Some(context) = page_context else {
+            continue;
+        };
+
+        if let Some(unit_id) = context.unit_id.as_deref() {
+            if !gated_unit_ids.contains(unit_id) {
+                missing.push(format!("unit-runtime-gate:{unit_id}"));
+            }
+        }
+
+        if parent_page_ids.contains(&page.page_id) {
+            if context.readiness_status.is_empty() {
+                missing.push(format!("page-context-readiness:{}", page.page_id));
+            }
+
+            let has_child_contract = !context.child_summaries.is_empty()
+                || !context.child_unit_ids.is_empty()
+                || !context.child_page_ids.is_empty()
+                || !context.child_digest_ids.is_empty()
+                || !context.citation_digest_refs.is_empty()
+                || !context.diagram_digest_refs.is_empty();
+            if context.readiness_status == "compose_ready" && !has_child_contract {
+                missing.push(format!("page-context-child-contract:{}", page.page_id));
+            }
         }
     }
 

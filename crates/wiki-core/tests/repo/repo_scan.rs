@@ -31,11 +31,13 @@ impl LlmService for ScanBatchFilePurposeService {
             "items": items.into_iter().filter_map(|item| {
                 let path = item.get("path")?.as_str()?;
                 let purpose = if path.contains("middleware") {
-                    "实现 HTTP 请求处理链的中间件"
+                    "middleware"
                 } else if path.contains("helper") {
-                    "提供字符串处理辅助函数"
+                    "helper"
+                } else if path.contains("promote") {
+                    "helper"
                 } else {
-                    "提供通用工具函数"
+                    "utility"
                 };
                 Some(serde_json::json!({
                     "path": path,
@@ -320,21 +322,20 @@ fn scan_repo_batches_utility_file_purpose_candidates() {
     let root = fixture.path();
 
     std::fs::write(root.join("go.mod"), "module example.com/demo\n\ngo 1.23\n").unwrap();
-    std::fs::create_dir_all(root.join("src/middleware")).unwrap();
-    std::fs::create_dir_all(root.join("src/helper")).unwrap();
+    std::fs::create_dir_all(root.join("src/promote")).unwrap();
     std::fs::write(
-        root.join("src/middleware/logger.go"),
-        "package middleware\nfunc Logger(next Handler) {}\n",
+        root.join("src/promote/logger.go"),
+        "package promote\nfunc Logger(next Handler) {}\n",
     )
     .unwrap();
     std::fs::write(
-        root.join("src/middleware/auth.go"),
-        "package middleware\nfunc RequireAuth(next Handler) {}\n",
+        root.join("src/promote/auth.go"),
+        "package promote\nfunc RequireAuth(next Handler) {}\n",
     )
     .unwrap();
     std::fs::write(
-        root.join("src/helper/strings.go"),
-        "package helper\nfunc Join(parts []string) string {}\n",
+        root.join("src/promote/strings.go"),
+        "package promote\nfunc Join(parts []string) string {}\n",
     )
     .unwrap();
 
@@ -360,16 +361,16 @@ fn scan_repo_batches_utility_file_purpose_candidates() {
 
     assert_eq!(service.calls, 1);
     assert_eq!(
-        by_path.get("src/middleware/logger.go"),
-        Some(&FilePurpose::Middleware)
-    );
-    assert_eq!(
-        by_path.get("src/middleware/auth.go"),
-        Some(&FilePurpose::Middleware)
-    );
-    assert_eq!(
-        by_path.get("src/helper/strings.go"),
+        by_path.get("src/promote/logger.go"),
         Some(&FilePurpose::Helper)
+    );
+    assert_eq!(
+        by_path.get("src/promote/auth.go"),
+        Some(&FilePurpose::Helper)
+    );
+    assert_eq!(
+        by_path.get("src/promote/strings.go"),
+        Some(&FilePurpose::Utility)
     );
 }
 
@@ -433,4 +434,180 @@ fn llm_file_purpose_override_does_not_change_structural_sets() {
     assert_eq!(by_path.get("mux.go"), Some(&FilePurpose::Router));
     assert_eq!(llm_report.config_files, deterministic.config_files);
     assert_eq!(llm_report.entry_points, deterministic.entry_points);
+}
+
+#[test]
+fn scan_repo_batches_all_utility_file_purpose_candidates_without_hard_cap() {
+    let fixture = tempdir().unwrap();
+    let root = fixture.path();
+
+    std::fs::write(root.join("go.mod"), "module example.com/demo\n\ngo 1.23\n").unwrap();
+    std::fs::create_dir_all(root.join("src/promote")).unwrap();
+    for index in 0..66 {
+        std::fs::write(
+            root.join(format!("src/promote/candidate-{index:02}.go")),
+            "package promote\nfunc RequireAuth(next Handler) {}\n",
+        )
+        .unwrap();
+    }
+
+    let config = wiki_core::domain::steering::LlmConfig {
+        enabled: true,
+        model: "bridge/mock-model".to_string(),
+        max_calls: 16,
+        cache_ttl_seconds: 60 * 60,
+        allow_mermaid: true,
+        providers: std::collections::BTreeMap::new(),
+        ..wiki_core::domain::steering::LlmConfig::default()
+    };
+    let mut service = ScanBatchFilePurposeService::default();
+    let mut runtime = LlmRuntime::new(root, &config, Some(&mut service));
+    let report = scan_repo_with_boundary_and_llm(root, &[], &[], Some(&mut runtime)).unwrap();
+    drop(runtime);
+
+    let by_path = report
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.purpose))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    assert_eq!(service.calls, 5);
+    assert_eq!(
+        by_path.get("src/promote/candidate-00.go"),
+        Some(&FilePurpose::Helper)
+    );
+    assert_eq!(
+        by_path.get("src/promote/candidate-63.go"),
+        Some(&FilePurpose::Helper)
+    );
+    assert_eq!(
+        by_path.get("src/promote/candidate-64.go"),
+        Some(&FilePurpose::Helper)
+    );
+    assert_eq!(
+        by_path.get("src/promote/candidate-65.go"),
+        Some(&FilePurpose::Helper)
+    );
+}
+
+#[test]
+fn scan_repo_classifies_build_tooling_files_as_config() {
+    let fixture = tempdir().unwrap();
+    let root = fixture.path();
+
+    std::fs::create_dir_all(root.join("app/src/main")).unwrap();
+    std::fs::write(
+        root.join("BUILD"),
+        r#"java_library(name = "demo")
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("build_defs.bzl"),
+        r#"def wiki_rule():
+    pass
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("build.gradle.kts"),
+        r#"plugins { kotlin("jvm") }
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("settings.gradle.kts"),
+        r#"rootProject.name = "demo"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("gradle.properties"),
+        "org.gradle.jvmargs=-Xmx2g\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("go.mod"), "module example.com/demo\n\ngo 1.23\n").unwrap();
+    std::fs::write(
+        root.join("app/src/main/AndroidManifest.xml"),
+        r#"<manifest package="demo.app" />
+"#,
+    )
+    .unwrap();
+
+    let report = scan_repo(root, &[]).unwrap();
+    let by_path = report
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.purpose))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    assert_eq!(by_path.get("BUILD"), Some(&FilePurpose::Config));
+    assert_eq!(by_path.get("build_defs.bzl"), Some(&FilePurpose::Config));
+    assert_eq!(by_path.get("build.gradle.kts"), Some(&FilePurpose::Config));
+    assert_eq!(
+        by_path.get("settings.gradle.kts"),
+        Some(&FilePurpose::Config)
+    );
+    assert_eq!(by_path.get("gradle.properties"), Some(&FilePurpose::Config));
+    assert_eq!(by_path.get("go.mod"), Some(&FilePurpose::Config));
+    assert_eq!(
+        by_path.get("app/src/main/AndroidManifest.xml"),
+        Some(&FilePurpose::Config)
+    );
+}
+
+#[test]
+fn scan_repo_skips_story_files_but_keeps_internal_bootstrap_reviewable() {
+    let fixture = tempdir().unwrap();
+    let root = fixture.path();
+
+    std::fs::write(root.join("go.mod"), "module example.com/demo\n\ngo 1.23\n").unwrap();
+    std::fs::create_dir_all(root.join("src/internal")).unwrap();
+    std::fs::write(
+        root.join("src/internal/bootstrap.go"),
+        "package internal\nfunc Register(router Router) {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/Button.stories.tsx"),
+        "export const Basic = () => <Button />;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("build.gradle.kts"),
+        r#"plugins { kotlin("jvm") }
+"#,
+    )
+    .unwrap();
+
+    let config = wiki_core::domain::steering::LlmConfig {
+        enabled: true,
+        model: "bridge/mock-model".to_string(),
+        max_calls: 8,
+        cache_ttl_seconds: 60 * 60,
+        allow_mermaid: true,
+        providers: std::collections::BTreeMap::new(),
+        ..wiki_core::domain::steering::LlmConfig::default()
+    };
+    let mut service = ScanBatchFilePurposeService::default();
+    let mut runtime = LlmRuntime::new(root, &config, Some(&mut service));
+    let report = scan_repo_with_boundary_and_llm(root, &[], &[], Some(&mut runtime)).unwrap();
+    drop(runtime);
+
+    let by_path = report
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.purpose))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    assert_eq!(service.calls, 1);
+    assert_eq!(
+        by_path.get("src/Button.stories.tsx"),
+        Some(&FilePurpose::Test)
+    );
+    assert_eq!(by_path.get("build.gradle.kts"), Some(&FilePurpose::Config));
+    assert_eq!(
+        by_path.get("src/internal/bootstrap.go"),
+        Some(&FilePurpose::Utility)
+    );
 }

@@ -2,7 +2,6 @@
 
 ## Purpose
 定义 reference fidelity 专项报告的正式指标、runtime gate、结构化快照与诊断输出，确保 storybook、dagger 等样本的页面质量结论建立在最终 Markdown contract 与可复现快照之上。
-
 ## Requirements
 ### Requirement: reference fidelity 报告必须先验证 runtime 完整性
 系统 MUST 在读取最终 `.wiki/*.md`、`wiki.metadata.json` 与 runtime SQLite 状态后，先判定目标样本是否处于可验收的完整 runtime 状态。若 runtime 仅生成了 `.cache/wiki-cache.db` 或仅停留在 knowledge/research 阶段，报告 MUST 将该样本标记为 `runtime_incomplete`，并禁止把它纳入页面 fidelity 汇总结论。
@@ -48,3 +47,18 @@
 - **THEN** 新写出的 summary MUST 明确记录当前快照只包含哪些项目
 - **THEN** summary 与单项目报告 MUST 来自同一份 `results[]` 快照
 - **THEN** 报告 MUST 不得在未更新对应项目报告的前提下单独覆写 summary
+
+### Requirement: reference fidelity 报告必须诊断高层父页 contract offender 与 runtime gate blocker
+系统 MUST 在 reference fidelity 报告中把 severe reuse 页面映射回具体的高层 `KnowledgeUnit` 类型与 parent contract 状态，并把 runtime incomplete 样本细化为明确的 gate blocker。报告 MUST 能区分“高层父页吞页导致的 coarse reuse”和“runtime 未达到 compose/assemble-ready 导致的无页可比”，而不是把两者混成统一的 fidelity 低分。
+
+#### Scenario: storybook 报告定位高层 parent contract offender
+- **WHEN** 报告脚本对 `storybook` 生成 reference fidelity 报告
+- **THEN** 报告 MUST 指出 severe reuse 页面对应的 `KnowledgeUnit` 类型或 `decomposition_profile`
+- **THEN** 报告 MUST 说明这些页面是否缺少 child-backed contract 摘要或只消费了轻量 child digest
+
+#### Scenario: dagger 报告定位 runtime gate blocker
+- **WHEN** 报告脚本对 `dagger` 生成 reference fidelity 报告，且 runtime 尚未完整
+- **THEN** 报告 MUST 指出该样本卡在 `research-ready`、`compose-ready` 还是 `assemble-ready` 之前
+- **THEN** 报告 MUST 输出对应 blocker、缺失依赖或 interrupted stage
+- **THEN** 报告 MUST NOT 把该样本继续并入最终页面 fidelity 汇总分母
+

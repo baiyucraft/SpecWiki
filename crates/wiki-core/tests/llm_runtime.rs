@@ -9,11 +9,13 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
+use wiki_core::domain::context::{PageEvidenceGroup, PageEvidenceItem};
 use wiki_core::domain::research::ResearchStopReason;
 use wiki_core::domain::stable_id::stable_id;
 use wiki_core::domain::steering::SteeringConfig;
 use wiki_core::domain::steering::{
-    LlmCacheMode, LlmConfig, LlmProviderConfig, LlmProviderModelConfig, LlmProviderRequestFormat,
+    persist_learned_tools_mode, resolve_learned_tools_mode, LlmCacheMode, LlmConfig,
+    LlmProviderConfig, LlmProviderModelConfig, LlmProviderRequestFormat, LlmToolsMode,
 };
 use wiki_core::generation::context::{
     build_module_contexts, build_page_context, build_repo_context,
@@ -34,12 +36,54 @@ use wiki_core::storage::wiki_fs::remove_runtime_with_cache_mode;
 use wiki_core::workflows::init::run_init_with_progress_and_llm_as;
 use wiki_core::workflows::progress::NoopProgressSink;
 
+static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &Path) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, value.as_os_str());
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.as_ref() {
+            std::env::set_var(self.key, previous);
+        } else {
+            std::env::remove_var(self.key);
+        }
+    }
+}
+
 fn write_repo_file(repo_root: &Path, relative_path: &str, content: &str) {
     let path = repo_root.join(relative_path);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
     }
     fs::write(path, content).unwrap();
+}
+
+fn extract_chat_tool_payload(request: &str, tool_name: &str) -> serde_json::Value {
+    let request: serde_json::Value = serde_json::from_str(request).unwrap();
+    let content = request
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|messages| {
+            messages.iter().find_map(|message| {
+                (message.get("role").and_then(serde_json::Value::as_str) == Some("tool")
+                    && message.get("name").and_then(serde_json::Value::as_str) == Some(tool_name))
+                .then(|| message.get("content").and_then(serde_json::Value::as_str))
+                .flatten()
+            })
+        })
+        .unwrap_or_else(|| panic!("tool payload for {tool_name} should exist"));
+    serde_json::from_str(content).unwrap()
 }
 
 fn make_storybook_family_repo() -> tempfile::TempDir {
@@ -173,11 +217,13 @@ impl LlmService for BatchFilePurposeLlmService {
                     "items": items.into_iter().filter_map(|item| {
                         let path = item.get("path")?.as_str()?;
                         let purpose = if path.contains("middleware") {
-                            "实现 HTTP 请求日志记录的中间件"
+                            "middleware"
                         } else if path.contains("helper") {
-                            "提供字符串拼接辅助函数"
+                            "helper"
+                        } else if path.contains("promote") {
+                            "helper"
                         } else {
-                            "提供处理器链式组合的核心工具函数"
+                            "utility"
                         };
                         Some(serde_json::json!({
                             "path": path,
@@ -551,6 +597,36 @@ fn llm_runtime_batches_file_purpose_requests() {
 }
 
 #[test]
+fn llm_runtime_stops_file_purpose_batches_when_budget_is_exhausted() {
+    let fixture = tempdir().unwrap();
+    let mut config = llm_config("bridge/mock-model");
+    config.max_calls = 1;
+    let inputs = (0..17)
+        .map(|index| FilePurposeAssistInput {
+            path: format!("src/promote/candidate-{index:02}.go"),
+            kind: "source".to_string(),
+            language: "go".to_string(),
+            file_size: 64,
+            deterministic: "utility".to_string(),
+            preview: "package promote\nfunc Compose() string { return \"candidate\" }\n"
+                .to_string(),
+        })
+        .collect::<Vec<_>>();
+
+    let mut service = BatchFilePurposeLlmService::default();
+    let mut runtime = LlmRuntime::new(fixture.path(), &config, Some(&mut service));
+    let results = runtime.classify_file_purposes(&inputs).unwrap();
+
+    drop(runtime);
+    assert_eq!(service.calls, 1);
+    assert_eq!(
+        results[0],
+        Some(wiki_core::repo::scanner::FilePurpose::Helper)
+    );
+    assert!(results.iter().skip(16).all(Option::is_none));
+}
+
+#[test]
 fn llm_runtime_batches_top_level_promotion_requests() {
     let fixture = tempdir().unwrap();
     let config = llm_config("bridge/mock-model");
@@ -741,7 +817,7 @@ fn init_uses_provider_research_session_with_tools() {
     );
     let module_page = pages
         .iter()
-        .find(|page| page.relative_path.ends_with("核心模块/packages/app.md"))
+        .find(|page| page.page_type == "module")
         .expect("module page should exist");
     let page_context = build_page_context(module_page, &report, &tree, &repo_ctx, &mod_ctxs);
     let research_input = PageResearchInput::from_page(module_page, &page_context);
@@ -890,6 +966,152 @@ fn init_uses_provider_research_session_with_tools() {
             .and_then(serde_json::Value::as_bool),
         Some(false)
     );
+}
+
+#[test]
+fn force_no_tools_only_scopes_to_current_page_research_request() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    let source_id = stable_id("source", "packages/app/src/index.ts");
+    let server = FakeProviderServer::start_with_raw_responses(
+        vec![
+            serde_json::json!({
+                "model": "provider-model",
+                "choices": [
+                    {
+                        "message": {
+                            "content": "```json\n{\"summary\":\"no tools 摘要\",\"page_positioning\":\"该页不需要工具。\",\"section_plan\":[{\"section_key\":\"module-intro\",\"section_title\":\"简介\",\"section_summary\":\"直接使用 canonical 输入\",\"evidence_refs\":[],\"diagram_refs\":[],\"child_refs\":[]}],\"evidence_rollup\":[],\"diagram_rollup\":[],\"open_questions\":[]}\n```",
+                            "tool_calls": null
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+            serde_json::json!({
+                "model": "provider-model",
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call_001",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "read_source_snippets",
+                                        "arguments": format!("{{\"source_ids\":[\"{source_id}\"]}}"),
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+            serde_json::json!({
+                "model": "provider-model",
+                "choices": [
+                    {
+                        "message": {
+                            "content": "```json\n{\"summary\":\"tools 摘要\",\"page_positioning\":\"该页允许工具。\",\"section_plan\":[{\"section_key\":\"module-intro\",\"section_title\":\"简介\",\"section_summary\":\"工具模式仍然可用\",\"evidence_refs\":[],\"diagram_refs\":[],\"child_refs\":[]}],\"evidence_rollup\":[],\"diagram_rollup\":[],\"open_questions\":[]}\n```",
+                            "tool_calls": null
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+        ],
+        Duration::ZERO,
+    );
+    write_repo_file(
+        repo_root,
+        "package.json",
+        r#"{"name":"research-demo","private":true,"workspaces":["packages/*"]}"#,
+    );
+    write_repo_file(
+        repo_root,
+        "packages/app/package.json",
+        r#"{"name":"app","version":"1.0.0"}"#,
+    );
+    write_repo_file(
+        repo_root,
+        "packages/app/src/index.ts",
+        "export function run() { return true; }\n",
+    );
+    let report = scan_repo(repo_root, &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let pages = plan_pages(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &SteeringConfig::default(),
+    );
+    let module_page = pages
+        .iter()
+        .find(|page| page.relative_path.ends_with("核心模块/packages/app.md"))
+        .expect("module page should exist");
+    let module_context = build_page_context(module_page, &report, &tree, &repo_ctx, &mod_ctxs);
+    let no_tools_input =
+        PageResearchInput::from_page(module_page, &module_context).force_no_tools();
+    let tools_input = PageResearchInput::from_page(module_page, &module_context);
+    let symbol_snapshot = ParsedSymbolsSnapshot::default();
+    let resolved_graph = ResolvedGraphSnapshot::default();
+    let graph_analysis = GraphAnalysisSnapshot::default();
+    let no_tools_runtime = PageResearchRuntimeContext {
+        page: module_page,
+        page_context: &module_context,
+        scan_report: &report,
+        module_tree: &tree,
+        repo_context: &repo_ctx,
+        module_contexts: &mod_ctxs,
+        symbol_snapshot: &symbol_snapshot,
+        resolved_graph: &resolved_graph,
+        graph_analysis: &graph_analysis,
+        allowed_section_slots: &no_tools_input.allowed_section_slots,
+    };
+    let tools_runtime = PageResearchRuntimeContext {
+        page: module_page,
+        page_context: &module_context,
+        scan_report: &report,
+        module_tree: &tree,
+        repo_context: &repo_ctx,
+        module_contexts: &mod_ctxs,
+        symbol_snapshot: &symbol_snapshot,
+        resolved_graph: &resolved_graph,
+        graph_analysis: &graph_analysis,
+        allowed_section_slots: &tools_input.allowed_section_slots,
+    };
+    let mut config = llm_config("proxy/provider-model");
+    config.max_calls = 48;
+    config.providers.insert(
+        "proxy".to_string(),
+        provider_config(&server.api_base, &[("provider-model", "provider-model")]),
+    );
+    let mut runtime = LlmRuntime::new(repo_root, &config, None);
+
+    let no_tools_result = runtime
+        .research_page(&no_tools_input, &no_tools_runtime)
+        .unwrap();
+    let tools_result = runtime.research_page(&tools_input, &tools_runtime).unwrap();
+    let requests = server.requests();
+
+    assert!(no_tools_result.is_some());
+    assert_eq!(
+        no_tools_result.stats.tools_mode.as_deref(),
+        Some("no_tools")
+    );
+    assert_eq!(no_tools_result.stats.cache_hit, Some(false));
+    assert_eq!(no_tools_result.stats.retry_input_applied, Some(false));
+    assert!(tools_result.is_some());
+    assert_eq!(
+        tools_result.stats.tools_mode.as_deref(),
+        Some("native_tools")
+    );
+    assert_eq!(requests.len(), 3);
+    assert!(!requests[0].contains("\"tools\""));
+    assert!(requests[1].contains("\"tools\""));
 }
 
 #[test]
@@ -1385,6 +1607,355 @@ fn storybook_family_page_provider_research_drives_compose_rendering() {
 }
 
 #[test]
+fn parent_page_research_tool_returns_current_child_rollup() {
+    let repo = make_storybook_family_repo();
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let pages = plan_pages(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &SteeringConfig::default(),
+    );
+    let family_page = pages
+        .iter()
+        .find(|page| page.page_type == "family-index")
+        .expect("storybook family index page should exist");
+    let mut page_context = build_page_context(family_page, &report, &tree, &repo_ctx, &mod_ctxs);
+    page_context.child_summaries =
+        vec!["child-b: 汇总 B".to_string(), "child-a: 汇总 A".to_string()];
+    page_context.child_unit_ids = vec!["unit-b".to_string(), "unit-a".to_string()];
+    page_context.child_page_ids = vec!["page-b".to_string(), "page-a".to_string()];
+    page_context.child_digest_ids = vec!["digest-b".to_string(), "digest-a".to_string()];
+    page_context.readiness_status = "compose_ready".to_string();
+    page_context.citation_digest_refs = vec!["citation-2".to_string(), "citation-1".to_string()];
+    page_context.diagram_digest_refs = vec!["diagram-2".to_string(), "diagram-1".to_string()];
+
+    let server = FakeProviderServer::start_with_raw_responses(
+        vec![
+            serde_json::json!({
+                "model": "provider-model",
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call_children",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_page_children",
+                                        "arguments": format!("{{\"page_id\":\"{}\"}}", family_page.id),
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 120,
+                    "completion_tokens": 20,
+                    "total_tokens": 140
+                }
+            })
+            .to_string(),
+            serde_json::json!({
+                "model": "provider-model",
+                "choices": [
+                    {
+                        "message": {
+                            "content": "```json\n{\"summary\":\"family child rollup\",\"page_positioning\":\"该页验证 parent child rollup tool。\",\"section_plan\":[{\"section_key\":\"family-overview\",\"section_title\":\"简介\",\"section_summary\":\"基于 child rollup 组织父页。\",\"evidence_refs\":[],\"diagram_refs\":[],\"child_refs\":[]}],\"evidence_rollup\":[],\"diagram_rollup\":[],\"open_questions\":[]}\n```",
+                            "tool_calls": null
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 140,
+                    "completion_tokens": 40,
+                    "total_tokens": 180
+                }
+            })
+            .to_string(),
+        ],
+        Duration::ZERO,
+    );
+
+    let research_input = PageResearchInput::from_page(family_page, &page_context);
+    let symbol_snapshot = ParsedSymbolsSnapshot::default();
+    let resolved_graph = ResolvedGraphSnapshot::default();
+    let graph_analysis = GraphAnalysisSnapshot::default();
+    let research_runtime = PageResearchRuntimeContext {
+        page: family_page,
+        page_context: &page_context,
+        scan_report: &report,
+        module_tree: &tree,
+        repo_context: &repo_ctx,
+        module_contexts: &mod_ctxs,
+        symbol_snapshot: &symbol_snapshot,
+        resolved_graph: &resolved_graph,
+        graph_analysis: &graph_analysis,
+        allowed_section_slots: &research_input.allowed_section_slots,
+    };
+    let mut config = llm_config("proxy/provider-model");
+    config.providers.insert(
+        "proxy".to_string(),
+        provider_config(&server.api_base, &[("provider-model", "provider-model")]),
+    );
+    let mut runtime = LlmRuntime::new(repo.path(), &config, None);
+
+    let output = runtime
+        .research_page(&research_input, &research_runtime)
+        .unwrap()
+        .expect("family research should succeed");
+    let requests = server.requests();
+    let tool_payload = extract_chat_tool_payload(&requests[1], "get_page_children");
+    let children = tool_payload
+        .get("children")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    assert_eq!(output.result.summary, "family child rollup");
+    assert_eq!(children.len(), 2);
+    assert_eq!(
+        children[0]
+            .get("child_unit_id")
+            .and_then(serde_json::Value::as_str),
+        Some("unit-b")
+    );
+    assert_eq!(
+        children[0]
+            .get("summary")
+            .and_then(serde_json::Value::as_str),
+        Some("child-b: 汇总 B")
+    );
+    assert_eq!(
+        children[1]
+            .get("child_page_id")
+            .and_then(serde_json::Value::as_str),
+        Some("page-a")
+    );
+    assert_eq!(
+        tool_payload
+            .get("citation_digest_refs")
+            .and_then(serde_json::Value::as_array),
+        Some(&vec![
+            serde_json::json!("citation-1"),
+            serde_json::json!("citation-2")
+        ])
+    );
+    assert_eq!(
+        tool_payload
+            .get("diagram_digest_refs")
+            .and_then(serde_json::Value::as_array),
+        Some(&vec![
+            serde_json::json!("diagram-1"),
+            serde_json::json!("diagram-2")
+        ])
+    );
+    assert_eq!(
+        tool_payload
+            .get("readiness_status")
+            .and_then(serde_json::Value::as_str),
+        Some("compose_ready")
+    );
+}
+
+#[test]
+fn module_page_research_tools_prefer_evidence_backed_snippets_and_empty_children() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    write_repo_file(repo_root, "package.json", r#"{"name":"tool-payload-demo"}"#);
+    write_repo_file(
+        repo_root,
+        "src/index.ts",
+        concat!(
+            "export function run() {\n",
+            "  return prepare();\n",
+            "}\n",
+            "\n",
+            "function prepare() {\n",
+            "  return true;\n",
+            "}\n",
+        ),
+    );
+
+    let report = scan_repo(repo_root, &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let pages = plan_pages(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &SteeringConfig::default(),
+    );
+    let module_page = pages
+        .iter()
+        .find(|page| page.page_type == "module")
+        .expect("module page should exist");
+    let source_id = report
+        .files
+        .iter()
+        .find(|file| file.path == "src/index.ts")
+        .map(|file| file.id.clone())
+        .expect("source id should exist");
+    let mut page_context = build_page_context(module_page, &report, &tree, &repo_ctx, &mod_ctxs);
+    page_context.evidence_groups = vec![PageEvidenceGroup {
+        group_id: "module-main".to_string(),
+        section_title: "简介".to_string(),
+        title: "模块主证据".to_string(),
+        summary: "module evidence".to_string(),
+        items: vec![
+            PageEvidenceItem {
+                evidence_id: "evidence-late".to_string(),
+                label: "late".to_string(),
+                path: "src/index.ts".to_string(),
+                source_id: Some(source_id.clone()),
+                start_line: 5,
+                end_line: 6,
+                evidence_type: "symbol".to_string(),
+                section_refs: vec!["module-intro".to_string()],
+                note: "late span".to_string(),
+                coarse_span: false,
+            },
+            PageEvidenceItem {
+                evidence_id: "evidence-early".to_string(),
+                label: "early".to_string(),
+                path: "src/index.ts".to_string(),
+                source_id: Some(source_id.clone()),
+                start_line: 1,
+                end_line: 2,
+                evidence_type: "symbol".to_string(),
+                section_refs: vec!["module-intro".to_string()],
+                note: "early span".to_string(),
+                coarse_span: false,
+            },
+        ],
+    }];
+
+    let server = FakeProviderServer::start_with_raw_responses(
+        vec![
+            serde_json::json!({
+                "model": "provider-model",
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call_children",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_page_children",
+                                        "arguments": format!("{{\"page_id\":\"{}\"}}", module_page.id),
+                                    }
+                                },
+                                {
+                                    "id": "call_snippets",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "read_source_snippets",
+                                        "arguments": format!("{{\"source_ids\":[\"{}\"]}}", source_id),
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120
+                }
+            })
+            .to_string(),
+            serde_json::json!({
+                "model": "provider-model",
+                "choices": [
+                    {
+                        "message": {
+                            "content": "```json\n{\"summary\":\"module tool payload\",\"page_positioning\":\"该页验证 evidence-backed snippets。\",\"section_plan\":[{\"section_key\":\"module-intro\",\"section_title\":\"简介\",\"section_summary\":\"验证 child/snippet 工具输出。\",\"evidence_refs\":[],\"diagram_refs\":[],\"child_refs\":[]}],\"evidence_rollup\":[],\"diagram_rollup\":[],\"open_questions\":[]}\n```",
+                            "tool_calls": null
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 120,
+                    "completion_tokens": 40,
+                    "total_tokens": 160
+                }
+            })
+            .to_string(),
+        ],
+        Duration::ZERO,
+    );
+
+    let research_input = PageResearchInput::from_page(module_page, &page_context);
+    let symbol_snapshot = ParsedSymbolsSnapshot::default();
+    let resolved_graph = ResolvedGraphSnapshot::default();
+    let graph_analysis = GraphAnalysisSnapshot::default();
+    let research_runtime = PageResearchRuntimeContext {
+        page: module_page,
+        page_context: &page_context,
+        scan_report: &report,
+        module_tree: &tree,
+        repo_context: &repo_ctx,
+        module_contexts: &mod_ctxs,
+        symbol_snapshot: &symbol_snapshot,
+        resolved_graph: &resolved_graph,
+        graph_analysis: &graph_analysis,
+        allowed_section_slots: &research_input.allowed_section_slots,
+    };
+    let mut config = llm_config("proxy/provider-model");
+    config.providers.insert(
+        "proxy".to_string(),
+        provider_config(&server.api_base, &[("provider-model", "provider-model")]),
+    );
+    let mut runtime = LlmRuntime::new(repo_root, &config, None);
+
+    let output = runtime
+        .research_page(&research_input, &research_runtime)
+        .unwrap()
+        .expect("module research should succeed");
+    let requests = server.requests();
+    let children_payload = extract_chat_tool_payload(&requests[1], "get_page_children");
+    let snippet_payload = extract_chat_tool_payload(&requests[1], "read_source_snippets");
+    let snippets = snippet_payload
+        .get("snippets")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    assert_eq!(output.result.summary, "module tool payload");
+    assert_eq!(
+        children_payload
+            .get("children")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len),
+        Some(0)
+    );
+    assert_eq!(snippets.len(), 1);
+    assert_eq!(
+        snippets[0]
+            .get("start_line")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        snippets[0]
+            .get("end_line")
+            .and_then(serde_json::Value::as_u64),
+        Some(2)
+    );
+    assert!(snippets[0]
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|content| content.contains("export function run")));
+}
+#[test]
 fn core_page_research_budget_is_reserved_before_non_core_pages() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
@@ -1747,8 +2318,112 @@ fn invalid_page_research_output_is_negative_cached() {
 
     assert!(first.is_none());
     assert_eq!(first.stop_reason, ResearchStopReason::InvalidOutput);
+    assert_eq!(first.stats.cache_hit, Some(false));
     assert!(second.is_none());
     assert_eq!(second.stop_reason, ResearchStopReason::InvalidOutput);
+    assert_eq!(second.stats.cache_hit, Some(true));
+    assert_eq!(second.stats.retry_input_applied, Some(false));
+    assert_eq!(second.stats.tools_mode.as_deref(), Some("native_tools"));
     assert!(cached.response.contains("\"_cache_status\":\"negative\""));
     assert_eq!(server.calls(), 2);
+}
+
+#[test]
+fn force_no_tools_request_does_not_override_learned_tools_mode() {
+    let _home_lock = HOME_ENV_LOCK.lock().unwrap();
+    let home = tempdir().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", home.path());
+    let _userprofile_guard = EnvVarGuard::set("USERPROFILE", home.path());
+
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    let server = FakeProviderServer::start(
+        r#"{"summary":"provider 摘要","page_positioning":"该页用于说明模块职责。","section_plan":[{"section_key":"module-intro","section_title":"简介","section_summary":"概述模块职责。","evidence_refs":[],"diagram_refs":[],"child_refs":[]}],"evidence_rollup":[],"diagram_rollup":[],"open_questions":[]}"#,
+    );
+
+    write_repo_file(
+        repo_root,
+        "package.json",
+        r#"{"name":"force-no-tools-demo","private":true,"workspaces":["packages/*"]}"#,
+    );
+    write_repo_file(
+        repo_root,
+        "packages/app/package.json",
+        r#"{"name":"app","version":"1.0.0"}"#,
+    );
+    write_repo_file(
+        repo_root,
+        "packages/app/src/index.ts",
+        "export function run() { return true; }\n",
+    );
+
+    let report = scan_repo(repo_root, &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let pages = plan_pages(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &SteeringConfig::default(),
+    );
+    let module_page = pages
+        .iter()
+        .find(|page| page.relative_path.ends_with("核心模块/packages/app.md"))
+        .expect("module page should exist");
+    let page_context = build_page_context(module_page, &report, &tree, &repo_ctx, &mod_ctxs);
+    let research_input = PageResearchInput::from_page(module_page, &page_context).force_no_tools();
+    let symbol_snapshot = ParsedSymbolsSnapshot::default();
+    let resolved_graph = ResolvedGraphSnapshot::default();
+    let graph_analysis = GraphAnalysisSnapshot::default();
+    let research_runtime = PageResearchRuntimeContext {
+        page: module_page,
+        page_context: &page_context,
+        scan_report: &report,
+        module_tree: &tree,
+        repo_context: &repo_ctx,
+        module_contexts: &mod_ctxs,
+        symbol_snapshot: &symbol_snapshot,
+        resolved_graph: &resolved_graph,
+        graph_analysis: &graph_analysis,
+        allowed_section_slots: &research_input.allowed_section_slots,
+    };
+
+    let mut config = llm_config("proxy/provider-model");
+    config.providers.insert(
+        "proxy".to_string(),
+        provider_config(&server.api_base, &[("provider-model", "provider-model")]),
+    );
+    let provider = config
+        .providers
+        .get("proxy")
+        .expect("provider config should exist");
+    persist_learned_tools_mode(
+        "proxy",
+        "provider-model",
+        provider,
+        LlmToolsMode::NativeTools,
+        "test-seed",
+        24,
+    )
+    .unwrap();
+
+    let mut runtime = LlmRuntime::new(repo_root, &config, None);
+    let output = runtime
+        .research_page(&research_input, &research_runtime)
+        .unwrap();
+
+    assert!(output.is_some());
+    assert_eq!(output.stats.tools_mode.as_deref(), Some("no_tools"));
+    assert_eq!(output.stats.cache_hit, Some(false));
+    assert_eq!(output.stats.retry_input_applied, Some(false));
+    assert_eq!(
+        resolve_learned_tools_mode("proxy", provider, "provider-model"),
+        Some(LlmToolsMode::NativeTools)
+    );
+    assert!(server
+        .requests()
+        .iter()
+        .all(|request| !request.contains("\"tools\"")));
 }

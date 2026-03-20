@@ -44,6 +44,10 @@ const RETRY_HINT_LIMIT: usize = 6;
 const RETRY_SUMMARY_LIMIT: usize = 6;
 const RETRY_EVIDENCE_LIMIT: usize = 4;
 const RETRY_DIAGRAM_LIMIT: usize = 3;
+const FORCE_NO_TOOLS_SPARSE_FACT_LIMIT: usize = 4;
+const FORCE_NO_TOOLS_SPARSE_SUMMARY_LIMIT: usize = 3;
+const FORCE_NO_TOOLS_SPARSE_EVIDENCE_GROUP_LIMIT: usize = 1;
+const FORCE_NO_TOOLS_SPARSE_EVIDENCE_ITEM_LIMIT: usize = 2;
 
 impl ResearchProvider for ProviderBackedResearchProvider<'_, '_, '_> {
     fn research_system(&self, ds: &ResearchDataSource) -> io::Result<SystemResearch> {
@@ -92,6 +96,27 @@ impl ResearchProvider for ProviderBackedResearchProvider<'_, '_, '_> {
                 })
                 .collect(),
         );
+        let input = apply_provider_tools_policy(input, merged.research_profile.as_ref());
+        let (input, pretrim_applied) = canonicalize_provider_input(&input);
+        if let Some(reason) = force_no_tools_short_circuit_reason(
+            unit,
+            merged.research_profile.as_ref(),
+            child_digests,
+            &input,
+        ) {
+            merged.provider_stop_reason = Some(ResearchStopReason::NotRun);
+            debug_trace::record_json(
+                "provider_research_stop",
+                &json!({
+                    "page_id": page.id,
+                    "unit_id": unit.id,
+                    "stop_reason": ResearchStopReason::NotRun.as_str(),
+                    "force_no_tools_short_circuited_units": 1,
+                    "force_no_tools_short_circuit_reason": reason,
+                }),
+            );
+            return Ok(merged);
+        }
         let runtime_context = PageResearchRuntimeContext {
             page: &page,
             page_context: &page_context,
@@ -109,13 +134,15 @@ impl ResearchProvider for ProviderBackedResearchProvider<'_, '_, '_> {
             let mut runtime = self.runtime.borrow_mut();
             runtime.research_page(&input, &runtime_context)
         };
-        let session_result = match first_attempt {
+        let mut retry_input_applied = pretrim_applied;
+        let mut session_result = match first_attempt {
             Ok(result) => result,
             Err(error) => {
                 let Some(retry_input) = build_retry_input(&input) else {
                     mark_provider_error(&mut merged, &page.id, &unit.id, &error);
                     return Ok(merged);
                 };
+                retry_input_applied = true;
                 debug_trace::record_json(
                     "provider_research_retry",
                     &json!({
@@ -169,6 +196,7 @@ impl ResearchProvider for ProviderBackedResearchProvider<'_, '_, '_> {
                 }
             }
         };
+        session_result.stats.retry_input_applied = Some(retry_input_applied);
         merged.provider_stop_reason = Some(session_result.stop_reason.clone());
         merged.provider_session_stats = Some(session_result.stats.clone());
         debug_trace::record_json(
@@ -213,16 +241,87 @@ fn mark_provider_error(
     );
 }
 
-fn build_retry_input(input: &PageResearchInput) -> Option<PageResearchInput> {
-    let mut retry = input.clone();
+/// 基于稳定 `ResearchProfile` 决定本次 request 是否收窄为 `NoTools`。
+fn apply_provider_tools_policy(
+    input: PageResearchInput,
+    profile: Option<&ResearchProfile>,
+) -> PageResearchInput {
+    if should_force_no_tools(profile) {
+        return input.force_no_tools();
+    }
+    input
+}
+
+/// 对 provider 输入做 deterministic canonicalization，保证首请求就使用稳定缓存键。
+fn canonicalize_provider_input(input: &PageResearchInput) -> (PageResearchInput, bool) {
+    let mut canonical = input.clone();
     let mut changed = false;
 
-    changed |= trim_vec(&mut retry.facts, RETRY_FACT_LIMIT);
-    changed |= trim_vec(&mut retry.hints, RETRY_HINT_LIMIT);
-    changed |= trim_vec(&mut retry.summary_inputs, RETRY_SUMMARY_LIMIT);
-    changed |= trim_vec(&mut retry.evidence_groups, RETRY_EVIDENCE_LIMIT);
-    changed |= trim_vec(&mut retry.diagram_inputs, RETRY_DIAGRAM_LIMIT);
+    changed |= trim_vec(&mut canonical.facts, RETRY_FACT_LIMIT);
+    changed |= trim_vec(&mut canonical.hints, RETRY_HINT_LIMIT);
+    changed |= trim_vec(&mut canonical.summary_inputs, RETRY_SUMMARY_LIMIT);
+    changed |= trim_vec(&mut canonical.evidence_groups, RETRY_EVIDENCE_LIMIT);
+    changed |= trim_vec(&mut canonical.diagram_inputs, RETRY_DIAGRAM_LIMIT);
+    let retry_input_applied = changed || canonical.retry_input_applied;
+    canonical = canonical.with_retry_input_applied(retry_input_applied);
 
+    (canonical, changed)
+}
+
+/// 把只读型 research profile 收窄到 `NoTools`，避免把无工具页错误地绑定到 provider learned state。
+fn should_force_no_tools(profile: Option<&ResearchProfile>) -> bool {
+    matches!(
+        profile,
+        Some(
+            ResearchProfile::DocsGuide
+                | ResearchProfile::ConfigSurface
+                | ResearchProfile::ExampleTutorial
+                | ResearchProfile::Troubleshooting
+                | ResearchProfile::IntegrationPlatform
+        )
+    )
+}
+
+/// 对只读型且输入稀薄的 leaf unit，直接保留 structural baseline，
+/// 避免再打一发几乎没有增量的 no-tools provider request。
+fn force_no_tools_short_circuit_reason(
+    unit: &KnowledgeUnit,
+    profile: Option<&ResearchProfile>,
+    child_digests: &[PageDigest],
+    input: &PageResearchInput,
+) -> Option<&'static str> {
+    if !input.force_no_tools || !should_force_no_tools(profile) {
+        return None;
+    }
+    if !child_digests.is_empty() || !unit.child_unit_ids.is_empty() {
+        return None;
+    }
+    if matches!(
+        unit.unit_type,
+        UnitType::Overview | UnitType::Architecture | UnitType::DomainIndex
+    ) {
+        return None;
+    }
+    if !unit.scope.docs_anchors.is_empty() {
+        return None;
+    }
+
+    let evidence_items = input
+        .evidence_groups
+        .iter()
+        .map(|group| group.items.len())
+        .sum::<usize>();
+    let sparse_leaf = input.facts.len() <= FORCE_NO_TOOLS_SPARSE_FACT_LIMIT
+        && input.summary_inputs.len() <= FORCE_NO_TOOLS_SPARSE_SUMMARY_LIMIT
+        && input.evidence_groups.len() <= FORCE_NO_TOOLS_SPARSE_EVIDENCE_GROUP_LIMIT
+        && evidence_items <= FORCE_NO_TOOLS_SPARSE_EVIDENCE_ITEM_LIMIT
+        && input.diagram_inputs.is_empty();
+
+    sparse_leaf.then_some("sparse_force_no_tools_leaf")
+}
+
+fn build_retry_input(input: &PageResearchInput) -> Option<PageResearchInput> {
+    let (retry, changed) = canonicalize_provider_input(input);
     changed.then_some(retry)
 }
 
@@ -580,22 +679,36 @@ fn build_provider_diagram_suggestions(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_provider_diagram_suggestions, build_retry_input, mark_provider_error,
-        merge_provider_research, select_runtime_research_provider, RETRY_DIAGRAM_LIMIT,
-        RETRY_EVIDENCE_LIMIT, RETRY_FACT_LIMIT, RETRY_HINT_LIMIT, RETRY_SUMMARY_LIMIT,
+        build_provider_diagram_suggestions, build_retry_input, canonicalize_provider_input,
+        force_no_tools_short_circuit_reason, mark_provider_error, merge_provider_research,
+        select_runtime_research_provider, should_force_no_tools, ProviderBackedResearchProvider,
+        RETRY_DIAGRAM_LIMIT, RETRY_EVIDENCE_LIMIT, RETRY_FACT_LIMIT, RETRY_HINT_LIMIT,
+        RETRY_SUMMARY_LIMIT,
     };
     use crate::domain::context::{
         PageContext, PageDiagramEdge, PageDiagramInput, PageDiagramNode, PageEvidenceGroup,
         PageResearchDiagramRollup, PageResearchEvidenceGroup, PageResearchEvidenceItem,
-        PageResearchResult, PageResearchSectionPlan,
+        PageResearchResult, PageResearchSectionPlan, RepoContext,
     };
+    use crate::domain::knowledge::{KnowledgeTree, KnowledgeUnit, UnitScope, UnitType};
+    use crate::domain::module_tree::ModuleTree;
     use crate::domain::research::{
         PageDigest, PlannedSection, ResearchProfile, ResearchStopReason, UnitResearch,
     };
     use crate::domain::steering::{
         LlmProviderCapabilitiesConfig, LlmProviderConfig, LlmProviderModelConfig, LlmToolsMode,
     };
-    use crate::llm::{LlmRuntime, PageResearchInput, PageResearchSectionSlot};
+    use crate::generation::research_engine::{
+        ResearchDataSource, ResearchProvider, StructuralResearchProvider,
+    };
+    use crate::llm::{
+        LlmCompletion, LlmPromptRequest, LlmRuntime, LlmService, PageResearchInput,
+        PageResearchSectionSlot,
+    };
+    use crate::repo::scanner::{ScanReport, ScannedFile};
+    use crate::repo::symbol_graph::{GraphAnalysisSnapshot, GraphSummary, ResolvedGraphSnapshot};
+    use crate::repo::symbols::ParsedSymbolsSnapshot;
+    use std::cell::RefCell;
     use std::io;
     use std::path::Path;
 
@@ -621,6 +734,22 @@ mod tests {
         );
         steering.llm.providers.insert("dummy".to_string(), provider);
         steering
+    }
+
+    #[derive(Default)]
+    struct CountingLlmService {
+        calls: usize,
+    }
+
+    impl LlmService for CountingLlmService {
+        fn request(&mut self, _request: &LlmPromptRequest) -> io::Result<LlmCompletion> {
+            self.calls += 1;
+            Ok(LlmCompletion {
+                output: serde_json::json!({}),
+                model: Some("counting".to_string()),
+                usage: None,
+            })
+        }
     }
 
     #[test]
@@ -744,6 +873,7 @@ mod tests {
             &result,
             &context,
             &[PageDigest {
+                digest_id: "digest-child-1".to_string(),
                 unit_id: "child-1".to_string(),
                 page_id: "page-child-1".to_string(),
                 title: "子页".to_string(),
@@ -753,6 +883,9 @@ mod tests {
                 key_topics: Vec::new(),
                 key_sources: Vec::new(),
                 citations: Vec::new(),
+                section_digests: Vec::new(),
+                diagram_digests: Vec::new(),
+                readiness_stage: "compose_ready".to_string(),
             }],
             &crate::repo::scanner::ScanReport {
                 root: ".".to_string(),
@@ -943,6 +1076,8 @@ mod tests {
                 })
                 .collect(),
             session: None,
+            force_no_tools: false,
+            retry_input_applied: false,
         };
 
         let retry = build_retry_input(&input).expect("heavy payload should be trimmed");
@@ -953,6 +1088,7 @@ mod tests {
         assert_eq!(retry.evidence_groups.len(), RETRY_EVIDENCE_LIMIT);
         assert_eq!(retry.diagram_inputs.len(), RETRY_DIAGRAM_LIMIT);
         assert_eq!(retry.allowed_section_slots.len(), 1);
+        assert!(retry.retry_input_applied);
     }
 
     #[test]
@@ -969,8 +1105,276 @@ mod tests {
             evidence_groups: Vec::new(),
             diagram_inputs: Vec::new(),
             session: None,
+            force_no_tools: false,
+            retry_input_applied: false,
         };
 
         assert!(build_retry_input(&input).is_none());
+    }
+
+    #[test]
+    fn canonical_provider_input_is_idempotent_after_pretrim() {
+        let input = PageResearchInput {
+            page_id: "page-heavy".to_string(),
+            page_type: "module".to_string(),
+            title: "heavy".to_string(),
+            scope: "核心模块/heavy.md".to_string(),
+            facts: (0..12).map(|index| format!("fact-{index}")).collect(),
+            summary_inputs: (0..11).map(|index| format!("summary-{index}")).collect(),
+            hints: (0..9).map(|index| format!("hint-{index}")).collect(),
+            allowed_section_slots: Vec::new(),
+            evidence_groups: Vec::new(),
+            diagram_inputs: Vec::new(),
+            session: None,
+            force_no_tools: false,
+            retry_input_applied: false,
+        };
+
+        let (canonical, changed) = canonicalize_provider_input(&input);
+        let retry = build_retry_input(&canonical);
+
+        assert!(changed);
+        assert_eq!(canonical.facts.len(), RETRY_FACT_LIMIT);
+        assert_eq!(canonical.hints.len(), RETRY_HINT_LIMIT);
+        assert_eq!(canonical.summary_inputs.len(), RETRY_SUMMARY_LIMIT);
+        assert!(canonical.retry_input_applied);
+        assert!(retry.is_none());
+    }
+
+    #[test]
+    fn provider_tools_policy_follows_research_profile() {
+        assert!(should_force_no_tools(Some(&ResearchProfile::DocsGuide)));
+        assert!(should_force_no_tools(Some(&ResearchProfile::ConfigSurface)));
+        assert!(should_force_no_tools(Some(
+            &ResearchProfile::ExampleTutorial
+        )));
+        assert!(should_force_no_tools(Some(
+            &ResearchProfile::Troubleshooting
+        )));
+        assert!(should_force_no_tools(Some(
+            &ResearchProfile::IntegrationPlatform
+        )));
+        assert!(!should_force_no_tools(Some(&ResearchProfile::ApiSurface)));
+        assert!(!should_force_no_tools(Some(&ResearchProfile::Runtime)));
+        assert!(!should_force_no_tools(None));
+    }
+
+    #[test]
+    fn sparse_force_no_tools_leaf_short_circuits_provider_research() {
+        let unit = KnowledgeUnit::new(UnitType::ConceptGuide, "Docs", "docs", "docs/docs.md");
+        let input = PageResearchInput {
+            page_id: "page-docs".to_string(),
+            page_type: "topic".to_string(),
+            title: "Docs".to_string(),
+            scope: "unit:docs".to_string(),
+            facts: vec!["入口：docs/index.md".to_string()],
+            summary_inputs: vec!["主题：docs".to_string()],
+            hints: Vec::new(),
+            allowed_section_slots: Vec::new(),
+            evidence_groups: vec![PageEvidenceGroup {
+                group_id: "group-docs".to_string(),
+                section_title: "概述".to_string(),
+                title: "文档入口".to_string(),
+                summary: String::new(),
+                items: vec![crate::domain::context::PageEvidenceItem {
+                    evidence_id: "evidence:docs:index".to_string(),
+                    label: "docs/index.md".to_string(),
+                    path: "docs/index.md".to_string(),
+                    source_id: Some("source:docs/index.md".to_string()),
+                    start_line: 1,
+                    end_line: 8,
+                    note: String::new(),
+                    coarse_span: false,
+                    ..crate::domain::context::PageEvidenceItem::default()
+                }],
+            }],
+            diagram_inputs: Vec::new(),
+            session: None,
+            force_no_tools: true,
+            retry_input_applied: false,
+        };
+
+        let reason = force_no_tools_short_circuit_reason(
+            &unit,
+            Some(&ResearchProfile::DocsGuide),
+            &[],
+            &input,
+        );
+
+        assert_eq!(reason, Some("sparse_force_no_tools_leaf"));
+    }
+
+    #[test]
+    fn sparse_force_no_tools_leaf_skips_provider_request() {
+        let mut unit = KnowledgeUnit::new(UnitType::ConceptGuide, "Docs", "docs", "docs/docs.md");
+        unit.scope = UnitScope {
+            source_ids: vec!["source:docs/index.md".to_string()],
+            ..UnitScope::default()
+        };
+
+        let report = ScanReport {
+            root: ".".to_string(),
+            files: vec![ScannedFile {
+                id: "source:docs/index.md".to_string(),
+                path: "docs/index.md".to_string(),
+                language: "markdown".to_string(),
+                kind: "docs".to_string(),
+                purpose: crate::repo::scanner::FilePurpose::Docs,
+                fingerprint: "fp".to_string(),
+                size: 0,
+                tags: Vec::new(),
+            }],
+            tech_hints: Vec::new(),
+            workspace_roots: Vec::new(),
+            config_files: Vec::new(),
+            entry_points: Vec::new(),
+            dependency_hints: Vec::new(),
+        };
+        let module_tree = ModuleTree {
+            root_modules: Vec::new(),
+            modules: Vec::new(),
+            cross_module_edges: Vec::new(),
+            architecture_hints: Vec::new(),
+        };
+        let repo_context = RepoContext {
+            repo_summary_inputs: Vec::new(),
+            top_modules: Vec::new(),
+            key_entry_points: Vec::new(),
+            global_relations: Vec::new(),
+            tech_stack: Vec::new(),
+            graph_hotspots: Vec::new(),
+            detected_processes: Vec::new(),
+            community_labels: Vec::new(),
+            cycle_warnings: Vec::new(),
+            root_topics: Vec::new(),
+            process_topics: Vec::new(),
+        };
+        let module_contexts = vec![crate::domain::context::ModuleContext {
+            module_id: "module:docs".to_string(),
+            role_hints: vec!["docs".to_string()],
+            public_surface: Vec::new(),
+            dependencies: Vec::new(),
+            dependents: Vec::new(),
+            key_sources: vec!["docs/index.md".to_string()],
+            graph_hotspots: Vec::new(),
+            communities: Vec::new(),
+            cycle_warnings: Vec::new(),
+            capability_topics: Vec::new(),
+        }];
+        let symbol_snapshot = ParsedSymbolsSnapshot::default();
+        let resolved_graph = ResolvedGraphSnapshot::default();
+        let graph_analysis = GraphAnalysisSnapshot::default();
+        let graph_summary = GraphSummary::default();
+        let mut knowledge_tree = KnowledgeTree::new(unit.id.clone());
+        knowledge_tree.add_unit(unit.clone());
+        knowledge_tree.build_processing_order();
+        let ds = ResearchDataSource {
+            report: &report,
+            module_tree: &module_tree,
+            repo_context: &repo_context,
+            module_contexts: &module_contexts,
+            symbol_snapshot: &symbol_snapshot,
+            resolved_graph: &resolved_graph,
+            graph_analysis: &graph_analysis,
+            graph_summary: &graph_summary,
+            knowledge_tree: &knowledge_tree,
+        };
+        let steering = provider_enabled_steering();
+        let mut service = CountingLlmService::default();
+        let mut runtime = LlmRuntime::new(Path::new("."), &steering.llm, Some(&mut service));
+        let provider = ProviderBackedResearchProvider {
+            runtime: RefCell::new(&mut runtime),
+            structural: StructuralResearchProvider,
+        };
+
+        let research = provider.research_unit(&unit, &ds, &[]).unwrap();
+
+        drop(provider);
+        drop(runtime);
+        assert_eq!(service.calls, 0);
+        assert_eq!(
+            research.provider_stop_reason,
+            Some(ResearchStopReason::NotRun)
+        );
+    }
+
+    #[test]
+    fn runtime_profile_never_short_circuits_force_no_tools_provider_research() {
+        let unit = KnowledgeUnit::new(
+            UnitType::WorkflowDoc,
+            "Runtime",
+            "runtime",
+            "runtime/runtime.md",
+        );
+        let input = PageResearchInput {
+            page_id: "page-runtime".to_string(),
+            page_type: "topic".to_string(),
+            title: "Runtime".to_string(),
+            scope: "unit:runtime".to_string(),
+            facts: vec!["入口：src/runtime.rs".to_string()],
+            summary_inputs: Vec::new(),
+            hints: Vec::new(),
+            allowed_section_slots: Vec::new(),
+            evidence_groups: Vec::new(),
+            diagram_inputs: Vec::new(),
+            session: None,
+            force_no_tools: true,
+            retry_input_applied: false,
+        };
+
+        let reason = force_no_tools_short_circuit_reason(
+            &unit,
+            Some(&ResearchProfile::Runtime),
+            &[],
+            &input,
+        );
+
+        assert!(reason.is_none());
+    }
+
+    #[test]
+    fn parent_units_with_child_rollups_do_not_short_circuit_force_no_tools_provider_research() {
+        let mut unit =
+            KnowledgeUnit::new(UnitType::ConfigDoc, "Config", "config", "config/config.md");
+        unit.child_unit_ids = vec!["unit:child-a".to_string()];
+        let input = PageResearchInput {
+            page_id: "page-config".to_string(),
+            page_type: "family-child".to_string(),
+            title: "Config".to_string(),
+            scope: "unit-group:config".to_string(),
+            facts: vec!["配置族".to_string()],
+            summary_inputs: vec!["child rollup".to_string()],
+            hints: Vec::new(),
+            allowed_section_slots: Vec::new(),
+            evidence_groups: Vec::new(),
+            diagram_inputs: Vec::new(),
+            session: None,
+            force_no_tools: true,
+            retry_input_applied: false,
+        };
+        let child_digests = vec![PageDigest {
+            digest_id: "digest-child-a".to_string(),
+            unit_id: "unit:child-a".to_string(),
+            page_id: "page-child-a".to_string(),
+            title: "Child A".to_string(),
+            decomposition_profile: None,
+            research_profile: Some(ResearchProfile::ConfigSurface),
+            summary: "child summary".to_string(),
+            key_topics: Vec::new(),
+            key_sources: Vec::new(),
+            citations: Vec::new(),
+            section_digests: Vec::new(),
+            diagram_digests: Vec::new(),
+            readiness_stage: "compose_ready".to_string(),
+        }];
+
+        let reason = force_no_tools_short_circuit_reason(
+            &unit,
+            Some(&ResearchProfile::ConfigSurface),
+            &child_digests,
+            &input,
+        );
+
+        assert!(reason.is_none());
     }
 }

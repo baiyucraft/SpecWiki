@@ -2760,9 +2760,9 @@ fn knowledge_unit_to_planned_page(unit: &KnowledgeUnit, tree: &KnowledgeTree) ->
         generation_mode: "knowledge-tree".to_string(),
         priority: (unit.priority * 100.0) as usize,
         merged_module_ids: Vec::new(),
-        unit_id: None,
-        unit_type: None,
-        domain_id: None,
+        unit_id: Some(unit.id.clone()),
+        unit_type: Some(unit.unit_type.as_str().to_string()),
+        domain_id: Some(unit.domain_id.clone()),
     }
 }
 

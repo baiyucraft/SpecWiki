@@ -192,6 +192,10 @@ export function collectProject(project) {
       baselineClass: runtimeSnapshot.baselineClass,
       incompleteReason: runtimeSnapshot.incompleteReason,
       dbCounts: runtimeSnapshot.dbCounts,
+      runtimeSummary: runtimeSnapshot.runtimeSummary,
+      gateSummary: runtimeSnapshot.runtimeGateSummary,
+      researchProgressSummary: runtimeSnapshot.researchProgressSummary,
+      parentContract: runtimeSnapshot.parentContract,
     },
     metadataSummary: {
       moduleCount: runtimeSnapshot.metadata?.modules?.length ?? 0,
@@ -255,18 +259,70 @@ function describeReferenceDelta(result) {
   return `generated=${result.runtimeSnapshot.markdownPageCount} / reference=${result.reference.pageCount}（delta=${delta >= 0 ? "+" : ""}${delta}）`;
 }
 
+function formatRuntimeUnitSummary(unit) {
+  if (!unit) {
+    return "n/a";
+  }
+
+  const parts = [];
+  if (unit.unitId) {
+    parts.push(unit.unitId);
+  }
+  if (unit.unitType) {
+    parts.push(`type=${unit.unitType}`);
+  }
+  if (unit.startedAt) {
+    parts.push(`since=${unit.startedAt}`);
+  }
+  return parts.join(", ") || "n/a";
+}
+
+function formatDurationSummary(durationMs) {
+  return Number.isFinite(durationMs) ? `${durationMs}ms` : "n/a";
+}
+
+function formatProviderStatsSummary(providerStats) {
+  if (!providerStats) {
+    return "n/a";
+  }
+
+  const parts = [];
+  if (providerStats.unitId) {
+    parts.push(`unit=${providerStats.unitId}`);
+  }
+  if (providerStats.stopReason) {
+    parts.push(`stop=${providerStats.stopReason}`);
+  }
+  if (Number.isFinite(providerStats.turnsUsed)) {
+    parts.push(`turns=${providerStats.turnsUsed}`);
+  }
+  if (Number.isFinite(providerStats.toolCalls)) {
+    parts.push(`tools=${providerStats.toolCalls}`);
+  }
+  if (Number.isFinite(providerStats.elapsedMs)) {
+    parts.push(`elapsed=${providerStats.elapsedMs}ms`);
+  }
+  if (providerStats.cacheHit !== null && providerStats.cacheHit !== undefined) {
+    parts.push(`cache_hit=${providerStats.cacheHit}`);
+  }
+  if (providerStats.toolsMode) {
+    parts.push(`mode=${providerStats.toolsMode}`);
+  }
+  return parts.join(", ") || "n/a";
+}
+
 /**
  * 将项目分析结果渲染为 Markdown 报告。
  *
  * @param results 项目分析结果数组。
  * @returns 返回 Markdown 文本。
  */
-function toMarkdown(results) {
+export function toMarkdown(results) {
   const lines = [
     "# Test Project Analysis",
     "",
     `生成时间：${new Date().toISOString()}`,
-    "说明：当前报告只基于 2.0 的 `knowledge_units / research_cache / page_drafts / wiki_pages` 与最终 `.wiki/*.md` 读取，不再依赖旧 `page_context_cache.context.research_result` 或 `topic_dossier`。",
+    "说明：当前报告基于 2.0 的 `knowledge_units / research_cache / page_drafts / unit_runtime_gates / wiki_pages`、`runtime_meta.pipeline_runtime_summary` 与最终 `.wiki/*.md` 读取，不再依赖旧 `page_context_cache.context.research_result` 或 `topic_dossier`。",
     "",
     "## 总览",
     "",
@@ -286,6 +342,9 @@ function toMarkdown(results) {
     lines.push(`## ${result.project}`);
     lines.push("");
     lines.push(`- runtime：${result.runtimeState} / ${result.baselineClass} / ${result.incompleteReason ?? "ready"}`);
+    lines.push(`- runtime gate：summary_state=${result.runtime.runtimeSummary?.runtime_state ?? "missing"}，gate_total=${result.runtime.gateSummary?.total ?? 0}，compose_ready=${result.runtime.gateSummary?.composeReady ?? 0}，compose_blocked=${result.runtime.gateSummary?.composeBlocked ?? 0}，assemble_done=${result.runtime.gateSummary?.assembleDone ?? 0}`);
+    lines.push(`- research runtime：current=${formatRuntimeUnitSummary(result.runtime.researchProgressSummary?.currentResearchUnit)}，last_elapsed=${formatDurationSummary(result.runtime.researchProgressSummary?.lastCompletedResearch?.elapsedMs)}，provider=${formatProviderStatsSummary(result.runtime.researchProgressSummary?.providerStats)}`);
+    lines.push(`- parent contract：parent_pages=${result.runtime.parentContract?.parentPages ?? 0}，compose_ready_parents=${result.runtime.parentContract?.composeReadyParents ?? 0}，child_digest_parents=${result.runtime.parentContract?.childDigestParents ?? 0}，missing_readiness_parents=${result.runtime.parentContract?.missingReadinessParents ?? 0}`);
     lines.push(`- 2.0 pipeline：knowledge_units=${result.knowledgeMetrics.knowledgeUnitCount}，knowledge_domains=${result.knowledgeMetrics.knowledgeDomainCount}，unit_research=${result.knowledgeMetrics.unitResearchRows}，section_plan_units=${result.knowledgeMetrics.sectionPlanUnits}，page_drafts=${result.knowledgeMetrics.pageDraftCount}，wiki_pages=${result.knowledgeMetrics.wikiPageCount}，markdown=${result.knowledgeMetrics.markdownPageCount}`);
     lines.push(`- 覆盖率：research=${result.knowledgeMetrics.researchCoverage}，compose=${result.knowledgeMetrics.composeCoverage}，assemble=${result.knowledgeMetrics.assembleCoverage}`);
     lines.push(`- UnitType：${result.knowledgeMetrics.unitTypeCounts.slice(0, 8).map((item) => `${item.name}(${item.count})`).join("、") || "无"}`);

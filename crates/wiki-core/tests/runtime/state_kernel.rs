@@ -6,7 +6,10 @@ use std::path::Path;
 
 use tempfile::tempdir;
 use wiki_core::domain::change_set::plan_runtime_changes;
-use wiki_core::storage::cache_store::{read_page_context_cache, read_page_generation_cache};
+use wiki_core::storage::cache_store::{
+    missing_incremental_cache_components, read_page_context_cache, read_page_generation_cache,
+    write_page_context_cache,
+};
 use wiki_core::storage::sqlite_store;
 use wiki_core::workflows::{init::run_init, query::run_query, status::run_status};
 
@@ -268,6 +271,82 @@ fn init_persists_compose_plan_in_page_context_cache() {
     assert_eq!(
         context_cache.page_id, domain_or_module_page.page_id,
         "page context cache page_id should match"
+    );
+}
+
+#[test]
+fn init_persists_runtime_summary_and_unit_gates() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    write_storybook_like_repo(repo_root);
+    run_init(repo_root).unwrap();
+
+    let conn = sqlite_store::open_db_readonly(repo_root).unwrap();
+    let runtime_summary = sqlite_store::runtime_meta_get(&conn, "pipeline_runtime_summary")
+        .unwrap()
+        .expect("pipeline runtime summary should be persisted");
+    assert!(runtime_summary.contains("\"runtime_state\":\"completed\""));
+
+    let runtime_gates = sqlite_store::read_unit_runtime_gates(&conn).unwrap();
+    assert!(
+        !runtime_gates.is_empty(),
+        "unit runtime gates should be persisted"
+    );
+    assert!(runtime_gates
+        .iter()
+        .all(|gate| gate.assemble_status == "done"));
+}
+
+#[test]
+fn missing_incremental_cache_components_reports_runtime_gate_and_parent_contract_gaps() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    write_storybook_like_repo(repo_root);
+    run_init(repo_root).unwrap();
+
+    let state = wiki_core::storage::state_store::read_state(repo_root).unwrap();
+    let parent_page_id = state
+        .pages
+        .iter()
+        .find(|page| {
+            state
+                .pages
+                .iter()
+                .any(|candidate| candidate.parent_id.as_deref() == Some(page.page_id.as_str()))
+        })
+        .map(|page| page.page_id.clone())
+        .expect("runtime should contain at least one parent page");
+    let mut parent_context = read_page_context_cache(repo_root, &parent_page_id).unwrap();
+    parent_context.context.page_type = "domain-index".to_string();
+    parent_context.context.child_summaries.clear();
+    parent_context.context.child_unit_ids.clear();
+    parent_context.context.child_page_ids.clear();
+    parent_context.context.child_digest_ids.clear();
+    parent_context.context.citation_digest_refs.clear();
+    parent_context.context.diagram_digest_refs.clear();
+    parent_context.context.readiness_status = "compose_ready".to_string();
+    write_page_context_cache(repo_root, &parent_context).unwrap();
+
+    let conn = sqlite_store::open_db(repo_root).unwrap();
+    conn.execute(
+        "DELETE FROM runtime_meta WHERE key = 'pipeline_runtime_summary'",
+        [],
+    )
+    .unwrap();
+    sqlite_store::clear_unit_runtime_gates(&conn).unwrap();
+
+    let missing = missing_incremental_cache_components(repo_root, &state);
+    assert!(missing.contains(&"pipeline-runtime-summary".to_string()));
+    assert!(missing.contains(&"unit-runtime-gates".to_string()));
+    assert!(
+        missing.contains(&format!(
+            "page-context-child-contract:{}",
+            parent_context.page_id
+        )),
+        "missing components: {:?}",
+        missing
     );
 }
 

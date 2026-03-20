@@ -1,9 +1,14 @@
+//! 仓库扫描负责把文件系统整理成可复用的 Repo Facts 起点。
+//! 它只做稳定分类和轻量启发式，不在这里提前混入页面级解释。
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+
+use crate::debug_trace;
 
 use crate::domain::stable_id::stable_id;
 use crate::llm::{FilePurposeAssistInput, LlmRuntime};
@@ -131,6 +136,9 @@ struct PendingFilePurposeCandidate {
     index: usize,
     input: FilePurposeAssistInput,
 }
+
+/// `FilePurpose` uncertainty gate 需要和 LLM 侧批次大小保持一致，便于诊断请求数。
+const FILE_PURPOSE_GATE_BATCH_SIZE: usize = 16;
 
 impl ScannedFile {
     /// 兼容旧粗分类的配置文件判断。
@@ -394,7 +402,7 @@ fn visit_dir(
         let purpose = classify_file_purpose(&relative, &kind);
         if purpose == FilePurpose::Utility {
             let preview = build_file_purpose_preview(&bytes);
-            if !preview.is_empty() {
+            if should_review_utility_with_llm(&relative, &kind, &preview) {
                 pending_file_purposes.push(PendingFilePurposeCandidate {
                     index: files.len(),
                     input: FilePurposeAssistInput {
@@ -435,6 +443,110 @@ fn build_file_purpose_preview(bytes: &[u8]) -> String {
         .join("\n")
 }
 
+/// 只有确实存在角色歧义的源码文件才进入 LLM 复核。
+/// 这里先用路径和预览做一次确定性筛选，把明显的 support/barrel/common 文件留在 `Utility`，
+/// 避免扫描阶段为低价值候选消耗大量 request。
+///
+/// # 参数
+/// - `path`：仓库内相对路径。
+/// - `kind`：扫描阶段给出的粗粒度文件类型。
+/// - `preview`：文件前几行的轻量预览，用于识别结构性信号。
+///
+/// # 返回
+/// - 如果该文件仍需要进入 LLM `FilePurpose` 复核，则返回 `true`。
+fn should_review_utility_with_llm(path: &str, kind: &str, preview: &str) -> bool {
+    if kind != "source" || preview.is_empty() {
+        return false;
+    }
+
+    let normalized_path = path.to_ascii_lowercase();
+    let path_segments = normalized_path.split('/').collect::<Vec<_>>();
+    let stem = Path::new(path)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if path_segments.iter().any(|segment| {
+        matches!(
+            *segment,
+            "utils"
+                | "util"
+                | "helpers"
+                | "helper"
+                | "common"
+                | "generated"
+                | "__generated__"
+                | "stories"
+                | "story"
+                | "examples"
+                | "example"
+                | "demo"
+                | "demos"
+                | "tests"
+                | "test"
+                | "spec"
+                | "__tests__"
+                | "__mocks__"
+                | "mocks"
+                | "styles"
+                | "style"
+                | "tokens"
+        )
+    }) {
+        return false;
+    }
+
+    if matches!(
+        stem.as_str(),
+        "index" | "types" | "type" | "constants" | "constant" | "helpers" | "helper"
+    ) || stem.contains("util")
+        || stem.contains("helper")
+        || stem.contains("common")
+        || stem.contains("shared")
+        || stem.contains("story")
+        || stem.contains("example")
+        || stem.contains("mock")
+        || stem.contains("test")
+    {
+        return false;
+    }
+
+    let normalized_preview = preview.to_ascii_lowercase();
+    let preview_signal = [
+        "middleware",
+        "handler",
+        "router",
+        "route(",
+        "controller",
+        "repository",
+        "service",
+        "plugin",
+        "pipeline",
+        "processor",
+        "command",
+        "createapp",
+        "createserver",
+        "bootstrap",
+        "register(",
+        "grpc",
+        "graphql",
+    ]
+    .iter()
+    .any(|signal| normalized_preview.contains(signal));
+    let path_signal = stem == "mux"
+        || stem.contains("router")
+        || stem.contains("route")
+        || stem.contains("controller")
+        || stem.contains("service")
+        || normalized_path.contains("/router")
+        || normalized_path.contains("/routes/")
+        || normalized_path.contains("/controller")
+        || normalized_path.contains("/service");
+
+    preview_signal || path_signal
+}
+
 fn apply_llm_file_purpose_overrides(
     files: &mut [ScannedFile],
     pending_file_purposes: Vec<PendingFilePurposeCandidate>,
@@ -446,6 +558,15 @@ fn apply_llm_file_purpose_overrides(
     if pending_file_purposes.is_empty() {
         return Ok(());
     }
+
+    let total_candidates = pending_file_purposes.len();
+    debug_trace::record_json(
+        "scan_file_purpose_gate",
+        &serde_json::json!({
+            "file_purpose_candidates": total_candidates,
+            "file_purpose_batches_planned": pending_file_purposes.len().div_ceil(FILE_PURPOSE_GATE_BATCH_SIZE),
+        }),
+    );
 
     let inputs = pending_file_purposes
         .iter()
@@ -674,21 +795,59 @@ fn make_relative(root: &Path, path: &Path) -> String {
 /// # 返回
 /// - 返回该文件的粗粒度角色分类。
 fn classify_file_kind(path: &str) -> String {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+
     if matches!(
         path,
         "package.json"
             | "tsconfig.json"
             | "Cargo.toml"
+            | "Cargo.lock"
             | "pnpm-workspace.yaml"
             | "pyproject.toml"
             | "requirements.txt"
             | "Pipfile"
-    ) || path.ends_with("/package.json")
+            | "go.mod"
+            | "go.sum"
+            | "Makefile"
+            | "wiki.dev.yaml"
+            | "wiki.yaml"
+    ) || matches!(
+        file_name,
+        "BUILD"
+            | "BUILD.bazel"
+            | "WORKSPACE"
+            | "WORKSPACE.bazel"
+            | "MODULE.bazel"
+            | "pom.xml"
+            | "build.gradle"
+            | "build.gradle.kts"
+            | "settings.gradle"
+            | "settings.gradle.kts"
+            | "gradle.properties"
+            | "AndroidManifest.xml"
+            | "package-lock.json"
+            | "pnpm-lock.yaml"
+            | "yarn.lock"
+            | "bun.lockb"
+    ) || path.ends_with(".bzl")
+        || path.ends_with("/package.json")
         || path.ends_with("/tsconfig.json")
         || path.ends_with("/Cargo.toml")
+        || path.ends_with("/Cargo.lock")
         || path.ends_with("/pyproject.toml")
         || path.ends_with("/requirements.txt")
         || path.ends_with("/Pipfile")
+        || path.ends_with("/go.mod")
+        || path.ends_with("/go.sum")
+        || path.ends_with("/build.gradle")
+        || path.ends_with("/build.gradle.kts")
+        || path.ends_with("/settings.gradle")
+        || path.ends_with("/settings.gradle.kts")
+        || path.ends_with("/gradle.properties")
         || path.ends_with("/config.yaml")
         || path.ends_with("/config.yml")
         || path.ends_with("/nginx.conf")
@@ -1485,11 +1644,30 @@ fn is_nested_repo(dir: &Path, _root_manifests: &[String]) -> bool {
 
 /// 判断文件路径是否位于 test / spec 相关目录下。
 /// 用于在扫描阶段标记降权信号，供 hierarchy 和 generation 层消费。
+/// Storybook `*.stories.*` 这类演示文件也在这里统一降权，避免它们进入主源码角色判断。
+///
+/// # 参数
+/// - `path`：仓库内相对路径。
+///
+/// # 返回
+/// - 如果该文件应被视为 test/demo 类输入，则返回 `true`。
 fn is_test_path(path: &str) -> bool {
-    let segments: Vec<&str> = path.split('/').collect();
-    segments
-        .iter()
-        .any(|seg| matches!(*seg, "tests" | "test" | "spec" | "__tests__" | "__test__"))
+    let lower_path = path.to_ascii_lowercase();
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let segments: Vec<&str> = lower_path.split('/').collect();
+
+    segments.iter().any(|seg| {
+        matches!(
+            *seg,
+            "tests" | "test" | "spec" | "__tests__" | "__test__" | "stories" | "story"
+        )
+    }) || file_name.contains(".stories.")
+        || file_name.starts_with("story.")
+        || file_name.starts_with("stories.")
 }
 
 #[cfg(test)]

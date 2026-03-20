@@ -420,6 +420,24 @@ pub struct PageContext {
     /// 叶子优先增强阶段从子页汇总出的摘要。
     #[serde(default)]
     pub child_summaries: Vec<String>,
+    /// parent page 直接消费的子 KnowledgeUnit IDs。
+    #[serde(default)]
+    pub child_unit_ids: Vec<String>,
+    /// parent page 直接消费的子页面 IDs。
+    #[serde(default)]
+    pub child_page_ids: Vec<String>,
+    /// parent page 直接消费的子页 digest IDs。
+    #[serde(default)]
+    pub child_digest_ids: Vec<String>,
+    /// 当前页面的 parent compose contract readiness 状态。
+    #[serde(default)]
+    pub readiness_status: String,
+    /// 当前页面引用的 citation digest 摘要 IDs。
+    #[serde(default)]
+    pub citation_digest_refs: Vec<String>,
+    /// 当前页面引用的 diagram digest 摘要 IDs。
+    #[serde(default)]
+    pub diagram_digest_refs: Vec<String>,
     /// 页面稳定 evidence groups，供 renderer、LLM 和验证脚本共享。
     #[serde(default)]
     pub evidence_groups: Vec<PageEvidenceGroup>,

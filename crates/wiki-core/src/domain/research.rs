@@ -80,6 +80,18 @@ pub struct ResearchSessionStats {
     pub delta_diagram_count: usize,
     #[serde(default)]
     pub child_digest_delta: usize,
+    /// 单次 provider-backed research 的总耗时，单位毫秒。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
+    /// 当前结果是否直接命中 page research cache。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit: Option<bool>,
+    /// 当前 request 最终实际采用的 tools 模式。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_mode: Option<String>,
+    /// 当前 request 是否在首请求前就应用了 deterministic pre-trim。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_input_applied: Option<bool>,
 }
 
 // ─── SystemResearch ─────────────────────────────────────────
@@ -219,9 +231,33 @@ pub struct DiagramEdgeSuggestion {
 
 // ─── PageDigest ─────────────────────────────────────────────
 
+/// 页面章节摘要——供父页逐层消费子页的 section 级信息。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PageSectionDigest {
+    pub digest_id: String,
+    pub section_key: String,
+    pub title: String,
+    pub summary: String,
+    #[serde(default)]
+    pub key_sources: Vec<String>,
+    #[serde(default)]
+    pub citations: Vec<SourceCitation>,
+}
+
+/// 页面图摘要——供父页感知子页已有图表达。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PageDiagramDigest {
+    pub digest_id: String,
+    pub diagram_type: String,
+    pub title: String,
+    #[serde(default)]
+    pub summary: String,
+}
+
 /// 页面摘要——子页 compose 完成后产出的精简摘要，供父页消费。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PageDigest {
+    pub digest_id: String,
     pub unit_id: String,
     pub page_id: String,
     pub title: String,
@@ -236,4 +272,10 @@ pub struct PageDigest {
     pub key_sources: Vec<String>,
     #[serde(default)]
     pub citations: Vec<SourceCitation>,
+    #[serde(default)]
+    pub section_digests: Vec<PageSectionDigest>,
+    #[serde(default)]
+    pub diagram_digests: Vec<PageDiagramDigest>,
+    #[serde(default)]
+    pub readiness_stage: String,
 }

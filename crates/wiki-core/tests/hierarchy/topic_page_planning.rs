@@ -15,9 +15,7 @@ use wiki_core::repo::scanner::scan_repo;
 use wiki_core::repo::symbol_graph::GraphSummary;
 use wiki_core::storage::sqlite_store;
 
-fn assert_units_have_resolvable_parents(
-    units: &[wiki_core::domain::knowledge::KnowledgeUnit],
-) {
+fn assert_units_have_resolvable_parents(units: &[wiki_core::domain::knowledge::KnowledgeUnit]) {
     let ids: BTreeSet<&str> = units.iter().map(|unit| unit.id.as_str()).collect();
     for unit in units {
         if let Some(parent_id) = unit.parent_unit_id.as_deref() {

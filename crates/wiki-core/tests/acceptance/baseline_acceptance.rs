@@ -29,12 +29,18 @@ fn baseline_fixture_generates_hierarchical_wiki_and_structured_query_results() {
         .iter()
         .find(|item| item.title.contains("auth"))
         .expect("auth page should be exported to metadata");
-    let _architecture_item = metadata
+    let architecture_item = metadata
         .wiki_items
         .iter()
         .find(|item| item.path.ends_with("系统架构.md"))
         .expect("architecture page should be exported to metadata");
-    assert!(!auth_item.ancestor_ids.is_empty());
+    assert!(!auth_item.module_ids.is_empty());
+    assert!(auth_item
+        .source_files
+        .iter()
+        .any(|path| path == "packages/domain/auth/src/index.ts"));
+    assert!(architecture_item.parent_id.is_some());
+    assert!(!architecture_item.ancestor_ids.is_empty());
 
     let query = run_query(repo_root, "auth").unwrap();
     assert!(query.matched_modules.iter().any(|module| {

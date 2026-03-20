@@ -37,7 +37,7 @@ use crate::workflows::init::{
     ancestor_ids_for_page, build_minimal_page_context, current_timestamp,
     find_or_build_planned_page, page_provenance, source_paths_for_page,
 };
-use crate::workflows::page_render::run_compose_pipeline;
+use crate::workflows::page_render::{finalize_pipeline_runtime, run_compose_pipeline_with_action};
 use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
 };
@@ -175,7 +175,8 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
             research_provider.summary, research_provider.mode
         ),
     );
-    let pipeline = run_compose_pipeline(
+    let pipeline = run_compose_pipeline_with_action(
+        action,
         repo_root,
         &scan_report,
         &module_tree,
@@ -214,7 +215,8 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
     for (index, draft) in page_drafts.iter().enumerate() {
         let rendered = render_page_draft(draft);
         let planned_page = find_or_build_planned_page(draft, &pages_by_id);
-        let page_context = build_minimal_page_context(draft, &knowledge_tree);
+        let page_context =
+            build_minimal_page_context(draft, &planned_page, &knowledge_tree, &digests);
 
         let final_content = match old_page_contents.get(&planned_page.id) {
             Some(old_content) => merge_old_user_sections(
@@ -307,6 +309,7 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
     let metadata = export_metadata(&state, &export_context);
     reporter.phase("write_metadata", "写入元数据");
     write_metadata(repo_root, &metadata)?;
+    finalize_pipeline_runtime(repo_root, action, generated_pages.len())?;
     sqlite_store::clear_pipeline_checkpoint(&sqlite_store::open_db(repo_root)?)?;
 
     Ok(RebuildReport {

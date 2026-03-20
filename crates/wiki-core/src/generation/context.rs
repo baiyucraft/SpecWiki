@@ -1048,6 +1048,12 @@ pub fn build_page_context_with_graph_inputs(
         summary_inputs,
         hints,
         child_summaries,
+        child_unit_ids: Vec::new(),
+        child_page_ids: Vec::new(),
+        child_digest_ids: Vec::new(),
+        readiness_status: String::new(),
+        citation_digest_refs: Vec::new(),
+        diagram_digest_refs: Vec::new(),
         evidence_groups,
         diagram_inputs,
     }

@@ -13,6 +13,7 @@ use std::time::Duration;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+use crate::domain::checkpoint::UnitRuntimeGate;
 use crate::domain::metadata::DirtyState;
 use crate::domain::module_tree::ModuleNode;
 use crate::domain::relation::WikiRelation;
@@ -444,9 +445,22 @@ fn init_runtime_tables(conn: &Connection) -> io::Result<()> {
             created_at            TEXT DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS unit_runtime_gates (
+            unit_id               TEXT PRIMARY KEY REFERENCES knowledge_units(id),
+            unit_type             TEXT NOT NULL,
+            research_status       TEXT NOT NULL,
+            compose_status        TEXT NOT NULL,
+            assemble_status       TEXT NOT NULL,
+            last_ready_stage      TEXT,
+            blocked_reason        TEXT,
+            missing_dependencies  TEXT NOT NULL,
+            updated_at            TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_knowledge_units_domain ON knowledge_units(domain_id);
         CREATE INDEX IF NOT EXISTS idx_knowledge_units_parent ON knowledge_units(parent_unit_id);
-        CREATE INDEX IF NOT EXISTS idx_research_cache_type ON research_cache(research_type);",
+        CREATE INDEX IF NOT EXISTS idx_research_cache_type ON research_cache(research_type);
+        CREATE INDEX IF NOT EXISTS idx_unit_runtime_gates_compose ON unit_runtime_gates(compose_status);",
     )
     .map_err(|e| io::Error::other(format!("runtime schema init: {e}")))?;
     Ok(())
@@ -2415,16 +2429,13 @@ pub fn write_knowledge_domains(
     conn: &Connection,
     domains: &[crate::domain::knowledge::KnowledgeDomain],
 ) -> io::Result<()> {
-    conn.execute("DELETE FROM knowledge_units", [])
-        .map_err(|e| io::Error::other(format!("clear knowledge_units: {e}")))?;
-    conn.execute("DELETE FROM knowledge_domains", [])
-        .map_err(|e| io::Error::other(format!("clear knowledge_domains: {e}")))?;
     for domain in domains {
         let evidence = serde_json::to_string(&domain.evidence).unwrap_or_default();
         let modules = serde_json::to_string(&domain.source_modules).unwrap_or_default();
         let files = serde_json::to_string(&domain.source_files).unwrap_or_default();
         conn.execute(
-            "INSERT INTO knowledge_domains (id, domain_type, label, evidence, source_modules, source_files)
+            "INSERT OR REPLACE INTO knowledge_domains
+             (id, domain_type, label, evidence, source_modules, source_files)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 domain.id,
@@ -2639,6 +2650,75 @@ pub fn clear_page_drafts(conn: &Connection) -> io::Result<()> {
     }
     conn.execute("DELETE FROM page_drafts", [])
         .map_err(|e| io::Error::other(format!("clear_page_drafts: {e}")))?;
+    Ok(())
+}
+
+// ── unit_runtime_gates CRUD ────────────────────────────────────────
+
+pub fn write_unit_runtime_gate(conn: &Connection, gate: &UnitRuntimeGate) -> io::Result<()> {
+    let missing_dependencies = serde_json::to_string(&gate.missing_dependencies)
+        .map_err(|e| io::Error::other(format!("serialize unit_runtime_gate deps: {e}")))?;
+    conn.execute(
+        "INSERT OR REPLACE INTO unit_runtime_gates
+         (unit_id, unit_type, research_status, compose_status, assemble_status,
+          last_ready_stage, blocked_reason, missing_dependencies, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            gate.unit_id,
+            gate.unit_type,
+            gate.research_status,
+            gate.compose_status,
+            gate.assemble_status,
+            gate.last_ready_stage,
+            gate.blocked_reason,
+            missing_dependencies,
+            gate.updated_at,
+        ],
+    )
+    .map_err(|e| io::Error::other(format!("write_unit_runtime_gate({}): {e}", gate.unit_id)))?;
+    Ok(())
+}
+
+pub fn read_unit_runtime_gates(conn: &Connection) -> io::Result<Vec<UnitRuntimeGate>> {
+    if !table_exists(conn, "unit_runtime_gates")? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT unit_id, unit_type, research_status, compose_status, assemble_status,
+                    last_ready_stage, blocked_reason, missing_dependencies, updated_at
+             FROM unit_runtime_gates
+             ORDER BY unit_id",
+        )
+        .map_err(|e| io::Error::other(format!("prepare read_unit_runtime_gates: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let missing_dependencies: String = row.get(7)?;
+            let missing_dependencies =
+                serde_json::from_str::<Vec<String>>(&missing_dependencies).unwrap_or_default();
+            Ok(UnitRuntimeGate {
+                unit_id: row.get(0)?,
+                unit_type: row.get(1)?,
+                research_status: row.get(2)?,
+                compose_status: row.get(3)?,
+                assemble_status: row.get(4)?,
+                last_ready_stage: row.get(5)?,
+                blocked_reason: row.get(6)?,
+                missing_dependencies,
+                updated_at: row.get(8)?,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query read_unit_runtime_gates: {e}")))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("rows read_unit_runtime_gates: {e}")))
+}
+
+pub fn clear_unit_runtime_gates(conn: &Connection) -> io::Result<()> {
+    if !table_exists(conn, "unit_runtime_gates")? {
+        return Ok(());
+    }
+    conn.execute("DELETE FROM unit_runtime_gates", [])
+        .map_err(|e| io::Error::other(format!("clear_unit_runtime_gates: {e}")))?;
     Ok(())
 }
 

@@ -20,6 +20,7 @@ export const RUNTIME_COUNT_TABLES = [
   "research_cache",
   "page_digests",
   "page_drafts",
+  "unit_runtime_gates",
   "wiki_pages",
   "pipeline_checkpoint",
 ];
@@ -62,6 +63,236 @@ function hasRuntimeSignals(dbCounts) {
     .some(([name, count]) => name !== "pipeline_checkpoint" && count > 0);
 }
 
+function safeQuerySqliteRows(cacheDbPath, sql) {
+  try {
+    return querySqliteRows(cacheDbPath, sql);
+  } catch {
+    return [];
+  }
+}
+
+function safeQuerySqliteValue(cacheDbPath, sql) {
+  try {
+    return querySqliteValue(cacheDbPath, sql);
+  } catch {
+    return "";
+  }
+}
+
+function sqliteTableExists(cacheDbPath, tableName) {
+  return safeQuerySqliteValue(
+    cacheDbPath,
+    [
+      "select count(*)",
+      "from sqlite_master",
+      "where type = 'table'",
+      `and name = '${String(tableName).replaceAll("'", "''")}';`,
+    ].join(" "),
+  ) === "1";
+}
+
+function sqliteColumnExists(cacheDbPath, tableName, columnName) {
+  if (!sqliteTableExists(cacheDbPath, tableName)) {
+    return false;
+  }
+
+  return safeQuerySqliteRows(
+    cacheDbPath,
+    `pragma table_info(${quoteSqliteName(tableName)});`,
+  ).some((row) => {
+    const [, name = ""] = row.split("|");
+    return name === columnName;
+  });
+}
+
+function escapeSqliteString(value) {
+  return String(value ?? "").replaceAll("'", "''");
+}
+
+function parseJsonObject(raw) {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readJsonValue(source, keys) {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined && value !== null && value !== "") {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function readJsonString(source, keys) {
+  const value = readJsonValue(source, keys);
+  return value === null ? null : String(value);
+}
+
+function readJsonNumber(source, keys) {
+  const value = readJsonValue(source, keys);
+  if (value === null) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function readJsonBoolean(source, keys) {
+  const value = readJsonValue(source, keys);
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return null;
+}
+
+function findLatestUnitResearchId(cacheDbPath) {
+  if (!sqliteTableExists(cacheDbPath, "research_cache")) {
+    return null;
+  }
+
+  const targetId = safeQuerySqliteValue(
+    cacheDbPath,
+    [
+      "select coalesce(target_id, '')",
+      "from research_cache",
+      "where research_type = 'unit'",
+      "order by rowid desc, target_id asc",
+      "limit 1;",
+    ].join(" "),
+  );
+  return targetId || null;
+}
+
+function readUnitResearchResult(cacheDbPath, unitId) {
+  if (!unitId || !sqliteColumnExists(cacheDbPath, "research_cache", "result")) {
+    return null;
+  }
+
+  const resultJson = safeQuerySqliteValue(
+    cacheDbPath,
+    [
+      "select coalesce(result, '')",
+      "from research_cache",
+      "where research_type = 'unit'",
+      `and target_id = '${escapeSqliteString(unitId)}'`,
+      "limit 1;",
+    ].join(" "),
+  );
+  return parseJsonObject(resultJson);
+}
+
+function summarizeProviderStats(unitId, researchResult) {
+  if (!researchResult) {
+    return null;
+  }
+
+  const sessionStats = readJsonValue(researchResult, ["provider_session_stats", "providerSessionStats"]);
+  const stopReason = readJsonString(researchResult, ["provider_stop_reason", "providerStopReason"]);
+  const turnsUsed = readJsonNumber(sessionStats, ["turns_used", "turnsUsed"]);
+  const toolCalls = readJsonNumber(sessionStats, ["tool_calls", "toolCalls"]);
+  const elapsedMs = readJsonNumber(sessionStats, ["elapsed_ms", "elapsedMs"]);
+  const cacheHit = readJsonBoolean(sessionStats, ["cache_hit", "cacheHit"]);
+  const toolsMode = readJsonString(sessionStats, ["tools_mode", "toolsMode"]);
+  const retryInputApplied = readJsonBoolean(sessionStats, ["retry_input_applied", "retryInputApplied"]);
+
+  if (
+    !stopReason
+    && turnsUsed === null
+    && toolCalls === null
+    && elapsedMs === null
+    && cacheHit === null
+    && !toolsMode
+    && retryInputApplied === null
+  ) {
+    return null;
+  }
+
+  return {
+    unitId: unitId || null,
+    stopReason,
+    turnsUsed,
+    toolCalls,
+    elapsedMs,
+    cacheHit,
+    toolsMode,
+    retryInputApplied,
+  };
+}
+
+/**
+ * 把 runtime summary 与 research_cache.result 归一成脚本可消费的最小研究进度摘要。
+ *
+ * `pipeline_runtime_summary` 负责描述“当前在跑谁”和“最近完成了谁”，
+ * `research_cache.result.provider_session_stats` 负责补最近一次 provider 观测指标。
+ *
+ * @param cacheDbPath `.wiki/.cache/wiki-cache.db` 路径。
+ * @param runtimeSummary workflow 级 runtime summary。
+ * @returns 返回兼容旧数据的研究进度摘要；字段缺失时统一退化为 `null`。
+ */
+function readResearchProgressSummary(cacheDbPath, runtimeSummary) {
+  const currentUnitId = readJsonString(runtimeSummary, [
+    "current_research_unit_id",
+    "currentResearchUnitId",
+  ]);
+  const currentUnitType = readJsonString(runtimeSummary, [
+    "current_research_unit_type",
+    "currentResearchUnitType",
+  ]);
+  const currentStartedAt = readJsonString(runtimeSummary, [
+    "current_research_started_at",
+    "currentResearchStartedAt",
+  ]);
+  const lastUnitId =
+    readJsonString(runtimeSummary, ["last_researched_unit_id", "lastResearchedUnitId"])
+    ?? findLatestUnitResearchId(cacheDbPath);
+  const lastResearchResult = readUnitResearchResult(cacheDbPath, lastUnitId);
+  const lastElapsedMs =
+    readJsonNumber(runtimeSummary, ["last_research_elapsed_ms", "lastResearchElapsedMs"])
+    ?? readJsonNumber(
+      readJsonValue(lastResearchResult, ["provider_session_stats", "providerSessionStats"]),
+      ["elapsed_ms", "elapsedMs"],
+    );
+
+  return {
+    currentResearchUnit:
+      currentUnitId || currentUnitType || currentStartedAt
+        ? {
+          unitId: currentUnitId,
+          unitType: currentUnitType,
+          startedAt: currentStartedAt,
+        }
+        : null,
+    lastCompletedResearch:
+      lastUnitId || lastElapsedMs !== null
+        ? {
+          unitId: lastUnitId,
+          elapsedMs: lastElapsedMs,
+        }
+        : null,
+    providerStats: summarizeProviderStats(lastUnitId, lastResearchResult),
+  };
+}
+
 /**
  * 从 runtime SQLite 里读取关键表计数。
  *
@@ -76,8 +307,11 @@ export function readRuntimeDbCounts(cacheDbPath, tables = RUNTIME_COUNT_TABLES) 
 
   return Object.fromEntries(
     tables.map((name) => {
+      if (!sqliteTableExists(cacheDbPath, name)) {
+        return [name, 0];
+      }
       const count = parseSqliteNumber(
-        querySqliteValue(cacheDbPath, `select count(*) from ${quoteSqliteName(name)};`),
+        safeQuerySqliteValue(cacheDbPath, `select count(*) from ${quoteSqliteName(name)};`),
       );
       return [name, count];
     }),
@@ -91,7 +325,10 @@ export function readRuntimeDbCounts(cacheDbPath, tables = RUNTIME_COUNT_TABLES) 
  * @returns 返回 checkpoint 摘要；没有 checkpoint 时返回 `null`。
  */
 export function readPipelineCheckpoint(cacheDbPath) {
-  const rows = querySqliteRows(
+  if (!sqliteTableExists(cacheDbPath, "pipeline_checkpoint")) {
+    return null;
+  }
+  const rows = safeQuerySqliteRows(
     cacheDbPath,
     [
       "select",
@@ -115,6 +352,204 @@ export function readPipelineCheckpoint(cacheDbPath) {
     targetId,
     errorMessage,
   };
+}
+
+/**
+ * 读取 workflow 级 runtime summary，优先解释当前 pipeline 停在哪个阶段。
+ *
+ * @param cacheDbPath `.wiki/.cache/wiki-cache.db` 路径。
+ * @returns 返回 runtime summary；不存在或损坏时返回 `null`。
+ */
+export function readPipelineRuntimeSummary(cacheDbPath) {
+  if (!sqliteTableExists(cacheDbPath, "runtime_meta")) {
+    return null;
+  }
+  const raw = safeQuerySqliteValue(
+    cacheDbPath,
+    [
+      "select coalesce(value, '')",
+      "from runtime_meta",
+      "where key = 'pipeline_runtime_summary'",
+      "limit 1;",
+    ].join(" "),
+  );
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 读取 unit 级 runtime gate，帮助报告脚本定位哪些页面还没进入 compose / assemble。
+ *
+ * @param cacheDbPath `.wiki/.cache/wiki-cache.db` 路径。
+ * @returns 返回 unit gate 列表；表不存在时返回空数组。
+ */
+export function readUnitRuntimeGates(cacheDbPath) {
+  if (!sqliteTableExists(cacheDbPath, "unit_runtime_gates")) {
+    return [];
+  }
+  const rows = safeQuerySqliteRows(
+    cacheDbPath,
+    [
+      "select",
+      "coalesce(unit_id, ''),",
+      "coalesce(unit_type, ''),",
+      "coalesce(research_status, ''),",
+      "coalesce(compose_status, ''),",
+      "coalesce(assemble_status, ''),",
+      "coalesce(last_ready_stage, ''),",
+      "coalesce(blocked_reason, ''),",
+      "coalesce(missing_dependencies, '[]')",
+      "from unit_runtime_gates",
+      "order by unit_id asc;",
+    ].join(" "),
+  );
+
+  return rows.map((row) => {
+    const [
+      unitId = "",
+      unitType = "",
+      researchStatus = "",
+      composeStatus = "",
+      assembleStatus = "",
+      lastReadyStage = "",
+      blockedReason = "",
+      missingDependencies = "[]",
+    ] = row.split("|");
+    return {
+      unitId,
+      unitType,
+      researchStatus,
+      composeStatus,
+      assembleStatus,
+      lastReadyStage: lastReadyStage || null,
+      blockedReason: blockedReason || null,
+      missingDependencies: JSON.parse(missingDependencies || "[]"),
+    };
+  });
+}
+
+function summarizeUnitRuntimeGates(unitRuntimeGates) {
+  return {
+    total: unitRuntimeGates.length,
+    composeReady: unitRuntimeGates.filter((gate) => gate.composeStatus === "ready").length,
+    composePending: unitRuntimeGates.filter((gate) => gate.composeStatus === "pending").length,
+    composeBlocked: unitRuntimeGates.filter((gate) => gate.composeStatus === "blocked").length,
+    assembleDone: unitRuntimeGates.filter((gate) => gate.assembleStatus === "done").length,
+    blockedUnits: unitRuntimeGates
+      .filter((gate) => gate.blockedReason || gate.missingDependencies.length > 0)
+      .map((gate) => ({
+        unitId: gate.unitId,
+        composeStatus: gate.composeStatus,
+        blockedReason: gate.blockedReason,
+        missingDependencies: gate.missingDependencies,
+      })),
+  };
+}
+
+function readParentContractMetrics(cacheDbPath) {
+  if (!sqliteTableExists(cacheDbPath, "page_context_cache")) {
+    return {
+      parentPages: 0,
+      composeReadyParents: 0,
+      missingReadinessParents: 0,
+      childDigestParents: 0,
+      childPageParents: 0,
+      citationDigestParents: 0,
+      diagramDigestParents: 0,
+    };
+  }
+  const row = safeQuerySqliteRows(
+    cacheDbPath,
+    [
+      "select",
+      "count(*),",
+      "sum(case when coalesce(json_extract(context, '$.readiness_status'), '') = 'compose_ready' then 1 else 0 end),",
+      "sum(case when coalesce(json_extract(context, '$.readiness_status'), '') = '' then 1 else 0 end),",
+      "sum(case when coalesce(json_array_length(json_extract(context, '$.child_digest_ids')), 0) > 0 then 1 else 0 end),",
+      "sum(case when coalesce(json_array_length(json_extract(context, '$.child_page_ids')), 0) > 0 then 1 else 0 end),",
+      "sum(case when coalesce(json_array_length(json_extract(context, '$.citation_digest_refs')), 0) > 0 then 1 else 0 end),",
+      "sum(case when coalesce(json_array_length(json_extract(context, '$.diagram_digest_refs')), 0) > 0 then 1 else 0 end)",
+      "from page_context_cache",
+      "where coalesce(json_extract(context, '$.page_type'), '') in ('overview', 'architecture', 'domain-index');",
+    ].join(" "),
+  )[0];
+
+  const [
+    parentPages = "0",
+    composeReadyParents = "0",
+    missingReadinessParents = "0",
+    childDigestParents = "0",
+    childPageParents = "0",
+    citationDigestParents = "0",
+    diagramDigestParents = "0",
+  ] = (row ?? "").split("|");
+
+  return {
+    parentPages: parseSqliteNumber(parentPages),
+    composeReadyParents: parseSqliteNumber(composeReadyParents),
+    missingReadinessParents: parseSqliteNumber(missingReadinessParents),
+    childDigestParents: parseSqliteNumber(childDigestParents),
+    childPageParents: parseSqliteNumber(childPageParents),
+    citationDigestParents: parseSqliteNumber(citationDigestParents),
+    diagramDigestParents: parseSqliteNumber(diagramDigestParents),
+  };
+}
+
+function normalizeWikiItemPath(itemPath) {
+  return String(itemPath ?? "")
+    .replaceAll("\\", "/")
+    .replace(/^\.wiki\//, "");
+}
+
+function readPageRuntimeByPath(cacheDbPath, metadata) {
+  if (!sqliteTableExists(cacheDbPath, "page_context_cache")) {
+    return {};
+  }
+  const contextRows = safeQuerySqliteRows(
+    cacheDbPath,
+    "select coalesce(page_id, ''), coalesce(context, '{}') from page_context_cache order by page_id asc;",
+  );
+  const contextByPageId = new Map(
+    contextRows.map((row) => {
+      const [pageId = "", contextJson = "{}"] = row.split("|");
+      try {
+        return [pageId, JSON.parse(contextJson)];
+      } catch {
+        return [pageId, null];
+      }
+    }),
+  );
+
+  return Object.fromEntries(
+    (metadata?.wiki_items ?? [])
+      .map((item) => {
+        const context = contextByPageId.get(item.id);
+        if (!context) {
+          return null;
+        }
+        return [
+          normalizeWikiItemPath(item.path),
+          {
+            pageId: item.id,
+            unitId: context.unit_id ?? null,
+            unitType: context.unit_type ?? null,
+            domainId: context.domain_id ?? null,
+            readinessStatus: context.readiness_status ?? "",
+            childDigestCount: Array.isArray(context.child_digest_ids)
+              ? context.child_digest_ids.length
+              : 0,
+          },
+        ];
+      })
+      .filter(Boolean),
+  );
 }
 
 function classifyRuntimeState(snapshot) {
@@ -146,7 +581,33 @@ function inferIncompleteReason(snapshot) {
   if (!snapshot.cacheDbExists) {
     return "缺少 `.wiki/.cache/wiki-cache.db`";
   }
+  const runtimeState = snapshot.runtimeSummary?.runtime_state ?? "";
+  const interruptedStage = snapshot.runtimeSummary?.last_interrupted_stage ?? "";
+  if (runtimeState === "researching") {
+    return "workflow 仍在 research，尚未进入 compose";
+  }
+  if (runtimeState === "compose_pending") {
+    return "research 已完成，但 compose 尚未完成";
+  }
+  if (runtimeState === "compose_complete") {
+    return "compose 已完成，但 assemble 尚未写出 metadata 与 Markdown";
+  }
+  if (runtimeState === "interrupted") {
+    if (interruptedStage.startsWith("research")) {
+      return `research 阶段中断：${interruptedStage}`;
+    }
+    if (interruptedStage.startsWith("compose")) {
+      return `compose 阶段中断：${interruptedStage}`;
+    }
+    if (interruptedStage) {
+      return `workflow 中断：${interruptedStage}`;
+    }
+    return "workflow 已中断，但缺少明确阶段信息";
+  }
   if (!snapshot.metadataExists && snapshot.markdownPageCount === 0 && hasRuntimeSignals(snapshot.dbCounts)) {
+    if (runtimeState) {
+      return `已有 knowledge/research 数据，pipeline_runtime_summary.runtime_state=${runtimeState}，但 assemble 尚未写出 metadata 与 Markdown`;
+    }
     return "已有 knowledge/research 数据，但 assemble 尚未写出 metadata 与 Markdown";
   }
   if (!snapshot.metadataExists) {
@@ -156,6 +617,9 @@ function inferIncompleteReason(snapshot) {
     return "缺少最终 Markdown 页面";
   }
   if (snapshot.dbCounts.wiki_pages === 0) {
+    if (runtimeState) {
+      return `SQLite 中 wiki_pages=0，pipeline_runtime_summary.runtime_state=${runtimeState}`;
+    }
     return "SQLite 中 `wiki_pages=0`，页面装配尚未完成";
   }
   return "runtime 产物不完整";
@@ -176,7 +640,13 @@ export function inspectWikiRuntime(wikiDir) {
   const markdownFiles = listMarkdownFiles(wikiDir);
   const dbCounts = readRuntimeDbCounts(cacheDbPath);
   const checkpoint = readPipelineCheckpoint(cacheDbPath);
+  const runtimeSummary = readPipelineRuntimeSummary(cacheDbPath);
+  const unitRuntimeGates = readUnitRuntimeGates(cacheDbPath);
+  const runtimeGateSummary = summarizeUnitRuntimeGates(unitRuntimeGates);
+  const researchProgressSummary = readResearchProgressSummary(cacheDbPath, runtimeSummary);
+  const parentContract = readParentContractMetrics(cacheDbPath);
   const metadata = metadataExists ? JSON.parse(readFileSync(metadataPath, "utf-8")) : null;
+  const pageRuntimeByPath = readPageRuntimeByPath(cacheDbPath, metadata);
 
   const snapshot = {
     wikiDir,
@@ -189,6 +659,12 @@ export function inspectWikiRuntime(wikiDir) {
     markdownPageCount: markdownFiles.length,
     dbCounts,
     checkpoint,
+    runtimeSummary,
+    unitRuntimeGates,
+    runtimeGateSummary,
+    researchProgressSummary,
+    parentContract,
+    pageRuntimeByPath,
     metadata,
   };
 

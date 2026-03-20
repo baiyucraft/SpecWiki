@@ -67,6 +67,7 @@ pub fn compose_leaf_page(unit: &KnowledgeUnit, research: &UnitResearch) -> (Page
     };
 
     let digest = PageDigest {
+        digest_id: stable_id("digest", &unit.id),
         unit_id: unit.id.clone(),
         page_id,
         title: unit.title.clone(),
@@ -80,6 +81,9 @@ pub fn compose_leaf_page(unit: &KnowledgeUnit, research: &UnitResearch) -> (Page
             .collect(),
         key_sources: research.key_sources.iter().take(5).cloned().collect(),
         citations: digest_citations_from_research(research, &[]),
+        section_digests: Vec::new(),
+        diagram_digests: Vec::new(),
+        readiness_stage: "compose_ready".to_string(),
     };
 
     (draft, digest)
@@ -139,6 +143,7 @@ pub fn compose_parent_page(
     };
 
     let digest = PageDigest {
+        digest_id: stable_id("digest", &unit.id),
         unit_id: unit.id.clone(),
         page_id,
         title: unit.title.clone(),
@@ -151,6 +156,9 @@ pub fn compose_parent_page(
             child_digests,
         ),
         citations: digest_citations_from_research(research, child_digests),
+        section_digests: Vec::new(),
+        diagram_digests: Vec::new(),
+        readiness_stage: "compose_ready".to_string(),
     };
 
     (draft, digest)
@@ -651,6 +659,7 @@ pub fn compose_knowledge_tree(
 
                 let draft = compose_system_page(unit, system_research, &domain_digests);
                 let digest = PageDigest {
+                    digest_id: stable_id("digest", &unit.id),
                     unit_id: unit.id.clone(),
                     page_id: draft.page_id.clone(),
                     title: unit.title.clone(),
@@ -663,6 +672,9 @@ pub fn compose_knowledge_tree(
                         &domain_digests,
                         MAX_DIGEST_CITATIONS,
                     ),
+                    section_digests: Vec::new(),
+                    diagram_digests: Vec::new(),
+                    readiness_stage: "compose_ready".to_string(),
                 };
                 digests.insert(unit.id.clone(), digest);
                 drafts.push(draft);
@@ -671,6 +683,7 @@ pub fn compose_knowledge_tree(
                 if let Some(dr) = domain_researches.get(&unit.domain_id) {
                     let draft = compose_index_page(unit, dr, &child_digests);
                     let digest = PageDigest {
+                        digest_id: stable_id("digest", &unit.id),
                         unit_id: unit.id.clone(),
                         page_id: draft.page_id.clone(),
                         title: unit.title.clone(),
@@ -683,6 +696,9 @@ pub fn compose_knowledge_tree(
                             &child_digests,
                             MAX_DIGEST_CITATIONS,
                         ),
+                        section_digests: Vec::new(),
+                        diagram_digests: Vec::new(),
+                        readiness_stage: "compose_ready".to_string(),
                     };
                     digests.insert(unit.id.clone(), digest);
                     drafts.push(draft);
@@ -1173,6 +1189,7 @@ mod tests {
         };
 
         let child_digests = vec![PageDigest {
+            digest_id: "digest-child-unit".to_string(),
             unit_id: "child-unit".to_string(),
             page_id: "page-child".to_string(),
             title: "子模块".to_string(),
@@ -1189,6 +1206,9 @@ mod tests {
                 symbol_id: None,
                 note: "子模块入口".to_string(),
             }],
+            section_digests: Vec::new(),
+            diagram_digests: Vec::new(),
+            readiness_stage: "compose_ready".to_string(),
         }];
 
         let (draft, digest) = compose_parent_page(&unit, &research, &child_digests);
@@ -1236,6 +1256,7 @@ mod tests {
             input_hash: String::new(),
         };
         let domain_digests = vec![PageDigest {
+            digest_id: "digest-domain-runtime".to_string(),
             unit_id: "domain-runtime".to_string(),
             page_id: "page-runtime".to_string(),
             title: "核心模块".to_string(),
@@ -1252,6 +1273,9 @@ mod tests {
                 symbol_id: None,
                 note: "运行时主入口".to_string(),
             }],
+            section_digests: Vec::new(),
+            diagram_digests: Vec::new(),
+            readiness_stage: "compose_ready".to_string(),
         }];
 
         let draft = compose_system_page(&unit, &system_research, &domain_digests);
@@ -1294,6 +1318,7 @@ mod tests {
             input_hash: String::new(),
         };
         let child_digests = vec![PageDigest {
+            digest_id: "digest-unit-runtime".to_string(),
             unit_id: "unit-runtime".to_string(),
             page_id: "page-runtime".to_string(),
             title: "运行时".to_string(),
@@ -1310,6 +1335,9 @@ mod tests {
                 symbol_id: None,
                 note: "运行时入口".to_string(),
             }],
+            section_digests: Vec::new(),
+            diagram_digests: Vec::new(),
+            readiness_stage: "compose_ready".to_string(),
         }];
 
         let draft = compose_index_page(&unit, &domain_research, &child_digests);

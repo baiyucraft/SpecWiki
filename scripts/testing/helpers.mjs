@@ -1,5 +1,9 @@
-// wiki-core 测试脚本共享工具。
-// 提供二进制路径解析、JSON IPC 调用、断言辅助等。
+/**
+ * wiki-core 测试脚本共享工具。
+ *
+ * 这里集中维护二进制解析、子进程调用、超时清理与断言辅助，
+ * 避免不同脚本各自复制一套 Windows 锁文件与长流程治理逻辑。
+ */
 
 import { execFileSync, execSync, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -28,6 +32,9 @@ const REMOVE_RETRY_DELAY_MS = 500;
 const REMOVE_RETRY_ATTEMPTS = 40;
 const FILE_RETRY_DELAY_MS = 250;
 const FILE_RETRY_ATTEMPTS = 20;
+
+// 项目级 child worker 会先依赖内部 timeout 自己收尾，这里额外预留两分钟给日志冲刷和 finally 清理。
+export const COMMAND_TIMEOUT_GRACE_MS = 2 * 60_000;
 
 // -------------------------------------------------------------------------
 // 二进制
@@ -121,17 +128,46 @@ export async function runTaskPool(items, jobs, worker) {
 }
 
 /**
+ * 按输入顺序串行执行异步任务。
+ *
+ * @param items 待处理项目列表。
+ * @param worker 实际执行单项任务的异步函数。
+ * @returns 返回与输入顺序一致的结果数组。
+ */
+export async function runSequentialTasks(items, worker) {
+  const results = [];
+  for (let index = 0; index < items.length; index++) {
+    results.push(await worker(items[index], index));
+  }
+  return results;
+}
+
+/**
+ * 判断错误文本是否属于 Windows 常见的瞬态文件锁或目录占用问题。
+ *
+ * @param message 错误码或错误消息。
+ * @returns 命中 `EBUSY`、`EPERM`、`ENOTEMPTY` 或 `os error 32` 时返回 `true`。
+ */
+export function isTransientFsErrorMessage(message) {
+  const normalized = String(message ?? "");
+  return (
+    ["EBUSY", "EPERM", "ENOTEMPTY"].some((code) => normalized.includes(code))
+    || normalized.includes("os error 32")
+  );
+}
+
+/**
  * 启动子进程并收集 stdout/stderr，供项目级并行 worker 复用。
  *
  * @param command 要执行的命令。
  * @param args 命令参数数组。
- * @param options 运行选项；默认在仓库根目录执行且不走 shell。
- * @returns 返回退出码和捕获到的标准输出/错误。
+ * @param options 运行选项；默认在仓库根目录执行且不走 shell，并可附加超时。
+ * @returns 返回退出码、退出信号、是否超时以及捕获到的标准输出/错误。
  */
 export async function runCommandCapture(
   command,
   args,
-  { cwd = ROOT_DIR, shell = false } = {},
+  { cwd = ROOT_DIR, shell = false, timeoutMs } = {},
 ) {
   return await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -142,6 +178,18 @@ export async function runCommandCapture(
 
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    const timer =
+      Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? setTimeout(() => {
+          timedOut = true;
+          stderr = appendProcessMessage(
+            stderr,
+            `command timed out after ${timeoutMs}ms`,
+          );
+          terminateChildProcess(child, { killTreeOnWindows: false });
+        }, timeoutMs)
+        : null;
 
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -149,12 +197,22 @@ export async function runCommandCapture(
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
-    child.on("error", reject);
-    child.on("close", (code) => {
+    child.on("error", (error) => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      reject(error);
+    });
+    child.on("close", (code, signal) => {
+      if (timer) {
+        clearTimeout(timer);
+      }
       resolve({
-        code: code ?? -1,
+        code: timedOut ? -1 : (code ?? -1),
+        signal: signal ?? null,
         stdout,
         stderr,
+        timedOut,
       });
     });
   });
@@ -165,11 +223,54 @@ function sleepSync(ms) {
 }
 
 function isTransientFsError(error) {
-  const message = String(error?.code || error?.message || "");
-  return (
-    ["EBUSY", "EPERM", "ENOTEMPTY"].some((code) => message.includes(code))
-    || message.includes("os error 32")
-  );
+  return isTransientFsErrorMessage(error?.code || error?.message || "");
+}
+
+function appendProcessMessage(stderr, message) {
+  return stderr ? `${stderr}\n${message}` : message;
+}
+
+function tryKillProcessTree(pid) {
+  if (!pid || process.platform !== "win32") {
+    return;
+  }
+
+  try {
+    execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+      timeout: 15_000,
+    });
+  } catch {
+    // 进程可能已经退出，这里不再覆盖原始失败语义。
+  }
+}
+
+/**
+ * 终止测试脚本拉起的子进程。
+ *
+ * 对 `wiki-core` 这类 leaf 进程，Windows 下需要回收整棵进程树，避免残留句柄继续锁住 `.wiki/.cache`；
+ * 对项目级 node worker，默认只杀当前进程，避免破坏其 `finally` 里的临时 dev config 回滚。
+ *
+ * @param child Node `spawn()` 返回的子进程句柄。
+ * @param options 终止选项；`killTreeOnWindows` 仅应在 leaf 进程上启用。
+ * @returns 无返回值。
+ */
+export function terminateChildProcess(child, options = {}) {
+  if (!child || child.killed) {
+    return;
+  }
+
+  if (process.platform === "win32" && options.killTreeOnWindows) {
+    tryKillProcessTree(child.pid);
+    return;
+  }
+
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    // 进程可能已经退出，这里保留调用方原始错误。
+  }
 }
 
 function writeFileWithRetry(filePath, content) {
@@ -372,8 +473,10 @@ export async function callCoreStreaming(command, options = {}) {
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      stderr = appendProcessMessage(stderr, `wiki-core ${command.action} timed out after ${timeout}ms`);
+      terminateChildProcess(child, { killTreeOnWindows: true });
     }, timeout);
+    timer.unref?.();
 
     child.stdout.on("data", (chunk) => {
       stdoutBuffer += chunk.toString();
@@ -391,7 +494,7 @@ export async function callCoreStreaming(command, options = {}) {
       drainOutput(true);
 
       if (timedOut) {
-        reject(new Error(`wiki-core ${command.action} timed out after ${timeout}ms`));
+        reject(new Error(stderr || `wiki-core ${command.action} timed out after ${timeout}ms`));
         return;
       }
       if (code !== 0) {

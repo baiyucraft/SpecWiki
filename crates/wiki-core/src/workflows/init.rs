@@ -30,7 +30,7 @@ use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite_store;
 use crate::storage::state_store::write_state_with_symbol_graph;
 use crate::storage::wiki_fs::{remove_runtime_with_cache_mode, write_page};
-use crate::workflows::page_render::run_compose_pipeline;
+use crate::workflows::page_render::{finalize_pipeline_runtime, run_compose_pipeline_with_action};
 use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
 };
@@ -174,7 +174,8 @@ pub fn run_init_with_progress_and_llm_as<'a>(
             research_provider.summary, research_provider.mode
         ),
     );
-    let pipeline = run_compose_pipeline(
+    let pipeline = run_compose_pipeline_with_action(
+        action,
         repo_root,
         &scan_report,
         &module_tree,
@@ -218,7 +219,8 @@ pub fn run_init_with_progress_and_llm_as<'a>(
         let content_hash = crate::repo::fingerprint::fingerprint_bytes(rendered.content.as_bytes());
 
         let planned_page = find_or_build_planned_page(draft, &pages_by_id);
-        let page_context = build_minimal_page_context(draft, &knowledge_tree);
+        let page_context =
+            build_minimal_page_context(draft, &planned_page, &knowledge_tree, &_digests);
         let input_hash = crate::repo::fingerprint::fingerprint_bytes(
             format!("{}:{}", draft.page_id, draft.citation_count).as_bytes(),
         );
@@ -297,6 +299,7 @@ pub fn run_init_with_progress_and_llm_as<'a>(
     let metadata = export_metadata(&state, &export_context);
     reporter.phase("write_metadata", "写入元数据");
     write_metadata(repo_root, &metadata)?;
+    finalize_pipeline_runtime(repo_root, action, generated_pages.len())?;
     sqlite_store::clear_pipeline_checkpoint(&sqlite_store::open_db(repo_root)?)?;
 
     Ok(InitReport {
@@ -406,11 +409,72 @@ pub(crate) fn find_or_build_planned_page(
 /// 新 pipeline 中 PageContext 主要承载 source_ids 供状态层持久化。
 pub(crate) fn build_minimal_page_context(
     draft: &PageDraft,
+    planned_page: &crate::generation::planner::PlannedPage,
     knowledge_tree: &crate::domain::knowledge::KnowledgeTree,
+    digests: &BTreeMap<String, crate::domain::research::PageDigest>,
 ) -> PageContext {
     let mut ctx = PageContext::default();
     if let Some(unit) = knowledge_tree.get_unit(&draft.unit_id) {
+        let child_digests = crate::workflows::page_render::collect_compose_input_digests(
+            unit,
+            knowledge_tree,
+            digests,
+        );
+        ctx.page_id = planned_page.id.clone();
+        ctx.page_type = planned_page.page_type.clone();
+        ctx.scope = planned_page.scope.clone();
+        ctx.unit_id = planned_page.unit_id.clone();
+        ctx.unit_type = planned_page.unit_type.clone();
+        ctx.domain_id = planned_page.domain_id.clone();
         ctx.source_ids = unit.scope.source_ids.clone();
+        ctx.module_ids = unit.scope.module_ids.clone();
+        ctx.relation_ids = unit.scope.relation_ids.clone();
+        ctx.facts = vec![
+            format!("unit={}", unit.id),
+            format!("unit_type={}", unit.unit_type.as_str()),
+            format!("relative_path={}", unit.relative_path),
+        ];
+        ctx.summary_inputs = vec![draft.title.clone()];
+        ctx.child_summaries = child_digests
+            .iter()
+            .map(|digest| format!("{}: {}", digest.title, digest.summary))
+            .collect();
+        ctx.child_unit_ids = child_digests
+            .iter()
+            .map(|digest| digest.unit_id.clone())
+            .collect();
+        ctx.child_page_ids = child_digests
+            .iter()
+            .map(|digest| digest.page_id.clone())
+            .collect();
+        ctx.child_digest_ids = child_digests
+            .iter()
+            .map(|digest| digest.digest_id.clone())
+            .collect();
+        ctx.readiness_status = if child_digests.is_empty() && !unit.is_leaf() {
+            "waiting_children".to_string()
+        } else {
+            "compose_ready".to_string()
+        };
+        ctx.citation_digest_refs = child_digests
+            .iter()
+            .flat_map(|digest| {
+                digest
+                    .section_digests
+                    .iter()
+                    .filter(|section| !section.citations.is_empty())
+                    .map(|section| section.digest_id.clone())
+            })
+            .collect();
+        ctx.diagram_digest_refs = child_digests
+            .iter()
+            .flat_map(|digest| {
+                digest
+                    .diagram_digests
+                    .iter()
+                    .map(|diagram| diagram.digest_id.clone())
+            })
+            .collect();
     }
     ctx
 }
@@ -426,4 +490,124 @@ pub(crate) fn current_timestamp() -> String {
                 .map(|duration| duration.as_secs().to_string())
                 .unwrap_or_else(|_| "0".to_string())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::build_minimal_page_context;
+    use crate::domain::compose::PageDraft;
+    use crate::domain::knowledge::{
+        DomainType, KnowledgeDomain, KnowledgeTree, KnowledgeUnit, UnitType,
+    };
+    use crate::domain::research::{
+        PageDiagramDigest, PageDigest, PageSectionDigest, SourceCitation,
+    };
+    use crate::generation::planner::plan_pages_from_knowledge_tree;
+
+    #[test]
+    fn build_minimal_page_context_persists_child_contract_and_unit_identity() {
+        let domain = KnowledgeDomain::new(DomainType::CoreRuntime, "核心模块");
+        let mut parent = KnowledgeUnit::new(
+            UnitType::DomainIndex,
+            "核心模块",
+            domain.id.clone(),
+            "核心模块/核心模块.md",
+        );
+        let child = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "运行时",
+            domain.id.clone(),
+            "核心模块/运行时.md",
+        );
+        parent.child_unit_ids.push(child.id.clone());
+
+        let mut tree = KnowledgeTree::new(parent.id.clone());
+        tree.add_domain(domain);
+        tree.add_unit(parent.clone());
+        tree.add_unit(child.clone());
+        tree.processing_order = vec![child.id.clone(), parent.id.clone()];
+
+        let planned_page = plan_pages_from_knowledge_tree(&tree)
+            .into_iter()
+            .find(|page| {
+                page.id == crate::domain::stable_id::stable_id("page", &parent.relative_path)
+            })
+            .expect("parent page should be planned");
+        let draft = PageDraft {
+            page_id: planned_page.id.clone(),
+            unit_id: parent.id.clone(),
+            title: parent.title.clone(),
+            relative_path: parent.relative_path.clone(),
+            sections: Vec::new(),
+            diagrams: Vec::new(),
+            citation_count: 0,
+        };
+        let child_digest = PageDigest {
+            digest_id: "digest-child-runtime".to_string(),
+            unit_id: child.id.clone(),
+            page_id: crate::domain::stable_id::stable_id("page", &child.relative_path),
+            title: child.title.clone(),
+            summary: "负责主运行时流程。".to_string(),
+            key_sources: vec!["src/runtime.rs".to_string()],
+            section_digests: vec![PageSectionDigest {
+                digest_id: "section-runtime".to_string(),
+                section_key: "runtime-flow".to_string(),
+                title: "运行时流程".to_string(),
+                summary: "按阶段推进主流程。".to_string(),
+                key_sources: vec!["src/runtime.rs".to_string()],
+                citations: vec![SourceCitation {
+                    path: "src/runtime.rs".to_string(),
+                    start_line: 10,
+                    end_line: 24,
+                    source_id: Some("source-runtime".to_string()),
+                    symbol_id: None,
+                    note: "主入口".to_string(),
+                }],
+            }],
+            diagram_digests: vec![PageDiagramDigest {
+                digest_id: "diagram-runtime".to_string(),
+                diagram_type: "flow".to_string(),
+                title: "运行时流".to_string(),
+                summary: "阶段关系".to_string(),
+            }],
+            readiness_stage: "compose_ready".to_string(),
+            ..PageDigest::default()
+        };
+        let digests = BTreeMap::from([(child.id.clone(), child_digest)]);
+
+        let context = build_minimal_page_context(&draft, &planned_page, &tree, &digests);
+
+        assert_eq!(context.unit_id.as_deref(), Some(parent.id.as_str()));
+        assert_eq!(
+            context.unit_type.as_deref(),
+            Some(parent.unit_type.as_str())
+        );
+        assert_eq!(
+            context.domain_id.as_deref(),
+            Some(parent.domain_id.as_str())
+        );
+        assert_eq!(context.child_unit_ids, vec![child.id.clone()]);
+        assert_eq!(
+            context.child_page_ids,
+            vec![crate::domain::stable_id::stable_id(
+                "page",
+                &child.relative_path
+            )]
+        );
+        assert_eq!(
+            context.child_digest_ids,
+            vec!["digest-child-runtime".to_string()]
+        );
+        assert_eq!(context.readiness_status, "compose_ready");
+        assert_eq!(
+            context.citation_digest_refs,
+            vec!["section-runtime".to_string()]
+        );
+        assert_eq!(
+            context.diagram_digest_refs,
+            vec!["diagram-runtime".to_string()]
+        );
+    }
 }

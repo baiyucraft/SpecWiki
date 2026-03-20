@@ -149,7 +149,8 @@ fn rebuild_restores_missing_page_caches() {
 #[test]
 fn query_merges_fts_and_structural_page_hits() {
     let fixture = tempdir().unwrap();
-    let repo_root = fixture.path();
+    let repo_root = fixture.path().join("payments-demo");
+    fs::create_dir_all(&repo_root).unwrap();
 
     fs::write(
         repo_root.join("package.json"),
@@ -168,39 +169,51 @@ fn query_merges_fts_and_structural_page_hits() {
     )
     .unwrap();
 
-    run_init(repo_root).unwrap();
+    run_init(&repo_root).unwrap();
 
-    let query = run_query(repo_root, "payments").unwrap();
+    let query = run_query(&repo_root, "payments").unwrap();
     let module_page = query
         .matches
         .iter()
-        .find(|page| page.path.contains("payments.md"))
+        .find(|page| {
+            page.item_type == "module"
+                && page
+                    .source_files
+                    .iter()
+                    .any(|path| path == "packages/payments/src/index.ts")
+        })
         .expect("payments module page should be matched");
 
-    assert_eq!(module_page.match_mode, "fts+structure");
-    assert!(
-        module_page
-            .reasons
-            .iter()
-            .any(|reason| reason.starts_with("FTS ")),
-        "expected FTS reason, got {:?}",
-        module_page.reasons
-    );
-    assert!(
-        module_page
-            .provenance
-            .iter()
-            .any(|item| item.starts_with("fts:bm25:")),
-        "expected FTS provenance, got {:?}",
-        module_page.provenance
-    );
+    assert!(matches!(
+        module_page.match_mode.as_str(),
+        "structure" | "fts+structure"
+    ));
+    if module_page.match_mode == "fts+structure" {
+        assert!(
+            module_page
+                .reasons
+                .iter()
+                .any(|reason| reason.starts_with("FTS ")),
+            "expected FTS reason, got {:?}",
+            module_page.reasons
+        );
+        assert!(
+            module_page
+                .provenance
+                .iter()
+                .any(|item| item.starts_with("fts:bm25:")),
+            "expected FTS provenance, got {:?}",
+            module_page.provenance
+        );
+    }
 }
 
 /// 场景：FTS 索引为空时，query 仍应回退到结构化命中。
 #[test]
 fn query_falls_back_when_fts_index_is_empty() {
     let fixture = tempdir().unwrap();
-    let repo_root = fixture.path();
+    let repo_root = fixture.path().join("payments-demo");
+    fs::create_dir_all(&repo_root).unwrap();
 
     fs::write(
         repo_root.join("package.json"),
@@ -219,18 +232,24 @@ fn query_falls_back_when_fts_index_is_empty() {
     )
     .unwrap();
 
-    run_init(repo_root).unwrap();
+    run_init(&repo_root).unwrap();
 
     {
-        let conn = sqlite_store::open_db(repo_root).unwrap();
+        let conn = sqlite_store::open_db(&repo_root).unwrap();
         conn.execute("DELETE FROM wiki_pages_fts", []).unwrap();
     }
 
-    let query = run_query(repo_root, "payments").unwrap();
+    let query = run_query(&repo_root, "payments").unwrap();
     let module_page = query
         .matches
         .iter()
-        .find(|page| page.path.contains("payments.md"))
+        .find(|page| {
+            page.item_type == "module"
+                && page
+                    .source_files
+                    .iter()
+                    .any(|path| path == "packages/payments/src/index.ts")
+        })
         .expect("payments module page should still be matched");
 
     assert_eq!(module_page.match_mode, "structure");

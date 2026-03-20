@@ -1,15 +1,20 @@
-// wiki-core 生命周期测试脚本。
-// 现在支持按阶段拆分运行，避免每次把 init → sync → query → update → rebuild 全链路一次跑完。
-//
-// 用法：
-//   node scripts/test-wiki-lifecycle.mjs --list-phases
-//   node scripts/test-wiki-lifecycle.mjs --phase bootstrap
-//   node scripts/test-wiki-lifecycle.mjs --phase steady axum zustand
-//   node scripts/test-wiki-lifecycle.mjs --phase steady --timeout-minutes 120 dagger
-//   node scripts/test-wiki-lifecycle.mjs --phase mutation
-//   node scripts/test-wiki-lifecycle.mjs --phase rebuild
-//   node scripts/test-wiki-lifecycle.mjs --jobs 6
-//   node scripts/test-wiki-lifecycle.mjs                    # 默认 full
+/**
+ * wiki-core 生命周期测试脚本。
+ *
+ * 这个入口负责把 `init -> status -> sync -> query -> update -> rebuild`
+ * 按 phase 组合成可复跑的验收链路；
+ * 进程超时、Windows 锁文件清理与顺序执行则复用共享 helpers。
+ *
+ * 用法：
+ *   node scripts/test-wiki-lifecycle.mjs --list-phases
+ *   node scripts/test-wiki-lifecycle.mjs --phase bootstrap
+ *   node scripts/test-wiki-lifecycle.mjs --phase steady axum zustand
+ *   node scripts/test-wiki-lifecycle.mjs --phase steady --timeout-minutes 120 dagger
+ *   node scripts/test-wiki-lifecycle.mjs --phase mutation
+ *   node scripts/test-wiki-lifecycle.mjs --phase rebuild
+ *   node scripts/test-wiki-lifecycle.mjs --jobs 6
+ *   node scripts/test-wiki-lifecycle.mjs                    # 默认 full
+ */
 
 import {
   appendFileSync,
@@ -27,12 +32,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   callCore,
   callCoreStreaming,
+  COMMAND_TIMEOUT_GRACE_MS,
   ensureBinary,
   formatUsageSnapshot,
+  isTransientFsErrorMessage,
   ROOT_DIR,
   removePathWithRetry,
   resolveProjectJobs,
   runCommandCapture,
+  runSequentialTasks,
   runTaskPool,
   TEST_DIR,
   TestRunner,
@@ -863,26 +871,30 @@ function printLifecycleProjectResult(result, index, total, phase) {
 }
 
 async function runLifecycleProjectInChild(proj, phase, runMode, timeoutMs) {
-  const childArgs = [SCRIPT_PATH, "--child-json", "--phase", phase, "--run-mode", runMode, "--no-build"];
-  if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
-    childArgs.push("--timeout-minutes", String(Math.ceil(timeoutMs / 60_000)));
-  }
-  childArgs.push(proj);
+  const childArgs = buildLifecycleProjectChildArgs(proj, { phase, runMode, timeoutMs });
 
   for (let attempt = 0; attempt < 3; attempt++) {
     const child = await runCommandCapture(
       process.execPath,
       childArgs,
-      { cwd: ROOT_DIR },
+      {
+        cwd: ROOT_DIR,
+        timeoutMs:
+          (Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60 * 60_000)
+          + COMMAND_TIMEOUT_GRACE_MS,
+      },
     );
 
+    if (child.timedOut) {
+      throw new Error(child.stderr || `child worker for ${proj} timed out`);
+    }
     if (child.stdout.trim()) {
       return JSON.parse(child.stdout.trim());
     }
 
     if (
       attempt < 2
-      && /EBUSY|EPERM|ENOTEMPTY/.test(child.stderr || "")
+      && isTransientFsErrorMessage(child.stderr || "")
     ) {
       await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
       continue;
@@ -921,7 +933,7 @@ export async function runLifecycleTests(names, options = {}) {
       printLifecycleProjectResult(result, index, total, phase);
       return result;
     })
-    : await Promise.all(projects.map(async (proj, index) => {
+    : await runSequentialTasks(projects, async (proj, index) => {
       console.log(`[${index + 1}/${total}] ${proj} [phase=${phase}]`);
       const result = await runLifecycleProject(proj, {
         phase,
@@ -934,7 +946,7 @@ export async function runLifecycleTests(names, options = {}) {
         );
       }
       return result;
-    }));
+    });
 
   for (const result of results) {
     assertionTotal += result.total ?? 0;
@@ -1010,6 +1022,30 @@ export function parseCliArgs(argv) {
   return { childMode, ensureFresh, jobs, listPhases, names, phase, runMode, timeoutMs };
 }
 
+/**
+ * 构造 lifecycle child worker 的命令参数。
+ *
+ * @param proj 测试项目名。
+ * @param options child worker 运行选项。
+ * @returns 返回可直接传给 `node` 的参数数组。
+ */
+export function buildLifecycleProjectChildArgs(proj, options = {}) {
+  const args = [
+    SCRIPT_PATH,
+    "--child-json",
+    "--phase",
+    options.phase || "full",
+    "--run-mode",
+    options.runMode || "cold",
+    "--no-build",
+  ];
+  if (Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
+    args.push("--timeout-minutes", String(Math.ceil(options.timeoutMs / 60_000)));
+  }
+  args.push(proj);
+  return args;
+}
+
 const entryHref = process.argv[1] ? pathToFileURL(process.argv[1]).href : null;
 
 if (entryHref && import.meta.url === entryHref) {
@@ -1025,6 +1061,7 @@ if (entryHref && import.meta.url === entryHref) {
       captureLogs: true,
       phase: args.phase,
       runMode: args.runMode,
+      timeoutMs: args.timeoutMs,
     });
     process.stdout.write(JSON.stringify(await result));
     process.exit(0);

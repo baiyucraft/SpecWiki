@@ -1,11 +1,15 @@
-// 批量对 tmp/test/* 项目执行 init，保留生成的 .wiki 目录。
-// 如果项目已有 .wiki，先删除再重新生成。
-// aLocal 和 spec-wiki 指向真实仓库执行 init 后拷贝回来。
-//
-// 用法：
-//   node scripts/run-test-projects.mjs                     # 跑全部
-//   node scripts/run-test-projects.mjs --jobs 6           # 调整项目并行度
-//   node scripts/run-test-projects.mjs axum chi           # 只跑指定项目
+/**
+ * 批量对 `tmp/test/*` 项目执行 `init`，并保留生成后的 `.wiki` 目录。
+ *
+ * 这个脚本只负责项目级调度与结果汇总；
+ * 真正的 core 调用、超时与 Windows 锁文件清理由 `scripts/testing/helpers.mjs` 统一承接。
+ *
+ * 用法：
+ *   node scripts/run-test-projects.mjs                             # 跑全部
+ *   node scripts/run-test-projects.mjs --jobs 6                   # 调整项目并行度
+ *   node scripts/run-test-projects.mjs --timeout-minutes 90 dagger
+ *   node scripts/run-test-projects.mjs axum chi                   # 只跑指定项目
+ */
 
 import { execFileSync } from "node:child_process";
 import {
@@ -19,13 +23,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   callCoreStreaming,
+  COMMAND_TIMEOUT_GRACE_MS,
   ensureBinary,
   formatUsageSnapshot,
   ROOT_DIR,
   TEST_DIR,
+  isTransientFsErrorMessage,
   removePathWithRetry,
   resolveProjectJobs,
   runCommandCapture,
+  runSequentialTasks,
   runTaskPool,
   withTemporaryDevConfig,
 } from "./testing/helpers.mjs";
@@ -40,6 +47,7 @@ const REAL_REPO_MAP = {
   aLocal: "E:\\project\\aLocal",
   "spec-wiki": ROOT_DIR,
 };
+const DEFAULT_INIT_TIMEOUT_MS = 60 * 60_000;
 
 function resolveRunModes(runMode) {
   if (runMode === "both") {
@@ -121,6 +129,14 @@ function createProjectProgressLogger(logs, project, runLabel) {
   };
 }
 
+/**
+ * 在真实仓库上执行 `init`，再把 `.wiki` 复制回测试样本目录。
+ *
+ * @param proj 测试项目名。
+ * @param realRepo 真实仓库根目录。
+ * @param options 运行选项；支持日志、cache mode 和超时。
+ * @returns 返回本次 init 捕获到的 progress 事件。
+ */
 async function initViaRealRepo(proj, realRepo, options = {}) {
   const projDir = path.join(TEST_DIR, proj);
   const wikiInReal = path.join(realRepo, ".wiki");
@@ -132,7 +148,10 @@ async function initViaRealRepo(proj, realRepo, options = {}) {
     () =>
       callCoreStreaming(
         { action: "init", repoRoot: realRepo },
-        { onProgress: (event) => logger?.onProgress(event) },
+        {
+          onProgress: (event) => logger?.onProgress(event),
+          timeoutMs: options.timeoutMs,
+        },
       ),
     { cacheMode },
   );
@@ -252,7 +271,10 @@ async function runSingleProject(proj, options = {}) {
           () =>
             callCoreStreaming(
               { action: "init", repoRoot: `tmp/test/${proj}` },
-              { onProgress: (event) => logger.onProgress(event) },
+              {
+                onProgress: (event) => logger.onProgress(event),
+                timeoutMs: options.timeoutMs,
+              },
             ),
           { cacheMode: run.cacheMode },
         );
@@ -329,17 +351,39 @@ function printProjectStart(proj, index, total) {
 }
 
 function isTransientProjectError(message) {
-  return /EBUSY|EPERM|ENOTEMPTY|os error 32/.test(message || "");
+  return isTransientFsErrorMessage(message || "");
 }
 
-async function runProjectInChild(proj, runMode) {
+/**
+ * 构造项目级 child worker 的命令参数。
+ *
+ * @param proj 测试项目名。
+ * @param options child worker 运行选项。
+ * @returns 返回可直接传给 `node` 的参数数组。
+ */
+export function buildRunTestProjectChildArgs(proj, options = {}) {
+  const args = [SCRIPT_PATH, "--child-json", "--no-build", "--run-mode", options.runMode || "cold"];
+  if (Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
+    args.push("--timeout-minutes", String(Math.ceil(options.timeoutMs / 60_000)));
+  }
+  args.push(proj);
+  return args;
+}
+
+async function runProjectInChild(proj, options = {}) {
   for (let attempt = 0; attempt < 3; attempt++) {
     const child = await runCommandCapture(
       process.execPath,
-      [SCRIPT_PATH, "--child-json", "--no-build", "--run-mode", runMode, proj],
-      { cwd: ROOT_DIR },
+      buildRunTestProjectChildArgs(proj, options),
+      {
+        cwd: ROOT_DIR,
+        timeoutMs: (options.timeoutMs ?? DEFAULT_INIT_TIMEOUT_MS) + COMMAND_TIMEOUT_GRACE_MS,
+      },
     );
 
+    if (child.timedOut) {
+      throw new Error(child.stderr || `child worker for ${proj} timed out`);
+    }
     if (!child.stdout.trim()) {
       if (attempt < 2 && isTransientProjectError(child.stderr)) {
         await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
@@ -375,16 +419,22 @@ export async function runTestProjects(names, options = {}) {
   const results = useParallel
     ? await runTaskPool(projects, jobs, async (proj, index) => {
       printProjectStart(proj, index, total);
-      const result = await runProjectInChild(proj, options.runMode || "cold");
+      const result = await runProjectInChild(proj, {
+        runMode: options.runMode || "cold",
+        timeoutMs: options.timeoutMs,
+      });
       printProjectResult(result, index, total);
       return result;
     })
-    : await Promise.all(projects.map(async (proj, index) => {
+    : await runSequentialTasks(projects, async (proj, index) => {
       printProjectStart(proj, index, total);
-      const result = await runSingleProject(proj, { runMode: options.runMode });
+      const result = await runSingleProject(proj, {
+        runMode: options.runMode,
+        timeoutMs: options.timeoutMs,
+      });
       printProjectResult(result, index, total);
       return result;
-    }));
+    });
 
   for (const result of results) {
     if (result.skipped) {
@@ -401,12 +451,13 @@ export async function runTestProjects(names, options = {}) {
   return failed === 0;
 }
 
-function parseCliArgs(argv) {
+export function parseCliArgs(argv) {
   const names = [];
   let jobs;
   let childMode = false;
   let ensureFresh = true;
   let runMode = "cold";
+  let timeoutMs;
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -428,16 +479,27 @@ function parseCliArgs(argv) {
       index++;
       continue;
     }
+    if (arg === "--timeout-minutes") {
+      const timeoutMinutes = Number(argv[index + 1]);
+      if (Number.isFinite(timeoutMinutes) && timeoutMinutes > 0) {
+        timeoutMs = Math.round(timeoutMinutes * 60_000);
+      }
+      index++;
+      continue;
+    }
     names.push(arg);
   }
 
-  return { childMode, ensureFresh, jobs, names, runMode };
+  return { childMode, ensureFresh, jobs, names, runMode, timeoutMs };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseCliArgs(process.argv.slice(2));
   if (args.childMode) {
-    const result = await runSingleProject(args.names[0], { runMode: args.runMode });
+    const result = await runSingleProject(args.names[0], {
+      runMode: args.runMode,
+      timeoutMs: args.timeoutMs,
+    });
     process.stdout.write(JSON.stringify(result));
     process.exit(0);
   }
@@ -446,6 +508,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     ensureFresh: args.ensureFresh,
     jobs: args.jobs,
     runMode: args.runMode,
+    timeoutMs: args.timeoutMs,
   });
   if (!ok) process.exit(1);
 }
