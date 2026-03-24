@@ -79,6 +79,12 @@ function safeQuerySqliteValue(cacheDbPath, sql) {
   }
 }
 
+function normalizeSourcePath(value) {
+  return String(value)
+    .replaceAll("\\", "/")
+    .replace(/#L\d+(?:-L?\d+)?$/i, "");
+}
+
 function sqliteTableExists(cacheDbPath, tableName) {
   return safeQuerySqliteValue(
     cacheDbPath,
@@ -502,13 +508,123 @@ function readParentContractMetrics(cacheDbPath) {
   };
 }
 
+/**
+ * 从 `page_digests` 读取 compose 诊断字段，并按 unit_id 组织回页面级视图。
+ *
+ * @param {string} cacheDbPath runtime cache 数据库路径。
+ * @returns {{byUnitId: Record<string, object>, summary: object}} 返回逐页诊断映射与聚合摘要；老 schema 会返回空结果。
+ */
+function readPageDigestDiagnostics(cacheDbPath) {
+  if (
+    !sqliteTableExists(cacheDbPath, "page_digests")
+    || !sqliteColumnExists(cacheDbPath, "page_digests", "digest")
+  ) {
+    return {
+      byUnitId: {},
+      summary: {
+        digestPages: 0,
+        pagesWithSkeletonProfile: 0,
+        pagesWithSectionGroundingRefs: 0,
+        pagesWithPlannedKeySources: 0,
+        pagesWithGroundedKeySources: 0,
+        pagesWithGroundingGap: 0,
+      },
+    };
+  }
+
+  const rows = safeQuerySqliteRows(
+    cacheDbPath,
+    "select coalesce(unit_id, ''), coalesce(digest, '{}') from page_digests order by unit_id asc;",
+  );
+  const byUnitId = {};
+  let pagesWithSkeletonProfile = 0;
+  let pagesWithSectionGroundingRefs = 0;
+  let pagesWithPlannedKeySources = 0;
+  let pagesWithGroundedKeySources = 0;
+  let pagesWithGroundingGap = 0;
+
+  for (const row of rows) {
+    const [unitId = "", digestJson = "{}"] = row.split("|");
+    const digest = parseJsonObject(digestJson);
+    const plannedKeySources = Array.isArray(digest?.planned_key_sources)
+      ? digest.planned_key_sources.map((item) => String(item))
+      : [];
+    const groundedKeySources = Array.isArray(digest?.grounded_key_sources)
+      ? digest.grounded_key_sources.map((item) => String(item))
+      : [];
+    const sectionGroundingRefs = Array.isArray(digest?.section_grounding_refs)
+      ? digest.section_grounding_refs
+      : [];
+    const skeletonProfile = digest?.skeleton_profile && typeof digest.skeleton_profile === "object"
+      ? digest.skeleton_profile
+      : null;
+    const plannedBasenames = new Set(
+      plannedKeySources.map((item) => path.posix.basename(normalizeSourcePath(item)).toLowerCase()),
+    );
+    const groundedBasenames = new Set(
+      groundedKeySources.map((item) => path.posix.basename(normalizeSourcePath(item)).toLowerCase()),
+    );
+    const missingGroundedSources = plannedKeySources.filter((item) => {
+      const normalized = normalizeSourcePath(item);
+      const basename = path.posix.basename(normalized).toLowerCase();
+      return !groundedKeySources.some((candidate) => normalizeSourcePath(candidate) === normalized)
+        && !groundedBasenames.has(basename);
+    });
+
+    if (skeletonProfile) {
+      pagesWithSkeletonProfile += 1;
+    }
+    if (sectionGroundingRefs.length > 0) {
+      pagesWithSectionGroundingRefs += 1;
+    }
+    if (plannedKeySources.length > 0) {
+      pagesWithPlannedKeySources += 1;
+    }
+    if (groundedKeySources.length > 0) {
+      pagesWithGroundedKeySources += 1;
+    }
+    if (plannedKeySources.length > 0 && missingGroundedSources.length > 0) {
+      pagesWithGroundingGap += 1;
+    }
+
+    byUnitId[unitId] = {
+      unitId,
+      plannedKeySources,
+      groundedKeySources,
+      missingGroundedSources,
+      sectionGroundingRefs,
+      sectionGroundingRefCount: sectionGroundingRefs.length,
+      skeletonProfile,
+      skeletonProfileKey: skeletonProfile?.profile_key ?? null,
+      plannedKeySourceCount: plannedKeySources.length,
+      groundedKeySourceCount: groundedKeySources.length,
+      groundingGapCount: missingGroundedSources.length,
+      groundingGap: plannedKeySources.length > 0 && missingGroundedSources.length > 0,
+      readinessStage: readJsonString(digest, ["readiness_stage", "readinessStage"]) ?? "",
+      digestTitle: readJsonString(digest, ["title"]) ?? null,
+    };
+  }
+
+  return {
+    byUnitId,
+    summary: {
+      digestPages: rows.length,
+      pagesWithSkeletonProfile,
+      pagesWithSectionGroundingRefs,
+      pagesWithPlannedKeySources,
+      pagesWithGroundedKeySources,
+      pagesWithGroundingGap,
+    },
+  };
+}
+
 function normalizeWikiItemPath(itemPath) {
   return String(itemPath ?? "")
     .replaceAll("\\", "/")
     .replace(/^\.wiki\//, "");
 }
 
-function readPageRuntimeByPath(cacheDbPath, metadata) {
+function readPageRuntimeByPath(cacheDbPath, metadata, pageDigestDiagnostics) {
   if (!sqliteTableExists(cacheDbPath, "page_context_cache")) {
     return {};
   }
@@ -534,6 +650,9 @@ function readPageRuntimeByPath(cacheDbPath, metadata) {
         if (!context) {
           return null;
         }
+        const digestDiagnostics = context.unit_id
+          ? pageDigestDiagnostics?.byUnitId?.[context.unit_id] ?? null
+          : null;
         return [
           normalizeWikiItemPath(item.path),
           {
@@ -545,6 +664,18 @@ function readPageRuntimeByPath(cacheDbPath, metadata) {
             childDigestCount: Array.isArray(context.child_digest_ids)
               ? context.child_digest_ids.length
               : 0,
+            plannedKeySources: digestDiagnostics?.plannedKeySources ?? [],
+            groundedKeySources: digestDiagnostics?.groundedKeySources ?? [],
+            missingGroundedSources: digestDiagnostics?.missingGroundedSources ?? [],
+            plannedKeySourceCount: digestDiagnostics?.plannedKeySourceCount ?? 0,
+            groundedKeySourceCount: digestDiagnostics?.groundedKeySourceCount ?? 0,
+            groundingGapCount: digestDiagnostics?.groundingGapCount ?? 0,
+            groundingGap: digestDiagnostics?.groundingGap ?? false,
+            sectionGroundingRefs: digestDiagnostics?.sectionGroundingRefs ?? [],
+            sectionGroundingRefCount: digestDiagnostics?.sectionGroundingRefCount ?? 0,
+            skeletonProfile: digestDiagnostics?.skeletonProfile ?? null,
+            skeletonProfileKey: digestDiagnostics?.skeletonProfileKey ?? null,
+            digestReadinessStage: digestDiagnostics?.readinessStage ?? "",
           },
         ];
       })
@@ -645,8 +776,9 @@ export function inspectWikiRuntime(wikiDir) {
   const runtimeGateSummary = summarizeUnitRuntimeGates(unitRuntimeGates);
   const researchProgressSummary = readResearchProgressSummary(cacheDbPath, runtimeSummary);
   const parentContract = readParentContractMetrics(cacheDbPath);
+  const pageDigestDiagnostics = readPageDigestDiagnostics(cacheDbPath);
   const metadata = metadataExists ? JSON.parse(readFileSync(metadataPath, "utf-8")) : null;
-  const pageRuntimeByPath = readPageRuntimeByPath(cacheDbPath, metadata);
+  const pageRuntimeByPath = readPageRuntimeByPath(cacheDbPath, metadata, pageDigestDiagnostics);
 
   const snapshot = {
     wikiDir,
@@ -664,6 +796,7 @@ export function inspectWikiRuntime(wikiDir) {
     runtimeGateSummary,
     researchProgressSummary,
     parentContract,
+    composeDiagnostics: pageDigestDiagnostics.summary,
     pageRuntimeByPath,
     metadata,
   };

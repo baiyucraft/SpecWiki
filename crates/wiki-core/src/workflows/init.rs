@@ -10,11 +10,13 @@ use std::time::Instant;
 use std::time::SystemTime;
 
 use crate::debug_trace;
+use crate::domain::checkpoint::PipelineRuntimeSummary;
 use crate::domain::compose::PageDraft;
 use crate::domain::context::PageContext;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
 use crate::domain::state::{assemble_state, PageBuildResult};
 use crate::domain::steering::load_steering_config;
+use crate::domain::steering::LlmCacheMode;
 use crate::generation::context::{build_module_contexts_with_graph, build_repo_context_with_graph};
 use crate::generation::renderer::render_page_draft;
 use crate::llm::{LlmRuntime, LlmService};
@@ -26,6 +28,7 @@ use crate::storage::cache_store::{
     ensure_cache_dir, ensure_page_cache_dirs, write_module_tree_cache, write_page_context_cache,
     write_page_generation_cache, write_scan_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
+use crate::storage::metadata_store::metadata_exists;
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite_store;
 use crate::storage::state_store::write_state_with_symbol_graph;
@@ -106,7 +109,9 @@ pub fn run_init_with_progress_and_llm_as<'a>(
 
     // 按 deterministic pipeline 的顺序串起整条生成链。
     let steering = load_steering_config(repo_root);
-    remove_runtime_with_cache_mode(repo_root, steering.llm.cache_mode)?;
+    if !should_preserve_incomplete_init_runtime(action, repo_root, steering.llm.cache_mode)? {
+        remove_runtime_with_cache_mode(repo_root, steering.llm.cache_mode)?;
+    }
     debug_trace::begin_session(action, repo_root, &steering.debug)?;
     let mut llm_runtime = LlmRuntime::new(repo_root, &steering.llm, _llm_service);
     let usage_sink = shared_sink.clone();
@@ -309,6 +314,70 @@ pub fn run_init_with_progress_and_llm_as<'a>(
     })
 }
 
+fn should_preserve_incomplete_init_runtime(
+    action: &str,
+    repo_root: &Path,
+    cache_mode: LlmCacheMode,
+) -> io::Result<bool> {
+    if action != "init" || cache_mode == LlmCacheMode::Clear {
+        return Ok(false);
+    }
+
+    if metadata_exists(repo_root)
+        || count_existing_markdown_pages(repo_root.join(".wiki").as_path())? > 0
+    {
+        return Ok(false);
+    }
+
+    let db_path = sqlite_store::db_path(repo_root);
+    if !db_path.exists() {
+        return Ok(false);
+    }
+
+    let conn = sqlite_store::open_db(repo_root)?;
+    let Some(raw_summary) = sqlite_store::runtime_meta_get(&conn, "pipeline_runtime_summary")?
+    else {
+        return Ok(false);
+    };
+    let runtime_summary: PipelineRuntimeSummary = serde_json::from_str(&raw_summary)
+        .map_err(|error| io::Error::other(format!("deserialize runtime summary: {error}")))?;
+    if runtime_summary.workflow_action != action {
+        return Ok(false);
+    }
+    if !matches!(
+        runtime_summary.runtime_state.as_str(),
+        "researching" | "compose_pending" | "compose_complete" | "interrupted"
+    ) {
+        return Ok(false);
+    }
+
+    Ok(!sqlite_store::read_unit_runtime_gates(&conn)?.is_empty())
+}
+
+fn count_existing_markdown_pages(wiki_root: &Path) -> io::Result<usize> {
+    if !wiki_root.exists() {
+        return Ok(0);
+    }
+
+    let mut count = 0usize;
+    for entry in std::fs::read_dir(wiki_root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            if entry.file_name() == ".cache" {
+                continue;
+            }
+            count += count_existing_markdown_pages(&path)?;
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
 /// 根据页面上下文里的 `source_ids` 反查源码路径。
 pub(crate) fn source_paths_for_page(
     scan_report: &crate::repo::scanner::ScanReport,
@@ -495,8 +564,12 @@ pub(crate) fn current_timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::fs;
 
-    use super::build_minimal_page_context;
+    use tempfile::tempdir;
+
+    use super::{build_minimal_page_context, should_preserve_incomplete_init_runtime};
+    use crate::domain::checkpoint::UnitRuntimeGate;
     use crate::domain::compose::PageDraft;
     use crate::domain::knowledge::{
         DomainType, KnowledgeDomain, KnowledgeTree, KnowledgeUnit, UnitType,
@@ -504,7 +577,9 @@ mod tests {
     use crate::domain::research::{
         PageDiagramDigest, PageDigest, PageSectionDigest, SourceCitation,
     };
+    use crate::domain::steering::LlmCacheMode;
     use crate::generation::planner::plan_pages_from_knowledge_tree;
+    use crate::storage::sqlite_store;
 
     #[test]
     fn build_minimal_page_context_persists_child_contract_and_unit_identity() {
@@ -609,5 +684,144 @@ mod tests {
             context.diagram_digest_refs,
             vec!["diagram-runtime".to_string()]
         );
+    }
+
+    #[test]
+    fn incomplete_init_runtime_is_preserved_only_for_narrow_resume_window() {
+        let fixture = tempdir().unwrap();
+        let repo_root = fixture.path();
+        let wiki_root = repo_root.join(".wiki");
+        fs::create_dir_all(wiki_root.join(".cache")).unwrap();
+
+        let conn = sqlite_store::open_db(repo_root).unwrap();
+        let domain = KnowledgeDomain::new(DomainType::CoreRuntime, "核心运行时");
+        let unit = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "运行时",
+            domain.id.clone(),
+            "核心运行时/运行时.md",
+        );
+        sqlite_store::write_knowledge_domains(&conn, &[domain]).unwrap();
+        sqlite_store::write_knowledge_units(&conn, &[unit.clone()]).unwrap();
+        sqlite_store::runtime_meta_set(
+            &conn,
+            "pipeline_runtime_summary",
+            &serde_json::json!({
+                "facts_input_hash": "facts-same",
+                "workflow_action": "init",
+                "runtime_state": "researching"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        sqlite_store::write_unit_runtime_gate(
+            &conn,
+            &UnitRuntimeGate {
+                unit_id: unit.id.clone(),
+                unit_type: unit.unit_type.as_str().to_string(),
+                research_status: "ready".to_string(),
+                compose_status: "ready".to_string(),
+                assemble_status: "pending".to_string(),
+                last_ready_stage: Some("research_unit".to_string()),
+                blocked_reason: None,
+                missing_dependencies: Vec::new(),
+                updated_at: "1".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert!(
+            should_preserve_incomplete_init_runtime("init", repo_root, LlmCacheMode::Preserve)
+                .unwrap()
+        );
+        assert!(!should_preserve_incomplete_init_runtime(
+            "rebuild",
+            repo_root,
+            LlmCacheMode::Preserve
+        )
+        .unwrap());
+        assert!(
+            !should_preserve_incomplete_init_runtime("init", repo_root, LlmCacheMode::Clear)
+                .unwrap()
+        );
+        sqlite_store::runtime_meta_set(
+            &conn,
+            "pipeline_runtime_summary",
+            &serde_json::json!({
+                "facts_input_hash": "facts-same",
+                "workflow_action": "rebuild",
+                "runtime_state": "researching"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(!should_preserve_incomplete_init_runtime(
+            "init",
+            repo_root,
+            LlmCacheMode::Preserve
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn init_runtime_is_not_preserved_once_metadata_or_markdown_exists() {
+        let fixture = tempdir().unwrap();
+        let repo_root = fixture.path();
+        let wiki_root = repo_root.join(".wiki");
+        fs::create_dir_all(wiki_root.join(".cache")).unwrap();
+
+        let conn = sqlite_store::open_db(repo_root).unwrap();
+        let domain = KnowledgeDomain::new(DomainType::CoreRuntime, "核心运行时");
+        let unit = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "运行时",
+            domain.id.clone(),
+            "核心运行时/运行时.md",
+        );
+        sqlite_store::write_knowledge_domains(&conn, &[domain]).unwrap();
+        sqlite_store::write_knowledge_units(&conn, &[unit.clone()]).unwrap();
+        sqlite_store::runtime_meta_set(
+            &conn,
+            "pipeline_runtime_summary",
+            &serde_json::json!({
+                "facts_input_hash": "facts-same",
+                "workflow_action": "init",
+                "runtime_state": "compose_pending"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        sqlite_store::write_unit_runtime_gate(
+            &conn,
+            &UnitRuntimeGate {
+                unit_id: unit.id.clone(),
+                unit_type: unit.unit_type.as_str().to_string(),
+                research_status: "ready".to_string(),
+                compose_status: "pending".to_string(),
+                assemble_status: "pending".to_string(),
+                last_ready_stage: Some("research_unit".to_string()),
+                blocked_reason: None,
+                missing_dependencies: Vec::new(),
+                updated_at: "1".to_string(),
+            },
+        )
+        .unwrap();
+
+        fs::write(wiki_root.join("运行时.md"), "# runtime\n").unwrap();
+        assert!(!should_preserve_incomplete_init_runtime(
+            "init",
+            repo_root,
+            LlmCacheMode::Preserve
+        )
+        .unwrap());
+
+        fs::remove_file(wiki_root.join("运行时.md")).unwrap();
+        fs::write(wiki_root.join("wiki.metadata.json"), "{}").unwrap();
+        assert!(!should_preserve_incomplete_init_runtime(
+            "init",
+            repo_root,
+            LlmCacheMode::Preserve
+        )
+        .unwrap());
     }
 }

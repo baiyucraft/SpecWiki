@@ -54,7 +54,9 @@ export const LOW_FIDELITY_NOTE_PATTERNS = [
 export const SEVERE_REUSE_THRESHOLD = 3;
 
 function normalizePath(value) {
-  return value.replaceAll("\\", "/");
+  return String(value)
+    .replaceAll("\\", "/")
+    .replace(/#L\d+(?:-L?\d+)?$/i, "");
 }
 
 function fileBasename(filePath) {

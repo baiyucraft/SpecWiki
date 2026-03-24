@@ -289,6 +289,66 @@ test("runtime inspection 会从 runtime/research JSON 提取最小 research 摘�
   }
 });
 
+
+test("runtime inspection 会把 page digest 里的 compose diagnostics 关联回页面路径", () => {
+  const fixtureDir = createFixtureDir("wiki-runtime-compose-diagnostics-");
+  const wikiDir = path.join(fixtureDir, ".wiki");
+  const cacheDir = path.join(wikiDir, ".cache");
+  const dbPath = path.join(cacheDir, "wiki-cache.db");
+
+  try {
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(
+      path.join(wikiDir, "wiki.metadata.json"),
+      JSON.stringify({
+        wiki_items: [
+          {
+            id: "page-runtime",
+            path: ".wiki/核心模块/运行时.md",
+            title: "运行时",
+          },
+        ],
+      }),
+    );
+    execFileSync("sqlite3", [
+      dbPath,
+      [
+        "create table page_context_cache(page_id text primary key, input_hash text, context text);",
+        "create table page_digests(unit_id text primary key, digest text, content_hash text);",
+        "insert into page_context_cache values ('page-runtime', 'hash-1', '{\"page_id\":\"page-runtime\",\"page_type\":\"module\",\"unit_id\":\"unit-runtime\",\"unit_type\":\"module-doc\",\"domain_id\":\"domain-runtime\",\"readiness_status\":\"compose_ready\",\"child_digest_ids\":[]}');",
+        "insert into page_digests values ('unit-runtime', '{\"unit_id\":\"unit-runtime\",\"page_id\":\"page-runtime\",\"title\":\"运行时\",\"planned_key_sources\":[\"src/runtime.ts\",\"src/queue.ts\"],\"grounded_key_sources\":[\"src/runtime.ts\"],\"section_grounding_refs\":[{\"section_key\":\"runtime-flow\",\"key_source_cluster_keys\":[\"runtime-entry\"],\"evidence_cluster_keys\":[\"cluster-a\"],\"child_digest_refs\":[],\"diagram_refs\":[]}],\"skeleton_profile\":{\"profile_key\":\"runtime\",\"seed_sections\":[{\"section_key\":\"runtime-flow\",\"title\":\"运行时流程\"}]},\"readiness_stage\":\"compose_ready\"}', 'hash-digest');",
+      ].join(" "),
+    ]);
+
+    const snapshot = inspectWikiRuntime(wikiDir);
+    const binding = snapshot.pageRuntimeByPath["核心模块/运行时.md"];
+
+    expect(snapshot.composeDiagnostics).toEqual({
+      digestPages: 1,
+      pagesWithSkeletonProfile: 1,
+      pagesWithSectionGroundingRefs: 1,
+      pagesWithPlannedKeySources: 1,
+      pagesWithGroundedKeySources: 1,
+      pagesWithGroundingGap: 1,
+    });
+    expect(binding).toMatchObject({
+      pageId: "page-runtime",
+      unitId: "unit-runtime",
+      plannedKeySourceCount: 2,
+      groundedKeySourceCount: 1,
+      groundingGap: true,
+      sectionGroundingRefCount: 1,
+      skeletonProfileKey: "runtime",
+      digestReadinessStage: "compose_ready",
+    });
+    expect(binding.plannedKeySources).toEqual(["src/runtime.ts", "src/queue.ts"]);
+    expect(binding.groundedKeySources).toEqual(["src/runtime.ts"]);
+    expect(binding.missingGroundedSources).toEqual(["src/queue.ts"]);
+  } finally {
+    rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
+
 test("test project analysis Markdown 会输出 research runtime 摘要且保留旧阶段文案", () => {
   const markdown = toMarkdown([
     {

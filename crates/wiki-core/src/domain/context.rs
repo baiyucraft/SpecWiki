@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::domain::research::{KeySourceCluster, SectionGroundingRef, SkeletonProfile};
+
 /// `TopicSeed` 表示 planner 可消费的稳定主题线索。
 /// 它来自 hierarchy 或后续聚合输入，但在进入 planner 前仍保持纯事实型描述。
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -246,6 +248,9 @@ pub struct PageResearchSectionPlan {
     /// 当前节直接引用的子页 rollup。
     #[serde(default)]
     pub child_refs: Vec<String>,
+    /// 当前节是否预留 child digest rollup 槽位。
+    #[serde(default)]
+    pub child_digest_slot: bool,
 }
 
 /// `PageComposeSection` 是 renderer 真正消费的章节计划。
@@ -293,6 +298,15 @@ pub struct PageResearchResult {
     /// 驱动正式页面结构的稳定 section 计划。
     #[serde(default)]
     pub section_plan: Vec<PageResearchSectionPlan>,
+    /// 页面骨架画像。
+    #[serde(default)]
+    pub skeleton_profile: Option<SkeletonProfile>,
+    /// 关键来源簇。
+    #[serde(default)]
+    pub key_source_clusters: Vec<KeySourceCluster>,
+    /// section 级 grounding 合同。
+    #[serde(default)]
+    pub section_grounding_refs: Vec<SectionGroundingRef>,
     /// 证据上卷。
     #[serde(default)]
     pub evidence_rollup: Vec<PageResearchEvidenceGroup>,

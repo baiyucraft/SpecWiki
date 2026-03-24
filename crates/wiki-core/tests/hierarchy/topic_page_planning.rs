@@ -1,7 +1,7 @@
 //! 9.4 之后，页面规划的验收重点转为 Knowledge Planning 层。
 //! 这组测试覆盖 storybook / dagger archetype 的知识域发现与知识单元规划。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use tempfile::TempDir;
 use wiki_core::domain::knowledge::{DecompositionProfile, DomainType, UnitType};
@@ -38,16 +38,55 @@ fn assert_units_have_resolvable_parents(units: &[wiki_core::domain::knowledge::K
     }
 }
 
+fn assert_unit_has_diagnostic_bundle(
+    unit: &wiki_core::domain::knowledge::KnowledgeUnit,
+    expected_kind: wiki_core::domain::knowledge::PlannerSignalKind,
+) {
+    let bundle = unit
+        .planner_signal_bundles
+        .iter()
+        .find(|bundle| bundle.kind == expected_kind)
+        .unwrap_or_else(|| {
+            panic!(
+                "unit `{}` missing planner signal bundle {:?}: {:?}",
+                unit.title, expected_kind, unit.planner_signal_bundles
+            )
+        });
+    assert!(
+        !bundle.matched_keywords.is_empty(),
+        "unit `{}` bundle {:?} should retain matched keywords",
+        unit.title,
+        expected_kind
+    );
+    assert!(
+        !bundle.matched_source_ids.is_empty(),
+        "unit `{}` bundle {:?} should retain matched source ids",
+        unit.title,
+        expected_kind
+    );
+    assert!(
+        !bundle.matched_paths.is_empty(),
+        "unit `{}` bundle {:?} should retain matched paths",
+        unit.title,
+        expected_kind
+    );
+}
+
 fn make_storybook_like_repo() -> TempDir {
     let repo = tempfile::tempdir().unwrap();
+    fs::create_dir_all(repo.path().join(".storybook")).unwrap();
     fs::create_dir_all(repo.path().join("code/addons/a11y/src")).unwrap();
     fs::create_dir_all(repo.path().join("code/frameworks/react/src")).unwrap();
     fs::create_dir_all(repo.path().join("code/frameworks/angular/src")).unwrap();
     fs::create_dir_all(repo.path().join("code/frameworks/vue3/src")).unwrap();
     fs::create_dir_all(repo.path().join("code/builders/vite/src")).unwrap();
+    fs::create_dir_all(repo.path().join("code/builders/vite")).unwrap();
     fs::create_dir_all(repo.path().join("code/core/src")).unwrap();
     fs::create_dir_all(repo.path().join("code/addons/docs/docs")).unwrap();
+    fs::create_dir_all(repo.path().join("code/addons/themes/src/decorators")).unwrap();
+    fs::create_dir_all(repo.path().join("code/addons/themes/template/stories")).unwrap();
     fs::create_dir_all(repo.path().join("code/renderers/react")).unwrap();
+    fs::create_dir_all(repo.path().join("code/core/template/stories")).unwrap();
     fs::create_dir_all(repo.path().join("test-storybooks/kitchen-sink/react/src")).unwrap();
     fs::create_dir_all(repo.path().join("docs/get-started")).unwrap();
     fs::create_dir_all(repo.path().join("docs/get-started/advanced")).unwrap();
@@ -63,9 +102,29 @@ fn make_storybook_like_repo() -> TempDir {
     )
     .unwrap();
     fs::write(
+        repo.path().join(".storybook/main.ts"),
+        "export const defineMainConfig = { stories: [], addons: [], framework: '@storybook/react-vite' };\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join(".storybook/preview.tsx"),
+        "export const previewAnnotations = ['docs']; export const themeProvider = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join(".storybook/manager.tsx"),
+        "export const managerLayout = true;\n",
+    )
+    .unwrap();
+    fs::write(
         repo.path().join("code/addons/a11y/src/index.ts"),
         "export const addon = true;
 ",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/addons/a11y/src/preset.ts"),
+        "export const addonPreset = true;\n",
     )
     .unwrap();
     fs::write(
@@ -78,6 +137,11 @@ fn make_storybook_like_repo() -> TempDir {
         repo.path()
             .join("code/frameworks/angular/src/framework-preset-angular.ts"),
         "export const angularPreset = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/frameworks/angular/src/preset.ts"),
+        "export const frameworkPreset = true;\n",
     )
     .unwrap();
     fs::write(
@@ -98,6 +162,16 @@ fn make_storybook_like_repo() -> TempDir {
     )
     .unwrap();
     fs::write(
+        repo.path().join("code/builders/vite/build-config.ts"),
+        "export const viteBuildConfig = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/builders/vite/vite-config.ts"),
+        "export const viteConfigSurface = true;\n",
+    )
+    .unwrap();
+    fs::write(
         repo.path().join("code/core/src/public-types.ts"),
         "export type StorybookApi = { run(): void };
 ",
@@ -111,6 +185,27 @@ fn make_storybook_like_repo() -> TempDir {
     fs::write(
         repo.path().join("code/core/src/addon-types.ts"),
         "export type AddonTypes = {};\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/core/src/decorators.ts"),
+        "export const decoratorsApi = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/core/src/decorators.test.ts"),
+        "test('decorators', () => {});\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("code/core/template/stories/decorators.stories.ts"),
+        "export const decoratorsStory = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/core/src/hooks.ts"),
+        "export const hooksApi = true;\n",
     )
     .unwrap();
     fs::write(
@@ -166,6 +261,34 @@ fn make_storybook_like_repo() -> TempDir {
     fs::write(
         repo.path().join("code/core/src/typings.d.ts"),
         "export interface StorybookTypes {}\n",
+    )
+    .unwrap();
+    fs::create_dir_all(repo.path().join("code/core/src/channels")).unwrap();
+    fs::write(
+        repo.path().join("code/core/src/channels/types.ts"),
+        "export type ChannelEvent = { id: string };\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/addons/a11y/src/types.ts"),
+        "export type A11yApi = { enabled: boolean };\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("code/addons/themes/src/decorators/provider.decorator.tsx"),
+        "export const themeDecorator = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("code/addons/themes/template/stories/decorators.stories.ts"),
+        "export const themeDecoratorStory = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/builders/vite/src/types.ts"),
+        "export type ViteBuilderOptions = { vite: boolean };\n",
     )
     .unwrap();
     fs::write(
@@ -348,6 +471,24 @@ fn make_dagger_like_repo() -> TempDir {
     .unwrap();
     fs::write(
         repo.path()
+            .join("dagger-android/src/main/java/android/AndroidInjector.java"),
+        "class AndroidInjector {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("dagger-android/src/main/java/android/HasAndroidInjector.java"),
+        "class HasAndroidInjector {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("dagger-android/src/main/java/android/AndroidInjection.java"),
+        "class AndroidInjection {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
             .join("hilt-core/src/main/java/hilt/HiltEntry.java"),
         "class HiltEntry {}
 ",
@@ -400,6 +541,30 @@ fn make_dagger_like_repo() -> TempDir {
         repo.path()
             .join("dagger-compiler/src/main/java/compiler/BindsMethodValidator.java"),
         "class BindsMethodValidator {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("dagger-compiler/src/main/java/compiler/ComponentProcessor.java"),
+        "class ComponentProcessor {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("dagger-compiler/src/main/java/compiler/BindingGraphFactory.java"),
+        "class BindingGraphFactory {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("dagger-compiler/src/main/java/compiler/SourceFileGenerator.java"),
+        "class SourceFileGenerator {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("dagger-compiler/src/main/java/compiler/ValidationReport.java"),
+        "class ValidationReport {}\n",
     )
     .unwrap();
     fs::write(
@@ -1239,7 +1404,7 @@ fn docs_backed_units_route_into_generic_domains_and_preserve_parent_chain() {
 
     let troubleshooting = units
         .iter()
-        .find(|unit| unit.title == "Troubleshooting")
+        .find(|unit| unit.relative_path == "故障排除/troubleshooting.md")
         .expect("troubleshooting readme unit should exist");
     let common_errors = units
         .iter()
@@ -1300,6 +1465,41 @@ fn docs_backed_units_route_into_generic_domains_and_preserve_parent_chain() {
 }
 
 #[test]
+fn docs_backed_units_keep_surface_cluster_diagnostics() {
+    let repo = make_storybook_like_repo();
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let domains = discover_knowledge_domains(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &GraphSummary::default(),
+        &SteeringConfig::default(),
+    );
+    let units = plan_knowledge_units(
+        &domains,
+        &tree,
+        &report,
+        &mod_ctxs,
+        &SteeringConfig::default(),
+    );
+
+    for title in ["Addon Api", "Main Js", "Get Started"] {
+        let unit = units
+            .iter()
+            .find(|unit| unit.title == title)
+            .unwrap_or_else(|| panic!("docs-backed unit should exist: {title}"));
+        assert_unit_has_diagnostic_bundle(
+            unit,
+            wiki_core::domain::knowledge::PlannerSignalKind::SurfaceCluster,
+        );
+    }
+}
+
+#[test]
 fn storybook_api_signal_units_cover_developer_api_topics_without_module_api_sprawl() {
     let repo = make_storybook_like_repo();
     let report = scan_repo(repo.path(), &[]).unwrap();
@@ -1324,12 +1524,22 @@ fn storybook_api_signal_units_cover_developer_api_topics_without_module_api_spra
 
     for expected_title in [
         "插件API",
+        "Decorators API",
         "CSF API",
         "Preview API",
+        "Hooks API",
         "Store API",
         "API类型定义",
+        "插件类型定义",
         "工具类型定义",
+        "构建器类型定义",
+        "核心类型定义",
         "框架类型定义",
+        "main.js配置",
+        "preview.js配置",
+        "manager.js配置",
+        "构建器配置",
+        "预设配置",
         "Angular框架支持",
         "组件故事（Stories）",
     ] {
@@ -1350,6 +1560,68 @@ fn storybook_api_signal_units_cover_developer_api_topics_without_module_api_spra
                 .collect::<Vec<_>>()
         );
     }
+    assert!(units.iter().any(|unit| {
+        unit.title == "配置API参考"
+            && unit.unit_type == UnitType::ApiDoc
+            && unit.child_unit_ids.len() >= 3
+    }));
+    for (title, expected_path) in [
+        ("preview.js配置", ".storybook/preview.tsx"),
+        ("manager.js配置", ".storybook/manager.tsx"),
+    ] {
+        let unit = units
+            .iter()
+            .find(|unit| unit.title == title)
+            .unwrap_or_else(|| panic!("missing config api unit: {title}"));
+        let source_paths = unit
+            .scope
+            .source_ids
+            .iter()
+            .filter_map(|source_id| {
+                report
+                    .files
+                    .iter()
+                    .find(|file| &file.id == source_id)
+                    .map(|file| file.path.as_str())
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            source_paths.iter().any(|path| *path == expected_path),
+            "{title} should retain {expected_path}; source_paths={source_paths:?}"
+        );
+    }
+    let decorators_unit = units
+        .iter()
+        .find(|unit| unit.title == "Decorators API")
+        .expect("missing decorators api unit");
+    let decorators_sources = decorators_unit
+        .scope
+        .source_ids
+        .iter()
+        .filter_map(|source_id| {
+            report
+                .files
+                .iter()
+                .find(|file| &file.id == source_id)
+                .map(|file| file.path.as_str())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        decorators_sources
+            .iter()
+            .any(|path| *path == "code/core/src/decorators.ts"),
+        "Decorators API should keep core implementation source; sources={decorators_sources:?}"
+    );
+    assert!(
+        decorators_sources.len() <= 8,
+        "Decorators API should trim source scope; sources={decorators_sources:?}"
+    );
+    assert!(
+        decorators_sources
+            .iter()
+            .all(|path| !path.contains(".stories.") && !path.contains("/template/")),
+        "Decorators API should prefer implementation sources over template stories; sources={decorators_sources:?}"
+    );
 
     assert!(
         !units.iter().any(|unit| unit.title == "API：core"),
@@ -1372,6 +1644,142 @@ fn storybook_api_signal_units_cover_developer_api_topics_without_module_api_spra
             "storybook should not materialize annotation-di signal unit: {unexpected_title}"
         );
     }
+}
+
+#[test]
+fn types_api_prefers_topic_spine_over_generic_public_contracts() {
+    let repo = make_storybook_like_repo();
+    fs::create_dir_all(repo.path().join("code/core/src/csf")).unwrap();
+    fs::create_dir_all(
+        repo.path()
+            .join("code/core/src/preview-api/modules/preview-web"),
+    )
+    .unwrap();
+    fs::create_dir_all(repo.path().join("code/core/src/manager-api/modules")).unwrap();
+    fs::create_dir_all(repo.path().join("code/core/src/docs-tools/argTypes")).unwrap();
+    fs::create_dir_all(repo.path().join("code/core/src/preview-api/modules/store")).unwrap();
+    fs::create_dir_all(repo.path().join("code/renderers/html/src")).unwrap();
+    fs::create_dir_all(repo.path().join("code/lib/core-webpack/src")).unwrap();
+    fs::create_dir_all(repo.path().join("code/lib/cli-storybook/src")).unwrap();
+    fs::write(repo.path().join("docs/api/arg-types.mdx"), "# Arg Types\n").unwrap();
+    fs::write(
+        repo.path().join("code/core/src/csf/story.ts"),
+        "export type ComponentAnnotations = {}; export type StoryObj = {};\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("code/core/src/preview-api/modules/preview-web/PreviewWeb.tsx"),
+        "export class PreviewWeb {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("code/core/src/manager-api/modules/stories.ts"),
+        "export const getCurrentStoryData = () => {};\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("code/core/src/docs-tools/argTypes/types.ts"),
+        "export type ArgTypes = {};\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("code/core/src/preview-api/modules/store/args.test.ts"),
+        "test('args', () => {});\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/renderers/html/src/public-types.ts"),
+        "export type HtmlRendererTypes = {};\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/lib/core-webpack/src/types.ts"),
+        "export type WebpackTypes = {};\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/lib/cli-storybook/src/typings.d.ts"),
+        "export interface WindowTypes {}\n",
+    )
+    .unwrap();
+
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let domains = discover_knowledge_domains(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &GraphSummary::default(),
+        &SteeringConfig::default(),
+    );
+    let units = plan_knowledge_units(
+        &domains,
+        &tree,
+        &report,
+        &mod_ctxs,
+        &SteeringConfig::default(),
+    );
+
+    let unit = units
+        .iter()
+        .find(|unit| unit.title == "Types API")
+        .expect("Types API should exist");
+    let source_paths = unit
+        .scope
+        .source_ids
+        .iter()
+        .filter_map(|source_id| {
+            report
+                .files
+                .iter()
+                .find(|file| &file.id == source_id)
+                .map(|file| file.path.as_str())
+        })
+        .collect::<Vec<_>>();
+    for expected_path in [
+        "code/core/src/csf/story.ts",
+        "code/core/src/preview-api/modules/preview-web/PreviewWeb.tsx",
+        "code/core/src/manager-api/modules/stories.ts",
+        "code/core/src/docs-tools/argTypes/types.ts",
+    ] {
+        assert!(
+            source_paths.iter().any(|path| *path == expected_path),
+            "Types API should keep topic spine source {expected_path}; sources={source_paths:?}"
+        );
+    }
+    for unexpected_path in [
+        "code/renderers/html/src/public-types.ts",
+        "code/lib/core-webpack/src/types.ts",
+        "code/lib/cli-storybook/src/typings.d.ts",
+    ] {
+        assert!(
+            !source_paths.iter().any(|path| *path == unexpected_path),
+            "Types API should not be dominated by generic contract source {unexpected_path}; sources={source_paths:?}"
+        );
+    }
+    let collapse_guard = unit
+        .collapse_guard
+        .as_ref()
+        .expect("Types API should retain scope refinement diagnostics");
+    assert_eq!(
+        collapse_guard.reason,
+        wiki_core::domain::knowledge::CollapseGuardReason::TopicScopeRefinement
+    );
+    assert!(
+        collapse_guard
+            .collapsed_paths
+            .iter()
+            .any(|path| path.ends_with("public-types.ts")),
+        "Types API should record collapsed generic contracts: {:?}",
+        collapse_guard.collapsed_paths
+    );
 }
 
 #[test]
@@ -1574,7 +1982,9 @@ fn dagger_units_capture_runtime_compiler_and_integration_profiles() {
             && unit.unit_type == UnitType::TroubleshootDoc
     }));
     for expected_title in [
+        "Android API",
         "Hilt API",
+        "编译时API",
         "运行时API",
         "异步处理与生产者",
         "@Provides 与 @Binds 注解详解",
@@ -1589,6 +1999,558 @@ fn dagger_units_capture_runtime_compiler_and_integration_profiles() {
             "missing api leaf unit: {expected_title}"
         );
     }
+    for (title, expected_paths) in [
+        (
+            "Android API",
+            vec![
+                "dagger-android/src/main/java/android/AndroidInjector.java",
+                "dagger-android/src/main/java/android/AndroidInjection.java",
+            ],
+        ),
+        (
+            "编译时API",
+            vec![
+                "dagger-compiler/src/main/java/compiler/ComponentProcessor.java",
+                "dagger-compiler/src/main/java/compiler/BindingGraphFactory.java",
+            ],
+        ),
+    ] {
+        let unit = units
+            .iter()
+            .find(|unit| unit.title == title)
+            .unwrap_or_else(|| panic!("missing dagger api unit: {title}"));
+        let source_paths = unit
+            .scope
+            .source_ids
+            .iter()
+            .filter_map(|source_id| {
+                report
+                    .files
+                    .iter()
+                    .find(|file| &file.id == source_id)
+                    .map(|file| file.path.as_str())
+            })
+            .collect::<Vec<_>>();
+        for expected_path in expected_paths {
+            assert!(
+                source_paths.iter().any(|path| *path == expected_path),
+                "{title} should retain {expected_path}; source_paths={source_paths:?}"
+            );
+        }
+        assert!(
+            source_paths.len() <= 8,
+            "{title} should keep a focused source scope; source_paths={source_paths:?}"
+        );
+        assert!(
+            source_paths
+                .iter()
+                .all(|path| !path.contains("buildSrc/") && !path.contains("/test/")),
+            "{title} should prefer implementation sources over build/test noise; source_paths={source_paths:?}"
+        );
+    }
+}
+
+#[test]
+fn dagger_api_units_keep_topic_spines_under_scope_refinement() {
+    let repo = make_dagger_like_repo();
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let domains = discover_knowledge_domains(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &GraphSummary::default(),
+        &SteeringConfig::default(),
+    );
+    let units = plan_knowledge_units(
+        &domains,
+        &tree,
+        &report,
+        &mod_ctxs,
+        &SteeringConfig::default(),
+    );
+
+    for (title, expected_paths) in [
+        (
+            "运行时API",
+            vec![
+                "dagger-runtime/src/main/java/runtime/MembersInjector.java",
+                "dagger-runtime/src/main/java/runtime/Subcomponent.java",
+            ],
+        ),
+        (
+            "编译时API",
+            vec![
+                "dagger-compiler/src/main/java/compiler/ComponentProcessor.java",
+                "dagger-compiler/src/main/java/compiler/BindingGraphFactory.java",
+            ],
+        ),
+        (
+            "Hilt API",
+            vec![
+                "hilt-android/src/main/java/hilt/HiltAndroidApp.java",
+                "hilt-android/src/main/java/hilt/AndroidEntryPoint.java",
+            ],
+        ),
+    ] {
+        let unit = units
+            .iter()
+            .find(|unit| unit.title == title)
+            .unwrap_or_else(|| panic!("missing dagger refined api unit: {title}"));
+        let source_paths = unit
+            .scope
+            .source_ids
+            .iter()
+            .filter_map(|source_id| {
+                report
+                    .files
+                    .iter()
+                    .find(|file| &file.id == source_id)
+                    .map(|file| file.path.as_str())
+            })
+            .collect::<Vec<_>>();
+        for expected_path in expected_paths {
+            assert!(
+                source_paths.iter().any(|path| *path == expected_path),
+                "{title} should keep non-generic implementation spine {expected_path}; sources={source_paths:?}"
+            );
+        }
+        assert!(
+            !source_paths.is_empty(),
+            "{title} should keep a non-empty scope after refinement"
+        );
+    }
+}
+
+#[test]
+fn storybook_repo_signal_families_materialize_fidelity_target_pages() {
+    let repo = make_storybook_like_repo();
+    fs::create_dir_all(
+        repo.path()
+            .join("docs/writing-tests/integrations/vitest-addon"),
+    )
+    .unwrap();
+    fs::create_dir_all(repo.path().join("docs/configure/integration")).unwrap();
+    fs::create_dir_all(repo.path().join("code/core/src/telemetry")).unwrap();
+    fs::create_dir_all(repo.path().join("docs/_snippets")).unwrap();
+    fs::create_dir_all(repo.path().join(".circleci")).unwrap();
+    fs::create_dir_all(repo.path().join("code/lib/eslint-plugin/src")).unwrap();
+    fs::create_dir_all(repo.path().join("code/addons/docs/src")).unwrap();
+    fs::write(repo.path().join("docs/faq.mdx"), "# FAQ\n").unwrap();
+    fs::write(
+        repo.path()
+            .join("docs/writing-tests/integrations/vitest-addon/index.mdx"),
+        "# Vitest Addon\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("docs/writing-tests/integrations/vitest-addon/migration-guide.mdx"),
+        "# Vitest Migration\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("docs/writing-tests/in-ci.mdx"),
+        "# In CI\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("docs/configure/integration/eslint-plugin.mdx"),
+        "# ESLint Plugin\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("docs/configure/telemetry.mdx"),
+        "# Telemetry\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("docs/_snippets/chromatic-install.md"),
+        "# Chromatic Install\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("docs/_snippets/test-runner-local-build-workflow.md"),
+        "# Test Runner Workflow\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join(".circleci/config.yml"),
+        "workflows:\n  chromatic:\n    jobs: []\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/chromatic.config.json"),
+        "{ \"projectId\": \"storybook-like\" }\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/lib/eslint-plugin/src/index.ts"),
+        "export const eslintPlugin = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/core/src/telemetry/index.ts"),
+        "export const telemetry = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/addons/docs/src/index.ts"),
+        "export const docsAddon = true;\n",
+    )
+    .unwrap();
+
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let domains = discover_knowledge_domains(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &GraphSummary::default(),
+        &SteeringConfig::default(),
+    );
+    let units = plan_knowledge_units(
+        &domains,
+        &tree,
+        &report,
+        &mod_ctxs,
+        &SteeringConfig::default(),
+    );
+
+    for expected_path in [
+        "故障排除/故障排除.md",
+        "测试框架/测试框架.md",
+        "测试框架/Vitest集成.md",
+        "部署和CI_CD/部署和CI_CD.md",
+        "部署和CI_CD/CI_CD集成.md",
+        "部署和CI_CD/Chromatic集成.md",
+        "高级功能/工具集成/ESLint集成.md",
+        "高级功能/性能监控.md",
+        "插件系统/核心Addons详解/Docs-Addon.md",
+    ] {
+        assert!(
+            units.iter().any(|unit| unit.relative_path == expected_path),
+            "missing storybook fidelity target page: {expected_path}; units={:?}",
+            units
+                .iter()
+                .map(|unit| unit.relative_path.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    let testing_family = units
+        .iter()
+        .find(|unit| unit.relative_path == "测试框架/测试框架.md")
+        .expect("testing family should exist");
+    let vitest_unit = units
+        .iter()
+        .find(|unit| unit.relative_path == "测试框架/Vitest集成.md")
+        .expect("vitest page should exist");
+    assert!(vitest_unit.parent_unit_id.as_deref() == Some(testing_family.id.as_str()));
+    let vitest_signal = vitest_unit
+        .planner_signal_bundles
+        .iter()
+        .find(|bundle| {
+            bundle.kind == wiki_core::domain::knowledge::PlannerSignalKind::SurfaceCluster
+        })
+        .expect("vitest page should retain surface cluster diagnostics");
+    assert!(
+        vitest_signal
+            .key
+            .starts_with("surface_cluster/testing_frameworks/"),
+        "Vitest集成 should expose testing capability namespace; key={}",
+        vitest_signal.key
+    );
+    let vitest_sources = vitest_unit
+        .scope
+        .source_ids
+        .iter()
+        .filter_map(|source_id| {
+            report
+                .files
+                .iter()
+                .find(|file| &file.id == source_id)
+                .map(|file| file.path.as_str())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        vitest_sources
+            .iter()
+            .all(|path| !path.contains("/test-storybooks/") && !path.contains("/template/")),
+        "Vitest集成 should stay off sample/template noise; sources={vitest_sources:?}"
+    );
+    assert!(!units
+        .iter()
+        .any(|unit| unit.relative_path == "测试基础设施/test-storybooks.md"));
+    assert!(units.iter().any(|unit| {
+        unit.relative_path == "测试框架/Vitest集成.md"
+            && unit.parent_unit_id.as_deref() == Some(testing_family.id.as_str())
+    }));
+
+    let deploy_family = units
+        .iter()
+        .find(|unit| unit.relative_path == "部署和CI_CD/部署和CI_CD.md")
+        .expect("deploy family should exist");
+    let deploy_signal = deploy_family
+        .planner_signal_bundles
+        .iter()
+        .find(|bundle| {
+            bundle.kind == wiki_core::domain::knowledge::PlannerSignalKind::LeafDecomposition
+        })
+        .expect("deploy family should retain leaf decomposition diagnostics");
+    assert!(
+        deploy_signal
+            .key
+            .starts_with("leaf_decomposition/delivery_pipelines/"),
+        "部署和CI_CD family should expose delivery capability namespace; key={}",
+        deploy_signal.key
+    );
+    for expected_child in ["部署和CI_CD/CI_CD集成.md", "部署和CI_CD/Chromatic集成.md"] {
+        assert!(units.iter().any(|unit| {
+            unit.relative_path == expected_child
+                && unit.parent_unit_id.as_deref() == Some(deploy_family.id.as_str())
+        }));
+    }
+
+    let docs_addon = units
+        .iter()
+        .find(|unit| unit.relative_path == "插件系统/核心Addons详解/Docs-Addon.md")
+        .expect("docs addon leaf should exist");
+    assert!(!units
+        .iter()
+        .any(|unit| unit.relative_path == "插件生态/docs.md"));
+    assert_eq!(docs_addon.title, "Docs Addon");
+    let docs_addon_signal = docs_addon
+        .planner_signal_bundles
+        .iter()
+        .find(|bundle| {
+            bundle.kind == wiki_core::domain::knowledge::PlannerSignalKind::SurfaceCluster
+        })
+        .expect("docs addon page should retain surface cluster diagnostics");
+    assert!(
+        docs_addon_signal
+            .key
+            .starts_with("surface_cluster/addon_ecosystem/"),
+        "Docs Addon should expose addon capability namespace; key={}",
+        docs_addon_signal.key
+    );
+    assert!(
+        docs_addon
+            .scope
+            .source_ids
+            .iter()
+            .filter_map(|source_id| {
+                report
+                    .files
+                    .iter()
+                    .find(|file| &file.id == source_id)
+                    .map(|file| file.path.as_str())
+            })
+            .any(|path| path.contains("code/addons/docs/")),
+        "Docs Addon should stay grounded on addon sources"
+    );
+    let troubleshooting_unit = units
+        .iter()
+        .find(|unit| unit.relative_path == "故障排除/故障排除.md")
+        .expect("troubleshooting root should exist");
+    assert!(troubleshooting_unit
+        .scope
+        .docs_anchors
+        .iter()
+        .any(|anchor| anchor.file_path == "docs/faq.mdx"));
+}
+
+#[test]
+fn dagger_examples_and_android_testing_materialize_fidelity_target_pages() {
+    let repo = make_dagger_like_repo();
+    fs::create_dir_all(repo.path().join("examples/bazel/java/example/hilt")).unwrap();
+    fs::create_dir_all(
+        repo.path()
+            .join("hilt-android-testing/main/java/dagger/hilt/android/testing"),
+    )
+    .unwrap();
+    fs::write(repo.path().join("README.md"), "# Dagger\n").unwrap();
+    fs::write(repo.path().join("examples/bazel/BUILD"), "# bazel\n").unwrap();
+    fs::write(
+        repo.path()
+            .join("examples/bazel/java/example/hilt/CoffeeApp.java"),
+        "class CoffeeApp {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("examples/bazel/java/example/hilt/HeaterModule.java"),
+        "class HeaterModule {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("examples/bazel/java/example/hilt/PumpModule.java"),
+        "class PumpModule {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join(
+            "hilt-android-testing/main/java/dagger/hilt/android/testing/HiltAndroidTest.java",
+        ),
+        "class HiltAndroidTest {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join(
+            "hilt-android-testing/main/java/dagger/hilt/android/testing/HiltAndroidRule.java",
+        ),
+        "class HiltAndroidRule {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join(
+            "hilt-android-testing/main/java/dagger/hilt/android/testing/CustomTestApplication.java",
+        ),
+        "class CustomTestApplication {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("hilt-android-testing/main/java/dagger/hilt/android/testing/TestInstallIn.java"),
+        "class TestInstallIn {}\n",
+    )
+    .unwrap();
+
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let domains = discover_knowledge_domains(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &GraphSummary::default(),
+        &SteeringConfig::default(),
+    );
+    let units = plan_knowledge_units(
+        &domains,
+        &tree,
+        &report,
+        &mod_ctxs,
+        &SteeringConfig::default(),
+    );
+
+    for expected_path in [
+        "快速开始.md",
+        "示例与教程/示例与教程.md",
+        "示例与教程/基础示例.md",
+        "测试策略与最佳实践/Android测试.md",
+    ] {
+        assert!(
+            units.iter().any(|unit| unit.relative_path == expected_path),
+            "missing dagger fidelity target page: {expected_path}; units={:?}",
+            units
+                .iter()
+                .map(|unit| unit.relative_path.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    let quick_start = units
+        .iter()
+        .find(|unit| unit.relative_path == "快速开始.md")
+        .expect("quick start page should exist");
+    assert!(quick_start
+        .scope
+        .source_ids
+        .iter()
+        .filter_map(|source_id| {
+            report
+                .files
+                .iter()
+                .find(|file| &file.id == source_id)
+                .map(|file| file.path.as_str())
+        })
+        .any(|path| path == "README.md"));
+
+    let basic_example = units
+        .iter()
+        .find(|unit| unit.relative_path == "示例与教程/基础示例.md")
+        .expect("basic example page should exist");
+    let basic_example_sources = basic_example
+        .scope
+        .source_ids
+        .iter()
+        .filter_map(|source_id| {
+            report
+                .files
+                .iter()
+                .find(|file| &file.id == source_id)
+                .map(|file| file.path.as_str())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        basic_example_sources
+            .iter()
+            .any(|path| path.starts_with("examples/bazel/")),
+        "basic example should stay grounded on representative example sources; sources={basic_example_sources:?}"
+    );
+    assert!(
+        basic_example_sources
+            .iter()
+            .all(|path| !path.contains("/javatests/")),
+        "basic example should not expand into example test noise; sources={basic_example_sources:?}"
+    );
+
+    let testing_family = units
+        .iter()
+        .find(|unit| unit.relative_path == "测试策略与最佳实践/测试策略与最佳实践.md")
+        .expect("testing family should exist");
+    let android_testing = units
+        .iter()
+        .find(|unit| unit.relative_path == "测试策略与最佳实践/Android测试.md")
+        .expect("android testing page should exist");
+    assert_eq!(
+        android_testing.parent_unit_id.as_deref(),
+        Some(testing_family.id.as_str())
+    );
+    let android_testing_signal = android_testing
+        .planner_signal_bundles
+        .iter()
+        .find(|bundle| {
+            bundle.kind == wiki_core::domain::knowledge::PlannerSignalKind::SurfaceCluster
+        })
+        .expect("android testing page should retain surface cluster diagnostics");
+    assert!(
+        android_testing_signal
+            .key
+            .starts_with("surface_cluster/testing_practices/"),
+        "Android测试 should expose testing capability namespace; key={}",
+        android_testing_signal.key
+    );
+    let android_testing_sources = android_testing
+        .scope
+        .source_ids
+        .iter()
+        .filter_map(|source_id| {
+            report
+                .files
+                .iter()
+                .find(|file| &file.id == source_id)
+                .map(|file| file.path.as_str())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        android_testing_sources
+            .iter()
+            .any(|path| path.contains("hilt-android-testing/main/java/dagger/hilt/android/testing/")),
+        "Android测试 should stay grounded on hilt-android-testing support sources; sources={android_testing_sources:?}"
+    );
 }
 
 #[test]
@@ -1802,6 +2764,186 @@ fn config_planner_adds_theme_signal_units_when_theme_docs_exist() {
 }
 
 #[test]
+fn theme_signal_units_keep_distinct_topic_spines() {
+    let repo = make_storybook_like_repo();
+    fs::create_dir_all(repo.path().join("docs/configure/user-interface")).unwrap();
+    fs::create_dir_all(repo.path().join("code/core/src/theming/themes")).unwrap();
+    fs::create_dir_all(repo.path().join("code/core/src/theming/tests")).unwrap();
+    fs::create_dir_all(repo.path().join("code/addons/themes/src/decorators")).unwrap();
+    fs::create_dir_all(repo.path().join("code/addons/a11y/src")).unwrap();
+    fs::create_dir_all(repo.path().join("code/.storybook")).unwrap();
+    fs::write(
+        repo.path()
+            .join("docs/configure/user-interface/theming.mdx"),
+        "# Theming\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("docs/configure/styling-and-css.mdx"),
+        "# Styling And Css\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/core/src/theming/create.ts"),
+        "export const createTheme = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/core/src/theming/convert.ts"),
+        "export const convertTheme = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/core/src/theming/ensure.ts"),
+        "export const ensureTheme = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/core/src/theming/base.ts"),
+        "export const themeBase = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/core/src/theming/themes/light.ts"),
+        "export const lightTheme = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/core/src/theming/themes/dark.ts"),
+        "export const darkTheme = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("code/addons/themes/src/theme-switcher.tsx"),
+        "export const ThemeSwitcher = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("code/addons/themes/src/decorators/index.ts"),
+        "export const withTheme = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/addons/a11y/src/a11yRunner.ts"),
+        "export const runA11y = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join("code/addons/a11y/src/visionSimulatorFilters.ts"),
+        "export const visionSimulator = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/.storybook/preview.tsx"),
+        "export const preview = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("code/.storybook/manager.tsx"),
+        "export const manager = true;\n",
+    )
+    .unwrap();
+
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let domains = discover_knowledge_domains(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &GraphSummary::default(),
+        &SteeringConfig::default(),
+    );
+    let units = plan_knowledge_units(
+        &domains,
+        &tree,
+        &report,
+        &mod_ctxs,
+        &SteeringConfig::default(),
+    );
+
+    let sources_for = |title: &str| {
+        units
+            .iter()
+            .find(|unit| unit.title == title)
+            .unwrap_or_else(|| panic!("missing theme signal unit: {title}"))
+            .scope
+            .source_ids
+            .iter()
+            .filter_map(|source_id| {
+                report
+                    .files
+                    .iter()
+                    .find(|file| &file.id == source_id)
+                    .map(|file| file.path.clone())
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let theme_overview_sources = sources_for("主题系统概览");
+    assert!(
+        theme_overview_sources
+            .iter()
+            .any(|path| path == "code/core/src/theming/base.ts"),
+        "主题系统概览 should stay on theme system spine; sources={theme_overview_sources:?}"
+    );
+    assert!(
+        theme_overview_sources.iter().any(|path| path == "code/.storybook/preview.tsx")
+            || theme_overview_sources
+                .iter()
+                .any(|path| path == "code/addons/themes/src/theme-switcher.tsx"),
+        "主题系统概览 should keep preview/manager integration context; sources={theme_overview_sources:?}"
+    );
+
+    let custom_theme_sources = sources_for("自定义主题开发");
+    for expected_path in [
+        "code/core/src/theming/create.ts",
+        "code/core/src/theming/convert.ts",
+        "code/core/src/theming/ensure.ts",
+    ] {
+        assert!(
+            custom_theme_sources.iter().any(|path| path == expected_path),
+            "自定义主题开发 should keep implementation spine {expected_path}; sources={custom_theme_sources:?}"
+        );
+    }
+    assert!(
+        custom_theme_sources.iter().any(|path| {
+            path == "code/addons/themes/src/decorators/index.ts"
+                || path == "code/addons/themes/src/decorators/provider.decorator.tsx"
+        }),
+        "自定义主题开发 should keep addon theme decorator context; sources={custom_theme_sources:?}"
+    );
+    assert!(
+        !custom_theme_sources
+            .iter()
+            .any(|path| path == "code/addons/a11y/src/a11yRunner.ts"),
+        "自定义主题开发 should not drift into a11y validation sources; sources={custom_theme_sources:?}"
+    );
+
+    let color_font_sources = sources_for("颜色和字体系统");
+    assert!(
+        color_font_sources
+            .iter()
+            .any(|path| path == "code/addons/a11y/src/a11yRunner.ts")
+            || color_font_sources
+                .iter()
+                .any(|path| { path == "code/addons/a11y/src/visionSimulatorFilters.ts" }),
+        "颜色和字体系统 should keep accessibility validation spine; sources={color_font_sources:?}"
+    );
+    assert!(
+        !color_font_sources
+            .iter()
+            .any(|path| path == "code/addons/themes/package.json"),
+        "颜色和字体系统 should shrink generic package manifests once stronger topic spine exists; sources={color_font_sources:?}"
+    );
+}
+
+#[test]
 fn compiler_docs_are_routed_into_compiler_toolchain_units() {
     let repo = make_dagger_like_repo();
     fs::create_dir_all(repo.path().join("docs/compiler")).unwrap();
@@ -1983,6 +3125,10 @@ fn dense_raw_config_surfaces_collapse_into_aggregate_unit() {
         .iter()
         .filter(|unit| unit.unit_type == UnitType::ConfigDoc)
         .collect::<Vec<_>>();
+    let aggregate_unit = config_units
+        .iter()
+        .find(|unit| unit.title == "配置参考")
+        .expect("aggregate config unit should exist");
     assert!(
         config_units.iter().any(|unit| unit.title == "配置参考"),
         "dense raw config surfaces should collapse into an aggregate config page: {:?}",
@@ -1990,6 +3136,39 @@ fn dense_raw_config_surfaces_collapse_into_aggregate_unit() {
             .iter()
             .map(|unit| unit.relative_path.clone())
             .collect::<Vec<_>>()
+    );
+    let collapse_guard = aggregate_unit
+        .collapse_guard
+        .as_ref()
+        .expect("aggregate config unit should retain collapse guard");
+    assert_eq!(
+        collapse_guard.reason,
+        wiki_core::domain::knowledge::CollapseGuardReason::RawConfigSurfaceAggregation
+    );
+    for expected_path in [
+        "package.json",
+        "settings.gradle.kts",
+        "gradle.properties",
+        "buildSrc/build.gradle.kts",
+    ] {
+        assert!(
+            collapse_guard
+                .collapsed_paths
+                .iter()
+                .any(|path| path == expected_path),
+            "collapse guard should retain collapsed path {expected_path}: {:?}",
+            collapse_guard.collapsed_paths
+        );
+    }
+    assert!(
+        collapse_guard.collapsed_paths.len() >= 4,
+        "collapse guard should retain the collapsed raw config candidate set: {:?}",
+        collapse_guard.collapsed_paths
+    );
+    assert!(
+        collapse_guard.preserved_paths.is_empty(),
+        "dense raw config repo should not preserve standalone/doc-backed config candidates: {:?}",
+        collapse_guard.preserved_paths
     );
     assert!(!config_units.iter().any(|unit| unit.title == "Bazelrc"));
     assert!(!config_units.iter().any(|unit| unit.title == "Bazelversion"));
@@ -2285,6 +3464,14 @@ fn signal_decomposition_adds_compiler_runtime_and_testing_topic_units() {
         compiler_family.decomposition_profile,
         Some(DecompositionProfile::CompilerPipeline)
     );
+    assert_unit_has_diagnostic_bundle(
+        compiler_family,
+        wiki_core::domain::knowledge::PlannerSignalKind::LeafDecomposition,
+    );
+    assert_unit_has_diagnostic_bundle(
+        compiler_family,
+        wiki_core::domain::knowledge::PlannerSignalKind::RepoArchetype,
+    );
     assert!(units.iter().any(|unit| {
         unit.title == "注解处理基础"
             && unit.parent_unit_id.as_deref() == Some(compiler_family.id.as_str())
@@ -2326,6 +3513,30 @@ fn signal_decomposition_adds_compiler_runtime_and_testing_topic_units() {
         unit.title == "性能测试与监控"
             && unit.parent_unit_id.as_deref() == Some(testing_family.id.as_str())
     }));
+    let compiler_leaf = units
+        .iter()
+        .find(|unit| unit.title == "注解处理基础")
+        .expect("compiler leaf should exist");
+    assert_unit_has_diagnostic_bundle(
+        compiler_leaf,
+        wiki_core::domain::knowledge::PlannerSignalKind::SurfaceCluster,
+    );
+    assert_unit_has_diagnostic_bundle(
+        compiler_leaf,
+        wiki_core::domain::knowledge::PlannerSignalKind::RepoArchetype,
+    );
+    let runtime_leaf = units
+        .iter()
+        .find(|unit| unit.title == "@Inject 注解详解")
+        .expect("runtime leaf should exist");
+    assert_unit_has_diagnostic_bundle(
+        runtime_leaf,
+        wiki_core::domain::knowledge::PlannerSignalKind::SurfaceCluster,
+    );
+    assert_unit_has_diagnostic_bundle(
+        runtime_leaf,
+        wiki_core::domain::knowledge::PlannerSignalKind::RepoArchetype,
+    );
 
     let paths = units
         .iter()
@@ -2349,4 +3560,68 @@ fn signal_decomposition_adds_compiler_runtime_and_testing_topic_units() {
             .any(|unit| unit.relative_path == "核心模块/高级特性与扩展.md"),
         "{paths:?}"
     );
+}
+
+#[test]
+fn signal_decomposition_unit_ids_stay_stable_after_non_signal_noise() {
+    let repo = make_dagger_signal_repo();
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let domains = discover_knowledge_domains(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &GraphSummary::default(),
+        &SteeringConfig::default(),
+    );
+    let baseline_units = plan_knowledge_units(
+        &domains,
+        &tree,
+        &report,
+        &mod_ctxs,
+        &SteeringConfig::default(),
+    );
+    let baseline_ids = baseline_units
+        .iter()
+        .filter(|unit| {
+            matches!(
+                unit.title.as_str(),
+                "编译时处理机制" | "注解处理基础" | "核心概念" | "@Inject 注解详解"
+            )
+        })
+        .map(|unit| (unit.relative_path.clone(), unit.id.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+    fs::create_dir_all(repo.path().join("docs/changelog")).unwrap();
+    fs::write(repo.path().join("docs/changelog/notes.md"), "# Notes\n").unwrap();
+
+    let report = scan_repo(repo.path(), &[]).unwrap();
+    let tree = build_module_tree(&report);
+    let repo_ctx = build_repo_context(&report, &tree);
+    let mod_ctxs = build_module_contexts(&report, &tree);
+    let domains = discover_knowledge_domains(
+        &report,
+        &tree,
+        &repo_ctx,
+        &mod_ctxs,
+        &GraphSummary::default(),
+        &SteeringConfig::default(),
+    );
+    let updated_units = plan_knowledge_units(
+        &domains,
+        &tree,
+        &report,
+        &mod_ctxs,
+        &SteeringConfig::default(),
+    );
+    let updated_ids = updated_units
+        .iter()
+        .filter(|unit| baseline_ids.contains_key(&unit.relative_path))
+        .map(|unit| (unit.relative_path.clone(), unit.id.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(baseline_ids, updated_ids);
 }

@@ -26,6 +26,7 @@ import {
   COMMAND_TIMEOUT_GRACE_MS,
   ensureBinary,
   formatUsageSnapshot,
+  isPreserveResumeEligibleInitErrorMessage,
   ROOT_DIR,
   TEST_DIR,
   isTransientFsErrorMessage,
@@ -36,6 +37,10 @@ import {
   runTaskPool,
   withTemporaryDevConfig,
 } from "./testing/helpers.mjs";
+import {
+  inspectWikiRuntime,
+  readPipelineCheckpoint,
+} from "./testing/wiki-runtime-inspection.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 
@@ -48,6 +53,7 @@ const REAL_REPO_MAP = {
   "spec-wiki": ROOT_DIR,
 };
 const DEFAULT_INIT_TIMEOUT_MS = 60 * 60_000;
+const MAX_INIT_RESUME_ATTEMPTS = 4;
 
 function resolveRunModes(runMode) {
   if (runMode === "both") {
@@ -141,20 +147,14 @@ async function initViaRealRepo(proj, realRepo, options = {}) {
   const projDir = path.join(TEST_DIR, proj);
   const wikiInReal = path.join(realRepo, ".wiki");
 
-  // init on real repo
   const { logger, cacheMode } = options;
-  const result = await withTemporaryDevConfig(
-    realRepo,
-    () =>
-      callCoreStreaming(
-        { action: "init", repoRoot: realRepo },
-        {
-          onProgress: (event) => logger?.onProgress(event),
-          timeoutMs: options.timeoutMs,
-        },
-      ),
-    { cacheMode },
-  );
+  const result = await runInitWithResume({
+    logger,
+    projectRoot: realRepo,
+    repoRootArg: realRepo,
+    initialCacheMode: cacheMode,
+    timeoutMs: options.timeoutMs,
+  });
   if (!result.response.ok) {
     throw new Error(result.response.error || `${proj} init failed`);
   }
@@ -164,7 +164,7 @@ async function initViaRealRepo(proj, realRepo, options = {}) {
     removePathWithRetry(path.join(projDir, ".wiki"));
   }
   cpSync(wikiInReal, path.join(projDir, ".wiki"), { recursive: true });
-  return result.progressEvents;
+  return result;
 }
 
 // -------------------------------------------------------------------------
@@ -239,6 +239,103 @@ function readGraphCounts(wikiDir) {
   };
 }
 
+async function runInitAttempt(projectRoot, repoRootArg, logger, cacheMode, timeoutMs) {
+  return await withTemporaryDevConfig(
+    projectRoot,
+    () =>
+      callCoreStreaming(
+        { action: "init", repoRoot: repoRootArg },
+        {
+          onProgress: (event) => logger?.onProgress(event),
+          timeoutMs,
+        },
+      ),
+    { cacheMode },
+  );
+}
+
+export function shouldResumeInitFromFailure({
+  message,
+  checkpoint,
+  runtimeSnapshot,
+  attempt,
+  maxAttempts = MAX_INIT_RESUME_ATTEMPTS,
+}) {
+  if (attempt >= maxAttempts || !isPreserveResumeEligibleInitErrorMessage(message)) {
+    return false;
+  }
+  if (!runtimeSnapshot?.cacheDbExists || runtimeSnapshot.metadataExists) {
+    return false;
+  }
+  if (runtimeSnapshot.markdownPageCount > 0) {
+    return false;
+  }
+  if (runtimeSnapshot.runtimeState !== "runtime_incomplete") {
+    return false;
+  }
+  const workflowRuntimeState = runtimeSnapshot.runtimeSummary?.runtime_state;
+  if (!["researching", "compose_pending", "compose_complete", "interrupted"].includes(workflowRuntimeState)) {
+    return false;
+  }
+
+  const normalized = String(message ?? "").toLowerCase();
+  if (normalized.includes("timed out after")) {
+    return true;
+  }
+
+  return checkpoint != null;
+}
+
+async function runInitWithResume({
+  logger,
+  projectRoot,
+  repoRootArg,
+  initialCacheMode,
+  timeoutMs,
+}) {
+  let cacheMode = initialCacheMode;
+  let resumedFromCheckpoint = false;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= MAX_INIT_RESUME_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      logger?.log(`RETRY attempt=${attempt}/${MAX_INIT_RESUME_ATTEMPTS} cache_mode=${cacheMode}`);
+    }
+
+    try {
+      const result = await runInitAttempt(projectRoot, repoRootArg, logger, cacheMode, timeoutMs);
+      return {
+        ...result,
+        effectiveCacheMode: cacheMode,
+        resumedFromCheckpoint,
+      };
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      const wikiDir = path.join(projectRoot, ".wiki");
+      const runtimeSnapshot = inspectWikiRuntime(wikiDir);
+      const checkpoint = readPipelineCheckpoint(runtimeSnapshot.cacheDbPath);
+      if (!shouldResumeInitFromFailure({
+        message,
+        checkpoint,
+        runtimeSnapshot,
+        attempt,
+      })) {
+        throw error;
+      }
+
+      resumedFromCheckpoint = true;
+      cacheMode = "preserve";
+      logger?.log(
+        `RESUME runtime_state=${runtimeSnapshot.runtimeState} checkpoint_stage=${checkpoint?.stage || runtimeSnapshot.runtimeSummary?.runtime_state || "unknown"} target=${checkpoint?.targetId || runtimeSnapshot.runtimeSummary?.current_research_unit_id || "n/a"}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, attempt * 5_000)));
+    }
+  }
+
+  throw lastError ?? new Error(`init failed for ${repoRootArg}`);
+}
+
 async function runSingleProject(proj, options = {}) {
   const projDir = path.join(TEST_DIR, proj);
   const wikiDir = path.join(projDir, ".wiki");
@@ -259,36 +356,34 @@ async function runSingleProject(proj, options = {}) {
     for (const run of resolveRunModes(options.runMode || "cold")) {
       const logger = createProjectProgressLogger(logs, proj, run.label);
       logger.log(`START cache_mode=${run.cacheMode}`);
-      let progressEvents;
+      let initResult;
       if (REAL_REPO_MAP[proj]) {
-        progressEvents = await initViaRealRepo(proj, REAL_REPO_MAP[proj], {
+        initResult = await initViaRealRepo(proj, REAL_REPO_MAP[proj], {
           cacheMode: run.cacheMode,
           logger,
+          timeoutMs: options.timeoutMs,
         });
       } else {
-        const stream = await withTemporaryDevConfig(
-          projDir,
-          () =>
-            callCoreStreaming(
-              { action: "init", repoRoot: `tmp/test/${proj}` },
-              {
-                onProgress: (event) => logger.onProgress(event),
-                timeoutMs: options.timeoutMs,
-              },
-            ),
-          { cacheMode: run.cacheMode },
-        );
-        if (!stream.response.ok) {
-          throw new Error(stream.response.error || `${proj} init failed`);
-        }
-        progressEvents = stream.progressEvents;
+        initResult = await runInitWithResume({
+          logger,
+          projectRoot: projDir,
+          repoRootArg: `tmp/test/${proj}`,
+          initialCacheMode: run.cacheMode,
+          timeoutMs: options.timeoutMs,
+        });
       }
+      if (!initResult.response.ok) {
+        throw new Error(initResult.response.error || `${proj} init failed`);
+      }
+      const progressEvents = initResult.progressEvents;
       const pages = countPages(wikiDir);
       const graph = readGraphCounts(wikiDir);
       const usage = summarizeProgressUsage(progressEvents);
       runs.push({
         label: run.label,
         cacheMode: run.cacheMode,
+        effectiveCacheMode: initResult.effectiveCacheMode,
+        resumedFromCheckpoint: initResult.resumedFromCheckpoint,
         pages,
         graph,
         usage,
@@ -296,7 +391,7 @@ async function runSingleProject(proj, options = {}) {
         pageEnrichmentRequests: promptCount(usage, "page_enrichment"),
       });
       logger.log(
-        `DONE pages=${pages} symbols=${graph.symbols} total_tokens=${usage?.total_tokens ?? 0}`,
+        `DONE pages=${pages} symbols=${graph.symbols} total_tokens=${usage?.total_tokens ?? 0} resumed=${initResult.resumedFromCheckpoint ? "yes" : "no"}`,
       );
     }
     if (REAL_REPO_MAP[proj]) {
@@ -333,7 +428,7 @@ function printProjectResult(result, index, total) {
     }
     const summary = (result.runs ?? [])
       .map((run) =>
-        `${run.label}:${run.pages} pages, ${run.graph.symbols} symbols, ${run.graph.edges} edges, tokens=${run.usage?.total_tokens ?? 0}, page_research=${run.pageResearchRequests}`,
+        `${run.label}:${run.pages} pages, ${run.graph.symbols} symbols, ${run.graph.edges} edges, tokens=${run.usage?.total_tokens ?? 0}, page_research=${run.pageResearchRequests}, resumed=${run.resumedFromCheckpoint ? "yes" : "no"}`,
       )
       .join(" | ");
     console.log(`[${index + 1}/${total}] ${result.proj}  OK  ${summary}`);

@@ -25,7 +25,7 @@ use crate::domain::research::{
     DomainResearch, PageDiagramDigest, PageDigest, PageSectionDigest, SystemResearch, UnitResearch,
 };
 use crate::domain::steering::SteeringConfig;
-use crate::generation::compose_engine::{compose_leaf_page, compose_parent_page};
+use crate::generation::compose_engine::compose_contract_page_for_unit;
 use crate::generation::knowledge_planner::{
     build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
 };
@@ -94,7 +94,7 @@ pub fn run_compose_pipeline_with_action(
 ) -> io::Result<ComposePipelineOutput> {
     let conn = sqlite_store::open_db(repo_root)?;
     let facts_input_hash = compute_facts_input_hash(scan_report, module_tree);
-    let resume_enabled = prepare_resume_state(&conn, &facts_input_hash)?;
+    let resume_enabled = prepare_resume_state(&conn, workflow_action, &facts_input_hash)?;
 
     let domains = discover_knowledge_domains(
         scan_report,
@@ -116,30 +116,16 @@ pub fn run_compose_pipeline_with_action(
         sqlite_store::write_knowledge_domains(&conn, &domains)?;
         sqlite_store::write_knowledge_units(&conn, &units)?;
     }
-    initialize_runtime_gates(&conn, workflow_action, &facts_input_hash, &knowledge_tree)?;
-    let mut runtime_summary =
-        load_runtime_summary(&conn)?.unwrap_or_else(|| PipelineRuntimeSummary {
-            facts_input_hash: facts_input_hash.clone(),
-            workflow_action: workflow_action.to_string(),
-            runtime_state: "knowledge_planning_complete".to_string(),
-            researched_units: 0,
-            compose_ready_units: 0,
-            composed_units: 0,
-            assembled_pages: 0,
-            blocked_units: Vec::new(),
-            last_ready_stage: Some(PipelineStage::KnowledgePlanning.as_str().to_string()),
-            last_interrupted_stage: None,
-            summary_reason: None,
-            current_research_unit_id: None,
-            current_research_unit_type: None,
-            current_research_started_at: None,
-            last_researched_unit_id: None,
-            last_research_elapsed_ms: None,
-        });
+    let mut unit_runtime_gates = initialize_runtime_gates(&conn, &knowledge_tree, resume_enabled)?;
+    let mut runtime_summary = initialize_runtime_summary(
+        &conn,
+        workflow_action,
+        &facts_input_hash,
+        &unit_runtime_gates,
+    )?;
     runtime_summary.workflow_action = workflow_action.to_string();
     runtime_summary.facts_input_hash = facts_input_hash.clone();
     runtime_summary.runtime_state = "researching".to_string();
-    runtime_summary.last_ready_stage = Some(PipelineStage::KnowledgePlanning.as_str().to_string());
     runtime_summary.last_interrupted_stage = None;
     runtime_summary.summary_reason = None;
     runtime_summary.current_research_unit_id = None;
@@ -222,6 +208,20 @@ pub fn run_compose_pipeline_with_action(
         save_runtime_summary(&conn, &runtime_summary)?;
         let child_digests =
             collect_compose_input_digests(unit, &knowledge_tree, &unit_digests_for_research);
+        if unit_uses_seed_backed_research(unit) {
+            runtime_summary.current_research_unit_id = None;
+            runtime_summary.current_research_unit_type = None;
+            runtime_summary.current_research_started_at = None;
+            runtime_summary.last_researched_unit_id = Some(unit.id.clone());
+            runtime_summary.last_research_elapsed_ms = Some(
+                research_started_at
+                    .elapsed()
+                    .as_millis()
+                    .min(u64::MAX as u128) as u64,
+            );
+            persist_research_progress(&conn, &mut runtime_summary, &mut unit_runtime_gates, unit)?;
+            continue;
+        }
         let unit_input_hash =
             compute_unit_input_hash(&facts_input_hash, unit, &child_digests, steering);
         let mut research = load_or_compute_research(
@@ -265,20 +265,7 @@ pub fn run_compose_pipeline_with_action(
                 .as_millis()
                 .min(u64::MAX as u128) as u64,
         );
-        runtime_summary.researched_units += 1;
-        runtime_summary.compose_ready_units += 1;
-        runtime_summary.last_ready_stage = Some(PipelineStage::ResearchUnit.as_str().to_string());
-        write_unit_gate(
-            &conn,
-            unit,
-            "ready",
-            "ready",
-            "pending",
-            Some(PipelineStage::ResearchUnit.as_str().to_string()),
-            None,
-            Vec::new(),
-        )?;
-        save_runtime_summary(&conn, &runtime_summary)?;
+        persist_research_progress(&conn, &mut runtime_summary, &mut unit_runtime_gates, unit)?;
     }
 
     record_workflow_research_stop_summary(&unit_researches);
@@ -314,6 +301,7 @@ pub fn run_compose_pipeline_with_action(
                 persist_compose_progress(
                     &conn,
                     &mut runtime_summary,
+                    &mut unit_runtime_gates,
                     unit,
                     stage_for_compose_error(unit),
                 )?;
@@ -322,26 +310,38 @@ pub fn run_compose_pipeline_with_action(
         }
 
         let child_digests = collect_compose_input_digests(unit, &knowledge_tree, &digests);
-        let (draft, digest, stage) = compose_unit_page(unit, &child_digests, &unit_researches)
-            .map_err(|error| {
-                runtime_summary.runtime_state = "interrupted".to_string();
-                runtime_summary.last_interrupted_stage =
-                    Some(stage_for_compose_error(unit).as_str().to_string());
-                runtime_summary.summary_reason = Some(error.to_string());
-                let _ = save_runtime_summary(&conn, &runtime_summary);
-                save_checkpoint_and_return(
-                    &conn,
-                    &facts_input_hash,
-                    stage_for_compose_error(unit),
-                    Some(unit.id.clone()),
-                    error,
-                )
-            })?;
+        let (draft, digest, stage) = compose_unit_page(
+            unit,
+            &child_digests,
+            &system_research,
+            &domain_researches,
+            &unit_researches,
+        )
+        .map_err(|error| {
+            runtime_summary.runtime_state = "interrupted".to_string();
+            runtime_summary.last_interrupted_stage =
+                Some(stage_for_compose_error(unit).as_str().to_string());
+            runtime_summary.summary_reason = Some(error.to_string());
+            let _ = save_runtime_summary(&conn, &runtime_summary);
+            save_checkpoint_and_return(
+                &conn,
+                &facts_input_hash,
+                stage_for_compose_error(unit),
+                Some(unit.id.clone()),
+                error,
+            )
+        })?;
 
         persist_compose_result(&conn, unit, &draft, &digest)?;
         digests.insert(unit.id.clone(), digest);
         page_drafts.push(draft);
-        persist_compose_progress(&conn, &mut runtime_summary, unit, stage)?;
+        persist_compose_progress(
+            &conn,
+            &mut runtime_summary,
+            &mut unit_runtime_gates,
+            unit,
+            stage,
+        )?;
     }
 
     let planned_pages = plan_pages_from_knowledge_tree(&knowledge_tree);
@@ -357,12 +357,17 @@ pub fn run_compose_pipeline_with_action(
     })
 }
 
-fn prepare_resume_state(conn: &Connection, facts_input_hash: &str) -> io::Result<bool> {
+fn prepare_resume_state(
+    conn: &Connection,
+    workflow_action: &str,
+    facts_input_hash: &str,
+) -> io::Result<bool> {
     let checkpoint = sqlite_store::read_pipeline_checkpoint(conn)?;
     let runtime_summary = load_runtime_summary(conn)?;
     let Some((_checkpoint_id, checkpoint_hash, _stage, _target, _message)) = checkpoint else {
         if let Some(summary) = runtime_summary {
-            if summary.facts_input_hash == facts_input_hash
+            if summary.workflow_action == workflow_action
+                && summary.facts_input_hash == facts_input_hash
                 && summary.runtime_state != "completed"
                 && summary.runtime_state != "assemble_complete"
             {
@@ -375,7 +380,12 @@ fn prepare_resume_state(conn: &Connection, facts_input_hash: &str) -> io::Result
         return Ok(false);
     };
 
-    if checkpoint_hash != facts_input_hash {
+    if checkpoint_hash != facts_input_hash
+        || runtime_summary
+            .as_ref()
+            .map(|summary| summary.workflow_action.as_str())
+            != Some(workflow_action)
+    {
         sqlite_store::clear_pipeline_checkpoint(conn)?;
         sqlite_store::clear_page_drafts(conn)?;
         sqlite_store::clear_page_digests(conn)?;
@@ -416,30 +426,54 @@ fn build_pipeline_unit_order(knowledge_tree: &KnowledgeTree) -> Vec<String> {
     non_system
 }
 
+/// `SystemResearch / DomainResearch` 已经为高层页产出了可直接 compose 的 seed。
+/// 这些 unit 若再跑一轮 provider-backed research，只会重复消耗吞吐，不会引入新的 child digest。
+fn unit_uses_seed_backed_research(unit: &KnowledgeUnit) -> bool {
+    matches!(
+        unit.unit_type,
+        UnitType::Overview | UnitType::Architecture | UnitType::DomainIndex
+    )
+}
+
 fn initialize_runtime_gates(
     conn: &Connection,
-    workflow_action: &str,
-    facts_input_hash: &str,
     knowledge_tree: &KnowledgeTree,
-) -> io::Result<()> {
+    resume_enabled: bool,
+) -> io::Result<BTreeMap<String, UnitRuntimeGate>> {
+    let existing_gates = if resume_enabled {
+        sqlite_store::read_unit_runtime_gates(conn)?
+            .into_iter()
+            .map(|gate| (gate.unit_id.clone(), gate))
+            .collect::<BTreeMap<_, _>>()
+    } else {
+        BTreeMap::new()
+    };
+
     sqlite_store::clear_unit_runtime_gates(conn)?;
+    let mut runtime_gates = BTreeMap::new();
     for unit_id in &knowledge_tree.processing_order {
         let Some(unit) = knowledge_tree.get_unit(unit_id) else {
             continue;
         };
-        write_unit_gate(
-            conn,
-            unit,
-            "pending",
-            "pending",
-            "pending",
-            None,
-            None,
-            Vec::new(),
-        )?;
+        let gate = existing_gates
+            .get(&unit.id)
+            .cloned()
+            .map(|gate| normalize_runtime_gate(gate, unit))
+            .unwrap_or_else(|| pending_runtime_gate(unit));
+        sqlite_store::write_unit_runtime_gate(conn, &gate)?;
+        runtime_gates.insert(unit.id.clone(), gate);
     }
 
-    let summary = PipelineRuntimeSummary {
+    Ok(runtime_gates)
+}
+
+fn initialize_runtime_summary(
+    conn: &Connection,
+    workflow_action: &str,
+    facts_input_hash: &str,
+    runtime_gates: &BTreeMap<String, UnitRuntimeGate>,
+) -> io::Result<PipelineRuntimeSummary> {
+    let mut summary = load_runtime_summary(conn)?.unwrap_or_else(|| PipelineRuntimeSummary {
         facts_input_hash: facts_input_hash.to_string(),
         workflow_action: workflow_action.to_string(),
         runtime_state: "knowledge_planning_complete".to_string(),
@@ -456,8 +490,58 @@ fn initialize_runtime_gates(
         current_research_started_at: None,
         last_researched_unit_id: None,
         last_research_elapsed_ms: None,
-    };
-    save_runtime_summary(conn, &summary)
+    });
+    summary.facts_input_hash = facts_input_hash.to_string();
+    summary.workflow_action = workflow_action.to_string();
+    summary.researched_units = runtime_gates
+        .values()
+        .filter(|gate| gate.research_status == "ready")
+        .count();
+    summary.compose_ready_units = summary.researched_units;
+    summary.composed_units = runtime_gates
+        .values()
+        .filter(|gate| gate.compose_status == "done")
+        .count();
+    summary.assembled_pages = runtime_gates
+        .values()
+        .filter(|gate| gate.assemble_status == "done")
+        .count();
+    summary.blocked_units = runtime_gates
+        .values()
+        .filter(|gate| gate.blocked_reason.is_some())
+        .map(|gate| gate.unit_id.clone())
+        .collect();
+    Ok(summary)
+}
+
+fn pending_runtime_gate(unit: &KnowledgeUnit) -> UnitRuntimeGate {
+    UnitRuntimeGate {
+        unit_id: unit.id.clone(),
+        unit_type: unit.unit_type.as_str().to_string(),
+        research_status: "pending".to_string(),
+        compose_status: "pending".to_string(),
+        assemble_status: "pending".to_string(),
+        last_ready_stage: None,
+        blocked_reason: None,
+        missing_dependencies: Vec::new(),
+        updated_at: current_runtime_timestamp(),
+    }
+}
+
+fn normalize_runtime_gate(mut gate: UnitRuntimeGate, unit: &KnowledgeUnit) -> UnitRuntimeGate {
+    gate.unit_id = unit.id.clone();
+    gate.unit_type = unit.unit_type.as_str().to_string();
+    if gate.research_status.is_empty() {
+        gate.research_status = "pending".to_string();
+    }
+    if gate.compose_status.is_empty() {
+        gate.compose_status = "pending".to_string();
+    }
+    if gate.assemble_status.is_empty() {
+        gate.assemble_status = "pending".to_string();
+    }
+    gate.updated_at = current_runtime_timestamp();
+    gate
 }
 
 fn save_runtime_summary(conn: &Connection, summary: &PipelineRuntimeSummary) -> io::Result<()> {
@@ -506,6 +590,55 @@ fn write_unit_gate(
             updated_at: current_runtime_timestamp(),
         },
     )
+}
+
+fn persist_research_progress(
+    conn: &Connection,
+    runtime_summary: &mut PipelineRuntimeSummary,
+    runtime_gates: &mut BTreeMap<String, UnitRuntimeGate>,
+    unit: &KnowledgeUnit,
+) -> io::Result<()> {
+    let existing_gate = runtime_gates
+        .get(&unit.id)
+        .cloned()
+        .unwrap_or_else(|| pending_runtime_gate(unit));
+    let compose_already_done = existing_gate.compose_status == "done";
+    let assemble_already_done = existing_gate.assemble_status == "done";
+    let last_ready_stage = if compose_already_done {
+        existing_gate.last_ready_stage.clone()
+    } else {
+        Some(PipelineStage::ResearchUnit.as_str().to_string())
+    };
+    if existing_gate.research_status != "ready" {
+        runtime_summary.researched_units += 1;
+        runtime_summary.compose_ready_units += 1;
+        runtime_summary.last_ready_stage = Some(PipelineStage::ResearchUnit.as_str().to_string());
+    }
+    runtime_summary.last_interrupted_stage = None;
+    runtime_summary.summary_reason = None;
+
+    let next_gate = UnitRuntimeGate {
+        unit_id: unit.id.clone(),
+        unit_type: unit.unit_type.as_str().to_string(),
+        research_status: "ready".to_string(),
+        compose_status: if compose_already_done {
+            "done".to_string()
+        } else {
+            "ready".to_string()
+        },
+        assemble_status: if assemble_already_done {
+            "done".to_string()
+        } else {
+            "pending".to_string()
+        },
+        last_ready_stage,
+        blocked_reason: None,
+        missing_dependencies: Vec::new(),
+        updated_at: current_runtime_timestamp(),
+    };
+    sqlite_store::write_unit_runtime_gate(conn, &next_gate)?;
+    runtime_gates.insert(unit.id.clone(), next_gate);
+    save_runtime_summary(conn, runtime_summary)
 }
 
 fn load_or_compute_research<T, F>(
@@ -591,6 +724,10 @@ fn build_research_digest(unit: &KnowledgeUnit, research: &UnitResearch) -> PageD
             .map(|section| section.title.clone())
             .collect(),
         key_sources: research.key_sources.clone(),
+        planned_key_sources: digest_planned_key_sources_from_research(research),
+        grounded_key_sources: digest_grounded_key_sources_from_research(research),
+        skeleton_profile: research.skeleton_profile.clone(),
+        section_grounding_refs: research.section_grounding_refs.clone(),
         citations: research
             .evidence_clusters
             .iter()
@@ -613,6 +750,51 @@ fn build_research_digest(unit: &KnowledgeUnit, research: &UnitResearch) -> PageD
         diagram_digests: build_diagram_digests_from_research(research),
         readiness_stage: "research_ready".to_string(),
     }
+}
+
+fn digest_planned_key_sources_from_research(research: &UnitResearch) -> Vec<String> {
+    let mut planned = research
+        .key_source_clusters
+        .iter()
+        .flat_map(|cluster| cluster.source_paths.iter().cloned())
+        .collect::<Vec<_>>();
+    if planned.is_empty() {
+        for source in &research.key_sources {
+            if !planned.iter().any(|existing| existing == source) {
+                planned.push(source.clone());
+            }
+        }
+    }
+    planned
+}
+
+fn digest_grounded_key_sources_from_research(research: &UnitResearch) -> Vec<String> {
+    let section_digests = build_section_digests_from_research(research);
+    let mut grounded = Vec::new();
+    if research.section_grounding_refs.is_empty() {
+        for digest in section_digests {
+            for source in digest.key_sources {
+                if !grounded.iter().any(|existing| existing == &source) {
+                    grounded.push(source);
+                }
+            }
+        }
+        return grounded;
+    }
+
+    for grounding in &research.section_grounding_refs {
+        if let Some(digest) = section_digests
+            .iter()
+            .find(|digest| digest.section_key == grounding.section_key)
+        {
+            for source in &digest.key_sources {
+                if !grounded.iter().any(|existing| existing == source) {
+                    grounded.push(source.clone());
+                }
+            }
+        }
+    }
+    grounded
 }
 
 fn build_section_digests_from_research(research: &UnitResearch) -> Vec<PageSectionDigest> {
@@ -689,19 +871,18 @@ pub(crate) fn collect_compose_input_digests(
 fn compose_unit_page(
     unit: &KnowledgeUnit,
     child_digests: &[PageDigest],
+    system_research: &SystemResearch,
+    domain_researches: &BTreeMap<String, DomainResearch>,
     unit_researches: &BTreeMap<String, UnitResearch>,
 ) -> io::Result<(PageDraft, PageDigest, PipelineStage)> {
-    let Some(unit_research) = unit_researches.get(&unit.id) else {
-        return Err(io::Error::other(format!(
-            "missing unit research for {}",
-            unit.id
-        )));
-    };
-    let (draft, mut digest) = if unit.is_leaf() {
-        compose_leaf_page(unit, unit_research)
-    } else {
-        compose_parent_page(unit, unit_research, child_digests)
-    };
+    let (draft, mut digest) = compose_contract_page_for_unit(
+        unit,
+        Some(system_research),
+        domain_researches.get(&unit.domain_id),
+        unit_researches.get(&unit.id),
+        child_digests,
+    )
+    .ok_or_else(|| io::Error::other(format!("missing compose contract inputs for {}", unit.id)))?;
     digest.digest_id = crate::domain::stable_id::stable_id("digest", &unit.id);
     digest.section_digests = build_section_digests_from_draft(&draft);
     digest.diagram_digests = build_diagram_digests_from_draft(&draft);
@@ -758,7 +939,7 @@ fn enrich_parent_research(
     research: &mut UnitResearch,
     system_research: &SystemResearch,
     domain_researches: &BTreeMap<String, DomainResearch>,
-    child_digests: &[PageDigest],
+    _child_digests: &[PageDigest],
 ) {
     match unit.unit_type {
         UnitType::Overview | UnitType::Architecture => {
@@ -789,18 +970,6 @@ fn enrich_parent_research(
         }
         _ => {}
     }
-
-    for digest in child_digests {
-        for source in &digest.key_sources {
-            if !research
-                .key_sources
-                .iter()
-                .any(|existing| existing == source)
-            {
-                research.key_sources.push(source.clone());
-            }
-        }
-    }
 }
 
 fn persist_compose_result(
@@ -823,23 +992,41 @@ fn persist_compose_result(
 fn persist_compose_progress(
     conn: &Connection,
     runtime_summary: &mut PipelineRuntimeSummary,
+    runtime_gates: &mut BTreeMap<String, UnitRuntimeGate>,
     unit: &KnowledgeUnit,
     stage: PipelineStage,
 ) -> io::Result<()> {
-    runtime_summary.composed_units += 1;
+    let existing_gate = runtime_gates
+        .get(&unit.id)
+        .cloned()
+        .unwrap_or_else(|| pending_runtime_gate(unit));
+    if existing_gate.compose_status != "done" {
+        runtime_summary.composed_units += 1;
+    }
     runtime_summary.last_ready_stage = Some(stage.as_str().to_string());
     runtime_summary.last_interrupted_stage = None;
     runtime_summary.summary_reason = None;
-    write_unit_gate(
-        conn,
-        unit,
-        "ready",
-        "done",
-        "pending",
-        Some(stage.as_str().to_string()),
-        None,
-        Vec::new(),
-    )?;
+    let next_gate = UnitRuntimeGate {
+        unit_id: unit.id.clone(),
+        unit_type: unit.unit_type.as_str().to_string(),
+        research_status: if existing_gate.research_status.is_empty() {
+            "ready".to_string()
+        } else {
+            existing_gate.research_status
+        },
+        compose_status: "done".to_string(),
+        assemble_status: if existing_gate.assemble_status == "done" {
+            "done".to_string()
+        } else {
+            "pending".to_string()
+        },
+        last_ready_stage: Some(stage.as_str().to_string()),
+        blocked_reason: None,
+        missing_dependencies: Vec::new(),
+        updated_at: current_runtime_timestamp(),
+    };
+    sqlite_store::write_unit_runtime_gate(conn, &next_gate)?;
+    runtime_gates.insert(unit.id.clone(), next_gate);
     save_runtime_summary(conn, runtime_summary)
 }
 
@@ -1071,6 +1258,7 @@ pub fn finalize_pipeline_runtime(
 
 #[cfg(test)]
 mod tests {
+    use super::unit_uses_seed_backed_research;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::fs;
@@ -1081,7 +1269,7 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::debug_trace;
-    use crate::domain::checkpoint::{PipelineRuntimeSummary, PipelineStage};
+    use crate::domain::checkpoint::{PipelineRuntimeSummary, PipelineStage, UnitRuntimeGate};
     use crate::domain::compose::PageDraft;
     use crate::domain::knowledge::{KnowledgeDomain, KnowledgeTree, KnowledgeUnit, UnitType};
     use crate::domain::research::{
@@ -1102,8 +1290,10 @@ mod tests {
     use crate::storage::sqlite_store;
 
     use super::{
-        collect_compose_input_digests, compute_unit_input_hash, load_runtime_summary,
-        persist_compose_progress, prepare_resume_state, run_compose_pipeline, save_runtime_summary,
+        collect_compose_input_digests, compute_unit_input_hash, enrich_parent_research,
+        initialize_runtime_gates, initialize_runtime_summary, load_runtime_summary,
+        pending_runtime_gate, persist_compose_progress, persist_research_progress,
+        prepare_resume_state, run_compose_pipeline, save_runtime_summary,
     };
 
     #[test]
@@ -1144,6 +1334,10 @@ mod tests {
             summary: "半完成摘要".to_string(),
             key_topics: Vec::new(),
             key_sources: Vec::new(),
+            planned_key_sources: Vec::new(),
+            grounded_key_sources: Vec::new(),
+            skeleton_profile: None,
+            section_grounding_refs: Vec::new(),
             citations: Vec::new(),
             section_digests: Vec::new(),
             diagram_digests: Vec::new(),
@@ -1186,13 +1380,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(prepare_resume_state(&conn, "facts-same").unwrap());
+        assert!(prepare_resume_state(&conn, "init", "facts-same").unwrap());
         assert!(sqlite_store::read_page_draft(&conn, &unit.id)
             .unwrap()
             .is_some());
         assert!(sqlite_store::read_page_digest(&conn, &unit.id)
             .unwrap()
             .is_some());
+        assert!(!prepare_resume_state(&conn, "rebuild", "facts-same").unwrap());
     }
 
     #[test]
@@ -1254,9 +1449,11 @@ mod tests {
             last_researched_unit_id: None,
             last_research_elapsed_ms: None,
         };
+        let mut runtime_gates = BTreeMap::from([(unit.id.clone(), pending_runtime_gate(&unit))]);
         persist_compose_progress(
             &conn,
             &mut runtime_summary,
+            &mut runtime_gates,
             &unit,
             PipelineStage::ComposeLeaf,
         )
@@ -1278,6 +1475,242 @@ mod tests {
         assert_eq!(gates[0].unit_id, unit.id);
         assert_eq!(gates[0].compose_status, "done");
         assert_eq!(gates[0].assemble_status, "pending");
+    }
+
+    #[test]
+    fn initialize_runtime_gates_preserves_resume_progress_for_current_units() {
+        let fixture = tempdir().unwrap();
+        let repo_root = fixture.path();
+        let conn = sqlite_store::open_db(repo_root).unwrap();
+        let domain = KnowledgeDomain::new(
+            crate::domain::knowledge::DomainType::CoreRuntime,
+            "核心运行时",
+        );
+        let ready_unit = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "运行时",
+            domain.id.clone(),
+            "核心运行时/运行时.md",
+        );
+        let done_unit = KnowledgeUnit::new(
+            UnitType::DomainIndex,
+            "运行时域",
+            domain.id.clone(),
+            "核心运行时/运行时域.md",
+        );
+        let stale_unit = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "旧运行时",
+            domain.id.clone(),
+            "核心运行时/旧运行时.md",
+        );
+        let mut tree = KnowledgeTree::new(done_unit.id.clone());
+        tree.add_domain(domain.clone());
+        tree.add_unit(ready_unit.clone());
+        tree.add_unit(done_unit.clone());
+        tree.processing_order = vec![ready_unit.id.clone(), done_unit.id.clone()];
+        sqlite_store::write_knowledge_domains(&conn, &[domain]).unwrap();
+        sqlite_store::write_knowledge_units(
+            &conn,
+            &[ready_unit.clone(), done_unit.clone(), stale_unit.clone()],
+        )
+        .unwrap();
+
+        sqlite_store::write_unit_runtime_gate(
+            &conn,
+            &UnitRuntimeGate {
+                unit_id: ready_unit.id.clone(),
+                unit_type: ready_unit.unit_type.as_str().to_string(),
+                research_status: "ready".to_string(),
+                compose_status: "ready".to_string(),
+                assemble_status: "pending".to_string(),
+                last_ready_stage: Some("research_unit".to_string()),
+                blocked_reason: None,
+                missing_dependencies: Vec::new(),
+                updated_at: "1".to_string(),
+            },
+        )
+        .unwrap();
+        sqlite_store::write_unit_runtime_gate(
+            &conn,
+            &UnitRuntimeGate {
+                unit_id: done_unit.id.clone(),
+                unit_type: done_unit.unit_type.as_str().to_string(),
+                research_status: "ready".to_string(),
+                compose_status: "done".to_string(),
+                assemble_status: "pending".to_string(),
+                last_ready_stage: Some("compose_index".to_string()),
+                blocked_reason: None,
+                missing_dependencies: Vec::new(),
+                updated_at: "2".to_string(),
+            },
+        )
+        .unwrap();
+        sqlite_store::write_unit_runtime_gate(
+            &conn,
+            &UnitRuntimeGate {
+                unit_id: stale_unit.id.clone(),
+                unit_type: stale_unit.unit_type.as_str().to_string(),
+                research_status: "ready".to_string(),
+                compose_status: "done".to_string(),
+                assemble_status: "pending".to_string(),
+                last_ready_stage: Some("compose_leaf".to_string()),
+                blocked_reason: None,
+                missing_dependencies: Vec::new(),
+                updated_at: "3".to_string(),
+            },
+        )
+        .unwrap();
+
+        let runtime_gates = initialize_runtime_gates(&conn, &tree, true).unwrap();
+
+        assert_eq!(runtime_gates.len(), 2);
+        assert_eq!(runtime_gates[&ready_unit.id].research_status, "ready");
+        assert_eq!(runtime_gates[&ready_unit.id].compose_status, "ready");
+        assert_eq!(runtime_gates[&done_unit.id].compose_status, "done");
+        assert!(sqlite_store::read_unit_runtime_gates(&conn)
+            .unwrap()
+            .iter()
+            .all(|gate| gate.unit_id != stale_unit.id));
+    }
+
+    #[test]
+    fn initialize_runtime_summary_rehydrates_counts_from_preserved_gates() {
+        let fixture = tempdir().unwrap();
+        let repo_root = fixture.path();
+        let conn = sqlite_store::open_db(repo_root).unwrap();
+
+        save_runtime_summary(
+            &conn,
+            &PipelineRuntimeSummary {
+                facts_input_hash: "facts-old".to_string(),
+                workflow_action: "init".to_string(),
+                runtime_state: "interrupted".to_string(),
+                researched_units: 99,
+                compose_ready_units: 99,
+                composed_units: 99,
+                assembled_pages: 99,
+                blocked_units: vec!["unit-old".to_string()],
+                last_ready_stage: Some("compose_parent".to_string()),
+                last_interrupted_stage: Some("compose_parent".to_string()),
+                summary_reason: Some("old".to_string()),
+                current_research_unit_id: None,
+                current_research_unit_type: None,
+                current_research_started_at: None,
+                last_researched_unit_id: None,
+                last_research_elapsed_ms: None,
+            },
+        )
+        .unwrap();
+
+        let runtime_gates = BTreeMap::from([
+            (
+                "unit-ready".to_string(),
+                UnitRuntimeGate {
+                    unit_id: "unit-ready".to_string(),
+                    unit_type: "module_doc".to_string(),
+                    research_status: "ready".to_string(),
+                    compose_status: "ready".to_string(),
+                    assemble_status: "pending".to_string(),
+                    last_ready_stage: Some("research_unit".to_string()),
+                    blocked_reason: None,
+                    missing_dependencies: Vec::new(),
+                    updated_at: "1".to_string(),
+                },
+            ),
+            (
+                "unit-done".to_string(),
+                UnitRuntimeGate {
+                    unit_id: "unit-done".to_string(),
+                    unit_type: "domain_index".to_string(),
+                    research_status: "ready".to_string(),
+                    compose_status: "done".to_string(),
+                    assemble_status: "pending".to_string(),
+                    last_ready_stage: Some("compose_index".to_string()),
+                    blocked_reason: None,
+                    missing_dependencies: Vec::new(),
+                    updated_at: "2".to_string(),
+                },
+            ),
+        ]);
+
+        let summary =
+            initialize_runtime_summary(&conn, "init", "facts-same", &runtime_gates).unwrap();
+
+        assert_eq!(summary.facts_input_hash, "facts-same");
+        assert_eq!(summary.workflow_action, "init");
+        assert_eq!(summary.researched_units, 2);
+        assert_eq!(summary.compose_ready_units, 2);
+        assert_eq!(summary.composed_units, 1);
+        assert_eq!(summary.assembled_pages, 0);
+        assert!(summary.blocked_units.is_empty());
+    }
+
+    #[test]
+    fn resumed_research_and_compose_progress_do_not_double_count() {
+        let fixture = tempdir().unwrap();
+        let repo_root = fixture.path();
+        let conn = sqlite_store::open_db(repo_root).unwrap();
+        let domain = KnowledgeDomain::new(
+            crate::domain::knowledge::DomainType::CoreRuntime,
+            "核心运行时",
+        );
+        let unit = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "运行时",
+            domain.id.clone(),
+            "核心运行时/运行时.md",
+        );
+        sqlite_store::write_knowledge_domains(&conn, &[domain]).unwrap();
+        sqlite_store::write_knowledge_units(&conn, &[unit.clone()]).unwrap();
+
+        let mut runtime_summary = PipelineRuntimeSummary {
+            facts_input_hash: "facts-same".to_string(),
+            workflow_action: "init".to_string(),
+            runtime_state: "compose_pending".to_string(),
+            researched_units: 1,
+            compose_ready_units: 1,
+            composed_units: 1,
+            assembled_pages: 0,
+            blocked_units: Vec::new(),
+            last_ready_stage: Some("compose_leaf".to_string()),
+            last_interrupted_stage: Some("compose_leaf".to_string()),
+            summary_reason: Some("stale".to_string()),
+            current_research_unit_id: None,
+            current_research_unit_type: None,
+            current_research_started_at: None,
+            last_researched_unit_id: None,
+            last_research_elapsed_ms: None,
+        };
+        let mut runtime_gates = BTreeMap::from([(
+            unit.id.clone(),
+            UnitRuntimeGate {
+                unit_id: unit.id.clone(),
+                unit_type: unit.unit_type.as_str().to_string(),
+                research_status: "ready".to_string(),
+                compose_status: "done".to_string(),
+                assemble_status: "pending".to_string(),
+                last_ready_stage: Some("compose_leaf".to_string()),
+                blocked_reason: None,
+                missing_dependencies: Vec::new(),
+                updated_at: "1".to_string(),
+            },
+        )]);
+
+        persist_research_progress(&conn, &mut runtime_summary, &mut runtime_gates, &unit).unwrap();
+        persist_compose_progress(
+            &conn,
+            &mut runtime_summary,
+            &mut runtime_gates,
+            &unit,
+            PipelineStage::ComposeLeaf,
+        )
+        .unwrap();
+
+        assert_eq!(runtime_summary.researched_units, 1);
+        assert_eq!(runtime_summary.compose_ready_units, 1);
+        assert_eq!(runtime_summary.composed_units, 1);
+        assert_eq!(runtime_gates[&unit.id].compose_status, "done");
     }
 
     #[test]
@@ -1841,6 +2274,35 @@ mod tests {
             .rposition(|entry| entry.starts_with("domain:"))
             .unwrap();
         assert!(last_domain_index < first_unit_index);
+        let unit_research_ids = log
+            .iter()
+            .filter_map(|entry| entry.strip_prefix("unit:"))
+            .collect::<Vec<_>>();
+        let expected_unit_researches = output
+            .knowledge_tree
+            .processing_order
+            .iter()
+            .filter(|unit_id| {
+                output
+                    .knowledge_tree
+                    .get_unit(unit_id)
+                    .map(|unit| !unit_uses_seed_backed_research(unit))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(unit_research_ids.len(), expected_unit_researches);
+        for unit_id in unit_research_ids {
+            let unit = output
+                .knowledge_tree
+                .get_unit(unit_id)
+                .expect("logged unit should exist in knowledge tree");
+            assert!(
+                !unit_uses_seed_backed_research(unit),
+                "seed-backed unit should not trigger duplicate unit research: {} {:?}",
+                unit.title,
+                unit.unit_type
+            );
+        }
     }
 
     #[test]
@@ -1889,6 +2351,10 @@ mod tests {
                 summary: "域摘要".to_string(),
                 key_topics: vec!["运行时".to_string()],
                 key_sources: vec!["src/runtime.ts".to_string()],
+                planned_key_sources: Vec::new(),
+                grounded_key_sources: Vec::new(),
+                skeleton_profile: None,
+                section_grounding_refs: Vec::new(),
                 citations: Vec::new(),
                 section_digests: Vec::new(),
                 diagram_digests: Vec::new(),
@@ -1904,6 +2370,42 @@ mod tests {
         assert_eq!(overview_digests[0].title, "核心模块");
         assert_eq!(architecture_digests.len(), 1);
         assert!(leaf_digests.is_empty());
+    }
+
+    #[test]
+    fn enrich_parent_research_keeps_child_key_sources_on_digest_channel() {
+        let unit = KnowledgeUnit::new(
+            UnitType::DomainIndex,
+            "核心模块",
+            "domain-runtime",
+            "核心模块/核心模块.md",
+        );
+        let mut research = UnitResearch {
+            unit_id: unit.id.clone(),
+            key_sources: vec!["docs/index.md".to_string()],
+            summary: "已有父页摘要".to_string(),
+            ..UnitResearch::default()
+        };
+        let system_research = SystemResearch::default();
+        let domain_researches = BTreeMap::new();
+        let child_digests = vec![PageDigest {
+            digest_id: "digest-child".to_string(),
+            unit_id: "unit-child".to_string(),
+            page_id: "page-child".to_string(),
+            title: "子页".to_string(),
+            key_sources: vec!["src/runtime.ts".to_string(), "src/queue.ts".to_string()],
+            ..PageDigest::default()
+        }];
+
+        enrich_parent_research(
+            &unit,
+            &mut research,
+            &system_research,
+            &domain_researches,
+            &child_digests,
+        );
+
+        assert_eq!(research.key_sources, vec!["docs/index.md"]);
     }
 
     #[test]
@@ -1924,6 +2426,10 @@ mod tests {
             summary: "子页摘要".to_string(),
             key_topics: vec!["调度".to_string()],
             key_sources: vec!["src/runtime.ts".to_string()],
+            planned_key_sources: Vec::new(),
+            grounded_key_sources: Vec::new(),
+            skeleton_profile: None,
+            section_grounding_refs: Vec::new(),
             citations: Vec::new(),
             section_digests: Vec::new(),
             diagram_digests: Vec::new(),

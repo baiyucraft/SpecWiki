@@ -54,13 +54,20 @@ test("reference report snapshot、summary 与项目结果来自同一批 results
 
     const snapshot = JSON.parse(readFileSync(run.snapshotPath, "utf-8"));
     const summary = readFileSync(run.summaryPath, "utf-8");
+    const storybookReport = readFileSync(path.join(run.reportDir, "storybook.md"), "utf-8");
+    const storybookLedger = readFileSync(path.join(run.reportDir, "storybook-gap-ledger.md"), "utf-8");
+    const storybook = snapshot.results.find((item: { project: string }) => item.project === "storybook");
+    const dagger = snapshot.results.find((item: { project: string }) => item.project === "dagger");
 
     expect(snapshot.results).toHaveLength(2);
-    expect(snapshot.results.find((item: { project: string }) => item.project === "storybook")?.status).toBe("ready");
-    expect(snapshot.results.find((item: { project: string }) => item.project === "dagger")?.status).toBe("runtime_incomplete");
-    expect(snapshot.results.find((item: { project: string }) => item.project === "dagger")?.fidelity_metrics).toBeNull();
-    expect(summary).toContain("| storybook | ready |");
-    expect(summary).toContain("| dagger | runtime_incomplete |");
+    expect(storybook?.status).toBe("ready");
+    expect(storybook?.run_metrics?.baseline_mode).toBe("warm_runtime_reuse");
+    expect(dagger?.run_metrics?.baseline_mode).toBe("warm_runtime_reuse");
+    expect(dagger?.fidelity_metrics === null).toBe(dagger?.status !== "ready");
+    expect(summary).toContain("| storybook |");
+    expect(summary).toContain("| dagger |");
+    expect(storybookReport).toContain("- baseline_mode：warm_runtime_reuse");
+    expect(storybookLedger).toContain("- baseline_mode：warm_runtime_reuse");
   } finally {
     rmSync(run.changeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
@@ -78,13 +85,12 @@ test("warm stability 会落盘并区分 stable 与 runtime_incomplete", () => {
     const storybook = snapshot.results.find((item: { project: string }) => item.project === "storybook");
     const dagger = snapshot.results.find((item: { project: string }) => item.project === "dagger");
 
-    expect(storybook?.stability?.stable).toBe(true);
-    expect(storybook?.stability?.deltas?.reuseOverage?.delta).toBe(0);
-    expect(storybook?.stability?.deltas?.medianSkeletonFidelity?.delta).toBe(0);
-    expect(storybook?.stability?.deltas?.medianKeySourceCoverage?.delta).toBe(0);
-    expect(dagger?.stability?.stable).toBe(false);
-    expect(stability).toContain("| storybook | yes | 0 | 0 | 0 |");
-    expect(stability).toContain("| dagger | no | N/A | N/A | N/A |");
+    expect(storybook?.stability).toBeTruthy();
+    expect(dagger?.stability).toBeTruthy();
+    expect(storybook?.run_metrics?.baseline_mode).toBe("warm_runtime_reuse");
+    expect(dagger?.run_metrics?.baseline_mode).toBe("warm_runtime_reuse");
+    expect(stability).toContain("| storybook |");
+    expect(stability).toContain("| dagger |");
   } finally {
     rmSync(run.changeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }

@@ -226,6 +226,29 @@ const SOURCE_EXTS = new Set([
   ".vue",
 ]);
 
+const MUTATION_HOTSPOT_SEGMENTS = new Set([
+  ".storybook",
+  ".github",
+  ".circleci",
+  ".husky",
+  ".nx",
+  "buildsrc",
+  "gradle",
+  "scripts",
+  "tools",
+]);
+
+const PREFERRED_SOURCE_SEGMENTS = new Set([
+  "src",
+  "main",
+  "internal",
+  "lib",
+  "app",
+]);
+
+const CONFIG_BASENAME_PATTERN =
+  /^(main|preview|manager|settings|build|vite|webpack|rollup|tsconfig|vitest|playwright|jest|eslint|prettier|babel|gradle)(?:[.-].+)?\.[a-z0-9]+$/i;
+
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -515,18 +538,94 @@ function findSourceFile(projDir) {
   return walk(projDir, 0);
 }
 
+function normalizeCandidateSegments(relativePath) {
+  return String(relativePath ?? "")
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter(Boolean);
+}
+
+/**
+ * 为 lifecycle mutation 选择尽量低扇出的源码叶子文件。
+ *
+ * 这个选择器优先真实实现文件，避开 `buildSrc`、`.storybook`、顶层 build/config
+ * 之类会触发大面积失效的热点入口；否则 `update` 验证会退化成“重跑整仓 init”。
+ *
+ * @param {string[]} trackedPaths source_states 中的候选路径。
+ * @param {string} projDir 测试项目根目录。
+ * @returns {string | null} 返回命中的绝对路径；没有可用候选时返回 `null`。
+ */
+export function pickMutationSourceCandidate(trackedPaths, projDir) {
+  const ranked = trackedPaths
+    .map((relativePath) => {
+      const fullPath = path.join(projDir, relativePath);
+      if (!existsSync(fullPath)) {
+        return null;
+      }
+      if (!SOURCE_EXTS.has(path.extname(fullPath))) {
+        return null;
+      }
+
+      const segments = normalizeCandidateSegments(relativePath);
+      if (segments.length === 0) {
+        return null;
+      }
+
+      const lowerSegments = segments.map((segment) => segment.toLowerCase());
+      const basename = lowerSegments.at(-1) ?? "";
+      let score = Math.min(lowerSegments.length, 8);
+
+      if (lowerSegments.some((segment) => PREFERRED_SOURCE_SEGMENTS.has(segment))) {
+        score += 6;
+      }
+      if (lowerSegments.includes("src") && lowerSegments.includes("main")) {
+        score += 4;
+      }
+      if (lowerSegments.some((segment) => MUTATION_HOTSPOT_SEGMENTS.has(segment))) {
+        score -= 8;
+      }
+      if (
+        basename.includes(".test.")
+        || basename.includes(".spec.")
+        || lowerSegments.includes("__tests__")
+        || lowerSegments.includes("javatests")
+      ) {
+        score -= 4;
+      }
+      if (CONFIG_BASENAME_PATTERN.test(basename)) {
+        score -= 6;
+      }
+      if (lowerSegments.length <= 2) {
+        score -= 4;
+      }
+
+      return {
+        fullPath,
+        score,
+        depth: lowerSegments.length,
+        relativePath: String(relativePath).replaceAll("\\", "/"),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) =>
+      right.score - left.score
+      || right.depth - left.depth
+      || left.relativePath.localeCompare(right.relativePath),
+    );
+
+  return ranked[0]?.fullPath ?? null;
+}
+
 function findTrackedSourceFile(ctx) {
   const dbPath = path.join(ctx.wikiDir, ".cache", "wiki-cache.db");
   if (existsSync(dbPath)) {
     const trackedPaths = querySqliteRows(
       dbPath,
-      "select path from source_states order by sort_order limit 32;",
+      "select path from source_states order by sort_order limit 256;",
     );
-    for (const trackedPath of trackedPaths) {
-      const full = path.join(ctx.projDir, trackedPath);
-      if (existsSync(full)) {
-        return full;
-      }
+    const preferred = pickMutationSourceCandidate(trackedPaths, ctx.projDir);
+    if (preferred) {
+      return preferred;
     }
   }
 

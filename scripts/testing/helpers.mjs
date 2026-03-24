@@ -156,6 +156,18 @@ export function isTransientFsErrorMessage(message) {
   );
 }
 
+export function isPreserveResumeEligibleInitErrorMessage(message) {
+  const normalized = String(message ?? "").toLowerCase();
+  return (
+    normalized.includes("timed out after")
+    || normalized.includes("error sending request for url")
+    || normalized.includes("error decoding response body")
+    || normalized.includes("provider returned 408")
+    || normalized.includes("provider returned 429")
+    || /provider returned 5\d\d/.test(normalized)
+  );
+}
+
 /**
  * 启动子进程并收集 stdout/stderr，供项目级并行 worker 复用。
  *

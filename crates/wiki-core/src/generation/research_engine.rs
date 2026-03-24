@@ -7,15 +7,18 @@ use regex::Regex;
 
 use crate::domain::context::{ModuleContext, RepoContext};
 use crate::domain::knowledge::{
-    DecompositionProfile, KnowledgeDomain, KnowledgeTree, KnowledgeUnit, UnitType,
+    DecompositionProfile, KnowledgeDomain, KnowledgeTree, KnowledgeUnit, PlannerSignalKind,
+    UnitScope, UnitType,
 };
 use crate::domain::module_tree::ModuleTree;
 use crate::domain::research::{
-    DomainResearch, EvidenceCluster, PageDigest, PlannedSection, ResearchProfile, SourceCitation,
-    SystemResearch, UnitResearch,
+    canonical_reference_outline_title, is_reference_outline_title, DiagramSuggestion,
+    DomainResearch, EvidenceCluster, KeySourceCluster, PageDigest, PlannedSection,
+    ResearchPageSeed, ResearchProfile, SectionGroundingRef, SkeletonProfile, SkeletonSection,
+    SourceCitation, SystemResearch, UnitResearch,
 };
 use crate::domain::stable_id::stable_id;
-use crate::repo::scanner::ScanReport;
+use crate::repo::scanner::{FilePurpose, ScanReport, ScannedFile};
 use crate::repo::symbol_graph::{GraphAnalysisSnapshot, GraphSummary, ResolvedGraphSnapshot};
 use crate::repo::symbols::ParsedSymbolsSnapshot;
 
@@ -86,6 +89,76 @@ impl ResearchProvider for StructuralResearchProvider {
 
 // ─── Structural implementations ─────────────────────────────
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResearchPageKind {
+    SystemOverview,
+    SystemArchitecture,
+    DomainIndex,
+    ApiSurface,
+    ConfigSurface,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ResearchKeySourceOrigin {
+    PlannerGrounded,
+    RepoEntry,
+    ModuleKeySource,
+    ScopeSource,
+    DocReference,
+    DocsAnchor,
+    ConfigSurface,
+    GlobalFallback,
+}
+
+#[derive(Debug, Clone)]
+struct ResearchKeySourceCandidate {
+    path: String,
+    origin: ResearchKeySourceOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum KeySourceRole {
+    Entry,
+    Contract,
+    Implementation,
+    Verification,
+    Support,
+    Docs,
+    Config,
+    Sample,
+}
+
+#[derive(Debug, Clone)]
+struct ScoredKeySourceCandidate {
+    score: i32,
+    path: String,
+    basename: String,
+    role: KeySourceRole,
+    family: String,
+}
+
+#[derive(Debug, Clone)]
+struct KeySourceSelectionPolicy {
+    budget: usize,
+    duplicate_basename_limit: usize,
+    minimum_roles: Vec<(KeySourceRole, usize)>,
+    role_limits: BTreeMap<KeySourceRole, usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TopicFocusKind {
+    TypeSystem,
+    ThemeStyling,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TopicFocusHints {
+    kind: Option<TopicFocusKind>,
+    focus_tokens: BTreeSet<String>,
+    anchor_tokens: BTreeSet<String>,
+}
+
 fn research_system_structural(ds: &ResearchDataSource) -> SystemResearch {
     let project_name = ds
         .report
@@ -111,23 +184,71 @@ fn research_system_structural(ds: &ResearchDataSource) -> SystemResearch {
         .map(|d| d.label.clone())
         .collect();
 
+    let description = format!(
+        "包含 {} 个文件、{} 个模块的项目",
+        ds.report.files.len(),
+        ds.module_tree
+            .modules
+            .iter()
+            .filter(|m| m.parent_id.is_some())
+            .count()
+    );
+    let system_key_sources = select_structural_key_sources(
+        ds.report,
+        ResearchPageKind::SystemOverview,
+        None,
+        None,
+        collect_system_key_source_candidates(ds),
+    );
+    let system_architecture_key_sources = select_structural_key_sources(
+        ds.report,
+        ResearchPageKind::SystemArchitecture,
+        None,
+        None,
+        collect_system_key_source_candidates(ds),
+    );
+    let overview_unit = KnowledgeUnit::new(UnitType::Overview, "项目概述", "system", "项目概述.md");
+    let architecture_unit =
+        KnowledgeUnit::new(UnitType::Architecture, "系统架构", "system", "系统架构.md");
+    let mut overview_sections = build_default_section_plan(&overview_unit, None, &[]);
+    let mut architecture_sections = build_default_section_plan(&architecture_unit, None, &[]);
+    let overview_evidence_clusters =
+        build_structural_seed_evidence_clusters("system-overview", &system_key_sources, ds.report);
+    let architecture_evidence_clusters = build_structural_seed_evidence_clusters(
+        "system-architecture",
+        &system_architecture_key_sources,
+        ds.report,
+    );
+    seed_section_evidence_clusters(&mut overview_sections, &overview_evidence_clusters);
+    seed_section_evidence_clusters(&mut architecture_sections, &architecture_evidence_clusters);
+
     SystemResearch {
         project_name,
-        description: format!(
-            "包含 {} 个文件、{} 个模块的项目",
-            ds.report.files.len(),
-            ds.module_tree
-                .modules
-                .iter()
-                .filter(|m| m.parent_id.is_some())
-                .count()
-        ),
+        description: description.clone(),
         project_type: infer_project_type(ds),
         target_users: vec!["开发者".to_string()],
         system_boundary: format!("仓库根路径: {}", ds.report.root),
         tech_stack,
         architecture_pattern,
         key_domains,
+        overview_seed: build_page_seed(
+            "system_overview",
+            &description,
+            "说明仓库的整体定位、知识域和主入口。",
+            &overview_sections,
+            &system_key_sources,
+            &overview_evidence_clusters,
+            &[],
+        ),
+        architecture_seed: build_page_seed(
+            "system_architecture",
+            &description,
+            "说明仓库的模块结构、关系与整体架构边界。",
+            &architecture_sections,
+            &system_architecture_key_sources,
+            &architecture_evidence_clusters,
+            &[],
+        ),
         input_hash: String::new(),
     }
 }
@@ -177,19 +298,62 @@ fn research_domain_structural(domain: &KnowledgeDomain, ds: &ResearchDataSource)
         "域内包含单一模块".to_string()
     };
 
+    let domain_summary = format!(
+        "{}（{}）：包含 {} 个模块",
+        domain.label,
+        domain.domain_type.as_str(),
+        domain.source_modules.len()
+    );
+    let key_sources = select_structural_key_sources(
+        ds.report,
+        ResearchPageKind::DomainIndex,
+        None,
+        None,
+        collect_domain_key_source_candidates(domain, &module_context_index),
+    );
+    let mut domain_unit = KnowledgeUnit::new(
+        UnitType::DomainIndex,
+        &domain.label,
+        &domain.id,
+        format!("{0}/{0}.md", sanitize_path_segment(&domain.label)),
+    );
+    domain_unit.scope = UnitScope {
+        module_ids: domain.source_modules.clone(),
+        source_ids: ds
+            .report
+            .files
+            .iter()
+            .filter(|file| {
+                key_sources
+                    .iter()
+                    .any(|path| normalize_path(&file.path) == *path)
+            })
+            .map(|file| file.id.clone())
+            .collect(),
+        ..UnitScope::default()
+    };
+    let mut section_plan = build_default_section_plan(&domain_unit, None, &[]);
+    let evidence_clusters =
+        build_structural_seed_evidence_clusters("domain", &key_sources, ds.report);
+    seed_section_evidence_clusters(&mut section_plan, &evidence_clusters);
+
     DomainResearch {
         domain_id: domain.id.clone(),
-        domain_summary: format!(
-            "{}（{}）：包含 {} 个模块",
-            domain.label,
-            domain.domain_type.as_str(),
-            domain.source_modules.len()
-        ),
+        domain_summary: domain_summary.clone(),
         internal_structure,
         key_modules,
         key_apis,
         relationships,
         diagram_suggestion: None,
+        compose_seed: build_page_seed(
+            "domain_index",
+            &domain_summary,
+            &format!("说明知识域 {} 的结构、关键模块与子页组织。", domain.label),
+            &section_plan,
+            &key_sources,
+            &evidence_clusters,
+            &[],
+        ),
         input_hash: String::new(),
     }
 }
@@ -207,35 +371,21 @@ fn research_unit_structural(
 
     let positioning = format!("{}（类型: {}）", unit.title, unit.unit_type.as_str());
     let doc_reference_citations = collect_doc_reference_citations(unit, ds);
+    let research_profile = infer_research_profile(unit);
+    let topic_focus = build_unit_topic_focus_hints(unit, ds.report, &doc_reference_citations);
 
-    let mut key_sources: Vec<String> = unit
-        .scope
-        .module_ids
-        .iter()
-        .filter_map(|mid| module_context_index.get(mid.as_str()))
-        .flat_map(|ctx| ctx.key_sources.iter().cloned())
-        .take(8)
-        .collect();
-    key_sources.extend(
-        doc_reference_citations
-            .iter()
-            .map(|citation| citation.path.clone())
-            .take(8),
+    let key_sources = select_structural_key_sources(
+        ds.report,
+        research_page_kind(unit, research_profile.as_ref()),
+        research_profile.as_ref(),
+        topic_focus.as_ref(),
+        collect_unit_key_source_candidates(
+            unit,
+            ds.report,
+            &module_context_index,
+            &doc_reference_citations,
+        ),
     );
-    key_sources.extend(
-        unit.scope
-            .docs_anchors
-            .iter()
-            .map(|anchor| anchor.file_path.clone())
-            .chain(
-                unit.scope
-                    .config_surfaces
-                    .iter()
-                    .map(|surface| surface.file_path.clone()),
-            )
-            .take(8),
-    );
-    dedup_preserving_order(&mut key_sources);
 
     let summary = if !child_digests.is_empty() {
         format!("{} 包含 {} 个子单元", unit.title, child_digests.len())
@@ -248,7 +398,6 @@ fn research_unit_structural(
         )
     };
 
-    let research_profile = infer_research_profile(unit);
     let mut section_plan =
         build_docs_backed_section_plan(unit, ds, research_profile.as_ref(), child_digests)
             .unwrap_or_else(|| {
@@ -272,11 +421,11 @@ fn research_unit_structural(
             }
             first_section.section_summary = overview_parts.join("\n\n");
         }
-        first_section.evidence_cluster_keys = evidence_clusters
-            .iter()
-            .map(|c| c.cluster_key.clone())
-            .collect();
     }
+
+    let skeleton_profile = build_skeleton_profile(unit.unit_type.as_str(), &section_plan);
+    let key_source_clusters = build_key_source_clusters(&key_sources, &evidence_clusters);
+    let section_grounding_refs = build_section_grounding_refs(&section_plan, &key_source_clusters);
 
     UnitResearch {
         unit_id: unit.id.clone(),
@@ -285,12 +434,1722 @@ fn research_unit_structural(
         positioning,
         summary,
         section_plan,
+        skeleton_profile,
+        key_source_clusters,
+        section_grounding_refs,
         evidence_clusters,
         diagram_suggestions: Vec::new(),
         key_sources,
         provider_stop_reason: None,
         provider_session_stats: None,
         input_hash: String::new(),
+    }
+}
+
+fn collect_planner_grounded_paths(unit: &KnowledgeUnit, report: &ScanReport) -> Vec<String> {
+    let source_paths: BTreeSet<String> = report
+        .files
+        .iter()
+        .map(|file| normalize_path(&file.path))
+        .collect();
+
+    let mut bundles = unit.planner_signal_bundles.iter().collect::<Vec<_>>();
+    bundles.sort_by_key(|bundle| match bundle.kind {
+        PlannerSignalKind::SurfaceCluster => 0usize,
+        PlannerSignalKind::LeafDecomposition => 1,
+        PlannerSignalKind::RepoArchetype => 2,
+    });
+
+    let mut grounded_paths = bundles
+        .into_iter()
+        .flat_map(|bundle| bundle.matched_paths.iter())
+        .map(|path| normalize_path(path))
+        .filter(|path| !path.ends_with(".md") && !path.ends_with(".mdx"))
+        .filter(|path| source_paths.contains(path))
+        .collect::<Vec<_>>();
+    dedup_preserving_order(&mut grounded_paths);
+    grounded_paths
+}
+
+fn collect_system_key_source_candidates(
+    ds: &ResearchDataSource,
+) -> Vec<ResearchKeySourceCandidate> {
+    let mut candidates = Vec::new();
+    candidates.extend(
+        ds.repo_context
+            .key_entry_points
+            .iter()
+            .cloned()
+            .map(|path| ResearchKeySourceCandidate {
+                path,
+                origin: ResearchKeySourceOrigin::RepoEntry,
+            }),
+    );
+    candidates.extend(
+        ds.module_contexts
+            .iter()
+            .flat_map(|context| context.key_sources.iter().cloned())
+            .map(|path| ResearchKeySourceCandidate {
+                path,
+                origin: ResearchKeySourceOrigin::ModuleKeySource,
+            }),
+    );
+    candidates.extend(ds.report.entry_points.iter().cloned().map(|path| {
+        ResearchKeySourceCandidate {
+            path,
+            origin: ResearchKeySourceOrigin::RepoEntry,
+        }
+    }));
+    candidates.extend(ds.report.config_files.iter().cloned().map(|path| {
+        ResearchKeySourceCandidate {
+            path,
+            origin: ResearchKeySourceOrigin::ConfigSurface,
+        }
+    }));
+    candidates.extend(
+        ds.report
+            .files
+            .iter()
+            .filter(|file| is_global_structural_candidate(file))
+            .map(|file| ResearchKeySourceCandidate {
+                path: normalize_path(&file.path),
+                origin: ResearchKeySourceOrigin::GlobalFallback,
+            }),
+    );
+    candidates
+}
+
+fn collect_domain_key_source_candidates(
+    domain: &KnowledgeDomain,
+    module_context_index: &BTreeMap<&str, &ModuleContext>,
+) -> Vec<ResearchKeySourceCandidate> {
+    let mut candidates = domain
+        .source_files
+        .iter()
+        .cloned()
+        .map(|path| ResearchKeySourceCandidate {
+            path,
+            origin: ResearchKeySourceOrigin::ScopeSource,
+        })
+        .collect::<Vec<_>>();
+    candidates.extend(
+        domain
+            .source_modules
+            .iter()
+            .filter_map(|mid| module_context_index.get(mid.as_str()))
+            .flat_map(|context| context.key_sources.iter().cloned())
+            .map(|path| ResearchKeySourceCandidate {
+                path,
+                origin: ResearchKeySourceOrigin::ModuleKeySource,
+            }),
+    );
+    candidates.extend(domain.evidence.docs_anchors.iter().map(|anchor| {
+        ResearchKeySourceCandidate {
+            path: anchor.file_path.clone(),
+            origin: ResearchKeySourceOrigin::DocsAnchor,
+        }
+    }));
+    candidates.extend(domain.evidence.config_surfaces.iter().map(|surface| {
+        ResearchKeySourceCandidate {
+            path: surface.file_path.clone(),
+            origin: ResearchKeySourceOrigin::ConfigSurface,
+        }
+    }));
+    candidates
+}
+
+fn collect_unit_key_source_candidates(
+    unit: &KnowledgeUnit,
+    report: &ScanReport,
+    module_context_index: &BTreeMap<&str, &ModuleContext>,
+    doc_reference_citations: &[SourceCitation],
+) -> Vec<ResearchKeySourceCandidate> {
+    let mut candidates = collect_planner_grounded_paths(unit, report)
+        .into_iter()
+        .map(|path| ResearchKeySourceCandidate {
+            path,
+            origin: ResearchKeySourceOrigin::PlannerGrounded,
+        })
+        .collect::<Vec<_>>();
+    candidates.extend(unit.scope.source_ids.iter().filter_map(|source_id| {
+        report
+            .files
+            .iter()
+            .find(|file| &file.id == source_id)
+            .map(|file| ResearchKeySourceCandidate {
+                path: normalize_path(&file.path),
+                origin: ResearchKeySourceOrigin::ScopeSource,
+            })
+    }));
+    candidates.extend(
+        unit.scope
+            .module_ids
+            .iter()
+            .filter_map(|mid| module_context_index.get(mid.as_str()))
+            .flat_map(|context| context.key_sources.iter().cloned())
+            .map(|path| ResearchKeySourceCandidate {
+                path,
+                origin: ResearchKeySourceOrigin::ModuleKeySource,
+            }),
+    );
+    candidates.extend(
+        doc_reference_citations
+            .iter()
+            .map(|citation| ResearchKeySourceCandidate {
+                path: citation.path.clone(),
+                origin: ResearchKeySourceOrigin::DocReference,
+            }),
+    );
+    candidates.extend(
+        unit.scope
+            .docs_anchors
+            .iter()
+            .map(|anchor| ResearchKeySourceCandidate {
+                path: anchor.file_path.clone(),
+                origin: ResearchKeySourceOrigin::DocsAnchor,
+            }),
+    );
+    candidates.extend(unit.scope.config_surfaces.iter().map(|surface| {
+        ResearchKeySourceCandidate {
+            path: surface.file_path.clone(),
+            origin: ResearchKeySourceOrigin::ConfigSurface,
+        }
+    }));
+    candidates
+}
+
+fn build_unit_topic_focus_hints(
+    unit: &KnowledgeUnit,
+    report: &ScanReport,
+    doc_reference_citations: &[SourceCitation],
+) -> Option<TopicFocusHints> {
+    let mut title_tokens = extract_focus_tokens(&unit.title);
+    let mut path_tokens = BTreeSet::new();
+    for path in collect_planner_grounded_paths(unit, report) {
+        path_tokens.extend(extract_focus_tokens(&path));
+    }
+    for citation in doc_reference_citations {
+        path_tokens.extend(extract_focus_tokens(&citation.path));
+    }
+    for source_id in &unit.scope.source_ids {
+        if let Some(file) = report.files.iter().find(|file| &file.id == source_id) {
+            path_tokens.extend(extract_focus_tokens(&file.path));
+        }
+    }
+    for anchor in &unit.scope.docs_anchors {
+        path_tokens.extend(extract_focus_tokens(&anchor.file_path));
+        title_tokens.extend(extract_focus_tokens(&anchor.heading));
+    }
+    for surface in &unit.scope.config_surfaces {
+        path_tokens.extend(extract_focus_tokens(&surface.file_path));
+    }
+
+    let mut focus_tokens = title_tokens.clone();
+    focus_tokens.extend(path_tokens.iter().cloned());
+    let kind = infer_topic_focus_kind(&focus_tokens);
+    if kind.is_none() && title_tokens.is_empty() {
+        return None;
+    }
+
+    let semantic_anchor_tokens = kind.map(topic_focus_anchor_tokens).unwrap_or_default();
+    if matches!(kind, Some(TopicFocusKind::TypeSystem))
+        && (doc_reference_citations.is_empty()
+            || path_tokens
+                .intersection(&semantic_anchor_tokens)
+                .next()
+                .is_none())
+    {
+        return None;
+    }
+    let mut anchor_tokens = title_tokens.clone();
+    anchor_tokens.extend(semantic_anchor_tokens.iter().cloned());
+    focus_tokens.extend(anchor_tokens.iter().cloned());
+    Some(TopicFocusHints {
+        kind,
+        focus_tokens,
+        anchor_tokens,
+    })
+}
+
+fn infer_topic_focus_kind(tokens: &BTreeSet<String>) -> Option<TopicFocusKind> {
+    let theme_triggers = [
+        "theme",
+        "themes",
+        "theming",
+        "style",
+        "styles",
+        "css",
+        "font",
+        "fonts",
+        "color",
+        "colors",
+        "palette",
+        "typography",
+    ];
+    if tokens
+        .iter()
+        .any(|token| theme_triggers.contains(&token.as_str()))
+    {
+        return Some(TopicFocusKind::ThemeStyling);
+    }
+
+    let type_triggers = [
+        "type",
+        "types",
+        "typing",
+        "typings",
+        "arg",
+        "args",
+        "annotation",
+        "annotations",
+        "parameter",
+        "parameters",
+        "contract",
+        "schema",
+    ];
+    tokens
+        .iter()
+        .any(|token| type_triggers.contains(&token.as_str()))
+        .then_some(TopicFocusKind::TypeSystem)
+}
+
+fn topic_focus_anchor_tokens(kind: TopicFocusKind) -> BTreeSet<String> {
+    match kind {
+        TopicFocusKind::TypeSystem => [
+            "arg",
+            "args",
+            "annotation",
+            "annotations",
+            "component",
+            "manager",
+            "meta",
+            "parameter",
+            "parameters",
+            "preview",
+            "story",
+            "stories",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        TopicFocusKind::ThemeStyling => [
+            "a11y",
+            "accessibility",
+            "color",
+            "colors",
+            "contrast",
+            "css",
+            "dark",
+            "font",
+            "fonts",
+            "light",
+            "palette",
+            "style",
+            "styles",
+            "theme",
+            "themes",
+            "theming",
+            "typography",
+            "vision",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+    }
+}
+
+fn extract_focus_tokens(value: &str) -> BTreeSet<String> {
+    let mut normalized = String::with_capacity(value.len() * 2);
+    let mut previous_is_lower_or_digit = false;
+
+    for ch in value.chars() {
+        if ch.is_ascii_uppercase() && previous_is_lower_or_digit {
+            normalized.push(' ');
+        }
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+        } else {
+            normalized.push(' ');
+        }
+        previous_is_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+    }
+
+    let mut tokens = BTreeSet::new();
+    for token in normalized.split_whitespace() {
+        if is_focus_stopword(token) {
+            continue;
+        }
+        tokens.insert(token.to_string());
+        if let Some(stemmed) = stem_focus_token(token) {
+            tokens.insert(stemmed);
+        }
+    }
+    tokens.extend(expand_semantic_alias_tokens(value));
+    tokens
+}
+
+fn expand_semantic_alias_tokens(value: &str) -> BTreeSet<String> {
+    let lower = value.to_ascii_lowercase();
+    let mut aliases = BTreeSet::new();
+
+    if value.contains("运行时") || lower.contains("runtime") {
+        aliases.insert("runtime".to_string());
+    }
+    if value.contains("编译") || lower.contains("compiler") {
+        aliases.insert("compiler".to_string());
+    }
+    if value.contains("处理器") || lower.contains("processor") {
+        aliases.insert("processor".to_string());
+    }
+    if value.contains("代码生成") || lower.contains("codegen") {
+        aliases.insert("codegen".to_string());
+    }
+    if value.contains("测试") || lower.contains("test") {
+        aliases.insert("test".to_string());
+        aliases.insert("testing".to_string());
+    }
+    if value.contains("配置") || lower.contains("config") {
+        aliases.insert("config".to_string());
+    }
+    if value.contains("主题") || lower.contains("theme") || lower.contains("theming") {
+        aliases.insert("theme".to_string());
+        aliases.insert("theming".to_string());
+    }
+    if value.contains("类型") || lower.contains("type") || lower.contains("typing") {
+        aliases.insert("type".to_string());
+        aliases.insert("types".to_string());
+    }
+    if value.contains("集成") || lower.contains("integration") {
+        aliases.insert("integration".to_string());
+    }
+    if value.contains("示例") || lower.contains("example") || lower.contains("tutorial") {
+        aliases.insert("example".to_string());
+        aliases.insert("tutorial".to_string());
+    }
+    if value.contains("故障") || value.contains("排查") || lower.contains("troubleshoot") {
+        aliases.insert("troubleshooting".to_string());
+    }
+    if value.contains("架构") || lower.contains("architecture") {
+        aliases.insert("architecture".to_string());
+    }
+
+    aliases
+}
+
+fn is_focus_stopword(token: &str) -> bool {
+    matches!(
+        token,
+        "api"
+            | "code"
+            | "doc"
+            | "docs"
+            | "json"
+            | "jsx"
+            | "lib"
+            | "main"
+            | "md"
+            | "mdx"
+            | "module"
+            | "modules"
+            | "repo"
+            | "rs"
+            | "src"
+            | "test"
+            | "tests"
+            | "ts"
+            | "tsx"
+            | "wiki"
+    )
+}
+
+fn stem_focus_token(token: &str) -> Option<String> {
+    if token.ends_with("ies") && token.len() > 4 {
+        return Some(format!("{}y", &token[..token.len() - 3]));
+    }
+    if token.ends_with('s') && token.len() > 4 {
+        return Some(token[..token.len() - 1].to_string());
+    }
+    None
+}
+
+fn select_structural_key_sources(
+    report: &ScanReport,
+    page_kind: ResearchPageKind,
+    research_profile: Option<&ResearchProfile>,
+    topic_focus: Option<&TopicFocusHints>,
+    candidates: Vec<ResearchKeySourceCandidate>,
+) -> Vec<String> {
+    let mut grouped = BTreeMap::<String, BTreeSet<ResearchKeySourceOrigin>>::new();
+    for candidate in candidates {
+        let normalized = normalize_path(&candidate.path);
+        if report
+            .files
+            .iter()
+            .any(|file| normalize_path(&file.path) == normalized)
+        {
+            grouped
+                .entry(normalized)
+                .or_default()
+                .insert(candidate.origin);
+        }
+    }
+
+    let mut scored = grouped
+        .into_iter()
+        .filter_map(|(path, origins)| {
+            let file = report
+                .files
+                .iter()
+                .find(|file| normalize_path(&file.path) == path)?;
+            let origin_vec = origins.iter().copied().collect::<Vec<_>>();
+            let score = structural_key_source_score(
+                page_kind,
+                research_profile,
+                topic_focus,
+                file,
+                &origin_vec,
+            );
+            let basename = Path::new(&path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let role = classify_key_source_role(research_profile, file, &path);
+            let family = key_source_family(&basename, &path, role);
+            (score > -1000).then_some(ScoredKeySourceCandidate {
+                score,
+                path,
+                basename,
+                role,
+                family,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let budget = structural_key_source_budget(page_kind, research_profile);
+    if should_expand_profile_fallback_candidates(&scored, budget) {
+        extend_with_profile_fallback_candidates(
+            report,
+            page_kind,
+            research_profile,
+            topic_focus,
+            &mut scored,
+        );
+    }
+
+    if scored.is_empty() {
+        scored = report
+            .files
+            .iter()
+            .map(|file| {
+                let path = normalize_path(&file.path);
+                let basename = Path::new(&path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let fallback_score = fallback_structural_key_source_score(file)
+                    + topic_focus_score(topic_focus, &path, &basename);
+                let role = classify_key_source_role(research_profile, file, &path);
+                let family = key_source_family(&basename, &path, role);
+                ScoredKeySourceCandidate {
+                    score: fallback_score,
+                    path,
+                    basename,
+                    role,
+                    family,
+                }
+            })
+            .collect::<Vec<_>>();
+    }
+
+    scored.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.path.len().cmp(&right.path.len()))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    let policy = structural_selection_policy(page_kind, research_profile, topic_focus);
+    select_candidates_with_policy(&scored, research_profile, &policy)
+}
+
+fn structural_key_source_budget(
+    page_kind: ResearchPageKind,
+    research_profile: Option<&ResearchProfile>,
+) -> usize {
+    if is_high_level_page(page_kind) {
+        return 14;
+    }
+    match research_profile {
+        Some(ResearchProfile::Testing) => 12,
+        Some(ResearchProfile::ApiSurface) => 12,
+        Some(ResearchProfile::ConfigSurface) => 10,
+        Some(ResearchProfile::CompilerPipeline) => 10,
+        _ => 8,
+    }
+}
+
+fn structural_duplicate_basename_limit(
+    page_kind: ResearchPageKind,
+    research_profile: Option<&ResearchProfile>,
+) -> usize {
+    if is_high_level_page(page_kind) {
+        return 2;
+    }
+    match research_profile {
+        Some(ResearchProfile::ApiSurface) => 2,
+        Some(ResearchProfile::Testing) => 2,
+        _ => 3,
+    }
+}
+
+fn structural_selection_policy(
+    page_kind: ResearchPageKind,
+    research_profile: Option<&ResearchProfile>,
+    topic_focus: Option<&TopicFocusHints>,
+) -> KeySourceSelectionPolicy {
+    let mut minimum_roles = Vec::new();
+    let mut role_limits = BTreeMap::new();
+
+    match research_profile {
+        Some(ResearchProfile::ApiSurface) => {
+            let contract_minimum = if matches!(
+                topic_focus.and_then(|focus| focus.kind),
+                Some(TopicFocusKind::TypeSystem)
+            ) || topic_focus
+                .map(|focus| focus.kind.is_none() && !focus.anchor_tokens.is_empty())
+                .unwrap_or(false)
+            {
+                1
+            } else {
+                2
+            };
+            let implementation_minimum = if contract_minimum == 1 { 2 } else { 1 };
+            minimum_roles.push((KeySourceRole::Contract, contract_minimum));
+            minimum_roles.push((KeySourceRole::Implementation, implementation_minimum));
+            role_limits.insert(KeySourceRole::Docs, 1);
+            role_limits.insert(KeySourceRole::Support, 2);
+            role_limits.insert(KeySourceRole::Sample, 0);
+        }
+        Some(ResearchProfile::ConfigSurface) => {
+            minimum_roles.push((KeySourceRole::Config, 2));
+            minimum_roles.push((KeySourceRole::Implementation, 1));
+            role_limits.insert(KeySourceRole::Docs, 1);
+            role_limits.insert(KeySourceRole::Support, 1);
+            role_limits.insert(KeySourceRole::Sample, 0);
+        }
+        Some(ResearchProfile::Testing) => {
+            minimum_roles.push((KeySourceRole::Verification, 2));
+            minimum_roles.push((KeySourceRole::Implementation, 1));
+            role_limits.insert(KeySourceRole::Docs, 1);
+            role_limits.insert(KeySourceRole::Support, 2);
+            role_limits.insert(KeySourceRole::Sample, 0);
+        }
+        Some(ResearchProfile::DocsGuide) | Some(ResearchProfile::Troubleshooting) => {
+            role_limits.insert(KeySourceRole::Support, 2);
+        }
+        _ => {}
+    }
+
+    KeySourceSelectionPolicy {
+        budget: structural_key_source_budget(page_kind, research_profile),
+        duplicate_basename_limit: structural_duplicate_basename_limit(page_kind, research_profile),
+        minimum_roles,
+        role_limits,
+    }
+}
+
+fn select_candidates_with_policy(
+    scored: &[ScoredKeySourceCandidate],
+    research_profile: Option<&ResearchProfile>,
+    policy: &KeySourceSelectionPolicy,
+) -> Vec<String> {
+    let mut selected = Vec::new();
+    let mut basename_counts = BTreeMap::<String, usize>::new();
+    let mut role_counts = BTreeMap::<KeySourceRole, usize>::new();
+    let mut family_counts = BTreeMap::<String, usize>::new();
+
+    for (role, minimum) in &policy.minimum_roles {
+        for candidate in scored.iter().filter(|candidate| candidate.role == *role) {
+            if !can_select_candidate(
+                candidate,
+                research_profile,
+                policy,
+                &selected,
+                &basename_counts,
+                &role_counts,
+                &family_counts,
+            ) {
+                continue;
+            }
+            push_selected_candidate(
+                candidate,
+                &mut selected,
+                &mut basename_counts,
+                &mut role_counts,
+                &mut family_counts,
+            );
+            if role_counts.get(role).copied().unwrap_or(0) >= *minimum
+                || selected.len() >= policy.budget
+            {
+                break;
+            }
+        }
+    }
+
+    if selected.len() < policy.budget {
+        for candidate in scored {
+            if !can_select_candidate(
+                candidate,
+                research_profile,
+                policy,
+                &selected,
+                &basename_counts,
+                &role_counts,
+                &family_counts,
+            ) {
+                continue;
+            }
+            push_selected_candidate(
+                candidate,
+                &mut selected,
+                &mut basename_counts,
+                &mut role_counts,
+                &mut family_counts,
+            );
+            if selected.len() >= policy.budget {
+                break;
+            }
+        }
+    }
+
+    if selected.len() < policy.budget {
+        for candidate in scored {
+            if selected.iter().any(|existing| existing == &candidate.path) {
+                continue;
+            }
+            let basename_count = basename_counts
+                .get(&candidate.basename)
+                .copied()
+                .unwrap_or(0);
+            if basename_count >= policy.duplicate_basename_limit {
+                continue;
+            }
+            push_selected_candidate(
+                candidate,
+                &mut selected,
+                &mut basename_counts,
+                &mut role_counts,
+                &mut family_counts,
+            );
+            if selected.len() >= policy.budget {
+                break;
+            }
+        }
+    }
+
+    selected
+}
+
+fn can_select_candidate(
+    candidate: &ScoredKeySourceCandidate,
+    research_profile: Option<&ResearchProfile>,
+    policy: &KeySourceSelectionPolicy,
+    selected: &[String],
+    basename_counts: &BTreeMap<String, usize>,
+    role_counts: &BTreeMap<KeySourceRole, usize>,
+    family_counts: &BTreeMap<String, usize>,
+) -> bool {
+    if selected.iter().any(|existing| existing == &candidate.path) {
+        return false;
+    }
+
+    let basename_count = basename_counts
+        .get(&candidate.basename)
+        .copied()
+        .unwrap_or(0);
+    if basename_count >= policy.duplicate_basename_limit {
+        return false;
+    }
+
+    if let Some(limit) = policy.role_limits.get(&candidate.role) {
+        let role_count = role_counts.get(&candidate.role).copied().unwrap_or(0);
+        if role_count >= *limit {
+            return false;
+        }
+    }
+
+    let family_limit = key_source_family_limit(research_profile, candidate.role, &candidate.family);
+    let family_count = family_counts.get(&candidate.family).copied().unwrap_or(0);
+    family_count < family_limit
+}
+
+fn push_selected_candidate(
+    candidate: &ScoredKeySourceCandidate,
+    selected: &mut Vec<String>,
+    basename_counts: &mut BTreeMap<String, usize>,
+    role_counts: &mut BTreeMap<KeySourceRole, usize>,
+    family_counts: &mut BTreeMap<String, usize>,
+) {
+    selected.push(candidate.path.clone());
+    *basename_counts
+        .entry(candidate.basename.clone())
+        .or_default() += 1;
+    *role_counts.entry(candidate.role).or_default() += 1;
+    *family_counts.entry(candidate.family.clone()).or_default() += 1;
+}
+
+fn structural_key_source_score(
+    page_kind: ResearchPageKind,
+    research_profile: Option<&ResearchProfile>,
+    topic_focus: Option<&TopicFocusHints>,
+    file: &ScannedFile,
+    origins: &[ResearchKeySourceOrigin],
+) -> i32 {
+    let path = normalize_path(&file.path);
+    let lower_path = path.to_ascii_lowercase();
+    let topic_focus_anchor_overlap = topic_focus_anchor_overlap(topic_focus, &path);
+    let file_name = Path::new(&path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if file.is_asset_like() || is_generated_binary_path(&lower_path) || is_lockfile(&file_name) {
+        return -1000;
+    }
+
+    if is_root_governance_noise(&file_name, &lower_path) && is_high_level_page(page_kind) {
+        return -1000;
+    }
+    if is_bootstrap_wrapper_noise(&file_name) && is_high_level_page(page_kind) {
+        return -1000;
+    }
+    if is_sample_noise_path(&lower_path) && !allows_sample_noise(research_profile) {
+        return -1000;
+    }
+
+    let mut score = origins
+        .iter()
+        .map(|origin| origin_score(page_kind, *origin))
+        .sum::<i32>();
+
+    if is_root_governance_noise(&file_name, &lower_path) {
+        score -= 280;
+    }
+    if is_bootstrap_wrapper_noise(&file_name) {
+        score -= 180;
+    }
+    if is_sample_noise_path(&lower_path) && !allows_sample_noise(research_profile) {
+        score -= 220;
+    }
+    if file.is_test_like() && !allows_sample_noise(research_profile) {
+        score -= 120;
+    }
+    if file.is_test_like() && matches!(research_profile, Some(ResearchProfile::Testing)) {
+        score += 210;
+    }
+    if is_real_test_case_path(&lower_path)
+        && matches!(research_profile, Some(ResearchProfile::Testing))
+    {
+        score += 160;
+    }
+    if is_contract_like_path(file, &lower_path) {
+        score += match research_profile {
+            Some(ResearchProfile::ApiSurface) => 180,
+            Some(ResearchProfile::Runtime) => 130,
+            Some(ResearchProfile::ConfigSurface) => 80,
+            _ => 40,
+        };
+    }
+    if is_internal_support_path(&lower_path) {
+        score -= match research_profile {
+            Some(ResearchProfile::ApiSurface) if topic_focus_anchor_overlap > 0 => 40,
+            Some(ResearchProfile::ConfigSurface) if topic_focus_anchor_overlap > 0 => 60,
+            Some(ResearchProfile::Testing) if topic_focus_anchor_overlap > 0 => 50,
+            Some(ResearchProfile::Runtime) if topic_focus_anchor_overlap > 0 => 40,
+            Some(ResearchProfile::ApiSurface) => 150,
+            Some(ResearchProfile::ConfigSurface) => 160,
+            Some(ResearchProfile::Testing) => 110,
+            Some(ResearchProfile::Runtime) => 90,
+            _ => 40,
+        };
+    }
+    if file.is_docs_like() {
+        score += match research_profile {
+            Some(ResearchProfile::ApiSurface) => 10,
+            Some(ResearchProfile::ConfigSurface) => -20,
+            Some(ResearchProfile::DocsGuide)
+            | Some(ResearchProfile::Troubleshooting)
+            | Some(ResearchProfile::ExampleTutorial) => 80,
+            _ if is_high_level_page(page_kind) => 180,
+            _ => 35,
+        };
+    }
+    if file.is_config_like() {
+        score += match page_kind {
+            ResearchPageKind::ConfigSurface => 200,
+            kind if is_high_level_page(kind) => 120,
+            _ => 20,
+        };
+    }
+    if file.is_entry_like() {
+        score += if is_high_level_page(page_kind) {
+            140
+        } else {
+            60
+        };
+    }
+    if file.is_substantive_source() {
+        score += 90;
+    }
+    if is_repo_overview_doc_path(&lower_path) {
+        score += if is_high_level_page(page_kind) {
+            220
+        } else {
+            40
+        };
+    }
+    if is_root_manifest_or_build_path(&lower_path) {
+        score += if is_high_level_page(page_kind) {
+            170
+        } else {
+            50
+        };
+    }
+    if is_public_api_like_path(&lower_path) {
+        score += match page_kind {
+            ResearchPageKind::ApiSurface => {
+                if lower_path.ends_with("/public-types.ts") {
+                    120
+                } else {
+                    170
+                }
+            }
+            kind if is_high_level_page(kind) => 90,
+            _ => 45,
+        };
+    }
+    if is_processor_or_runtime_core_path(&lower_path) {
+        score += match page_kind {
+            ResearchPageKind::ApiSurface => 110,
+            kind if is_high_level_page(kind) => 130,
+            _ => 45,
+        };
+    }
+    if lower_path.contains("/src/") || lower_path.contains("/main/java/") {
+        score += 20;
+    }
+
+    score += match file.language.as_str() {
+        "markdown" | "mdx" => {
+            if is_high_level_page(page_kind) {
+                35
+            } else {
+                5
+            }
+        }
+        "typescript" | "javascript" | "react" | "vue" | "svelte" | "python" | "rust" | "java"
+        | "csharp" | "kotlin" | "php" | "swift" => 35,
+        _ => 0,
+    };
+
+    score += topic_focus_score(topic_focus, &path, &file_name);
+    score
+}
+
+fn topic_focus_score(topic_focus: Option<&TopicFocusHints>, path: &str, basename: &str) -> i32 {
+    let Some(topic_focus) = topic_focus else {
+        return 0;
+    };
+
+    let path_tokens = extract_focus_tokens(path);
+    let shared_focus = path_tokens.intersection(&topic_focus.focus_tokens).count() as i32;
+    let shared_anchor = path_tokens.intersection(&topic_focus.anchor_tokens).count() as i32;
+
+    let mut score = shared_focus.min(4) * 12 + shared_anchor.min(4) * 220;
+    if shared_anchor >= 2 {
+        score += 60;
+    }
+
+    if is_generic_topic_basename(basename) {
+        score -= match (topic_focus.kind, shared_anchor) {
+            (Some(TopicFocusKind::TypeSystem), 0) if is_generic_contract_basename(basename) => 520,
+            (_, 0) => 260,
+            (_, 1) => 24,
+            _ => 0,
+        };
+    }
+
+    score
+}
+
+fn topic_focus_anchor_overlap(topic_focus: Option<&TopicFocusHints>, path: &str) -> usize {
+    let Some(topic_focus) = topic_focus else {
+        return 0;
+    };
+    extract_focus_tokens(path)
+        .intersection(&topic_focus.anchor_tokens)
+        .count()
+}
+
+fn is_generic_topic_basename(basename: &str) -> bool {
+    matches!(
+        basename,
+        "index.ts"
+            | "index.tsx"
+            | "manager.ts"
+            | "manager.tsx"
+            | "preset.js"
+            | "preset.ts"
+            | "preview.js"
+            | "preview.ts"
+            | "preview.tsx"
+            | "public-types.ts"
+            | "types.ts"
+            | "typings.d.ts"
+    )
+}
+
+fn is_generic_contract_basename(basename: &str) -> bool {
+    matches!(basename, "public-types.ts" | "types.ts" | "typings.d.ts")
+}
+
+fn classify_key_source_role(
+    research_profile: Option<&ResearchProfile>,
+    file: &ScannedFile,
+    path: &str,
+) -> KeySourceRole {
+    let lower_path = path.to_ascii_lowercase();
+    if is_sample_noise_path(&lower_path) && !allows_sample_noise(research_profile) {
+        return KeySourceRole::Sample;
+    }
+    if file.is_docs_like() {
+        return KeySourceRole::Docs;
+    }
+    if file.is_config_like() {
+        return KeySourceRole::Config;
+    }
+    if is_real_test_case_path(&lower_path) || file.is_test_like() {
+        return KeySourceRole::Verification;
+    }
+    if is_internal_support_path(&lower_path) {
+        return KeySourceRole::Support;
+    }
+    if file.is_entry_like() {
+        return KeySourceRole::Entry;
+    }
+    if is_contract_like_path(file, &lower_path) {
+        return KeySourceRole::Contract;
+    }
+    KeySourceRole::Implementation
+}
+
+fn key_source_family(basename: &str, path: &str, role: KeySourceRole) -> String {
+    let lower_path = path.to_ascii_lowercase();
+    if matches!(role, KeySourceRole::Sample) {
+        return "sample-noise".to_string();
+    }
+    if matches!(role, KeySourceRole::Docs) {
+        return "docs-reference".to_string();
+    }
+    if matches!(role, KeySourceRole::Config) {
+        return if basename.starts_with("tsconfig") {
+            "tsconfig".to_string()
+        } else if lower_path.contains(".storybook/") {
+            "storybook-config".to_string()
+        } else {
+            "config-surface".to_string()
+        };
+    }
+    if matches!(role, KeySourceRole::Verification) {
+        return if lower_path.contains("/javatests/") {
+            "javatest-case".to_string()
+        } else {
+            "test-case".to_string()
+        };
+    }
+    if matches!(role, KeySourceRole::Support) {
+        return if lower_path.contains("/internal/testing/") {
+            "internal-testing".to_string()
+        } else if lower_path.contains("/internal/") {
+            "internal-support".to_string()
+        } else {
+            "support".to_string()
+        };
+    }
+    if lower_path.ends_with("/public-types.ts") {
+        return "public-types".to_string();
+    }
+    if lower_path.ends_with("/typings.d.ts") {
+        return "typings".to_string();
+    }
+    if basename == "types.ts" || basename.ends_with(".types.ts") {
+        return "types-contract".to_string();
+    }
+    if lower_path.contains("/validation/") {
+        return "validation".to_string();
+    }
+    if lower_path.contains("codegen") || lower_path.contains("processor") {
+        return "processor-codegen".to_string();
+    }
+    if lower_path.contains("/preview-api/") {
+        return "preview-api".to_string();
+    }
+    if lower_path.contains("/manager-api/") {
+        return "manager-api".to_string();
+    }
+    if lower_path.contains("/csf/") {
+        return "csf".to_string();
+    }
+    if lower_path.contains("/runtime/") || lower_path.contains("dagger-runtime") {
+        return "runtime-core".to_string();
+    }
+    role_family_name(role).to_string()
+}
+
+fn role_family_name(role: KeySourceRole) -> &'static str {
+    match role {
+        KeySourceRole::Entry => "entry",
+        KeySourceRole::Contract => "contract",
+        KeySourceRole::Implementation => "implementation",
+        KeySourceRole::Verification => "verification",
+        KeySourceRole::Support => "support",
+        KeySourceRole::Docs => "docs",
+        KeySourceRole::Config => "config",
+        KeySourceRole::Sample => "sample",
+    }
+}
+
+fn key_source_family_limit(
+    research_profile: Option<&ResearchProfile>,
+    role: KeySourceRole,
+    family: &str,
+) -> usize {
+    match research_profile {
+        Some(ResearchProfile::ApiSurface) => match family {
+            "public-types" => 1,
+            "docs-reference" => 1,
+            "internal-support" | "internal-testing" => 1,
+            _ => match role {
+                KeySourceRole::Support => 2,
+                _ => 3,
+            },
+        },
+        Some(ResearchProfile::ConfigSurface) => match family {
+            "docs-reference" => 1,
+            "storybook-config" => 3,
+            "tsconfig" => 1,
+            "internal-support" | "internal-testing" => 1,
+            _ => match role {
+                KeySourceRole::Support => 1,
+                _ => 3,
+            },
+        },
+        Some(ResearchProfile::Testing) => match family {
+            "internal-testing" => 1,
+            "internal-support" => 1,
+            "docs-reference" => 1,
+            _ => match role {
+                KeySourceRole::Verification => 6,
+                _ => 3,
+            },
+        },
+        _ => 3,
+    }
+}
+
+fn should_expand_profile_fallback_candidates(
+    scored: &[ScoredKeySourceCandidate],
+    budget: usize,
+) -> bool {
+    if scored.len() < budget.saturating_div(2).max(2) {
+        return true;
+    }
+
+    let mut family_counts = BTreeMap::<&str, usize>::new();
+    let mut role_counts = BTreeMap::<KeySourceRole, usize>::new();
+    for candidate in scored {
+        *family_counts.entry(candidate.family.as_str()).or_default() += 1;
+        *role_counts.entry(candidate.role).or_default() += 1;
+    }
+
+    let dominant_family = family_counts.values().copied().max().unwrap_or(0);
+    let dominant_role = role_counts
+        .iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(role, count)| (*role, *count));
+
+    dominant_family * 2 >= scored.len()
+        || dominant_role
+            .map(|(role, count)| {
+                count * 2 >= scored.len()
+                    && matches!(
+                        role,
+                        KeySourceRole::Docs
+                            | KeySourceRole::Support
+                            | KeySourceRole::Sample
+                            | KeySourceRole::Config
+                    )
+            })
+            .unwrap_or(false)
+}
+
+fn extend_with_profile_fallback_candidates(
+    report: &ScanReport,
+    page_kind: ResearchPageKind,
+    research_profile: Option<&ResearchProfile>,
+    topic_focus: Option<&TopicFocusHints>,
+    scored: &mut Vec<ScoredKeySourceCandidate>,
+) {
+    let mut existing_paths = scored
+        .iter()
+        .map(|candidate| candidate.path.clone())
+        .collect::<BTreeSet<_>>();
+
+    for file in &report.files {
+        if !is_profile_fallback_candidate(research_profile, file) {
+            continue;
+        }
+        let path = normalize_path(&file.path);
+        if existing_paths.contains(&path) {
+            continue;
+        }
+        let score = structural_key_source_score(
+            page_kind,
+            research_profile,
+            topic_focus,
+            file,
+            &[ResearchKeySourceOrigin::GlobalFallback],
+        );
+        if score <= -1000 {
+            continue;
+        }
+        let basename = Path::new(&path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let role = classify_key_source_role(research_profile, file, &path);
+        let family = key_source_family(&basename, &path, role);
+        scored.push(ScoredKeySourceCandidate {
+            score,
+            path: path.clone(),
+            basename,
+            role,
+            family,
+        });
+        existing_paths.insert(path);
+    }
+}
+
+fn is_profile_fallback_candidate(
+    research_profile: Option<&ResearchProfile>,
+    file: &ScannedFile,
+) -> bool {
+    let path = normalize_path(&file.path).to_ascii_lowercase();
+    if file.is_asset_like() || is_generated_binary_path(&path) {
+        return false;
+    }
+
+    match research_profile {
+        Some(ResearchProfile::ApiSurface) => {
+            is_contract_like_path(file, &path)
+                || file.is_entry_like()
+                || path.contains("/manager-api/")
+                || path.contains("/preview-api/")
+                || path.contains("/channels/")
+                || path.contains("/csf/")
+                || is_processor_or_runtime_core_path(&path)
+        }
+        Some(ResearchProfile::ConfigSurface) => {
+            file.is_config_like()
+                || file.is_entry_like()
+                || is_contract_like_path(file, &path)
+                || path.contains("/theming/")
+                || path.contains("/preset")
+                || path.contains("/preview")
+                || path.contains("/manager")
+                || path.contains("config")
+                || path.contains("setup")
+        }
+        Some(ResearchProfile::Testing) => {
+            is_real_test_case_path(&path)
+                || file.is_test_like()
+                || is_contract_like_path(file, &path)
+                || path.contains("/testing/")
+                || path.contains("/tests/")
+                || path.contains("/javatests/")
+                || path.contains("/spec/")
+                || path.contains("runner")
+                || path.contains("harness")
+                || path.contains("setup")
+        }
+        Some(ResearchProfile::Runtime) => {
+            is_contract_like_path(file, &path)
+                || path.contains("/validation/")
+                || path.contains("/binding/")
+                || path.contains("/multibindings/")
+                || is_processor_or_runtime_core_path(&path)
+        }
+        Some(ResearchProfile::IntegrationPlatform) => {
+            file.is_config_like()
+                || file.is_entry_like()
+                || is_real_test_case_path(&path)
+                || path.contains("playwright")
+                || path.contains("vitest")
+                || path.contains("storybook.setup")
+                || path.contains("runner")
+                || path.contains("harness")
+        }
+        _ => false,
+    }
+}
+
+fn is_contract_like_path(file: &ScannedFile, path: &str) -> bool {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    file.purpose == FilePurpose::Type
+        || file_name.ends_with(".d.ts")
+        || file_name == "types.ts"
+        || file_name.ends_with(".types.ts")
+        || file_name == "public-types.ts"
+        || file_name == "api.ts"
+        || is_public_java_contract_path(path)
+}
+
+fn is_public_java_contract_path(path: &str) -> bool {
+    let lower_path = path.to_ascii_lowercase();
+    lower_path.contains("/main/java/")
+        && lower_path.ends_with(".java")
+        && !lower_path.contains("/internal/")
+        && !lower_path.contains("/processor/")
+        && !lower_path.contains("/impl/")
+}
+
+fn is_real_test_case_path(path: &str) -> bool {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    path.contains("/javatests/")
+        || path.contains("/tests/")
+        || path.contains("/__tests__/")
+        || file_name.ends_with(".test.ts")
+        || file_name.ends_with(".test.tsx")
+        || file_name.ends_with(".spec.ts")
+        || file_name.ends_with(".spec.tsx")
+        || file_name.ends_with("test.java")
+        || file_name.ends_with("tests.java")
+        || file_name.ends_with("test.kt")
+        || file_name.ends_with("test.rs")
+}
+
+fn is_internal_support_path(path: &str) -> bool {
+    path.contains("/internal/testing/")
+        || path.contains("/testing/internal/")
+        || path.contains("/internal/")
+        || path.contains("/support/")
+        || path.contains("/testutil/")
+        || path.contains("/test-util/")
+}
+
+fn fallback_structural_key_source_score(file: &ScannedFile) -> i32 {
+    let path = normalize_path(&file.path).to_ascii_lowercase();
+    let file_name = Path::new(&path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let mut score = file.purpose.signal_weight();
+    if is_repo_overview_doc_path(&path) {
+        score += 120;
+    }
+    if is_root_manifest_or_build_path(&path) {
+        score += 110;
+    }
+    if file.is_entry_like() {
+        score += 90;
+    }
+    if is_root_governance_noise(file_name, &path) || is_bootstrap_wrapper_noise(file_name) {
+        score -= 200;
+    }
+    score
+}
+
+fn origin_score(page_kind: ResearchPageKind, origin: ResearchKeySourceOrigin) -> i32 {
+    match (page_kind, origin) {
+        (_, ResearchKeySourceOrigin::PlannerGrounded) => 130,
+        (ResearchPageKind::ConfigSurface, ResearchKeySourceOrigin::ConfigSurface) => 170,
+        (ResearchPageKind::ApiSurface, ResearchKeySourceOrigin::DocsAnchor) => 100,
+        (ResearchPageKind::ApiSurface, ResearchKeySourceOrigin::DocReference) => 100,
+        (kind, ResearchKeySourceOrigin::RepoEntry) if is_high_level_page(kind) => 140,
+        (kind, ResearchKeySourceOrigin::DocsAnchor) if is_high_level_page(kind) => 130,
+        (kind, ResearchKeySourceOrigin::DocReference) if is_high_level_page(kind) => 120,
+        (kind, ResearchKeySourceOrigin::ConfigSurface) if is_high_level_page(kind) => 110,
+        (_, ResearchKeySourceOrigin::ScopeSource) => 85,
+        (_, ResearchKeySourceOrigin::ModuleKeySource) => 70,
+        (_, ResearchKeySourceOrigin::RepoEntry) => 60,
+        (_, ResearchKeySourceOrigin::DocsAnchor) => 55,
+        (_, ResearchKeySourceOrigin::DocReference) => 55,
+        (_, ResearchKeySourceOrigin::ConfigSurface) => 55,
+        (_, ResearchKeySourceOrigin::GlobalFallback) => 0,
+    }
+}
+
+fn research_page_kind(
+    unit: &KnowledgeUnit,
+    research_profile: Option<&ResearchProfile>,
+) -> ResearchPageKind {
+    match unit.unit_type {
+        UnitType::Overview => ResearchPageKind::SystemOverview,
+        UnitType::Architecture => ResearchPageKind::SystemArchitecture,
+        UnitType::DomainIndex => ResearchPageKind::DomainIndex,
+        _ => match research_profile {
+            Some(ResearchProfile::ApiSurface) => ResearchPageKind::ApiSurface,
+            Some(ResearchProfile::ConfigSurface) => ResearchPageKind::ConfigSurface,
+            _ => ResearchPageKind::Other,
+        },
+    }
+}
+
+fn is_high_level_page(page_kind: ResearchPageKind) -> bool {
+    matches!(
+        page_kind,
+        ResearchPageKind::SystemOverview
+            | ResearchPageKind::SystemArchitecture
+            | ResearchPageKind::DomainIndex
+    )
+}
+
+fn allows_sample_noise(research_profile: Option<&ResearchProfile>) -> bool {
+    matches!(research_profile, Some(ResearchProfile::ExampleTutorial))
+}
+
+fn is_global_structural_candidate(file: &ScannedFile) -> bool {
+    let path = normalize_path(&file.path).to_ascii_lowercase();
+    file.is_entry_like()
+        || file.is_config_like()
+        || file.is_docs_like()
+        || file.is_substantive_source()
+        || is_repo_overview_doc_path(&path)
+        || is_root_manifest_or_build_path(&path)
+        || is_public_api_like_path(&path)
+        || is_processor_or_runtime_core_path(&path)
+}
+
+fn is_generated_binary_path(path: &str) -> bool {
+    path.ends_with(".jar") || path.ends_with(".min.js") || path.ends_with(".bundle.js")
+}
+
+fn is_lockfile(file_name: &str) -> bool {
+    matches!(
+        file_name,
+        "pnpm-lock.yaml" | "package-lock.json" | "yarn.lock" | "cargo.lock"
+    )
+}
+
+fn is_root_governance_noise(file_name: &str, path: &str) -> bool {
+    if path.contains('/') {
+        return false;
+    }
+
+    matches!(
+        file_name,
+        ".env"
+            | ".env.example"
+            | ".gitignore"
+            | ".mailmap"
+            | ".nvmrc"
+            | ".spelling"
+            | "authors"
+            | "code_of_conduct.md"
+            | "contributing.md"
+            | "license"
+            | "license.md"
+            | "license.txt"
+            | "maintainers.md"
+    ) || file_name.starts_with("changelog")
+}
+
+fn is_bootstrap_wrapper_noise(file_name: &str) -> bool {
+    matches!(file_name, "gradlew" | "gradlew.bat" | ".bazelrc")
+}
+
+fn is_sample_noise_path(path: &str) -> bool {
+    path.starts_with("test-storybooks/")
+        || path.contains("/test-storybooks/")
+        || path.starts_with("kitchen-sink/")
+        || path.contains("/kitchen-sink/")
+        || path.starts_with("__mocks")
+        || path.contains("/__mocks")
+        || path.contains("/__mocks-")
+        || path.starts_with("fixtures/")
+        || path.contains("/fixtures/")
+        || path.starts_with("__fixtures__/")
+        || path.contains("/__fixtures__/")
+        || path.starts_with("testdata/")
+        || path.contains("/testdata/")
+        || path.starts_with("sandbox/")
+        || path.contains("/sandbox/")
+}
+
+fn is_repo_overview_doc_path(path: &str) -> bool {
+    path == "readme.md"
+        || path.ends_with("/readme.md")
+        || path.starts_with("docs/index.")
+        || path.ends_with("/docs/index.md")
+        || path.ends_with("/docs/index.mdx")
+        || path.ends_with("/index.mdx")
+}
+
+fn is_root_manifest_or_build_path(path: &str) -> bool {
+    matches!(
+        path,
+        "package.json"
+            | "pnpm-workspace.yaml"
+            | "turbo.json"
+            | "nx.json"
+            | "settings.gradle.kts"
+            | "settings.gradle"
+            | "gradle.properties"
+            | "build.gradle"
+            | "build.gradle.kts"
+            | "cargo.toml"
+            | "pyproject.toml"
+            | "pom.xml"
+    )
+}
+
+fn is_public_api_like_path(path: &str) -> bool {
+    path.ends_with("/index.ts")
+        || path.ends_with("/index.js")
+        || path.ends_with("/public-types.ts")
+        || path.ends_with("/types.ts")
+        || path.ends_with("/api.ts")
+        || path.ends_with("/component.java")
+        || path.ends_with("/module.java")
+        || path.ends_with("/subcomponent.java")
+}
+
+fn is_processor_or_runtime_core_path(path: &str) -> bool {
+    path.contains("processor")
+        || path.contains("/runtime/")
+        || path.contains(".storybook/main.")
+        || path.contains(".storybook/preview.")
+}
+
+fn normalize_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn sanitize_path_segment(name: &str) -> String {
+    name.chars()
+        .map(|character| match character {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            _ => character,
+        })
+        .collect::<String>()
+        .trim()
+        .trim_matches('.')
+        .to_string()
+}
+
+fn build_skeleton_profile(
+    profile_key: &str,
+    section_plan: &[PlannedSection],
+) -> Option<SkeletonProfile> {
+    let seed_sections = section_plan
+        .iter()
+        .map(|section| SkeletonSection {
+            section_key: section.section_key.clone(),
+            title: section.title.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    (!seed_sections.is_empty()).then_some(SkeletonProfile {
+        profile_key: profile_key.to_string(),
+        seed_sections,
+    })
+}
+
+fn build_key_source_clusters(
+    key_sources: &[String],
+    evidence_clusters: &[EvidenceCluster],
+) -> Vec<KeySourceCluster> {
+    key_sources
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let evidence_cluster_keys = evidence_clusters
+                .iter()
+                .filter(|cluster| {
+                    cluster
+                        .citations
+                        .iter()
+                        .any(|citation| citation.path == *path)
+                })
+                .map(|cluster| cluster.cluster_key.clone())
+                .collect::<Vec<_>>();
+            KeySourceCluster {
+                cluster_key: format!("key-source:{index}:{}", stable_id("source-path", path)),
+                label: path.clone(),
+                source_paths: vec![path.clone()],
+                evidence_cluster_keys,
+            }
+        })
+        .collect()
+}
+
+fn build_section_grounding_refs(
+    section_plan: &[PlannedSection],
+    key_source_clusters: &[KeySourceCluster],
+) -> Vec<SectionGroundingRef> {
+    section_plan
+        .iter()
+        .enumerate()
+        .map(|(section_index, section)| SectionGroundingRef {
+            section_key: section.section_key.clone(),
+            key_source_cluster_keys: suggested_key_source_cluster_keys_for_section(
+                section,
+                key_source_clusters,
+                section_index,
+                section_plan.len(),
+            ),
+            evidence_cluster_keys: section.evidence_cluster_keys.clone(),
+            child_digest_refs: Vec::new(),
+            diagram_refs: Vec::new(),
+        })
+        .collect()
+}
+
+fn suggested_key_source_cluster_keys_for_section(
+    section: &PlannedSection,
+    key_source_clusters: &[KeySourceCluster],
+    section_index: usize,
+    _section_count: usize,
+) -> Vec<String> {
+    let mut matches = Vec::new();
+    let normalized_title =
+        canonical_reference_outline_title(section.title.trim()).unwrap_or(section.title.trim());
+
+    if !section.evidence_cluster_keys.is_empty() {
+        for cluster in key_source_clusters {
+            if cluster.evidence_cluster_keys.iter().any(|cluster_key| {
+                section
+                    .evidence_cluster_keys
+                    .iter()
+                    .any(|section_key| section_key == cluster_key)
+            }) {
+                matches.push(cluster.cluster_key.clone());
+            }
+        }
+    }
+
+    let limit = match normalized_title {
+        "附录" => 4,
+        "概述" | "API 概览" | "关键接口" | "使用边界" => 3,
+        "简介" | "项目结构" | "核心组件" | "架构总览" | "详细组件分析" | "依赖关系分析"
+        | "性能考量" | "故障排查指南" | "结论" => 3,
+        _ => 2,
+    };
+
+    if matches.len() < limit && uses_structural_fallback_key_sources(normalized_title) {
+        let start = if key_source_clusters.is_empty() {
+            0
+        } else {
+            (section_index * limit) % key_source_clusters.len()
+        };
+        for offset in 0..key_source_clusters.len() {
+            let cluster = &key_source_clusters[(start + offset) % key_source_clusters.len()];
+            if !matches
+                .iter()
+                .any(|existing| existing == &cluster.cluster_key)
+            {
+                matches.push(cluster.cluster_key.clone());
+            }
+            if matches.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    matches.truncate(limit);
+    matches
+}
+
+fn uses_structural_fallback_key_sources(title: &str) -> bool {
+    matches!(
+        title,
+        "概述"
+            | "API 概览"
+            | "关键接口"
+            | "使用边界"
+            | "简介"
+            | "项目结构"
+            | "核心组件"
+            | "架构总览"
+            | "详细组件分析"
+            | "依赖关系分析"
+            | "性能考量"
+            | "故障排查指南"
+            | "结论"
+            | "附录"
+    )
+}
+
+fn build_structural_seed_evidence_clusters(
+    prefix: &str,
+    key_sources: &[String],
+    report: &ScanReport,
+) -> Vec<EvidenceCluster> {
+    key_sources
+        .iter()
+        .enumerate()
+        .filter_map(|(index, path)| {
+            let scanned = report
+                .files
+                .iter()
+                .find(|file| normalize_path(&file.path) == normalize_path(path))?;
+            Some(EvidenceCluster {
+                cluster_key: format!("{prefix}:seed:{index}"),
+                label: path.clone(),
+                citations: vec![SourceCitation {
+                    path: normalize_path(&scanned.path),
+                    start_line: 1,
+                    end_line: 1,
+                    source_id: Some(scanned.id.clone()),
+                    symbol_id: None,
+                    note: "structural seed".to_string(),
+                }],
+            })
+        })
+        .collect()
+}
+
+fn build_page_seed(
+    profile_key: &str,
+    summary: &str,
+    positioning: &str,
+    section_plan: &[PlannedSection],
+    key_sources: &[String],
+    evidence_clusters: &[EvidenceCluster],
+    diagram_suggestions: &[DiagramSuggestion],
+) -> ResearchPageSeed {
+    let key_source_clusters = build_key_source_clusters(key_sources, evidence_clusters);
+    ResearchPageSeed {
+        summary: summary.to_string(),
+        positioning: positioning.to_string(),
+        section_plan: section_plan.to_vec(),
+        skeleton_profile: build_skeleton_profile(profile_key, section_plan),
+        section_grounding_refs: build_section_grounding_refs(section_plan, &key_source_clusters),
+        key_source_clusters,
+        evidence_clusters: evidence_clusters.to_vec(),
+        diagram_suggestions: diagram_suggestions.to_vec(),
     }
 }
 
@@ -384,6 +2243,34 @@ fn build_reference_docs_section_plan(
     lead: &str,
     sections: &[(String, String)],
 ) -> Vec<PlannedSection> {
+    let raw_outline = sections
+        .iter()
+        .map(|(title, _)| title.clone())
+        .take(6)
+        .collect::<Vec<_>>();
+    let lead_summary = summarize_doc_lead(lead);
+    let outline_summary = if raw_outline.is_empty() {
+        String::new()
+    } else {
+        format!("原始文档重点覆盖：{}。", raw_outline.join("、"))
+    };
+
+    build_reference_outline_section_plan(
+        unit,
+        research_profile,
+        child_digests,
+        &lead_summary,
+        &outline_summary,
+    )
+}
+
+fn build_reference_outline_section_plan(
+    unit: &KnowledgeUnit,
+    research_profile: Option<&ResearchProfile>,
+    child_digests: &[PageDigest],
+    lead_summary: &str,
+    outline_summary: &str,
+) -> Vec<PlannedSection> {
     let mut plan = vec![
         PlannedSection {
             section_key: "preamble".to_string(),
@@ -405,18 +2292,6 @@ fn build_reference_docs_section_plan(
         },
     ];
 
-    let raw_outline = sections
-        .iter()
-        .map(|(title, _)| title.clone())
-        .take(6)
-        .collect::<Vec<_>>();
-    let lead_summary = summarize_doc_lead(lead);
-    let outline_summary = if raw_outline.is_empty() {
-        String::new()
-    } else {
-        format!("原始文档重点覆盖：{}。", raw_outline.join("、"))
-    };
-
     plan.extend([
         build_reference_section(
             "intro",
@@ -433,7 +2308,7 @@ fn build_reference_docs_section_plan(
                 }
                 _ => format!("说明 {} 的定位、范围和核心问题", unit.title),
             },
-            lead_summary,
+            lead_summary.to_string(),
         ),
         build_reference_section(
             "structure",
@@ -445,7 +2320,7 @@ fn build_reference_docs_section_plan(
             "components",
             "核心组件",
             "总结主流程涉及的关键模块、类型、接口或配置面".to_string(),
-            outline_summary.clone(),
+            outline_summary.to_string(),
         ),
         build_reference_section(
             "architecture",
@@ -457,7 +2332,7 @@ fn build_reference_docs_section_plan(
             "detailed-analysis",
             "详细组件分析",
             "分解关键组件、关键章节和实现职责".to_string(),
-            outline_summary,
+            outline_summary.to_string(),
         ),
         build_reference_section(
             "dependencies",
@@ -536,20 +2411,7 @@ fn summarize_doc_lead(lead: &str) -> String {
 }
 
 fn is_reference_outline_heading(title: &str) -> bool {
-    matches!(
-        title.trim(),
-        "目录"
-            | "简介"
-            | "项目结构"
-            | "核心组件"
-            | "架构总览"
-            | "详细组件分析"
-            | "依赖关系分析"
-            | "性能考量"
-            | "故障排查指南"
-            | "结论"
-            | "附录"
-    )
+    is_reference_outline_title(title)
 }
 
 fn docs_path_is_localized(path: &str) -> bool {
@@ -618,6 +2480,18 @@ fn build_default_section_plan(
     child_digests: &[PageDigest],
 ) -> Vec<PlannedSection> {
     if let Some(profile) = research_profile {
+        if matches!(
+            profile,
+            ResearchProfile::ApiSurface | ResearchProfile::ConfigSurface
+        ) {
+            return build_reference_outline_section_plan(
+                unit,
+                Some(profile),
+                child_digests,
+                "",
+                "",
+            );
+        }
         let mut sections = build_profile_section_plan(unit, profile);
         if !child_digests.is_empty() && !sections.iter().any(|s| s.child_digest_slot) {
             sections.push(build_planned_section(
@@ -629,6 +2503,13 @@ fn build_default_section_plan(
             ));
         }
         return sections;
+    }
+
+    if matches!(
+        unit.unit_type,
+        UnitType::Overview | UnitType::Architecture | UnitType::DomainIndex
+    ) {
+        return build_reference_outline_section_plan(unit, None, child_digests, "", "");
     }
 
     let mut sections = Vec::new();
@@ -1141,8 +3022,18 @@ fn suggested_cluster_keys_for_section(
     section: &PlannedSection,
     evidence_clusters: &[EvidenceCluster],
 ) -> Vec<String> {
-    let section_title = section.title.trim();
+    let section_title =
+        canonical_reference_outline_title(section.title.trim()).unwrap_or(section.title.trim());
     let bucket_order: &[&str] = match section_title {
+        "概述" => &["docs-references", "docs-anchor", "key-sources"],
+        "API 概览" => &["api-surface", "key-sources", "docs-references"],
+        "关键接口" => &["api-surface", "key-sources", "docs-references"],
+        "使用边界" => &[
+            "config-surface",
+            "docs-references",
+            "docs-anchor",
+            "key-sources",
+        ],
         "简介" => &["docs-references", "docs-anchor", "key-sources"],
         "项目结构" => &["key-sources", "config-surface", "docs-anchor"],
         "核心组件" => &["api-surface", "key-sources", "docs-references"],
@@ -1196,19 +3087,7 @@ fn cluster_key_matches_bucket(cluster_key: &str, bucket: &str) -> bool {
 }
 
 fn uses_reference_outline_section_title(title: &str) -> bool {
-    matches!(
-        title,
-        "简介"
-            | "项目结构"
-            | "核心组件"
-            | "架构总览"
-            | "详细组件分析"
-            | "依赖关系分析"
-            | "性能考量"
-            | "故障排查指南"
-            | "结论"
-            | "附录"
-    )
+    is_reference_outline_title(title)
 }
 
 fn collect_doc_reference_citations(
@@ -1342,13 +3221,21 @@ fn infer_project_type(ds: &ResearchDataSource) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_docs_backed_section_plan, collect_doc_reference_citations,
-        seed_section_evidence_clusters, EvidenceCluster, ResearchDataSource,
+        build_default_section_plan, build_docs_backed_section_plan, build_section_grounding_refs,
+        build_unit_topic_focus_hints, collect_doc_reference_citations, research_domain_structural,
+        research_system_structural, research_unit_structural, seed_section_evidence_clusters,
+        select_structural_key_sources, structural_key_source_score, EvidenceCluster,
+        ResearchDataSource, ResearchKeySourceCandidate, ResearchKeySourceOrigin, ResearchPageKind,
     };
-    use crate::domain::context::RepoContext;
-    use crate::domain::knowledge::{DocsAnchor, KnowledgeTree, KnowledgeUnit, UnitScope, UnitType};
+    use crate::domain::context::{ModuleContext, RepoContext};
+    use crate::domain::knowledge::{
+        ConfigSurface, DocsAnchor, DomainType, KnowledgeDomain, KnowledgeTree, KnowledgeUnit,
+        UnitScope, UnitType,
+    };
     use crate::domain::module_tree::ModuleTree;
-    use crate::domain::research::SourceCitation;
+    use crate::domain::research::{
+        KeySourceCluster, PlannedSection, ResearchProfile, SourceCitation,
+    };
     use crate::repo::scanner::{DependencyHint, FilePurpose, ScanReport, ScannedFile};
     use crate::repo::symbol_graph::{GraphAnalysisSnapshot, GraphSummary, ResolvedGraphSnapshot};
     use crate::repo::symbols::ParsedSymbolsSnapshot;
@@ -1566,6 +3453,1385 @@ Accessibility tests audit the rendered DOM.
         assert!(appendix.evidence_cluster_keys.len() >= 3);
     }
 
+    #[test]
+    fn api_sections_ground_only_relevant_top_key_sources() {
+        let mut section_plan = vec![
+            PlannedSection {
+                section_key: "overview".to_string(),
+                title: "概述".to_string(),
+                intent: String::new(),
+                section_summary: String::new(),
+                evidence_cluster_keys: Vec::new(),
+                child_digest_slot: false,
+                preserve_source_markdown: false,
+            },
+            PlannedSection {
+                section_key: "api-surface".to_string(),
+                title: "API 概览".to_string(),
+                intent: String::new(),
+                section_summary: String::new(),
+                evidence_cluster_keys: Vec::new(),
+                child_digest_slot: false,
+                preserve_source_markdown: false,
+            },
+            PlannedSection {
+                section_key: "usage-boundary".to_string(),
+                title: "使用边界".to_string(),
+                intent: String::new(),
+                section_summary: String::new(),
+                evidence_cluster_keys: Vec::new(),
+                child_digest_slot: false,
+                preserve_source_markdown: false,
+            },
+        ];
+        let evidence_clusters = vec![
+            cluster("cluster:key-sources", "src/impl.ts"),
+            cluster("cluster:api-surface", "src/public-types.ts"),
+            cluster("cluster:docs-references", "docs/api.md"),
+            cluster("cluster:config-surface", ".storybook/main.ts"),
+        ];
+
+        seed_section_evidence_clusters(&mut section_plan, &evidence_clusters);
+
+        let key_source_clusters = vec![
+            KeySourceCluster {
+                cluster_key: "ks:impl".to_string(),
+                label: "impl".to_string(),
+                source_paths: vec!["src/impl.ts".to_string()],
+                evidence_cluster_keys: vec!["cluster:key-sources".to_string()],
+            },
+            KeySourceCluster {
+                cluster_key: "ks:api".to_string(),
+                label: "api".to_string(),
+                source_paths: vec!["src/public-types.ts".to_string()],
+                evidence_cluster_keys: vec!["cluster:api-surface".to_string()],
+            },
+            KeySourceCluster {
+                cluster_key: "ks:docs".to_string(),
+                label: "docs".to_string(),
+                source_paths: vec!["docs/api.md".to_string()],
+                evidence_cluster_keys: vec!["cluster:docs-references".to_string()],
+            },
+            KeySourceCluster {
+                cluster_key: "ks:config".to_string(),
+                label: "config".to_string(),
+                source_paths: vec![".storybook/main.ts".to_string()],
+                evidence_cluster_keys: vec!["cluster:config-surface".to_string()],
+            },
+        ];
+
+        let grounding_refs = build_section_grounding_refs(&section_plan, &key_source_clusters);
+        let overview = grounding_refs
+            .iter()
+            .find(|grounding| grounding.section_key == "overview")
+            .expect("overview grounding should exist");
+        let api_surface = grounding_refs
+            .iter()
+            .find(|grounding| grounding.section_key == "api-surface")
+            .expect("api surface grounding should exist");
+        let usage_boundary = grounding_refs
+            .iter()
+            .find(|grounding| grounding.section_key == "usage-boundary")
+            .expect("usage boundary grounding should exist");
+
+        assert!(overview.key_source_cluster_keys.len() <= 3);
+        assert!(overview
+            .key_source_cluster_keys
+            .iter()
+            .any(|key| key == "ks:docs"));
+        assert!(api_surface
+            .key_source_cluster_keys
+            .iter()
+            .any(|key| key == "ks:api"));
+        assert!(!api_surface
+            .key_source_cluster_keys
+            .iter()
+            .any(|key| key == "ks:config"));
+        assert!(usage_boundary
+            .key_source_cluster_keys
+            .iter()
+            .any(|key| key == "ks:config"));
+    }
+
+    #[test]
+    fn build_section_grounding_refs_distributes_fallback_key_sources_across_sections() {
+        let section_plan = vec![
+            PlannedSection {
+                section_key: "intro".to_string(),
+                title: "简介".to_string(),
+                intent: String::new(),
+                section_summary: String::new(),
+                evidence_cluster_keys: Vec::new(),
+                child_digest_slot: false,
+                preserve_source_markdown: false,
+            },
+            PlannedSection {
+                section_key: "components".to_string(),
+                title: "核心组件".to_string(),
+                intent: String::new(),
+                section_summary: String::new(),
+                evidence_cluster_keys: Vec::new(),
+                child_digest_slot: false,
+                preserve_source_markdown: false,
+            },
+            PlannedSection {
+                section_key: "dependencies".to_string(),
+                title: "依赖关系分析".to_string(),
+                intent: String::new(),
+                section_summary: String::new(),
+                evidence_cluster_keys: Vec::new(),
+                child_digest_slot: false,
+                preserve_source_markdown: false,
+            },
+        ];
+        let key_source_clusters = (0..6)
+            .map(|index| KeySourceCluster {
+                cluster_key: format!("ks:{index}"),
+                label: format!("source-{index}"),
+                source_paths: vec![format!("src/file-{index}.ts")],
+                evidence_cluster_keys: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let grounding_refs = build_section_grounding_refs(&section_plan, &key_source_clusters);
+        let intro = grounding_refs
+            .iter()
+            .find(|grounding| grounding.section_key == "intro")
+            .expect("intro grounding should exist");
+        let components = grounding_refs
+            .iter()
+            .find(|grounding| grounding.section_key == "components")
+            .expect("components grounding should exist");
+        let dependencies = grounding_refs
+            .iter()
+            .find(|grounding| grounding.section_key == "dependencies")
+            .expect("dependencies grounding should exist");
+
+        assert_eq!(intro.key_source_cluster_keys, vec!["ks:0", "ks:1", "ks:2"]);
+        assert_eq!(
+            components.key_source_cluster_keys,
+            vec!["ks:3", "ks:4", "ks:5"]
+        );
+        assert_eq!(
+            dependencies.key_source_cluster_keys,
+            vec!["ks:0", "ks:1", "ks:2"]
+        );
+    }
+
+    #[test]
+    fn system_research_prefers_docs_and_build_entries_over_root_noise() {
+        let report = ScanReport {
+            root: "repo".to_string(),
+            files: vec![
+                scanned_file_with("README.md", "docs", FilePurpose::Docs, &[], "markdown"),
+                scanned_file_with("docs/index.mdx", "docs", FilePurpose::Docs, &[], "mdx"),
+                scanned_file_with(
+                    "package.json",
+                    "config",
+                    FilePurpose::Config,
+                    &["entry-point"],
+                    "json",
+                ),
+                scanned_file_with(
+                    "code/.storybook/main.ts",
+                    "config",
+                    FilePurpose::Config,
+                    &["entry-point"],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/core/src/preview-api/modules/preview-web/docs-context/DocsContext.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/.storybook/preview.tsx",
+                    "config",
+                    FilePurpose::Config,
+                    &[],
+                    "react",
+                ),
+                scanned_file_with(
+                    "code/core/package.json",
+                    "config",
+                    FilePurpose::Config,
+                    &[],
+                    "json",
+                ),
+                scanned_file_with(
+                    "code/frameworks/react-vite/src/node/index.ts",
+                    "source",
+                    FilePurpose::Entry,
+                    &["entry-point"],
+                    "typescript",
+                ),
+                scanned_file_with(".env", "config", FilePurpose::Config, &[], "text"),
+                scanned_file_with(".nvmrc", "config", FilePurpose::Config, &[], "text"),
+                scanned_file_with("LICENSE", "docs", FilePurpose::Docs, &[], "text"),
+                scanned_file_with(".mailmap", "docs", FilePurpose::Docs, &[], "text"),
+            ],
+            tech_hints: Vec::new(),
+            workspace_roots: Vec::new(),
+            config_files: vec![
+                "package.json".to_string(),
+                "code/.storybook/main.ts".to_string(),
+            ],
+            entry_points: vec!["code/.storybook/main.ts".to_string()],
+            dependency_hints: Vec::<DependencyHint>::new(),
+        };
+        let mut ds_env = test_research_ds(&report);
+        ds_env.repo_context.key_entry_points = vec![
+            ".env".to_string(),
+            ".nvmrc".to_string(),
+            "LICENSE".to_string(),
+            "README.md".to_string(),
+            "package.json".to_string(),
+        ];
+        ds_env.module_contexts = vec![module_context(
+            "storybook-core",
+            vec![
+                ".mailmap".to_string(),
+                "docs/index.mdx".to_string(),
+                "code/.storybook/main.ts".to_string(),
+                "code/.storybook/preview.tsx".to_string(),
+                "code/core/package.json".to_string(),
+                "code/frameworks/react-vite/src/node/index.ts".to_string(),
+                "code/core/src/preview-api/modules/preview-web/docs-context/DocsContext.ts"
+                    .to_string(),
+            ],
+        )];
+
+        let research = research_system_structural(&ds_env.as_ds(&report));
+        let key_sources = research
+            .overview_seed
+            .key_source_clusters
+            .iter()
+            .map(|cluster| cluster.label.clone())
+            .collect::<Vec<_>>();
+
+        assert!(key_sources.iter().any(|path| path == "README.md"));
+        assert!(key_sources.iter().any(|path| path == "docs/index.mdx"));
+        assert!(key_sources.iter().any(|path| path == "package.json"));
+        assert!(key_sources
+            .iter()
+            .any(|path| path == "code/.storybook/main.ts"));
+        assert!(!key_sources.iter().any(|path| path == ".env"));
+        assert!(!key_sources.iter().any(|path| path == ".nvmrc"));
+        assert!(!key_sources.iter().any(|path| path == "LICENSE"));
+        assert!(!key_sources.iter().any(|path| path == ".mailmap"));
+    }
+
+    #[test]
+    fn domain_research_uses_reference_outline_and_reorders_domain_noise() {
+        let report = ScanReport {
+            root: "repo".to_string(),
+            files: vec![
+                scanned_file_with("docs/index.mdx", "docs", FilePurpose::Docs, &[], "mdx"),
+                scanned_file_with(
+                    "settings.gradle.kts",
+                    "config",
+                    FilePurpose::Config,
+                    &["entry-point"],
+                    "kotlin",
+                ),
+                scanned_file_with(
+                    "dagger-runtime/main/java/dagger/Component.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-compiler/main/java/dagger/internal/codegen/ComponentProcessor.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-runtime/main/java/dagger/Module.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-runtime/main/java/dagger/Subcomponent.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "hilt-core/main/java/dagger/hilt/DefineComponent.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "gradle.properties",
+                    "config",
+                    FilePurpose::Config,
+                    &[],
+                    "kotlin",
+                ),
+                scanned_file_with("AUTHORS", "docs", FilePurpose::Docs, &[], "text"),
+                scanned_file_with("LICENSE.txt", "docs", FilePurpose::Docs, &[], "text"),
+            ],
+            tech_hints: Vec::new(),
+            workspace_roots: Vec::new(),
+            config_files: vec!["settings.gradle.kts".to_string()],
+            entry_points: vec!["settings.gradle.kts".to_string()],
+            dependency_hints: Vec::<DependencyHint>::new(),
+        };
+        let mut ds_env = test_research_ds(&report);
+        ds_env.module_contexts = vec![module_context(
+            "dagger-core",
+            vec![
+                "AUTHORS".to_string(),
+                "docs/index.mdx".to_string(),
+                "settings.gradle.kts".to_string(),
+                "gradle.properties".to_string(),
+                "dagger-runtime/main/java/dagger/Module.java".to_string(),
+                "dagger-runtime/main/java/dagger/Subcomponent.java".to_string(),
+                "hilt-core/main/java/dagger/hilt/DefineComponent.java".to_string(),
+                "dagger-runtime/main/java/dagger/Component.java".to_string(),
+                "dagger-compiler/main/java/dagger/internal/codegen/ComponentProcessor.java"
+                    .to_string(),
+            ],
+        )];
+        let mut domain = KnowledgeDomain::new(DomainType::CoreRuntime, "核心模块");
+        domain.source_modules = vec!["dagger-core".to_string()];
+        domain.source_files = vec![
+            "AUTHORS".to_string(),
+            "LICENSE.txt".to_string(),
+            "docs/index.mdx".to_string(),
+            "settings.gradle.kts".to_string(),
+            "gradle.properties".to_string(),
+            "dagger-runtime/main/java/dagger/Component.java".to_string(),
+            "dagger-runtime/main/java/dagger/Module.java".to_string(),
+            "dagger-runtime/main/java/dagger/Subcomponent.java".to_string(),
+            "hilt-core/main/java/dagger/hilt/DefineComponent.java".to_string(),
+            "dagger-compiler/main/java/dagger/internal/codegen/ComponentProcessor.java".to_string(),
+        ];
+        domain.evidence.docs_anchors = vec![DocsAnchor {
+            file_path: "docs/index.mdx".to_string(),
+            heading: "Overview".to_string(),
+            level: 1,
+            links: Vec::new(),
+        }];
+
+        let research = research_domain_structural(&domain, &ds_env.as_ds(&report));
+        let section_titles = research
+            .compose_seed
+            .section_plan
+            .iter()
+            .map(|section| section.title.as_str())
+            .collect::<Vec<_>>();
+        let key_sources = research
+            .compose_seed
+            .key_source_clusters
+            .iter()
+            .map(|cluster| cluster.label.clone())
+            .collect::<Vec<_>>();
+
+        assert!(section_titles.contains(&"简介"));
+        assert!(section_titles.contains(&"项目结构"));
+        assert!(section_titles.contains(&"核心组件"));
+        assert!(section_titles.contains(&"架构总览"));
+        assert!(key_sources.iter().any(|path| path == "docs/index.mdx"));
+        assert!(key_sources.iter().any(|path| path == "settings.gradle.kts"));
+        assert!(key_sources
+            .iter()
+            .any(|path| path.ends_with("ComponentProcessor.java")));
+        assert!(!key_sources.iter().any(|path| path == "AUTHORS"));
+        assert!(!key_sources.iter().any(|path| path == "LICENSE.txt"));
+    }
+
+    #[test]
+    fn config_unit_research_prefers_real_config_entries_over_storybook_samples() {
+        let report = ScanReport {
+            root: "repo".to_string(),
+            files: vec![
+                scanned_file_with(
+                    "code/.storybook/main.ts",
+                    "config",
+                    FilePurpose::Config,
+                    &["entry-point"],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/.storybook/preview.tsx",
+                    "config",
+                    FilePurpose::Config,
+                    &[],
+                    "react",
+                ),
+                scanned_file_with(
+                    "code/core/src/common/utils/sync-main-preview-addons.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/.storybook/manager.tsx",
+                    "config",
+                    FilePurpose::Config,
+                    &[],
+                    "react",
+                ),
+                scanned_file_with(
+                    "code/builders/builder-vite/build-config.ts",
+                    "config",
+                    FilePurpose::Config,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/frameworks/react-vite/src/node/index.ts",
+                    "source",
+                    FilePurpose::Entry,
+                    &["entry-point"],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/core/src/csf/csf-factories.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/addons/links/build-config.ts",
+                    "config",
+                    FilePurpose::Config,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/addons/docs/src/blocks/blocks/DocsContext.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "test-storybooks/external-docs/.storybook/main.cjs",
+                    "config",
+                    FilePurpose::Config,
+                    &[],
+                    "javascript",
+                ),
+                scanned_file_with(
+                    "test-storybooks/portable-stories-kitchen-sink/react/.storybook/main.ts",
+                    "config",
+                    FilePurpose::Config,
+                    &[],
+                    "typescript",
+                ),
+            ],
+            tech_hints: Vec::new(),
+            workspace_roots: Vec::new(),
+            config_files: vec![
+                "code/.storybook/main.ts".to_string(),
+                "code/.storybook/preview.tsx".to_string(),
+            ],
+            entry_points: vec!["code/.storybook/main.ts".to_string()],
+            dependency_hints: Vec::<DependencyHint>::new(),
+        };
+        let ds_env = test_research_ds(&report);
+        let mut unit = KnowledgeUnit::new(
+            UnitType::ConfigDoc,
+            "配置API参考",
+            "api-domain",
+            "API-参考/配置API参考.md",
+        );
+        unit.scope = UnitScope {
+            source_ids: vec![
+                "source:code/.storybook/main.ts".to_string(),
+                "source:code/.storybook/preview.tsx".to_string(),
+                "source:code/core/src/common/utils/sync-main-preview-addons.ts".to_string(),
+                "source:code/.storybook/manager.tsx".to_string(),
+                "source:code/builders/builder-vite/build-config.ts".to_string(),
+                "source:code/frameworks/react-vite/src/node/index.ts".to_string(),
+                "source:code/core/src/csf/csf-factories.ts".to_string(),
+                "source:code/addons/links/build-config.ts".to_string(),
+                "source:code/addons/docs/src/blocks/blocks/DocsContext.ts".to_string(),
+                "source:test-storybooks/external-docs/.storybook/main.cjs".to_string(),
+                "source:test-storybooks/portable-stories-kitchen-sink/react/.storybook/main.ts"
+                    .to_string(),
+            ],
+            config_surfaces: vec![
+                ConfigSurface {
+                    file_path: "code/.storybook/main.ts".to_string(),
+                    keys: vec!["stories".to_string(), "addons".to_string()],
+                },
+                ConfigSurface {
+                    file_path: "code/.storybook/preview.tsx".to_string(),
+                    keys: vec!["parameters".to_string()],
+                },
+            ],
+            ..UnitScope::default()
+        };
+
+        let research = research_unit_structural(&unit, &ds_env.as_ds(&report), &[]);
+        let key_sources = research.key_sources.clone();
+        let section_titles = research
+            .section_plan
+            .iter()
+            .map(|section| section.title.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(key_sources[0], "code/.storybook/main.ts");
+        assert!(key_sources
+            .iter()
+            .any(|path| path == "code/.storybook/preview.tsx"));
+        assert!(!key_sources
+            .iter()
+            .any(|path| path.starts_with("test-storybooks/")));
+        assert!(section_titles.contains(&"简介"));
+        assert!(section_titles.contains(&"项目结构"));
+        assert!(section_titles.contains(&"依赖关系分析"));
+    }
+
+    #[test]
+    fn api_key_source_selection_limits_same_basename_monoculture() {
+        let report = ScanReport {
+            root: "repo".to_string(),
+            files: vec![
+                scanned_file_with(
+                    "code/renderers/html/src/public-types.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/renderers/vue3/src/public-types.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/renderers/react/src/public-types.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/core/src/manager-api/typings.d.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/core/src/preview/typings.d.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/core/src/channels/types.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+            ],
+            tech_hints: Vec::new(),
+            workspace_roots: Vec::new(),
+            config_files: Vec::new(),
+            entry_points: Vec::new(),
+            dependency_hints: Vec::<DependencyHint>::new(),
+        };
+        let candidates = report
+            .files
+            .iter()
+            .map(|file| ResearchKeySourceCandidate {
+                path: file.path.clone(),
+                origin: ResearchKeySourceOrigin::ScopeSource,
+            })
+            .collect::<Vec<_>>();
+
+        let selected = select_structural_key_sources(
+            &report,
+            ResearchPageKind::ApiSurface,
+            Some(&ResearchProfile::ApiSurface),
+            None,
+            candidates,
+        );
+        let public_types_count = selected
+            .iter()
+            .filter(|path| path.ends_with("/public-types.ts"))
+            .count();
+
+        assert!(public_types_count <= 2);
+        assert!(selected.iter().any(|path| path.ends_with("/typings.d.ts")));
+        assert!(selected.iter().any(|path| path.ends_with("/types.ts")));
+    }
+
+    #[test]
+    fn testing_profile_prefers_real_test_files_over_internal_test_scaffolding() {
+        let report = ScanReport {
+            root: "repo".to_string(),
+            files: vec![
+                scanned_file_with(
+                    "hilt-android-testing/main/java/dagger/hilt/android/internal/testing/TestInjector.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "hilt-android-testing/main/java/dagger/hilt/android/internal/testing/InternalTestRoot.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-runtime/test/javatests/dagger/internal/DoubleCheckTest.java",
+                    "test",
+                    FilePurpose::Test,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-runtime/test/javatests/dagger/internal/InstanceFactoryTest.java",
+                    "test",
+                    FilePurpose::Test,
+                    &[],
+                    "java",
+                ),
+            ],
+            tech_hints: Vec::new(),
+            workspace_roots: Vec::new(),
+            config_files: Vec::new(),
+            entry_points: Vec::new(),
+            dependency_hints: Vec::<DependencyHint>::new(),
+        };
+        let candidates = report
+            .files
+            .iter()
+            .map(|file| ResearchKeySourceCandidate {
+                path: file.path.clone(),
+                origin: ResearchKeySourceOrigin::ScopeSource,
+            })
+            .collect::<Vec<_>>();
+
+        let selected = select_structural_key_sources(
+            &report,
+            ResearchPageKind::Other,
+            Some(&ResearchProfile::Testing),
+            None,
+            candidates,
+        );
+
+        assert!(selected
+            .iter()
+            .take(2)
+            .all(|path| path.contains("/javatests/") || path.contains("Test.java")));
+        assert!(selected
+            .iter()
+            .any(|path| path.ends_with("DoubleCheckTest.java")));
+        assert!(selected
+            .iter()
+            .any(|path| path.ends_with("InstanceFactoryTest.java")));
+    }
+
+    #[test]
+    fn runtime_profile_prefers_public_contracts_and_validation_over_internal_helpers() {
+        let report = ScanReport {
+            root: "repo".to_string(),
+            files: vec![
+                scanned_file_with(
+                    "dagger-runtime/main/java/dagger/Binds.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-runtime/main/java/dagger/Lazy.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-compiler/main/java/dagger/internal/codegen/validation/BindsMethodValidator.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-compiler/main/java/dagger/internal/codegen/validation/ProvidesMethodValidator.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-runtime/main/java/dagger/internal/ProviderOfLazy.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-runtime/main/java/dagger/internal/MapLazyFactory.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+            ],
+            tech_hints: Vec::new(),
+            workspace_roots: Vec::new(),
+            config_files: Vec::new(),
+            entry_points: Vec::new(),
+            dependency_hints: Vec::<DependencyHint>::new(),
+        };
+        let candidates = report
+            .files
+            .iter()
+            .map(|file| ResearchKeySourceCandidate {
+                path: file.path.clone(),
+                origin: ResearchKeySourceOrigin::ScopeSource,
+            })
+            .collect::<Vec<_>>();
+
+        let selected = select_structural_key_sources(
+            &report,
+            ResearchPageKind::Other,
+            Some(&ResearchProfile::Runtime),
+            None,
+            candidates,
+        );
+
+        assert!(selected
+            .iter()
+            .take(2)
+            .any(|path| path.ends_with("Binds.java")));
+        assert!(selected
+            .iter()
+            .take(2)
+            .any(|path| path.ends_with("Lazy.java")));
+        assert!(selected.iter().any(|path| path.ends_with("Lazy.java")));
+        assert!(selected
+            .iter()
+            .any(|path| path.ends_with("BindsMethodValidator.java")));
+        assert!(selected.iter().any(|path| path.contains("/validation/")));
+    }
+
+    #[test]
+    fn docs_guide_profile_still_keeps_docs_sources_after_selector_hardening() {
+        let report = ScanReport {
+            root: "repo".to_string(),
+            files: vec![
+                scanned_file_with(
+                    "docs/configure/theming.mdx",
+                    "docs",
+                    FilePurpose::Docs,
+                    &[],
+                    "mdx",
+                ),
+                scanned_file_with(
+                    "docs/configure/styling-and-css.mdx",
+                    "docs",
+                    FilePurpose::Docs,
+                    &[],
+                    "mdx",
+                ),
+                scanned_file_with(
+                    "code/core/src/theming/create.ts",
+                    "source",
+                    FilePurpose::Entry,
+                    &["entry-point"],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/core/src/theming/index.ts",
+                    "source",
+                    FilePurpose::Entry,
+                    &["entry-point"],
+                    "typescript",
+                ),
+            ],
+            tech_hints: Vec::new(),
+            workspace_roots: Vec::new(),
+            config_files: Vec::new(),
+            entry_points: vec![
+                "code/core/src/theming/create.ts".to_string(),
+                "code/core/src/theming/index.ts".to_string(),
+            ],
+            dependency_hints: Vec::<DependencyHint>::new(),
+        };
+        let candidates = report
+            .files
+            .iter()
+            .map(|file| ResearchKeySourceCandidate {
+                path: file.path.clone(),
+                origin: if file.is_docs_like() {
+                    ResearchKeySourceOrigin::DocReference
+                } else {
+                    ResearchKeySourceOrigin::ScopeSource
+                },
+            })
+            .collect::<Vec<_>>();
+
+        let selected = select_structural_key_sources(
+            &report,
+            ResearchPageKind::Other,
+            Some(&ResearchProfile::DocsGuide),
+            None,
+            candidates,
+        );
+
+        assert!(selected
+            .iter()
+            .any(|path| path == "docs/configure/theming.mdx"));
+        assert!(selected
+            .iter()
+            .any(|path| path == "docs/configure/styling-and-css.mdx"));
+        assert!(selected
+            .iter()
+            .any(|path| path.ends_with("/theming/create.ts")));
+    }
+
+    #[test]
+    fn type_topic_focus_promotes_story_and_preview_families_over_generic_contracts() {
+        let report = ScanReport {
+            root: "repo".to_string(),
+            files: vec![
+                scanned_file_with(
+                    "code/renderers/html/src/public-types.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/lib/core-webpack/src/types.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/core/src/router/types.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/lib/cli-storybook/src/typings.d.ts",
+                    "source",
+                    FilePurpose::Type,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/core/src/csf/story.ts",
+                    "source",
+                    FilePurpose::Type,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/core/src/manager-api/modules/stories.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/core/src/preview-api/modules/preview-web/PreviewWeb.tsx",
+                    "source",
+                    FilePurpose::Entry,
+                    &["entry-point"],
+                    "react",
+                ),
+                scanned_file_with(
+                    "code/core/src/preview-api/modules/store/inferArgTypes.test.ts",
+                    "test",
+                    FilePurpose::Test,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "docs/api/arg-types.mdx",
+                    "docs",
+                    FilePurpose::Docs,
+                    &[],
+                    "mdx",
+                ),
+            ],
+            tech_hints: Vec::new(),
+            workspace_roots: Vec::new(),
+            config_files: Vec::new(),
+            entry_points: vec![
+                "code/core/src/preview-api/modules/preview-web/PreviewWeb.tsx".to_string(),
+            ],
+            dependency_hints: Vec::<DependencyHint>::new(),
+        };
+        let mut unit = KnowledgeUnit::new(
+            UnitType::ApiDoc,
+            "Types API",
+            "api-domain",
+            "API-参考/开发API参考/Types-API.md",
+        );
+        unit.scope = UnitScope {
+            source_ids: vec![
+                "source:code/renderers/html/src/public-types.ts".to_string(),
+                "source:code/core/src/csf/story.ts".to_string(),
+                "source:code/core/src/preview-api/modules/preview-web/PreviewWeb.tsx".to_string(),
+            ],
+            ..UnitScope::default()
+        };
+        let doc_reference_citations = vec![
+            SourceCitation {
+                path: "code/core/src/csf/story.ts".to_string(),
+                start_line: 1,
+                end_line: 24,
+                source_id: Some("source:code/core/src/csf/story.ts".to_string()),
+                symbol_id: None,
+                note: "文档引用".to_string(),
+            },
+            SourceCitation {
+                path: "code/core/src/preview-api/modules/preview-web/PreviewWeb.tsx".to_string(),
+                start_line: 1,
+                end_line: 24,
+                source_id: Some(
+                    "source:code/core/src/preview-api/modules/preview-web/PreviewWeb.tsx"
+                        .to_string(),
+                ),
+                symbol_id: None,
+                note: "文档引用".to_string(),
+            },
+        ];
+        let topic_focus = build_unit_topic_focus_hints(&unit, &report, &doc_reference_citations);
+        let candidates = report
+            .files
+            .iter()
+            .map(|file| ResearchKeySourceCandidate {
+                path: file.path.clone(),
+                origin: ResearchKeySourceOrigin::ScopeSource,
+            })
+            .collect::<Vec<_>>();
+
+        let selected = select_structural_key_sources(
+            &report,
+            ResearchPageKind::ApiSurface,
+            Some(&ResearchProfile::ApiSurface),
+            topic_focus.as_ref(),
+            candidates,
+        );
+        let top_four = selected.iter().take(4).cloned().collect::<Vec<_>>();
+
+        assert!(
+            top_four.iter().any(|path| path.ends_with("/csf/story.ts")),
+            "top_four={top_four:?}"
+        );
+        assert!(top_four
+            .iter()
+            .any(|path| path.ends_with("/manager-api/modules/stories.ts")));
+        assert!(top_four
+            .iter()
+            .any(|path| path.ends_with("/preview-web/PreviewWeb.tsx")));
+        assert!(!top_four
+            .iter()
+            .any(|path| path.ends_with("/router/types.ts")));
+        assert!(!top_four
+            .iter()
+            .any(|path| path.ends_with("/lib/core-webpack/src/types.ts")));
+    }
+
+    #[test]
+    fn theme_topic_focus_prefers_theming_core_over_framework_presets() {
+        let report = ScanReport {
+            root: "repo".to_string(),
+            files: vec![
+                scanned_file_with(
+                    "docs/configure/user-interface/theming.mdx",
+                    "docs",
+                    FilePurpose::Docs,
+                    &[],
+                    "mdx",
+                ),
+                scanned_file_with(
+                    "docs/configure/styling-and-css.mdx",
+                    "docs",
+                    FilePurpose::Docs,
+                    &[],
+                    "mdx",
+                ),
+                scanned_file_with(
+                    "code/core/src/theming/index.ts",
+                    "source",
+                    FilePurpose::Entry,
+                    &["entry-point"],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/core/src/theming/create.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/core/src/theming/themes/light.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/frameworks/nextjs/src/preset.ts",
+                    "source",
+                    FilePurpose::Config,
+                    &[],
+                    "typescript",
+                ),
+                scanned_file_with(
+                    "code/frameworks/nextjs/src/preview.tsx",
+                    "source",
+                    FilePurpose::Config,
+                    &[],
+                    "react",
+                ),
+                scanned_file_with(
+                    "code/core/src/router/types.ts",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "typescript",
+                ),
+            ],
+            tech_hints: Vec::new(),
+            workspace_roots: Vec::new(),
+            config_files: Vec::new(),
+            entry_points: vec!["code/core/src/theming/index.ts".to_string()],
+            dependency_hints: Vec::<DependencyHint>::new(),
+        };
+        let mut unit = KnowledgeUnit::new(
+            UnitType::ConfigDoc,
+            "颜色和字体系统",
+            "theme-domain",
+            "配置参考/主题和外观/颜色和字体系统.md",
+        );
+        unit.scope = UnitScope {
+            source_ids: vec![
+                "source:docs/configure/user-interface/theming.mdx".to_string(),
+                "source:docs/configure/styling-and-css.mdx".to_string(),
+                "source:code/core/src/theming/create.ts".to_string(),
+            ],
+            ..UnitScope::default()
+        };
+        let topic_focus = build_unit_topic_focus_hints(&unit, &report, &[]);
+        let candidates = report
+            .files
+            .iter()
+            .map(|file| ResearchKeySourceCandidate {
+                path: file.path.clone(),
+                origin: ResearchKeySourceOrigin::ScopeSource,
+            })
+            .collect::<Vec<_>>();
+
+        let selected = select_structural_key_sources(
+            &report,
+            ResearchPageKind::ConfigSurface,
+            Some(&ResearchProfile::ConfigSurface),
+            topic_focus.as_ref(),
+            candidates,
+        );
+        let top_three = selected.iter().take(3).cloned().collect::<Vec<_>>();
+
+        assert!(top_three
+            .iter()
+            .any(|path| path.contains("/core/src/theming/")));
+        assert!(!top_three
+            .iter()
+            .all(|path| path.contains("/frameworks/nextjs/")));
+        assert!(!top_three
+            .iter()
+            .any(|path| path.ends_with("/router/types.ts")));
+    }
+
+    #[test]
+    fn generic_title_focus_separates_runtime_compiler_and_hilt_api_spines() {
+        let report = ScanReport {
+            root: "repo".to_string(),
+            files: vec![
+                scanned_file_with(
+                    "dagger-runtime/main/java/dagger/Module.java",
+                    "source",
+                    FilePurpose::Type,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-runtime/main/java/dagger/Component.java",
+                    "source",
+                    FilePurpose::Type,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-runtime/main/java/dagger/Subcomponent.java",
+                    "source",
+                    FilePurpose::Type,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-compiler/main/java/dagger/internal/codegen/ComponentProcessor.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-compiler/main/java/dagger/internal/codegen/base/SourceFileGenerator.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-compiler/main/java/dagger/internal/codegen/processingstep/BindingMethodProcessingStep.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "hilt-android/main/java/dagger/hilt/android/AndroidEntryPoint.java",
+                    "source",
+                    FilePurpose::Type,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "hilt-compiler/main/java/dagger/hilt/android/processor/internal/androidentrypoint/AndroidEntryPointProcessor.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "hilt-compiler/main/java/dagger/hilt/android/processor/internal/androidentrypoint/AndroidEntryPointProcessingStep.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+                scanned_file_with(
+                    "dagger-android-processor/main/java/dagger/android/processor/AndroidProcessor.java",
+                    "source",
+                    FilePurpose::Service,
+                    &[],
+                    "java",
+                ),
+            ],
+            tech_hints: Vec::new(),
+            workspace_roots: Vec::new(),
+            config_files: Vec::new(),
+            entry_points: Vec::new(),
+            dependency_hints: Vec::<DependencyHint>::new(),
+        };
+
+        let mut compiler_unit = KnowledgeUnit::new(
+            UnitType::ApiDoc,
+            "编译时API",
+            "api-domain",
+            "API-参考/编译时API.md",
+        );
+        compiler_unit.scope = UnitScope {
+            source_ids: vec![
+                "source:dagger-compiler/main/java/dagger/internal/codegen/ComponentProcessor.java"
+                    .to_string(),
+                "source:dagger-compiler/main/java/dagger/internal/codegen/base/SourceFileGenerator.java"
+                    .to_string(),
+            ],
+            ..UnitScope::default()
+        };
+        let compiler_focus = build_unit_topic_focus_hints(&compiler_unit, &report, &[]);
+        assert!(compiler_focus.is_some(), "compiler_focus should exist");
+        let compiler_focus_ref = compiler_focus.as_ref();
+        let compiler_selected = select_structural_key_sources(
+            &report,
+            ResearchPageKind::ApiSurface,
+            Some(&ResearchProfile::ApiSurface),
+            compiler_focus_ref,
+            report
+                .files
+                .iter()
+                .map(|file| ResearchKeySourceCandidate {
+                    path: file.path.clone(),
+                    origin: ResearchKeySourceOrigin::ScopeSource,
+                })
+                .collect(),
+        );
+        let compiler_top_three = compiler_selected
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            compiler_top_three
+                .iter()
+                .any(|path| path.contains("dagger-compiler/")),
+            "compiler_top_three={compiler_top_three:?}"
+        );
+        assert!(!compiler_top_three
+            .iter()
+            .any(|path| path.ends_with("/AndroidEntryPoint.java")));
+
+        let mut hilt_unit = KnowledgeUnit::new(
+            UnitType::ApiDoc,
+            "Hilt API",
+            "api-domain",
+            "API-参考/Hilt-API.md",
+        );
+        hilt_unit.scope = UnitScope {
+            source_ids: vec![
+                "source:hilt-android/main/java/dagger/hilt/android/AndroidEntryPoint.java"
+                    .to_string(),
+                "source:hilt-compiler/main/java/dagger/hilt/android/processor/internal/androidentrypoint/AndroidEntryPointProcessor.java"
+                    .to_string(),
+            ],
+            ..UnitScope::default()
+        };
+        let hilt_focus = build_unit_topic_focus_hints(&hilt_unit, &report, &[]);
+        assert!(hilt_focus.is_some(), "hilt_focus should exist");
+        let hilt_selected = select_structural_key_sources(
+            &report,
+            ResearchPageKind::ApiSurface,
+            Some(&ResearchProfile::ApiSurface),
+            hilt_focus.as_ref(),
+            report
+                .files
+                .iter()
+                .map(|file| ResearchKeySourceCandidate {
+                    path: file.path.clone(),
+                    origin: ResearchKeySourceOrigin::ScopeSource,
+                })
+                .collect(),
+        );
+        let hilt_top_three = hilt_selected.iter().take(3).cloned().collect::<Vec<_>>();
+        assert!(
+            hilt_top_three.iter().any(|path| path.contains("hilt-")),
+            "hilt_top_three={hilt_top_three:?}"
+        );
+        assert!(!hilt_top_three
+            .iter()
+            .any(|path| path.ends_with("/ComponentProcessor.java")));
+
+        let mut runtime_unit = KnowledgeUnit::new(
+            UnitType::ApiDoc,
+            "运行时API",
+            "api-domain",
+            "API-参考/运行时API.md",
+        );
+        runtime_unit.scope = UnitScope {
+            source_ids: vec![
+                "source:dagger-runtime/main/java/dagger/Module.java".to_string(),
+                "source:dagger-runtime/main/java/dagger/Component.java".to_string(),
+            ],
+            ..UnitScope::default()
+        };
+        let runtime_focus = build_unit_topic_focus_hints(&runtime_unit, &report, &[]);
+        assert!(runtime_focus.is_some(), "runtime_focus should exist");
+        let runtime_selected = select_structural_key_sources(
+            &report,
+            ResearchPageKind::ApiSurface,
+            Some(&ResearchProfile::ApiSurface),
+            runtime_focus.as_ref(),
+            report
+                .files
+                .iter()
+                .map(|file| ResearchKeySourceCandidate {
+                    path: file.path.clone(),
+                    origin: ResearchKeySourceOrigin::ScopeSource,
+                })
+                .collect(),
+        );
+        let runtime_top_three = runtime_selected.iter().take(3).cloned().collect::<Vec<_>>();
+        assert!(
+            runtime_top_three
+                .iter()
+                .any(|path| path.contains("dagger-runtime/")),
+            "runtime_top_three={runtime_top_three:?}"
+        );
+        assert!(!runtime_top_three
+            .iter()
+            .any(|path| path.contains("dagger-compiler/")));
+    }
+
+    #[test]
+    fn example_tutorial_profile_does_not_penalize_sample_sources() {
+        let sample = scanned_file_with(
+            "test-storybooks/external-docs/.storybook/main.cjs",
+            "config",
+            FilePurpose::Config,
+            &["entry-point"],
+            "javascript",
+        );
+        let score_without_example = structural_key_source_score(
+            ResearchPageKind::Other,
+            Some(&ResearchProfile::ConfigSurface),
+            None,
+            &sample,
+            &[ResearchKeySourceOrigin::ScopeSource],
+        );
+        let score_with_example = structural_key_source_score(
+            ResearchPageKind::Other,
+            Some(&ResearchProfile::ExampleTutorial),
+            None,
+            &sample,
+            &[ResearchKeySourceOrigin::ScopeSource],
+        );
+
+        assert!(score_with_example > score_without_example);
+    }
+
+    #[test]
+    fn default_api_and_overview_skeletons_use_reference_outline() {
+        let overview_unit =
+            KnowledgeUnit::new(UnitType::Overview, "项目概述", "system", "项目概述.md");
+        let api_unit = KnowledgeUnit::new(
+            UnitType::ApiDoc,
+            "Android API",
+            "api-domain",
+            "API-参考/Android-API.md",
+        );
+
+        let overview_sections = build_default_section_plan(&overview_unit, None, &[]);
+        let api_sections =
+            build_default_section_plan(&api_unit, Some(&ResearchProfile::ApiSurface), &[]);
+
+        assert_eq!(overview_sections[1].title, "目录");
+        assert_eq!(overview_sections[2].title, "简介");
+        assert_eq!(overview_sections[3].title, "项目结构");
+        assert_eq!(api_sections[2].title, "简介");
+        assert_eq!(api_sections[3].title, "项目结构");
+        assert!(api_sections
+            .iter()
+            .any(|section| section.title == "详细组件分析"));
+    }
+
     fn scanned_file(path: &str, kind: &str) -> ScannedFile {
         ScannedFile {
             id: format!("source:{path}"),
@@ -1580,6 +4846,40 @@ Accessibility tests audit the rendered DOM.
             fingerprint: "fp".to_string(),
             size: 0,
             tags: Vec::new(),
+        }
+    }
+
+    fn scanned_file_with(
+        path: &str,
+        kind: &str,
+        purpose: FilePurpose,
+        tags: &[&str],
+        language: &str,
+    ) -> ScannedFile {
+        ScannedFile {
+            id: format!("source:{path}"),
+            path: path.to_string(),
+            language: language.to_string(),
+            kind: kind.to_string(),
+            purpose,
+            fingerprint: "fp".to_string(),
+            size: 0,
+            tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+        }
+    }
+
+    fn module_context(module_id: &str, key_sources: Vec<String>) -> ModuleContext {
+        ModuleContext {
+            module_id: module_id.to_string(),
+            role_hints: Vec::new(),
+            public_surface: Vec::new(),
+            dependencies: Vec::new(),
+            dependents: Vec::new(),
+            key_sources,
+            graph_hotspots: Vec::new(),
+            communities: Vec::new(),
+            cycle_warnings: Vec::new(),
+            capability_topics: Vec::new(),
         }
     }
 

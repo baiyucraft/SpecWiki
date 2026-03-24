@@ -532,7 +532,11 @@ function extractOutlineSkeleton(sectionTitles, content) {
 }
 
 function fileBasename(filePath) {
-  return path.posix.basename(filePath.replaceAll("\\", "/"));
+  return path.posix.basename(
+    String(filePath)
+      .replaceAll("\\", "/")
+      .replace(/#L\d+(?:-L?\d+)?$/i, ""),
+  );
 }
 
 function pageCategory(page) {
@@ -982,6 +986,7 @@ function collectProject(project, run, options = {}) {
     run_mode: options.runMode ?? run.label,
     run_label: run.label,
     cache_mode: run.cacheMode,
+    baseline_mode: classifyBaselineMode(run, options),
     usage: run.usage,
     page_research_requests: promptCount(run.usage, "page_research"),
     page_enrichment_requests: promptCount(run.usage, "page_enrichment"),
@@ -995,6 +1000,7 @@ function collectProject(project, run, options = {}) {
     runtime_summary: runtimeSnapshot.runtimeSummary,
     gate_summary: runtimeSnapshot.runtimeGateSummary,
     parent_contract: runtimeSnapshot.parentContract,
+    compose_diagnostics: runtimeSnapshot.composeDiagnostics,
     stop_reasons: stopReasons,
   };
 
@@ -1101,7 +1107,20 @@ function describeKnowledgeUnitBinding(result, generatedPath) {
     `domain_id=${binding.domainId ?? "n/a"}`,
     `readiness=${binding.readinessStatus || "n/a"}`,
     `child_digests=${binding.childDigestCount ?? 0}`,
+    `planned_key_sources=${binding.plannedKeySourceCount ?? 0}`,
+    `grounded_key_sources=${binding.groundedKeySourceCount ?? 0}`,
+    `grounding_refs=${binding.sectionGroundingRefCount ?? 0}`,
   ].join(", ");
+}
+
+function classifyBaselineMode(run, options = {}) {
+  if (options.skipInit) {
+    return "warm_runtime_reuse";
+  }
+  if (run.label === "warm" || run.label === "reuse" || run.cacheMode === "preserve") {
+    return "warm_runtime_reuse";
+  }
+  return "fresh_init_baseline";
 }
 
 function countReusedGeneratedPages(comparisons) {
@@ -1360,24 +1379,26 @@ function buildGapLedger(result) {
 
   const entries = [];
   for (const comparison of result.comparisons) {
+    const pageDiagnostics = comparison.generatedPath
+      ? result.page_runtime?.[comparison.generatedPath] ?? null
+      : null;
     if (!comparison.matched) {
       const entry = ledgerEntry("missing", comparison);
       entries.push({
         symptom: "missing_page",
         metric: "missing_pages",
         offendingPages: [comparison.referencePath],
-        contractHypothesis: entry.contract,
+        contractHypothesis: `${entry.contract} / typed surface bundle / leaf decomposition policy`,
       });
       continue;
     }
 
     if ((comparison.reuseCount ?? 1) > 1) {
-      const entry = ledgerEntry("collapsed", comparison);
       entries.push({
         symptom: "many_to_one_reuse",
         metric: `reuse_count=${comparison.reuseCount}`,
         offendingPages: [comparison.referencePath, comparison.generatedPath],
-        contractHypothesis: entry.contract,
+        contractHypothesis: "planner.collapse_guard / leaf decomposition policy / parent-consume-child boundary",
       });
     }
     if ((comparison.skeletonScore ?? 1) < 0.8) {
@@ -1385,7 +1406,7 @@ function buildGapLedger(result) {
         symptom: "skeleton_shortfall",
         metric: `skeleton_score=${Number(comparison.skeletonScore ?? 0).toFixed(2)}`,
         offendingPages: [comparison.referencePath, comparison.generatedPath],
-        contractHypothesis: "renderer heading contract / compose section plan",
+        contractHypothesis: skeletonContractHypothesis(pageDiagnostics),
       });
     }
     if ((comparison.keySource?.coverage ?? 1) < 0.7) {
@@ -1397,12 +1418,82 @@ function buildGapLedger(result) {
           comparison.generatedPath,
           ...(comparison.keySource?.missingSources ?? []).slice(0, 5).map((item) => `missing:${item}`),
         ],
-        contractHypothesis: "citation / evidence / compose source grounding",
+        contractHypothesis: keySourceContractHypothesis(pageDiagnostics, comparison),
       });
     }
   }
 
   return entries;
+}
+
+function sourceMatches(left, right) {
+  const normalizedLeft = String(left ?? "")
+    .replaceAll("\\", "/")
+    .replace(/#L\d+(?:-L?\d+)?$/i, "")
+    .toLowerCase();
+  const normalizedRight = String(right ?? "")
+    .replaceAll("\\", "/")
+    .replace(/#L\d+(?:-L?\d+)?$/i, "")
+    .toLowerCase();
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+  if (normalizedLeft === normalizedRight) {
+    return true;
+  }
+  return path.posix.basename(normalizedLeft) === path.posix.basename(normalizedRight);
+}
+
+/**
+ * 根据 compose diagnostics 判断 skeleton 缺口更偏向 research 还是 compose 落页。
+ *
+ * @param {object | null | undefined} pageDiagnostics 页面级 runtime 诊断。
+ * @returns {string} 返回可直接写入 gap ledger 的 contract hypothesis。
+ */
+function skeletonContractHypothesis(pageDiagnostics) {
+  if (!pageDiagnostics?.skeletonProfileKey) {
+    return "research.skeleton_profile missing";
+  }
+  if ((pageDiagnostics.sectionGroundingRefCount ?? 0) === 0) {
+    return "compose.section_grounding_refs missing";
+  }
+  return "compose section contract / renderer 落页没有保住 research skeleton";
+}
+
+/**
+ * 根据 planned/grounded key sources 与 reference 缺口，定位 key-source fidelity 的主链断点。
+ *
+ * @param {object | null | undefined} pageDiagnostics 页面级 runtime 诊断。
+ * @param {object} comparison 当前 generated/reference 的对比结果。
+ * @returns {string} 返回可直接写入 gap ledger 的 contract hypothesis。
+ */
+function keySourceContractHypothesis(pageDiagnostics, comparison) {
+  const planned = pageDiagnostics?.plannedKeySources ?? [];
+  const grounded = pageDiagnostics?.groundedKeySources ?? [];
+  const missing = comparison.keySource?.missingSources ?? [];
+
+  if (planned.length === 0) {
+    return "research.key_source_clusters / planned_key_sources missing";
+  }
+  if ((pageDiagnostics?.sectionGroundingRefCount ?? 0) === 0 || grounded.length === 0) {
+    return "compose.section_grounding_refs / grounded_key_sources missing";
+  }
+
+  const plannedMissesReference = missing.some((source) =>
+    !planned.some((candidate) => sourceMatches(candidate, source))
+  );
+  if (plannedMissesReference) {
+    return "planner/research planned_key_sources drift";
+  }
+
+  const groundedMissesPlanned = missing.some((source) =>
+    !grounded.some((candidate) => sourceMatches(candidate, source))
+  );
+  if (groundedMissesPlanned || pageDiagnostics?.groundingGap) {
+    return "compose grounded_key_sources 未落到最终 section";
+  }
+
+  return "research / compose source grounding contract drift";
 }
 
 function formatPercent(value) {
@@ -1522,6 +1613,7 @@ function renderGapLedger(result) {
     "## 当前状态",
     "",
     `- status：${result.status}`,
+    `- baseline_mode：${result.run_metrics.baseline_mode}`,
     `- runtime_state：${result.runtime_metrics.runtime_state}`,
     `- baseline_class：${result.runtime_metrics.baseline_class}`,
     "",
@@ -1560,6 +1652,7 @@ function renderProjectReport(result) {
     "",
     `- run_label：${result.run_metrics.run_label}`,
     `- cache_mode：${result.run_metrics.cache_mode}`,
+    `- baseline_mode：${result.run_metrics.baseline_mode}`,
     `- usage：requests=${result.run_metrics.usage?.request_count ?? 0}, total_tokens=${result.run_metrics.usage?.total_tokens ?? 0}, page_research=${result.run_metrics.page_research_requests}, page_enrichment=${result.run_metrics.page_enrichment_requests}`,
     "",
     "## Runtime Metrics",
@@ -1571,6 +1664,7 @@ function renderProjectReport(result) {
     `- pipeline_runtime_summary：state=${result.runtime_metrics.runtime_summary?.runtime_state ?? "missing"}, researched=${result.runtime_metrics.runtime_summary?.researched_units ?? 0}, compose_ready=${result.runtime_metrics.runtime_summary?.compose_ready_units ?? 0}, composed=${result.runtime_metrics.runtime_summary?.composed_units ?? 0}, assembled=${result.runtime_metrics.runtime_summary?.assembled_pages ?? 0}`,
     `- unit_runtime_gates：total=${result.runtime_metrics.gate_summary?.total ?? 0}, compose_ready=${result.runtime_metrics.gate_summary?.composeReady ?? 0}, compose_pending=${result.runtime_metrics.gate_summary?.composePending ?? 0}, compose_blocked=${result.runtime_metrics.gate_summary?.composeBlocked ?? 0}, assemble_done=${result.runtime_metrics.gate_summary?.assembleDone ?? 0}`,
     `- parent_contract：parents=${result.runtime_metrics.parent_contract?.parentPages ?? 0}, compose_ready_parents=${result.runtime_metrics.parent_contract?.composeReadyParents ?? 0}, child_digest_parents=${result.runtime_metrics.parent_contract?.childDigestParents ?? 0}, missing_readiness_parents=${result.runtime_metrics.parent_contract?.missingReadinessParents ?? 0}`,
+    `- compose_diagnostics：digest_pages=${result.runtime_metrics.compose_diagnostics?.digestPages ?? 0}, skeleton_profile_pages=${result.runtime_metrics.compose_diagnostics?.pagesWithSkeletonProfile ?? 0}, grounding_ref_pages=${result.runtime_metrics.compose_diagnostics?.pagesWithSectionGroundingRefs ?? 0}, planned_key_source_pages=${result.runtime_metrics.compose_diagnostics?.pagesWithPlannedKeySources ?? 0}, grounded_key_source_pages=${result.runtime_metrics.compose_diagnostics?.pagesWithGroundedKeySources ?? 0}, grounding_gap_pages=${result.runtime_metrics.compose_diagnostics?.pagesWithGroundingGap ?? 0}`,
     `- stop_reasons：${result.runtime_metrics.stop_reasons.stopReasonCounts.map(([reason, count]) => `${reason}(${count})`).join("、") || "无"}`,
   ];
 

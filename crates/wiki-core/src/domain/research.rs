@@ -36,6 +36,28 @@ impl ResearchProfile {
     }
 }
 
+/// 把 reference-style 标题归一到稳定集合，避免 research/compose 各自维护一套判断。
+pub fn canonical_reference_outline_title(title: &str) -> Option<&'static str> {
+    match title.trim() {
+        "目录" => Some("目录"),
+        "引言" | "简介" => Some("简介"),
+        "项目结构" => Some("项目结构"),
+        "核心组件" => Some("核心组件"),
+        "架构总览" => Some("架构总览"),
+        "详细组件分析" => Some("详细组件分析"),
+        "依赖分析" | "依赖关系分析" => Some("依赖关系分析"),
+        "性能考虑" | "性能考量" => Some("性能考量"),
+        "故障排查指南" => Some("故障排查指南"),
+        "结论" => Some("结论"),
+        "附录" => Some("附录"),
+        _ => None,
+    }
+}
+
+pub fn is_reference_outline_title(title: &str) -> bool {
+    canonical_reference_outline_title(title).is_some()
+}
+
 /// provider-backed research session 的停止原因。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -66,7 +88,7 @@ impl ResearchStopReason {
 }
 
 /// provider-backed research session 的观测指标。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResearchSessionStats {
     #[serde(default)]
     pub turns_used: usize,
@@ -94,10 +116,94 @@ pub struct ResearchSessionStats {
     pub retry_input_applied: Option<bool>,
 }
 
+// ─── ResearchPageSeed ──────────────────────────────────────
+
+/// 页面骨架里的单个稳定 section 槽位。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkeletonSection {
+    /// section 的稳定身份；compose/renderer 依赖它保持章节对齐。
+    pub section_key: String,
+    /// 最终 Markdown 里展示的章节标题。
+    pub title: String,
+}
+
+/// 研究阶段给 compose 提供的稳定页面骨架画像。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkeletonProfile {
+    /// 骨架画像标识；供 runtime/report 判断当前页属于哪类 skeleton contract。
+    pub profile_key: String,
+    #[serde(default)]
+    /// research 允许 compose 直接消费的稳定 section 槽位集合。
+    pub seed_sections: Vec<SkeletonSection>,
+}
+
+/// 关键来源簇，供 compose 在 section 级做显式 grounding。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KeySourceCluster {
+    /// 来源簇的稳定键；section grounding 通过它回连关键源码集合。
+    pub cluster_key: String,
+    /// 供 prompt/render/report 使用的人类可读标签。
+    pub label: String,
+    #[serde(default)]
+    /// 本簇绑定的源码路径集合。
+    pub source_paths: Vec<String>,
+    #[serde(default)]
+    /// 与该来源簇关联的 evidence cluster 键。
+    pub evidence_cluster_keys: Vec<String>,
+}
+
+/// section 级 grounding 合同，显式声明一节消费哪些来源簇、evidence、child digest 和图输入。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SectionGroundingRef {
+    /// 被 grounding 的目标 section。
+    pub section_key: String,
+    #[serde(default)]
+    /// 当前 section 消费的关键来源簇。
+    pub key_source_cluster_keys: Vec<String>,
+    #[serde(default)]
+    /// 当前 section 消费的 evidence clusters。
+    pub evidence_cluster_keys: Vec<String>,
+    #[serde(default)]
+    /// 当前 section 允许吸收的 child digest 引用。
+    pub child_digest_refs: Vec<String>,
+    #[serde(default)]
+    /// 当前 section 可消费的图输入引用。
+    pub diagram_refs: Vec<String>,
+}
+
+/// 可被 compose 直接消费的 research page seed。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResearchPageSeed {
+    #[serde(default)]
+    /// 供最终页面摘要/导语使用的高层概括。
+    pub summary: String,
+    #[serde(default)]
+    /// 页面定位说明；帮助 compose 保持内容边界。
+    pub positioning: String,
+    #[serde(default)]
+    /// research 产出的正式 section plan。
+    pub section_plan: Vec<PlannedSection>,
+    #[serde(default)]
+    /// 稳定骨架画像；用于高层页和 docs-backed 页保持章节身份。
+    pub skeleton_profile: Option<SkeletonProfile>,
+    #[serde(default)]
+    /// compose 必须围绕其展开正文的关键来源簇。
+    pub key_source_clusters: Vec<KeySourceCluster>,
+    #[serde(default)]
+    /// section 级 grounding 合同。
+    pub section_grounding_refs: Vec<SectionGroundingRef>,
+    #[serde(default)]
+    /// 可直接被 compose 消费的证据簇。
+    pub evidence_clusters: Vec<EvidenceCluster>,
+    #[serde(default)]
+    /// research 侧建议的图表达输入。
+    pub diagram_suggestions: Vec<DiagramSuggestion>,
+}
+
 // ─── SystemResearch ─────────────────────────────────────────
 
 /// R1: 全局系统研究结果——从 FactsSnapshot 全量中提取的项目级理解。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SystemResearch {
     pub project_name: String,
     pub description: String,
@@ -108,13 +214,17 @@ pub struct SystemResearch {
     pub architecture_pattern: String,
     pub key_domains: Vec<String>,
     #[serde(default)]
+    pub overview_seed: ResearchPageSeed,
+    #[serde(default)]
+    pub architecture_seed: ResearchPageSeed,
+    #[serde(default)]
     pub input_hash: String,
 }
 
 // ─── DomainResearch ─────────────────────────────────────────
 
 /// R2: 域级研究结果——每个 KnowledgeDomain 一份。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DomainResearch {
     pub domain_id: String,
     pub domain_summary: String,
@@ -125,13 +235,15 @@ pub struct DomainResearch {
     #[serde(default)]
     pub diagram_suggestion: Option<DiagramSuggestion>,
     #[serde(default)]
+    pub compose_seed: ResearchPageSeed,
+    #[serde(default)]
     pub input_hash: String,
 }
 
 // ─── UnitResearch ───────────────────────────────────────────
 
 /// R3: 单元级研究结果——每个 KnowledgeUnit 一份。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UnitResearch {
     pub unit_id: String,
     #[serde(default)]
@@ -141,6 +253,12 @@ pub struct UnitResearch {
     pub positioning: String,
     pub summary: String,
     pub section_plan: Vec<PlannedSection>,
+    #[serde(default)]
+    pub skeleton_profile: Option<SkeletonProfile>,
+    #[serde(default)]
+    pub key_source_clusters: Vec<KeySourceCluster>,
+    #[serde(default)]
+    pub section_grounding_refs: Vec<SectionGroundingRef>,
     pub evidence_clusters: Vec<EvidenceCluster>,
     #[serde(default)]
     pub diagram_suggestions: Vec<DiagramSuggestion>,
@@ -154,11 +272,27 @@ pub struct UnitResearch {
     pub input_hash: String,
 }
 
+impl UnitResearch {
+    /// 把 unit research 收敛成可复用于 system/domain/unit compose 的统一 seed。
+    pub fn to_seed(&self) -> ResearchPageSeed {
+        ResearchPageSeed {
+            summary: self.summary.clone(),
+            positioning: self.positioning.clone(),
+            section_plan: self.section_plan.clone(),
+            skeleton_profile: self.skeleton_profile.clone(),
+            key_source_clusters: self.key_source_clusters.clone(),
+            section_grounding_refs: self.section_grounding_refs.clone(),
+            evidence_clusters: self.evidence_clusters.clone(),
+            diagram_suggestions: self.diagram_suggestions.clone(),
+        }
+    }
+}
+
 // ─── PlannedSection ─────────────────────────────────────────
 
 /// Research 层规划的节标题和预期内容方向。
 /// Compose 层消费 PlannedSection 来构造 SectionDraft。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlannedSection {
     pub section_key: String,
     pub title: String,
@@ -178,7 +312,7 @@ pub struct PlannedSection {
 // ─── EvidenceCluster ────────────────────────────────────────
 
 /// 一组相互关联的源码引用，围绕同一个知识点聚合。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvidenceCluster {
     pub cluster_key: String,
     pub label: String,
@@ -188,7 +322,7 @@ pub struct EvidenceCluster {
 // ─── SourceCitation ─────────────────────────────────────────
 
 /// 单条源码引用——精确到文件路径和行号范围。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SourceCitation {
     pub path: String,
     pub start_line: usize,
@@ -204,7 +338,7 @@ pub struct SourceCitation {
 // ─── DiagramSuggestion ──────────────────────────────────────
 
 /// Research 层建议的图表——Compose 层决定是否渲染。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiagramSuggestion {
     pub diagram_type: String,
     pub title: String,
@@ -215,13 +349,13 @@ pub struct DiagramSuggestion {
     pub edges: Vec<DiagramEdgeSuggestion>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiagramNodeSuggestion {
     pub node_id: String,
     pub label: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiagramEdgeSuggestion {
     pub source: String,
     pub target: String,
@@ -232,7 +366,7 @@ pub struct DiagramEdgeSuggestion {
 // ─── PageDigest ─────────────────────────────────────────────
 
 /// 页面章节摘要——供父页逐层消费子页的 section 级信息。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PageSectionDigest {
     pub digest_id: String,
     pub section_key: String,
@@ -245,7 +379,7 @@ pub struct PageSectionDigest {
 }
 
 /// 页面图摘要——供父页感知子页已有图表达。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PageDiagramDigest {
     pub digest_id: String,
     pub diagram_type: String,
@@ -255,7 +389,7 @@ pub struct PageDiagramDigest {
 }
 
 /// 页面摘要——子页 compose 完成后产出的精简摘要，供父页消费。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PageDigest {
     pub digest_id: String,
     pub unit_id: String,
@@ -270,6 +404,14 @@ pub struct PageDigest {
     pub key_topics: Vec<String>,
     #[serde(default)]
     pub key_sources: Vec<String>,
+    #[serde(default)]
+    pub planned_key_sources: Vec<String>,
+    #[serde(default)]
+    pub grounded_key_sources: Vec<String>,
+    #[serde(default)]
+    pub skeleton_profile: Option<SkeletonProfile>,
+    #[serde(default)]
+    pub section_grounding_refs: Vec<SectionGroundingRef>,
     #[serde(default)]
     pub citations: Vec<SourceCitation>,
     #[serde(default)]

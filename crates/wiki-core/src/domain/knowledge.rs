@@ -121,6 +121,54 @@ impl DecompositionProfile {
     }
 }
 
+// ─── Planner Diagnostics ───────────────────────────────────
+
+/// planner 信号类型，用来区分仓库原型信号、surface 聚类与叶子拆分策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlannerSignalKind {
+    RepoArchetype,
+    SurfaceCluster,
+    LeafDecomposition,
+}
+
+/// 一个可诊断的 planner 信号束，描述某个单元为何被拆出或保留。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlannerSignalBundle {
+    pub kind: PlannerSignalKind,
+    pub key: String,
+    pub label: String,
+    #[serde(default)]
+    pub matched_keywords: Vec<String>,
+    #[serde(default)]
+    pub matched_source_ids: Vec<String>,
+    #[serde(default)]
+    pub matched_paths: Vec<String>,
+}
+
+/// collapse guard 的触发原因，用来解释为何候选被收回父页或聚合页。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollapseGuardReason {
+    RawConfigSurfaceAggregation,
+    TopicScopeRefinement,
+}
+
+/// 记录一次显式的折叠决策，既保留被吸收候选，也保留最终保留下来的候选。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollapseGuardDecision {
+    pub reason: CollapseGuardReason,
+    pub owner_title: String,
+    #[serde(default)]
+    pub collapsed_source_ids: Vec<String>,
+    #[serde(default)]
+    pub collapsed_paths: Vec<String>,
+    #[serde(default)]
+    pub preserved_source_ids: Vec<String>,
+    #[serde(default)]
+    pub preserved_paths: Vec<String>,
+}
+
 // ─── DomainEvidence ─────────────────────────────────────────
 
 /// 知识域被发现时的证据，记录哪些模块/文件/锚点触发了该域的识别。
@@ -227,6 +275,10 @@ pub struct KnowledgeUnit {
     pub parent_unit_id: Option<String>,
     #[serde(default)]
     pub child_unit_ids: Vec<String>,
+    #[serde(default)]
+    pub planner_signal_bundles: Vec<PlannerSignalBundle>,
+    #[serde(default)]
+    pub collapse_guard: Option<CollapseGuardDecision>,
     pub scope: UnitScope,
     pub relative_path: String,
     pub priority: f32,
@@ -254,6 +306,8 @@ impl KnowledgeUnit {
             domain_id,
             parent_unit_id: None,
             child_unit_ids: Vec::new(),
+            planner_signal_bundles: Vec::new(),
+            collapse_guard: None,
             scope: UnitScope::default(),
             relative_path,
             priority: 1.0,

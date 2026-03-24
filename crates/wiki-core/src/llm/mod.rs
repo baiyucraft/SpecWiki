@@ -902,7 +902,18 @@ impl PageResearchResult {
             .iter()
             .map(|diagram| diagram.diagram_id.clone())
             .collect::<BTreeSet<_>>();
-        let allowed_children = BTreeSet::<String>::new();
+        let allowed_children = context
+            .child_unit_ids
+            .iter()
+            .chain(context.child_page_ids.iter())
+            .chain(context.child_digest_ids.iter())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let allowed_source_paths = context
+            .evidence_groups
+            .iter()
+            .flat_map(|group| group.items.iter().map(|item| item.path.clone()))
+            .collect::<BTreeSet<_>>();
         let allowed_slots = if allowed_section_slots.is_empty() {
             section_titles_for_page_type(&context.page_type)
                 .into_iter()
@@ -965,8 +976,99 @@ impl PageResearchResult {
                 (!section.section_summary.is_empty()
                     || !section.evidence_refs.is_empty()
                     || !section.diagram_refs.is_empty()
-                    || !section.child_refs.is_empty())
-                .then_some(section)
+                    || !section.child_refs.is_empty()
+                    || section.child_digest_slot)
+                    .then_some(section)
+            })
+            .take(max_section_count)
+            .collect();
+        let allowed_section_keys = self
+            .section_plan
+            .iter()
+            .map(|section| section.section_key.clone())
+            .collect::<BTreeSet<_>>();
+        self.skeleton_profile = self.skeleton_profile.map(|mut profile| {
+            profile.profile_key = profile.profile_key.trim().to_string();
+            profile.seed_sections = profile
+                .seed_sections
+                .into_iter()
+                .filter_map(|mut section| {
+                    section.section_key = section.section_key.trim().to_string();
+                    section.title = section.title.trim().to_string();
+                    if section.section_key.is_empty()
+                        || section.title.is_empty()
+                        || !allowed_slot_keys.contains_key(&section.section_key)
+                    {
+                        return None;
+                    }
+                    Some(section)
+                })
+                .collect();
+            profile
+        });
+        self.key_source_clusters = self
+            .key_source_clusters
+            .into_iter()
+            .filter_map(|mut cluster| {
+                cluster.cluster_key = cluster.cluster_key.trim().to_string();
+                cluster.label = cluster.label.trim().to_string();
+                cluster.source_paths = dedupe_non_empty(cluster.source_paths)
+                    .into_iter()
+                    .filter(|path| allowed_source_paths.contains(path))
+                    .take(6)
+                    .collect();
+                cluster.evidence_cluster_keys = dedupe_non_empty(cluster.evidence_cluster_keys)
+                    .into_iter()
+                    .filter(|reference| allowed_group_keys.contains(reference))
+                    .take(6)
+                    .collect();
+                (!cluster.cluster_key.is_empty()
+                    && !cluster.label.is_empty()
+                    && (!cluster.source_paths.is_empty()
+                        || !cluster.evidence_cluster_keys.is_empty()))
+                .then_some(cluster)
+            })
+            .take(8)
+            .collect();
+        let allowed_key_source_clusters = self
+            .key_source_clusters
+            .iter()
+            .map(|cluster| cluster.cluster_key.clone())
+            .collect::<BTreeSet<_>>();
+        self.section_grounding_refs = self
+            .section_grounding_refs
+            .into_iter()
+            .filter_map(|mut grounding| {
+                grounding.section_key = grounding.section_key.trim().to_string();
+                grounding.key_source_cluster_keys =
+                    dedupe_non_empty(grounding.key_source_cluster_keys)
+                        .into_iter()
+                        .filter(|reference| allowed_key_source_clusters.contains(reference))
+                        .take(6)
+                        .collect();
+                grounding.evidence_cluster_keys = dedupe_non_empty(grounding.evidence_cluster_keys)
+                    .into_iter()
+                    .filter(|reference| allowed_group_keys.contains(reference))
+                    .take(6)
+                    .collect();
+                grounding.child_digest_refs = dedupe_non_empty(grounding.child_digest_refs)
+                    .into_iter()
+                    .filter(|reference| context.child_digest_ids.iter().any(|id| id == reference))
+                    .take(6)
+                    .collect();
+                grounding.diagram_refs = dedupe_non_empty(grounding.diagram_refs)
+                    .into_iter()
+                    .filter(|reference| allowed_diagrams.contains(reference))
+                    .take(4)
+                    .collect();
+
+                (!grounding.section_key.is_empty()
+                    && allowed_section_keys.contains(&grounding.section_key)
+                    && (!grounding.key_source_cluster_keys.is_empty()
+                        || !grounding.evidence_cluster_keys.is_empty()
+                        || !grounding.child_digest_refs.is_empty()
+                        || !grounding.diagram_refs.is_empty()))
+                .then_some(grounding)
             })
             .take(max_section_count)
             .collect();
@@ -1015,6 +1117,8 @@ impl PageResearchResult {
         (!self.summary.is_empty()
             || !self.page_positioning.is_empty()
             || !self.section_plan.is_empty()
+            || !self.key_source_clusters.is_empty()
+            || !self.section_grounding_refs.is_empty()
             || !self.evidence_rollup.is_empty()
             || !self.diagram_rollup.is_empty()
             || !self.open_questions.is_empty())
@@ -2434,6 +2538,8 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
     fn page_research_result_is_minimally_complete(result: &PageResearchResult) -> bool {
         (!result.summary.trim().is_empty() || !result.page_positioning.trim().is_empty())
             && (!result.section_plan.is_empty()
+                || !result.key_source_clusters.is_empty()
+                || !result.section_grounding_refs.is_empty()
                 || !result.evidence_rollup.is_empty()
                 || !result.diagram_rollup.is_empty())
     }
@@ -3867,13 +3973,14 @@ fn build_page_research_instruction(input: &PageResearchInput) -> String {
             "1. 最终结果必须严格符合 response_schema，对应 `PageResearchResult`。\n",
             "2. `page_positioning` 用 1 到 2 句说明当前页面在整体知识树中的定位，不得输出 Markdown 页面。\n",
             "3. `summary` 只能写 1 段高密度摘要，不得输出 Markdown 页面。\n",
-            "4. `section_plan` 必须只使用允许的 section 槽位；每节都应给出 `section_key / section_title / section_summary`，并尽量补充 `evidence_refs / diagram_refs / child_refs`。\n",
-            "5. `evidence_rollup` 只能引用当前输入中已存在的 evidence group / source path / line span。\n",
-            "6. `diagram_rollup` 只能引用 deterministic 已存在的 diagram inputs。\n",
-            "7. 若信息不足，可提出 `open_questions`，但不得凭空捏造事实。\n",
-            "8. 若工具调用有帮助，可以先调用工具，再返回最终结构化结果。\n",
-            "9. 不要返回自由新章节；重点是决定受控 section 槽位的顺序、重点和支撑材料。\n",
-            "10. 页面拆分与章节骨架以 facts/planner 预先给出的 contract 为准；LLM 只能在现有 contract 内补充优先级、摘要与证据组织，不能自由发明新的页树或章节体系。"
+            "4. `section_plan` 必须只使用允许的 section 槽位；每节都应给出 `section_key / section_title / section_summary`，并显式决定 `child_digest_slot`，同时尽量补充 `evidence_refs / diagram_refs / child_refs`。\n",
+            "5. `skeleton_profile`、`key_source_clusters` 与 `section_grounding_refs` 必须与当前输入里的 section / evidence / child digest / diagram 保持一致，不得发明不存在的引用。\n",
+            "6. `evidence_rollup` 只能引用当前输入中已存在的 evidence group / source path / line span。\n",
+            "7. `diagram_rollup` 只能引用 deterministic 已存在的 diagram inputs。\n",
+            "8. 若信息不足，可提出 `open_questions`，但不得凭空捏造事实。\n",
+            "9. 若工具调用有帮助，可以先调用工具，再返回最终结构化结果。\n",
+            "10. 不要返回自由新章节；重点是决定受控 section 槽位的顺序、重点和支撑材料。\n",
+            "11. 页面拆分与章节骨架以 facts/planner 预先给出的 contract 为准；LLM 只能在现有 contract 内补充优先级、摘要与证据组织，不能自由发明新的页树或章节体系。"
         ),
         page_type = input.page_type,
         title = input.title,
@@ -3887,7 +3994,7 @@ fn build_page_research_instruction(input: &PageResearchInput) -> String {
 fn page_research_response_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["summary", "page_positioning", "section_plan", "evidence_rollup", "diagram_rollup", "open_questions"],
+        "required": ["summary", "page_positioning", "section_plan", "skeleton_profile", "key_source_clusters", "section_grounding_refs", "evidence_rollup", "diagram_rollup", "open_questions"],
         "properties": {
             "summary": {"type": "string"},
             "page_positioning": {"type": "string"},
@@ -3895,14 +4002,60 @@ fn page_research_response_schema() -> Value {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "required": ["section_key", "section_title", "section_summary", "evidence_refs", "diagram_refs", "child_refs"],
+                    "required": ["section_key", "section_title", "section_summary", "evidence_refs", "diagram_refs", "child_refs", "child_digest_slot"],
                     "properties": {
                         "section_key": {"type": "string"},
                         "section_title": {"type": "string"},
                         "section_summary": {"type": "string"},
                         "evidence_refs": {"type": "array", "items": {"type": "string"}},
                         "diagram_refs": {"type": "array", "items": {"type": "string"}},
-                        "child_refs": {"type": "array", "items": {"type": "string"}}
+                        "child_refs": {"type": "array", "items": {"type": "string"}},
+                        "child_digest_slot": {"type": "boolean"}
+                    }
+                }
+            },
+            "skeleton_profile": {
+                "type": ["object", "null"],
+                "required": ["profile_key", "seed_sections"],
+                "properties": {
+                    "profile_key": {"type": "string"},
+                    "seed_sections": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["section_key", "title"],
+                            "properties": {
+                                "section_key": {"type": "string"},
+                                "title": {"type": "string"}
+                            }
+                        }
+                    }
+                }
+            },
+            "key_source_clusters": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["cluster_key", "label", "source_paths", "evidence_cluster_keys"],
+                    "properties": {
+                        "cluster_key": {"type": "string"},
+                        "label": {"type": "string"},
+                        "source_paths": {"type": "array", "items": {"type": "string"}},
+                        "evidence_cluster_keys": {"type": "array", "items": {"type": "string"}}
+                    }
+                }
+            },
+            "section_grounding_refs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["section_key", "key_source_cluster_keys", "evidence_cluster_keys", "child_digest_refs", "diagram_refs"],
+                    "properties": {
+                        "section_key": {"type": "string"},
+                        "key_source_cluster_keys": {"type": "array", "items": {"type": "string"}},
+                        "evidence_cluster_keys": {"type": "array", "items": {"type": "string"}},
+                        "child_digest_refs": {"type": "array", "items": {"type": "string"}},
+                        "diagram_refs": {"type": "array", "items": {"type": "string"}}
                     }
                 }
             },

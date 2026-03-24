@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::domain::context::{ModuleContext, RepoContext};
 use crate::domain::knowledge::{
-    ApiSurface, ConfigSurface, DecompositionProfile, DocsAnchor, DomainEvidence, DomainType,
-    KnowledgeDomain, KnowledgeTree, KnowledgeUnit, UnitScope, UnitType,
+    ApiSurface, CollapseGuardDecision, CollapseGuardReason, ConfigSurface, DecompositionProfile,
+    DocsAnchor, DomainEvidence, DomainType, KnowledgeDomain, KnowledgeTree, KnowledgeUnit,
+    PlannerSignalBundle, PlannerSignalKind, UnitScope, UnitType,
 };
 use crate::domain::module_tree::{ModuleNode, ModuleTree};
 use crate::domain::steering::SteeringConfig;
@@ -673,7 +674,7 @@ fn discover_plugin_ecosystem(
             let lower = file.path.to_ascii_lowercase();
             plugin_keywords.iter().any(|kw| lower.contains(kw))
         })
-        .map(|file| file.id.clone())
+        .map(|file| file.path.clone())
         .collect::<Vec<_>>();
 
     if matched.is_empty() && file_hits.is_empty() {
@@ -827,8 +828,18 @@ fn discover_testing_infra(
         .iter()
         .filter(|m| {
             let name_lower = m.name.to_ascii_lowercase();
-            test_keywords.iter().any(|kw| name_lower.contains(kw))
+            (test_keywords.iter().any(|kw| name_lower.contains(kw))
                 || m.tags.iter().any(|t| t == "test" || t == "testing")
+                || m.kind == "test-suite")
+                && !m.root_paths.iter().any(|path| {
+                    let lower = normalize_path(path).to_ascii_lowercase();
+                    lower.contains("/test-storybooks/")
+                        || lower.contains("/kitchen-sink/")
+                        || lower == "test-storybooks"
+                        || lower == "kitchen-sink"
+                        || lower.ends_with("/test-storybooks")
+                        || lower.ends_with("/kitchen-sink")
+                })
         })
         .copied()
         .collect();
@@ -851,6 +862,56 @@ fn discover_testing_infra(
         })
         .map(|file| file.path.clone())
         .collect();
+    let testing_docs_signal_keywords = [
+        "writing-tests",
+        "vitest",
+        "playwright",
+        "test-runner",
+        "stories-in-unit-tests",
+        "stories-in-end-to-end-tests",
+        "interaction-testing",
+        "snapshot-testing",
+        "visual-testing",
+        "accessibility-testing",
+        "in-ci",
+    ];
+    let testing_docs_signal_files: Vec<String> = _report
+        .files
+        .iter()
+        .filter(|file| is_markdown_path(&file.path))
+        .filter(|file| {
+            let lower = normalize_path(&file.path).to_ascii_lowercase();
+            testing_docs_signal_keywords
+                .iter()
+                .any(|keyword| lower.contains(keyword))
+        })
+        .map(|file| file.path.clone())
+        .collect();
+    let testing_support_signal_keywords = [
+        "hiltandroidtest",
+        "hiltandroidrule",
+        "testinstallin",
+        "customtestapplication",
+        "testinjector",
+        "skiptestinjection",
+        "bindvalue",
+        "uninstallmodules",
+    ];
+    let testing_support_signal_files: Vec<String> = _report
+        .files
+        .iter()
+        .filter(|file| {
+            let lower = normalize_path(&file.path).to_ascii_lowercase();
+            (lower.contains("hilt-android-testing/")
+                && !lower.contains("/test/")
+                && !lower.contains("/tests/")
+                && !lower.contains("/javatests/"))
+                || testing_support_signal_keywords
+                    .iter()
+                    .any(|keyword| lower.contains(keyword))
+        })
+        .map(|file| file.path.clone())
+        .collect();
 
     let mut domain = KnowledgeDomain::new(DomainType::TestingInfra, "测试基础设施");
     domain.evidence = DomainEvidence {
@@ -868,6 +929,8 @@ fn discover_testing_infra(
     domain.source_modules = matched.iter().map(|m| m.id.clone()).collect();
     domain.source_files = test_files.to_vec();
     domain.source_files.extend(performance_signal_files);
+    domain.source_files.extend(testing_docs_signal_files);
+    domain.source_files.extend(testing_support_signal_files);
     sort_and_dedup_strings(&mut domain.source_files);
     domain.estimated_depth = if matched.len() > 2 { 2 } else { 1 };
     Some(domain)
@@ -1020,7 +1083,31 @@ fn discover_dev_tooling(
         .copied()
         .collect();
 
-    if matched.is_empty() {
+    let tooling_file_keywords = [
+        "eslint",
+        "chromatic",
+        "in-ci",
+        "telemetry",
+        "workflow",
+        "pipeline",
+        "deploy",
+        "release",
+        "circleci",
+    ];
+    let file_hits: Vec<String> = report
+        .files
+        .iter()
+        .filter(|file| {
+            let lower = normalize_path(&file.path).to_ascii_lowercase();
+            tooling_keywords
+                .iter()
+                .chain(tooling_file_keywords.iter())
+                .any(|keyword| lower.contains(keyword))
+        })
+        .map(|file| file.path.clone())
+        .collect();
+
+    if matched.is_empty() && file_hits.is_empty() {
         return None;
     }
 
@@ -1031,8 +1118,15 @@ fn discover_dev_tooling(
         ..Default::default()
     };
     domain.source_modules = matched.iter().map(|m| m.id.clone()).collect();
-    domain.source_files = collect_module_files(report, &matched);
-    domain.estimated_depth = estimate_depth(&matched);
+    let mut source_files = collect_module_files(report, &matched);
+    source_files.extend(file_hits);
+    sort_and_dedup_strings(&mut source_files);
+    domain.source_files = source_files;
+    domain.estimated_depth = if matched.is_empty() {
+        estimate_file_depth(&domain.source_files)
+    } else {
+        estimate_depth(&matched)
+    };
     Some(domain)
 }
 
@@ -1088,6 +1182,8 @@ fn discover_api_reference(
                 || lower.contains("publicapi")
                 || lower.ends_with("public-types.ts")
                 || lower.ends_with("public-types.tsx")
+                || looks_like_runtime_config_entry(&file.path)
+                || api_signal_candidate_accepts_config_path(&file.path)
                 || looks_like_api_surface_path(&file.path)
         })
         .collect();
@@ -1685,10 +1781,14 @@ fn plan_units_for_domain(
             module_context_index,
             domain_label,
         ),
-        DomainType::PlatformBinding
-        | DomainType::BuildSystem
-        | DomainType::ThemeSystem
-        | DomainType::DevTooling => plan_module_doc_units(
+        DomainType::PlatformBinding | DomainType::ThemeSystem => plan_module_doc_units(
+            domain,
+            module_tree,
+            report,
+            module_context_index,
+            domain_label,
+        ),
+        DomainType::BuildSystem => plan_build_system_units(
             domain,
             module_tree,
             report,
@@ -1702,7 +1802,21 @@ fn plan_units_for_domain(
             module_context_index,
             domain_label,
         ),
-        DomainType::PluginEcosystem | DomainType::MultiFramework => plan_module_doc_units(
+        DomainType::PluginEcosystem => plan_plugin_units(
+            domain,
+            module_tree,
+            report,
+            module_context_index,
+            domain_label,
+        ),
+        DomainType::MultiFramework => plan_module_doc_units(
+            domain,
+            module_tree,
+            report,
+            module_context_index,
+            domain_label,
+        ),
+        DomainType::DevTooling => plan_dev_tooling_units(
             domain,
             module_tree,
             report,
@@ -1738,10 +1852,11 @@ fn plan_module_doc_units(
             continue;
         };
 
-        let module_name = sanitize_path_segment(&module.name);
+        let module_title = module_unit_title(domain, module);
+        let module_name = sanitize_path_segment(&module_title);
         let mut unit = KnowledgeUnit::new(
             UnitType::ModuleDoc,
-            &module.name,
+            &module_title,
             &domain.id,
             format!("{domain_label}/{module_name}.md"),
         );
@@ -1769,6 +1884,345 @@ fn plan_module_doc_units(
     units
 }
 
+fn plan_build_system_units(
+    domain: &KnowledgeDomain,
+    module_tree: &ModuleTree,
+    report: &ScanReport,
+    module_context_index: &BTreeMap<&str, &ModuleContext>,
+    domain_label: &str,
+) -> Vec<KnowledgeUnit> {
+    plan_module_doc_units(
+        domain,
+        module_tree,
+        report,
+        module_context_index,
+        domain_label,
+    )
+}
+
+fn plugin_addon_capability() -> RepoSignalCapabilitySpec {
+    RepoSignalCapabilitySpec {
+        capability_key: "addon_ecosystem",
+        materializations: vec![RepoSignalMaterializationSpec::Family(
+            RepoSignalFamilySpec {
+                root_prefix: "插件系统/核心Addons详解",
+                family_title: "核心Addons详解",
+                family_unit_type: UnitType::ModuleDoc,
+                family_profile: DecompositionProfile::IntegrationPlatform,
+                family_priority: 0.74,
+                leaves: &[
+                    DomainSignalLeafSpec {
+                        title: "Docs Addon",
+                        unit_type: UnitType::ModuleDoc,
+                        profile: DecompositionProfile::IntegrationPlatform,
+                        min_hits: 1,
+                        priority: 0.72,
+                        keywords: &["addons/docs", "docspage", "docsrenderer", "mdx"],
+                    },
+                    DomainSignalLeafSpec {
+                        title: "A11y Addon",
+                        unit_type: UnitType::ModuleDoc,
+                        profile: DecompositionProfile::IntegrationPlatform,
+                        min_hits: 2,
+                        priority: 0.7,
+                        keywords: &["addons/a11y", "accessibility", "contrast", "a11y"],
+                    },
+                    DomainSignalLeafSpec {
+                        title: "Actions Addon",
+                        unit_type: UnitType::ModuleDoc,
+                        profile: DecompositionProfile::IntegrationPlatform,
+                        min_hits: 1,
+                        priority: 0.68,
+                        keywords: &["actions", "action-logger", "addon-actions"],
+                    },
+                    DomainSignalLeafSpec {
+                        title: "Controls Addon",
+                        unit_type: UnitType::ModuleDoc,
+                        profile: DecompositionProfile::IntegrationPlatform,
+                        min_hits: 1,
+                        priority: 0.68,
+                        keywords: &["controls", "argtypes", "args-table"],
+                    },
+                    DomainSignalLeafSpec {
+                        title: "Themes Addon",
+                        unit_type: UnitType::ModuleDoc,
+                        profile: DecompositionProfile::IntegrationPlatform,
+                        min_hits: 1,
+                        priority: 0.68,
+                        keywords: &["themes", "themeprovider", "theme-switcher", "theming"],
+                    },
+                    DomainSignalLeafSpec {
+                        title: "Links Addon",
+                        unit_type: UnitType::ModuleDoc,
+                        profile: DecompositionProfile::IntegrationPlatform,
+                        min_hits: 1,
+                        priority: 0.66,
+                        keywords: &["addons/links", "linkto", "links"],
+                    },
+                ],
+            },
+        )],
+    }
+}
+
+fn dev_tooling_capabilities() -> Vec<RepoSignalCapabilitySpec> {
+    vec![
+        RepoSignalCapabilitySpec {
+            capability_key: "tooling_integrations",
+            materializations: vec![RepoSignalMaterializationSpec::Family(
+                RepoSignalFamilySpec {
+                    root_prefix: "高级功能/工具集成",
+                    family_title: "工具集成",
+                    family_unit_type: UnitType::ModuleDoc,
+                    family_profile: DecompositionProfile::IntegrationPlatform,
+                    family_priority: 0.68,
+                    leaves: &[DomainSignalLeafSpec {
+                        title: "ESLint集成",
+                        unit_type: UnitType::ModuleDoc,
+                        profile: DecompositionProfile::IntegrationPlatform,
+                        min_hits: 2,
+                        priority: 0.66,
+                        keywords: &["eslint", "eslint-plugin", ".eslintrc", "eslint.config"],
+                    }],
+                },
+            )],
+        },
+        RepoSignalCapabilitySpec {
+            capability_key: "operability_observability",
+            materializations: vec![RepoSignalMaterializationSpec::Standalone(
+                RepoSignalStandaloneSpec {
+                    root_prefix: "高级功能",
+                    leaves: &[DomainSignalLeafSpec {
+                        title: "性能监控",
+                        unit_type: UnitType::ModuleDoc,
+                        profile: DecompositionProfile::IntegrationPlatform,
+                        min_hits: 2,
+                        priority: 0.64,
+                        keywords: &[
+                            "telemetry",
+                            "performance",
+                            "monitor",
+                            "disable-telemetry",
+                            "enable-crash-reports",
+                        ],
+                    }],
+                },
+            )],
+        },
+        RepoSignalCapabilitySpec {
+            capability_key: "delivery_pipelines",
+            materializations: vec![RepoSignalMaterializationSpec::Family(
+                RepoSignalFamilySpec {
+                    root_prefix: "部署和CI_CD",
+                    family_title: "部署和CI_CD",
+                    family_unit_type: UnitType::WorkflowDoc,
+                    family_profile: DecompositionProfile::Testing,
+                    family_priority: 0.68,
+                    leaves: &[
+                        DomainSignalLeafSpec {
+                            title: "CI_CD集成",
+                            unit_type: UnitType::WorkflowDoc,
+                            profile: DecompositionProfile::Testing,
+                            min_hits: 2,
+                            priority: 0.66,
+                            keywords: &[
+                                "in-ci",
+                                "circleci",
+                                "github/workflows",
+                                "pipeline",
+                                "workflow",
+                            ],
+                        },
+                        DomainSignalLeafSpec {
+                            title: "Chromatic集成",
+                            unit_type: UnitType::WorkflowDoc,
+                            profile: DecompositionProfile::Testing,
+                            min_hits: 2,
+                            priority: 0.66,
+                            keywords: &["chromatic", "visual-testing", "visualtest", "prbadge"],
+                        },
+                    ],
+                },
+            )],
+        },
+    ]
+}
+
+fn testing_capabilities() -> Vec<RepoSignalCapabilitySpec> {
+    vec![
+        RepoSignalCapabilitySpec {
+            capability_key: "testing_practices",
+            materializations: vec![RepoSignalMaterializationSpec::Family(
+                RepoSignalFamilySpec {
+                    root_prefix: "测试策略与最佳实践",
+                    family_title: "测试策略与最佳实践",
+                    family_unit_type: UnitType::TestDoc,
+                    family_profile: DecompositionProfile::Testing,
+                    family_priority: 0.72,
+                    leaves: &[
+                        DomainSignalLeafSpec {
+                            title: "单元测试",
+                            unit_type: UnitType::TestDoc,
+                            profile: DecompositionProfile::Testing,
+                            min_hits: 3,
+                            priority: 0.68,
+                            keywords: &["test", "subject", "assert", "junit", "spec"],
+                        },
+                        DomainSignalLeafSpec {
+                            title: "集成测试",
+                            unit_type: UnitType::TestDoc,
+                            profile: DecompositionProfile::Testing,
+                            min_hits: 2,
+                            priority: 0.66,
+                            keywords: &[
+                                "integration",
+                                "functional",
+                                "androidtest",
+                                "sharedtest",
+                                "emulator",
+                            ],
+                        },
+                        DomainSignalLeafSpec {
+                            title: "性能测试与监控",
+                            unit_type: UnitType::TestDoc,
+                            profile: DecompositionProfile::Testing,
+                            min_hits: 2,
+                            priority: 0.64,
+                            keywords: &["benchmark", "performance", "monitor", "profile", "timing"],
+                        },
+                        DomainSignalLeafSpec {
+                            title: "Android测试",
+                            unit_type: UnitType::TestDoc,
+                            profile: DecompositionProfile::Testing,
+                            min_hits: 2,
+                            priority: 0.68,
+                            keywords: &[
+                                "androidtest",
+                                "hiltandroidtest",
+                                "hiltandroidrule",
+                                "testinstallin",
+                                "customtestapplication",
+                            ],
+                        },
+                    ],
+                },
+            )],
+        },
+        RepoSignalCapabilitySpec {
+            capability_key: "testing_frameworks",
+            materializations: vec![RepoSignalMaterializationSpec::Family(
+                RepoSignalFamilySpec {
+                    root_prefix: "测试框架",
+                    family_title: "测试框架",
+                    family_unit_type: UnitType::TestDoc,
+                    family_profile: DecompositionProfile::Testing,
+                    family_priority: 0.7,
+                    leaves: &[
+                        DomainSignalLeafSpec {
+                            title: "Vitest集成",
+                            unit_type: UnitType::IntegrationDoc,
+                            profile: DecompositionProfile::Testing,
+                            min_hits: 2,
+                            priority: 0.69,
+                            keywords: &[
+                                "vitest",
+                                "vitest-addon",
+                                "vitestconfig",
+                                "storybooktest",
+                                "browser-playwright",
+                            ],
+                        },
+                        DomainSignalLeafSpec {
+                            title: "Playwright测试",
+                            unit_type: UnitType::IntegrationDoc,
+                            profile: DecompositionProfile::Testing,
+                            min_hits: 2,
+                            priority: 0.67,
+                            keywords: &[
+                                "playwright",
+                                "test-runner",
+                                "stories-in-end-to-end-tests",
+                                "browser-playwright",
+                            ],
+                        },
+                        DomainSignalLeafSpec {
+                            title: "可访问性测试",
+                            unit_type: UnitType::TestDoc,
+                            profile: DecompositionProfile::Testing,
+                            min_hits: 2,
+                            priority: 0.66,
+                            keywords: &["accessibility", "a11y", "axe", "accessibility-testing"],
+                        },
+                        DomainSignalLeafSpec {
+                            title: "组件测试",
+                            unit_type: UnitType::TestDoc,
+                            profile: DecompositionProfile::Testing,
+                            min_hits: 2,
+                            priority: 0.66,
+                            keywords: &[
+                                "component-test",
+                                "storybooktest",
+                                "stories-in-unit-tests",
+                                "interaction-testing",
+                            ],
+                        },
+                        DomainSignalLeafSpec {
+                            title: "视觉回归测试",
+                            unit_type: UnitType::TestDoc,
+                            profile: DecompositionProfile::Testing,
+                            min_hits: 2,
+                            priority: 0.66,
+                            keywords: &[
+                                "visual-testing",
+                                "chromatic",
+                                "visualtest",
+                                "snapshot-testing",
+                            ],
+                        },
+                    ],
+                },
+            )],
+        },
+    ]
+}
+
+fn plan_plugin_units(
+    domain: &KnowledgeDomain,
+    module_tree: &ModuleTree,
+    report: &ScanReport,
+    module_context_index: &BTreeMap<&str, &ModuleContext>,
+    domain_label: &str,
+) -> Vec<KnowledgeUnit> {
+    let mut units = plan_module_doc_units(
+        domain,
+        module_tree,
+        report,
+        module_context_index,
+        domain_label,
+    );
+    let capabilities = vec![plugin_addon_capability()];
+    units.extend(plan_repo_signal_capabilities(domain, report, &capabilities));
+    units
+}
+
+fn plan_dev_tooling_units(
+    domain: &KnowledgeDomain,
+    module_tree: &ModuleTree,
+    report: &ScanReport,
+    module_context_index: &BTreeMap<&str, &ModuleContext>,
+    domain_label: &str,
+) -> Vec<KnowledgeUnit> {
+    let mut units = plan_module_doc_units(
+        domain,
+        module_tree,
+        report,
+        module_context_index,
+        domain_label,
+    );
+    let capabilities = dev_tooling_capabilities();
+    units.extend(plan_repo_signal_capabilities(domain, report, &capabilities));
+    units
+}
 fn plan_framework_units(
     domain: &KnowledgeDomain,
     module_tree: &ModuleTree,
@@ -1784,11 +2238,12 @@ fn plan_framework_units(
         domain_label,
     );
 
-    if domain_matches_keywords(
+    if let Some(archetype_signal) = domain_matches_keywords(
         domain,
+        report,
         &["hilt", "hiltandroidapp", "androidentrypoint", "installin"],
     ) {
-        units.extend(plan_domain_signal_family_units(
+        let mut hilt_units = plan_domain_signal_family_units(
             domain,
             report,
             domain_label,
@@ -1859,7 +2314,17 @@ fn plan_framework_units(
                     ],
                 },
             ],
-        ));
+        );
+        append_planner_signal_to_units(
+            &mut hilt_units,
+            make_planner_signal_bundle(
+                PlannerSignalKind::RepoArchetype,
+                repo_archetype_key("annotation_di_hilt"),
+                "注解驱动框架集成信号",
+                &archetype_signal,
+            ),
+        );
+        units.extend(hilt_units);
     }
 
     units
@@ -1879,96 +2344,119 @@ fn plan_runtime_units(
         module_context_index,
         domain_label,
     );
-    if domain.label != "核心模块" && domain_has_annotation_di_signal(domain) {
-        units.extend(plan_domain_signal_family_units(
-            domain,
-            report,
-            domain_label,
-            "核心概念",
-            UnitType::ModuleDoc,
-            DecompositionProfile::Runtime,
-            0.8,
-            &[
-                DomainSignalLeafSpec {
-                    title: "@Inject 注解详解",
-                    unit_type: UnitType::ModuleDoc,
-                    profile: DecompositionProfile::Runtime,
-                    min_hits: 2,
-                    priority: 0.78,
-                    keywords: &["inject", "membersinjector", "injected"],
-                },
-                DomainSignalLeafSpec {
-                    title: "绑定与提供者模式",
-                    unit_type: UnitType::ModuleDoc,
-                    profile: DecompositionProfile::Runtime,
-                    min_hits: 3,
-                    priority: 0.76,
-                    keywords: &[
-                        "provider",
-                        "lazy",
-                        "factory",
-                        "assisted",
-                        "bindsinstance",
-                        "multibinds",
-                        "intoset",
-                        "intomap",
-                    ],
-                },
-                DomainSignalLeafSpec {
-                    title: "多值绑定高级用法",
-                    unit_type: UnitType::ModuleDoc,
-                    profile: DecompositionProfile::Runtime,
-                    min_hits: 2,
-                    priority: 0.7,
-                    keywords: &[
-                        "multibinds",
-                        "intoset",
-                        "intomap",
-                        "mapkey",
-                        "elementsintoset",
-                    ],
-                },
-            ],
-        ));
-        units.extend(plan_domain_signal_family_units(
-            domain,
-            report,
-            domain_label,
-            "高级特性与扩展",
-            UnitType::ModuleDoc,
-            DecompositionProfile::Runtime,
-            0.76,
-            &[
-                DomainSignalLeafSpec {
-                    title: "多值绑定高级用法",
-                    unit_type: UnitType::ModuleDoc,
-                    profile: DecompositionProfile::Runtime,
-                    min_hits: 2,
-                    priority: 0.72,
-                    keywords: &[
-                        "multibinds",
-                        "intoset",
-                        "intomap",
-                        "mapkey",
-                        "elementsintoset",
-                    ],
-                },
-                DomainSignalLeafSpec {
-                    title: "延迟初始化与线程安全",
-                    unit_type: UnitType::ModuleDoc,
-                    profile: DecompositionProfile::Runtime,
-                    min_hits: 2,
-                    priority: 0.7,
-                    keywords: &[
-                        "lazy",
-                        "provideroflazy",
-                        "doublecheck",
-                        "singlecheck",
-                        "thread",
-                    ],
-                },
-            ],
-        ));
+    if domain.label != "核心模块" {
+        if let Some(archetype_signal) = domain_has_annotation_di_signal(domain, report) {
+            let mut runtime_core_units = plan_domain_signal_family_units(
+                domain,
+                report,
+                domain_label,
+                "核心概念",
+                UnitType::ModuleDoc,
+                DecompositionProfile::Runtime,
+                0.8,
+                &[
+                    DomainSignalLeafSpec {
+                        title: "@Inject 注解详解",
+                        unit_type: UnitType::ModuleDoc,
+                        profile: DecompositionProfile::Runtime,
+                        min_hits: 2,
+                        priority: 0.78,
+                        keywords: &["inject", "membersinjector", "injected"],
+                    },
+                    DomainSignalLeafSpec {
+                        title: "绑定与提供者模式",
+                        unit_type: UnitType::ModuleDoc,
+                        profile: DecompositionProfile::Runtime,
+                        min_hits: 3,
+                        priority: 0.76,
+                        keywords: &[
+                            "provider",
+                            "lazy",
+                            "factory",
+                            "assisted",
+                            "bindsinstance",
+                            "multibinds",
+                            "intoset",
+                            "intomap",
+                        ],
+                    },
+                    DomainSignalLeafSpec {
+                        title: "多值绑定高级用法",
+                        unit_type: UnitType::ModuleDoc,
+                        profile: DecompositionProfile::Runtime,
+                        min_hits: 2,
+                        priority: 0.7,
+                        keywords: &[
+                            "multibinds",
+                            "intoset",
+                            "intomap",
+                            "mapkey",
+                            "elementsintoset",
+                        ],
+                    },
+                ],
+            );
+            append_planner_signal_to_units(
+                &mut runtime_core_units,
+                make_planner_signal_bundle(
+                    PlannerSignalKind::RepoArchetype,
+                    repo_archetype_key("annotation_di_runtime"),
+                    "注解驱动运行时信号",
+                    &archetype_signal,
+                ),
+            );
+            units.extend(runtime_core_units);
+
+            let mut runtime_advanced_units = plan_domain_signal_family_units(
+                domain,
+                report,
+                domain_label,
+                "高级特性与扩展",
+                UnitType::ModuleDoc,
+                DecompositionProfile::Runtime,
+                0.76,
+                &[
+                    DomainSignalLeafSpec {
+                        title: "多值绑定高级用法",
+                        unit_type: UnitType::ModuleDoc,
+                        profile: DecompositionProfile::Runtime,
+                        min_hits: 2,
+                        priority: 0.72,
+                        keywords: &[
+                            "multibinds",
+                            "intoset",
+                            "intomap",
+                            "mapkey",
+                            "elementsintoset",
+                        ],
+                    },
+                    DomainSignalLeafSpec {
+                        title: "延迟初始化与线程安全",
+                        unit_type: UnitType::ModuleDoc,
+                        profile: DecompositionProfile::Runtime,
+                        min_hits: 2,
+                        priority: 0.7,
+                        keywords: &[
+                            "lazy",
+                            "provideroflazy",
+                            "doublecheck",
+                            "singlecheck",
+                            "thread",
+                        ],
+                    },
+                ],
+            );
+            append_planner_signal_to_units(
+                &mut runtime_advanced_units,
+                make_planner_signal_bundle(
+                    PlannerSignalKind::RepoArchetype,
+                    repo_archetype_key("annotation_di_runtime"),
+                    "注解驱动运行时信号",
+                    &archetype_signal,
+                ),
+            );
+            units.extend(runtime_advanced_units);
+        }
     }
     units
 }
@@ -1993,8 +2481,8 @@ fn plan_compiler_units(
         domain_label,
         |profile| matches!(profile, DecompositionProfile::CompilerPipeline),
     ));
-    if domain_has_annotation_di_signal(domain) {
-        units.extend(plan_domain_signal_family_units(
+    if let Some(archetype_signal) = domain_has_annotation_di_signal(domain, report) {
+        let mut compiler_family_units = plan_domain_signal_family_units(
             domain,
             report,
             domain_label,
@@ -2069,8 +2557,19 @@ fn plan_compiler_units(
                     ],
                 },
             ],
-        ));
-        units.extend(plan_domain_signal_leaf_units(
+        );
+        append_planner_signal_to_units(
+            &mut compiler_family_units,
+            make_planner_signal_bundle(
+                PlannerSignalKind::RepoArchetype,
+                repo_archetype_key("annotation_di_compiler"),
+                "注解驱动编译链信号",
+                &archetype_signal,
+            ),
+        );
+        units.extend(compiler_family_units);
+
+        let mut compiler_leaf_units = plan_domain_signal_leaf_units(
             domain,
             report,
             domain_label,
@@ -2082,7 +2581,17 @@ fn plan_compiler_units(
                 priority: 0.72,
                 keywords: &["spi", "bindinggraphplugin", "plugin", "serviceloader"],
             }],
-        ));
+        );
+        append_planner_signal_to_units(
+            &mut compiler_leaf_units,
+            make_planner_signal_bundle(
+                PlannerSignalKind::RepoArchetype,
+                repo_archetype_key("annotation_di_compiler"),
+                "注解驱动编译链信号",
+                &archetype_signal,
+            ),
+        );
+        units.extend(compiler_leaf_units);
     }
     units
 }
@@ -2154,47 +2663,8 @@ fn plan_testing_units(
     domain_label: &str,
 ) -> Vec<KnowledgeUnit> {
     let mut units = plan_test_doc_units(domain, module_tree, report, domain_label);
-    units.extend(plan_domain_signal_family_units(
-        domain,
-        report,
-        domain_label,
-        "测试策略与最佳实践",
-        UnitType::TestDoc,
-        DecompositionProfile::Testing,
-        0.72,
-        &[
-            DomainSignalLeafSpec {
-                title: "单元测试",
-                unit_type: UnitType::TestDoc,
-                profile: DecompositionProfile::Testing,
-                min_hits: 3,
-                priority: 0.68,
-                keywords: &["test", "subject", "assert", "junit", "spec"],
-            },
-            DomainSignalLeafSpec {
-                title: "集成测试",
-                unit_type: UnitType::TestDoc,
-                profile: DecompositionProfile::Testing,
-                min_hits: 2,
-                priority: 0.66,
-                keywords: &[
-                    "integration",
-                    "functional",
-                    "androidtest",
-                    "sharedtest",
-                    "emulator",
-                ],
-            },
-            DomainSignalLeafSpec {
-                title: "性能测试与监控",
-                unit_type: UnitType::TestDoc,
-                profile: DecompositionProfile::Testing,
-                min_hits: 2,
-                priority: 0.64,
-                keywords: &["benchmark", "performance", "monitor", "profile", "timing"],
-            },
-        ],
-    ));
+    let capabilities = testing_capabilities();
+    units.extend(plan_repo_signal_capabilities(domain, report, &capabilities));
     units
 }
 
@@ -2203,14 +2673,113 @@ fn plan_concept_guide_units(
     report: &ScanReport,
     domain_label: &str,
 ) -> Vec<KnowledgeUnit> {
-    plan_docs_backed_units_for_domain(domain, report, domain_label, |profile| {
+    let mut units = plan_docs_backed_units_for_domain(domain, report, domain_label, |profile| {
         !matches!(
             profile,
             DecompositionProfile::ApiSurface
                 | DecompositionProfile::ConfigSurface
                 | DecompositionProfile::Troubleshooting
         )
-    })
+    });
+    units.extend(plan_raw_example_source_units(domain, report, &units));
+    units
+}
+
+fn plan_raw_example_source_units(
+    domain: &KnowledgeDomain,
+    report: &ScanReport,
+    existing_units: &[KnowledgeUnit],
+) -> Vec<KnowledgeUnit> {
+    let example_doc_count = existing_units
+        .iter()
+        .filter(|unit| unit.unit_type == UnitType::ExampleDoc)
+        .count();
+    if example_doc_count >= 2 {
+        return Vec::new();
+    }
+
+    let Some(readme_path) = repo_root_readme_path(report) else {
+        return Vec::new();
+    };
+    let Some(example_cluster) = select_representative_example_source_cluster(report) else {
+        return Vec::new();
+    };
+
+    let existing_titles: BTreeSet<&str> = existing_units
+        .iter()
+        .map(|unit| unit.title.as_str())
+        .collect();
+    let existing_paths: BTreeSet<&str> = existing_units
+        .iter()
+        .map(|unit| unit.relative_path.as_str())
+        .collect();
+    let mut units = Vec::new();
+
+    if !existing_titles.contains("快速开始") && !existing_paths.contains("快速开始.md") {
+        let mut onboarding_paths = vec![readme_path.clone()];
+        onboarding_paths.extend(example_cluster.reference_paths.iter().take(6).cloned());
+        sort_and_dedup_strings(&mut onboarding_paths);
+
+        let mut unit = KnowledgeUnit::new(
+            UnitType::ExampleDoc,
+            "快速开始",
+            &domain.id,
+            "快速开始.md".to_string(),
+        );
+        unit.decomposition_profile = Some(DecompositionProfile::ExampleTutorial);
+        unit.scope = UnitScope {
+            source_ids: source_ids_for_paths(report, &onboarding_paths),
+            docs_anchors: vec![DocsAnchor {
+                file_path: normalize_path(&readme_path),
+                heading: "快速开始".to_string(),
+                level: 1,
+                links: Vec::new(),
+            }],
+            ..Default::default()
+        };
+        unit.priority = 0.72;
+        units.push(unit);
+    }
+
+    if existing_titles.contains("基础示例")
+        || existing_paths.contains("示例与教程/基础示例.md")
+        || example_cluster.reference_paths.is_empty()
+    {
+        return units;
+    }
+
+    let example_family = KnowledgeUnit::new(
+        UnitType::ExampleDoc,
+        "示例与教程",
+        &domain.id,
+        "示例与教程/示例与教程.md".to_string(),
+    );
+    let example_family_id = example_family.id.clone();
+    let mut example_family = example_family;
+    example_family.decomposition_profile = Some(DecompositionProfile::ExampleTutorial);
+    example_family.scope = UnitScope {
+        source_ids: source_ids_for_paths(report, &example_cluster.reference_paths),
+        ..Default::default()
+    };
+    example_family.priority = 0.68;
+    units.push(example_family);
+
+    let mut example_unit = KnowledgeUnit::new(
+        UnitType::ExampleDoc,
+        "基础示例",
+        &domain.id,
+        "示例与教程/基础示例.md".to_string(),
+    );
+    example_unit.parent_unit_id = Some(example_family_id);
+    example_unit.decomposition_profile = Some(DecompositionProfile::ExampleTutorial);
+    example_unit.scope = UnitScope {
+        source_ids: source_ids_for_paths(report, &example_cluster.reference_paths),
+        ..Default::default()
+    };
+    example_unit.priority = 0.7;
+    units.push(example_unit);
+
+    units
 }
 
 fn plan_api_doc_units(
@@ -2284,12 +2853,28 @@ fn plan_api_doc_units(
         0.76,
         &[
             DomainSignalLeafSpec {
+                title: "Addon API",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 1,
+                priority: 0.74,
+                keywords: &["addon", "addons", "addon-types"],
+            },
+            DomainSignalLeafSpec {
                 title: "插件API",
                 unit_type: UnitType::ApiDoc,
                 profile: DecompositionProfile::ApiSurface,
                 min_hits: 1,
                 priority: 0.74,
                 keywords: &["addon", "addons", "addon-types"],
+            },
+            DomainSignalLeafSpec {
+                title: "Decorators API",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 1,
+                priority: 0.72,
+                keywords: &["decorator", "decorators", "withdecorator", "make-decorator"],
             },
             DomainSignalLeafSpec {
                 title: "CSF API",
@@ -2315,12 +2900,28 @@ fn plan_api_doc_units(
                 keywords: &["preview", "preview-web", "process-preview-annotation"],
             },
             DomainSignalLeafSpec {
+                title: "Hooks API",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 1,
+                priority: 0.72,
+                keywords: &["hooks", "useargs", "useglobals", "usestorybookstate"],
+            },
+            DomainSignalLeafSpec {
                 title: "Store API",
                 unit_type: UnitType::ApiDoc,
                 profile: DecompositionProfile::ApiSurface,
                 min_hits: 1,
                 priority: 0.72,
                 keywords: &["store", "story-store", "usestorybookstate"],
+            },
+            DomainSignalLeafSpec {
+                title: "Types API",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 1,
+                priority: 0.7,
+                keywords: &["types", "typings", "public-types", "addon-types"],
             },
         ],
     ));
@@ -2342,6 +2943,14 @@ fn plan_api_doc_units(
                 keywords: &["types", "typings", "core-annotations", "story.ts"],
             },
             DomainSignalLeafSpec {
+                title: "插件类型定义",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 1,
+                priority: 0.7,
+                keywords: &["addon-types", "addons", "plugin", "decorator"],
+            },
+            DomainSignalLeafSpec {
                 title: "工具类型定义",
                 unit_type: UnitType::ApiDoc,
                 profile: DecompositionProfile::ApiSurface,
@@ -2350,12 +2959,101 @@ fn plan_api_doc_units(
                 keywords: &["builder", "builders", "cli", "tool"],
             },
             DomainSignalLeafSpec {
+                title: "构建器类型定义",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 1,
+                priority: 0.7,
+                keywords: &["builder", "builders", "build-config", "vite-config"],
+            },
+            DomainSignalLeafSpec {
+                title: "核心类型定义",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 1,
+                priority: 0.7,
+                keywords: &[
+                    "public-types",
+                    "typings",
+                    "channels/types",
+                    "/core/src/types/",
+                ],
+            },
+            DomainSignalLeafSpec {
                 title: "框架类型定义",
                 unit_type: UnitType::ApiDoc,
                 profile: DecompositionProfile::ApiSurface,
                 min_hits: 1,
                 priority: 0.7,
                 keywords: &["framework", "frameworks", "renderer-to-framework"],
+            },
+        ],
+    ));
+    units.extend(plan_domain_signal_family_units(
+        domain,
+        report,
+        domain_label,
+        "配置API参考",
+        UnitType::ApiDoc,
+        DecompositionProfile::ApiSurface,
+        0.76,
+        &[
+            DomainSignalLeafSpec {
+                title: "main.js配置",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 1,
+                priority: 0.74,
+                keywords: &[".storybook/main", "definemain", "vitefinal", "staticdirs"],
+            },
+            DomainSignalLeafSpec {
+                title: "preview.js配置",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 1,
+                priority: 0.74,
+                keywords: &[
+                    ".storybook/preview",
+                    "previewannotations",
+                    "themeprovider",
+                    "docscontext",
+                    "sb_theme",
+                ],
+            },
+            DomainSignalLeafSpec {
+                title: "manager.js配置",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 1,
+                priority: 0.72,
+                keywords: &[
+                    ".storybook/manager",
+                    "manager-api",
+                    "layout.ts",
+                    "addons/register",
+                ],
+            },
+            DomainSignalLeafSpec {
+                title: "构建器配置",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 2,
+                priority: 0.74,
+                keywords: &[
+                    "builder-vite",
+                    "builder-webpack",
+                    "build-config",
+                    "vite-config",
+                    "storybook-config-plugin",
+                ],
+            },
+            DomainSignalLeafSpec {
+                title: "预设配置",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 2,
+                priority: 0.72,
+                keywords: &["preset", "presets", "framework-preset", "common-preset"],
             },
         ],
     ));
@@ -2383,8 +3081,23 @@ fn plan_api_doc_units(
         ],
     ));
     let mut signal_leaves = Vec::new();
-    if domain_has_annotation_di_signal(domain) {
+    if domain_has_annotation_di_signal(domain, report).is_some() {
         signal_leaves.extend([
+            DomainSignalLeafSpec {
+                title: "Android API",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 2,
+                priority: 0.76,
+                keywords: &[
+                    "androidinjector",
+                    "hasandroidinjector",
+                    "androidinjection",
+                    "contributesandroidinjector",
+                    "daggerappcompatactivity",
+                    "androidinjectordescriptor",
+                ],
+            },
             DomainSignalLeafSpec {
                 title: "Hilt API",
                 unit_type: UnitType::ApiDoc,
@@ -2398,6 +3111,21 @@ fn plan_api_doc_units(
                     "definecomponent",
                     "entrypoint",
                     "generatesrootinput",
+                ],
+            },
+            DomainSignalLeafSpec {
+                title: "编译时API",
+                unit_type: UnitType::ApiDoc,
+                profile: DecompositionProfile::ApiSurface,
+                min_hits: 2,
+                priority: 0.76,
+                keywords: &[
+                    "componentprocessor",
+                    "delegatecomponentprocessor",
+                    "bindinggraphfactory",
+                    "sourcefilegenerator",
+                    "processingstep",
+                    "validationreport",
                 ],
             },
             DomainSignalLeafSpec {
@@ -2449,12 +3177,20 @@ fn plan_api_doc_units(
         priority: 0.7,
         keywords: &["timing", "monitor", "benchmark", "debug"],
     });
-    units.extend(plan_domain_signal_leaf_units(
-        domain,
-        report,
-        domain_label,
-        &signal_leaves,
-    ));
+    let mut signal_units =
+        plan_domain_signal_leaf_units(domain, report, domain_label, &signal_leaves);
+    if let Some(archetype_signal) = domain_has_annotation_di_signal(domain, report) {
+        append_planner_signal_to_units(
+            &mut signal_units,
+            make_planner_signal_bundle(
+                PlannerSignalKind::RepoArchetype,
+                repo_archetype_key("annotation_di_api_surface"),
+                "注解驱动 API surface 信号",
+                &archetype_signal,
+            ),
+        );
+    }
+    units.extend(signal_units);
 
     units
 }
@@ -2466,6 +3202,704 @@ struct DomainSignalLeafSpec {
     min_hits: usize,
     priority: f32,
     keywords: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TopicEvidenceProfile {
+    primary_terms: &'static [&'static str],
+    secondary_terms: &'static [&'static str],
+    contrast_terms: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct LeafScopeRefinementPolicy {
+    topic: TopicEvidenceProfile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum GenericContractClass {
+    DeclarationHeavy,
+    ConfigManifestHeavy,
+    ImplementationHeavy,
+    ValidationTestHeavy,
+}
+
+#[derive(Debug, Clone)]
+struct PathTopicEvidence {
+    tokens: BTreeSet<String>,
+    docs_shared_tokens: BTreeSet<String>,
+    classes: BTreeSet<GenericContractClass>,
+}
+
+#[derive(Debug, Clone)]
+struct ScoredSignalEntry {
+    source_id: String,
+    path: String,
+    topic_score: i32,
+    classes: BTreeSet<GenericContractClass>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct LeafSignalMatch {
+    signal: SignalMatch,
+    collapse_guard: Option<CollapseGuardDecision>,
+}
+
+struct RepoSignalFamilySpec {
+    root_prefix: &'static str,
+    family_title: &'static str,
+    family_unit_type: UnitType,
+    family_profile: DecompositionProfile,
+    family_priority: f32,
+    leaves: &'static [DomainSignalLeafSpec],
+}
+
+struct RepoSignalStandaloneSpec {
+    root_prefix: &'static str,
+    leaves: &'static [DomainSignalLeafSpec],
+}
+
+enum RepoSignalMaterializationSpec {
+    Family(RepoSignalFamilySpec),
+    Standalone(RepoSignalStandaloneSpec),
+}
+
+struct RepoSignalCapabilitySpec {
+    capability_key: &'static str,
+    materializations: Vec<RepoSignalMaterializationSpec>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct SignalMatch {
+    matched_keywords: Vec<String>,
+    matched_source_ids: Vec<String>,
+    matched_paths: Vec<String>,
+}
+
+impl SignalMatch {
+    fn source_count(&self) -> usize {
+        self.matched_source_ids.len()
+    }
+
+    fn extend(&mut self, other: &SignalMatch) {
+        self.matched_keywords = merge_sorted_strings(
+            self.matched_keywords.clone(),
+            other.matched_keywords.clone(),
+        );
+        self.matched_source_ids = merge_sorted_strings(
+            self.matched_source_ids.clone(),
+            other.matched_source_ids.clone(),
+        );
+        self.matched_paths =
+            merge_sorted_strings(self.matched_paths.clone(), other.matched_paths.clone());
+    }
+}
+
+fn merge_sorted_strings(left: Vec<String>, right: Vec<String>) -> Vec<String> {
+    left.into_iter()
+        .chain(right)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn lexical_topic_tokens(input: &str) -> BTreeSet<String> {
+    let mut tokens = BTreeSet::new();
+    let mut current = String::new();
+    let mut previous_was_lower_or_digit = false;
+
+    for character in input.chars() {
+        if !character.is_ascii_alphanumeric() {
+            if !current.is_empty() {
+                tokens.insert(current.to_ascii_lowercase());
+                current.clear();
+            }
+            previous_was_lower_or_digit = false;
+            continue;
+        }
+
+        if character.is_ascii_uppercase() && previous_was_lower_or_digit && !current.is_empty() {
+            tokens.insert(current.to_ascii_lowercase());
+            current.clear();
+        }
+
+        current.push(character);
+        previous_was_lower_or_digit = character.is_ascii_lowercase() || character.is_ascii_digit();
+    }
+
+    if !current.is_empty() {
+        tokens.insert(current.to_ascii_lowercase());
+    }
+
+    tokens
+}
+
+fn lexical_tokens_for_path(path: &str) -> BTreeSet<String> {
+    normalize_path(path)
+        .split('/')
+        .flat_map(lexical_topic_tokens)
+        .collect()
+}
+
+fn docs_topic_tokens(text: &str) -> BTreeSet<String> {
+    lexical_topic_tokens(text)
+}
+
+fn leaf_scope_refinement_policy(leaf: &DomainSignalLeafSpec) -> Option<LeafScopeRefinementPolicy> {
+    let topic = match (leaf.profile.clone(), leaf.title) {
+        (DecompositionProfile::ApiSurface, "Types API") => TopicEvidenceProfile {
+            primary_terms: &[
+                "story",
+                "stories",
+                "component",
+                "preview",
+                "manager",
+                "arg",
+                "args",
+                "annotations",
+                "csf",
+            ],
+            secondary_terms: &["type", "types", "parameter", "sbtype", "store", "infer"],
+            contrast_terms: &["renderer", "framework", "builder", "window"],
+        },
+        (DecompositionProfile::ConfigSurface, "主题系统概览") => TopicEvidenceProfile {
+            primary_terms: &["theme", "themes", "theming"],
+            secondary_terms: &["preview", "manager", "switcher", "base", "dark", "light"],
+            contrast_terms: &[
+                "create",
+                "convert",
+                "ensure",
+                "decorator",
+                "provider",
+                "a11y",
+                "contrast",
+                "vision",
+                "font",
+                "palette",
+                "typography",
+            ],
+        },
+        (DecompositionProfile::ConfigSurface, "自定义主题开发") => TopicEvidenceProfile {
+            primary_terms: &[
+                "create",
+                "convert",
+                "ensure",
+                "decorator",
+                "provider",
+                "theme",
+                "themes",
+                "theming",
+            ],
+            secondary_terms: &["preview", "index", "custom", "utils"],
+            contrast_terms: &[
+                "a11y",
+                "contrast",
+                "vision",
+                "font",
+                "palette",
+                "typography",
+            ],
+        },
+        (DecompositionProfile::ConfigSurface, "颜色和字体系统") => TopicEvidenceProfile {
+            primary_terms: &[
+                "color",
+                "font",
+                "palette",
+                "typography",
+                "contrast",
+                "vision",
+                "a11y",
+                "style",
+                "css",
+            ],
+            secondary_terms: &["theme", "themes", "theming", "accessibility"],
+            contrast_terms: &[
+                "create",
+                "convert",
+                "ensure",
+                "decorator",
+                "provider",
+                "switcher",
+            ],
+        },
+        _ => return None,
+    };
+
+    Some(LeafScopeRefinementPolicy { topic })
+}
+
+fn collect_leaf_docs_grounding_terms(
+    domain: &KnowledgeDomain,
+    leaf: &DomainSignalLeafSpec,
+    policy: &LeafScopeRefinementPolicy,
+) -> BTreeSet<String> {
+    let leaf_terms = lexical_topic_tokens(leaf.title)
+        .into_iter()
+        .chain(
+            policy
+                .topic
+                .primary_terms
+                .iter()
+                .map(|term| (*term).to_string()),
+        )
+        .chain(
+            policy
+                .topic
+                .secondary_terms
+                .iter()
+                .map(|term| (*term).to_string()),
+        )
+        .collect::<BTreeSet<_>>();
+
+    let mut docs_terms = BTreeSet::new();
+    for anchor in &domain.evidence.docs_anchors {
+        let anchor_terms = docs_topic_tokens(&anchor.heading)
+            .into_iter()
+            .chain(lexical_tokens_for_path(&anchor.file_path))
+            .collect::<BTreeSet<_>>();
+        if anchor_terms.intersection(&leaf_terms).next().is_some() {
+            docs_terms.extend(anchor_terms);
+        }
+    }
+
+    if docs_terms.is_empty() {
+        docs_terms.extend(leaf_terms);
+    }
+
+    docs_terms
+}
+
+fn classify_generic_contract_classes(path: &str) -> BTreeSet<GenericContractClass> {
+    let normalized = normalize_path(path).to_ascii_lowercase();
+    let mut classes = BTreeSet::new();
+    let file_name = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    let stem = file_name
+        .trim_end_matches(".d.ts")
+        .trim_end_matches(".tsx")
+        .trim_end_matches(".jsx")
+        .trim_end_matches(".ts")
+        .trim_end_matches(".js")
+        .trim_end_matches(".json")
+        .trim_end_matches(".md")
+        .trim_end_matches(".mdx");
+
+    if signal_path_is_secondary_noise(&normalized) {
+        classes.insert(GenericContractClass::ValidationTestHeavy);
+    }
+
+    if matches!(
+        file_name,
+        "package.json"
+            | "tsconfig.json"
+            | "tsconfig.base.json"
+            | "tsconfig.build.json"
+            | "tsconfig.test.json"
+            | "tsconfig.node.json"
+            | "build-config.ts"
+            | "build-config.js"
+    ) {
+        classes.insert(GenericContractClass::ConfigManifestHeavy);
+    }
+
+    if normalized.ends_with(".d.ts")
+        || matches!(stem, "types" | "typings" | "public-types")
+        || normalized.contains("/types/")
+        || normalized.contains("/typings/")
+    {
+        classes.insert(GenericContractClass::DeclarationHeavy);
+    }
+
+    if normalized.contains("/src/")
+        || normalized.contains("/lib/")
+        || normalized.contains("/modules/")
+        || normalized.contains("/preview-api/")
+        || normalized.contains("/manager-api/")
+        || normalized.contains("/theming/")
+        || normalized.contains("/addons/")
+    {
+        classes.insert(GenericContractClass::ImplementationHeavy);
+    }
+
+    classes
+}
+
+fn build_path_topic_evidence(path: &str, docs_terms: &BTreeSet<String>) -> PathTopicEvidence {
+    let tokens = lexical_tokens_for_path(path);
+    let docs_shared_tokens = tokens
+        .intersection(docs_terms)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    PathTopicEvidence {
+        tokens,
+        docs_shared_tokens,
+        classes: classify_generic_contract_classes(path),
+    }
+}
+
+fn score_topic_evidence(evidence: &PathTopicEvidence, policy: &LeafScopeRefinementPolicy) -> i32 {
+    let primary_terms = policy
+        .topic
+        .primary_terms
+        .iter()
+        .map(|term| (*term).to_string())
+        .collect::<BTreeSet<_>>();
+    let secondary_terms = policy
+        .topic
+        .secondary_terms
+        .iter()
+        .map(|term| (*term).to_string())
+        .collect::<BTreeSet<_>>();
+    let contrast_terms = policy
+        .topic
+        .contrast_terms
+        .iter()
+        .map(|term| (*term).to_string())
+        .collect::<BTreeSet<_>>();
+
+    let primary_hits = evidence.tokens.intersection(&primary_terms).count() as i32;
+    let secondary_hits = evidence.tokens.intersection(&secondary_terms).count() as i32;
+    let docs_hits = evidence.docs_shared_tokens.len() as i32;
+    let contrast_hits = evidence.tokens.intersection(&contrast_terms).count() as i32;
+    let strong_topic = primary_hits > 0 || docs_hits >= 2;
+
+    let mut score = primary_hits * 10 + secondary_hits * 5 + docs_hits * 4;
+    if evidence
+        .classes
+        .contains(&GenericContractClass::ImplementationHeavy)
+    {
+        score += 3;
+    }
+    if evidence
+        .classes
+        .contains(&GenericContractClass::ValidationTestHeavy)
+    {
+        score += if strong_topic { 1 } else { -4 };
+    }
+    if evidence
+        .classes
+        .contains(&GenericContractClass::DeclarationHeavy)
+    {
+        score += if strong_topic { -4 } else { -18 };
+    }
+    if evidence
+        .classes
+        .contains(&GenericContractClass::ConfigManifestHeavy)
+    {
+        score += if strong_topic { -6 } else { -20 };
+    }
+    if contrast_hits > 0 {
+        score -= if strong_topic {
+            contrast_hits * 3
+        } else {
+            contrast_hits * 8
+        };
+    }
+
+    score
+}
+
+fn expanded_leaf_signal_candidates<'a>(
+    domain: &KnowledgeDomain,
+    report: &'a ScanReport,
+    candidate_files: &[&'a crate::repo::scanner::ScannedFile],
+    policy: &LeafScopeRefinementPolicy,
+    docs_terms: &BTreeSet<String>,
+) -> Vec<&'a crate::repo::scanner::ScannedFile> {
+    let mut candidates = candidate_files
+        .iter()
+        .copied()
+        .map(|file| (file.id.clone(), file))
+        .collect::<BTreeMap<_, _>>();
+
+    for file in &report.files {
+        if candidates.contains_key(&file.id) || is_markdown_path(&file.path) || file.is_asset_like()
+        {
+            continue;
+        }
+
+        if matches!(domain.domain_type, DomainType::ApiReference)
+            && file.is_config_like()
+            && !api_signal_candidate_accepts_config_path(&file.path)
+        {
+            continue;
+        }
+
+        let normalized_path = normalize_path(&file.path);
+        let evidence = build_path_topic_evidence(&normalized_path, docs_terms);
+        if score_topic_evidence(&evidence, policy) <= 0 {
+            continue;
+        }
+
+        candidates.insert(file.id.clone(), file);
+    }
+
+    candidates.into_values().collect()
+}
+
+fn refine_signal_match_for_leaf(
+    domain: &KnowledgeDomain,
+    report: &ScanReport,
+    leaf: &DomainSignalLeafSpec,
+    candidate_files: &[&crate::repo::scanner::ScannedFile],
+    limit: usize,
+) -> LeafSignalMatch {
+    let Some(policy) = leaf_scope_refinement_policy(leaf) else {
+        return LeafSignalMatch {
+            signal: trim_signal_match(matching_signal(candidate_files, leaf.keywords), limit),
+            collapse_guard: None,
+        };
+    };
+
+    let docs_terms = collect_leaf_docs_grounding_terms(domain, leaf, &policy);
+    let candidate_files =
+        expanded_leaf_signal_candidates(domain, report, candidate_files, &policy, &docs_terms);
+    let mut all_keywords = BTreeSet::new();
+    let mut entries = candidate_files
+        .iter()
+        .filter_map(|file| {
+            let normalized_path = normalize_path(&file.path);
+            let lower = normalized_path.to_ascii_lowercase();
+            let matched_keywords = leaf
+                .keywords
+                .iter()
+                .filter(|keyword| lower.contains(**keyword))
+                .map(|keyword| (*keyword).to_string())
+                .collect::<BTreeSet<_>>();
+            let evidence = build_path_topic_evidence(&normalized_path, &docs_terms);
+            let topic_score = score_topic_evidence(&evidence, &policy);
+            if matched_keywords.is_empty() && topic_score <= 0 {
+                return None;
+            }
+            all_keywords.extend(matched_keywords.iter().cloned());
+            Some(ScoredSignalEntry {
+                source_id: file.id.clone(),
+                path: normalized_path,
+                topic_score,
+                classes: evidence.classes,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    entries.sort_by(|left, right| {
+        right
+            .topic_score
+            .cmp(&left.topic_score)
+            .then(left.path.cmp(&right.path))
+    });
+
+    let strong_spine_count = entries
+        .iter()
+        .filter(|entry| {
+            entry.topic_score >= 8
+                && !entry
+                    .classes
+                    .contains(&GenericContractClass::ConfigManifestHeavy)
+        })
+        .count();
+    let allow_generic_support = strong_spine_count < 2;
+
+    let mut preferred_entries = Vec::new();
+    let mut collapsed_entries = Vec::new();
+    for entry in entries {
+        let generic_only = entry.topic_score <= 0
+            && entry.classes.iter().any(|class| {
+                matches!(
+                    class,
+                    GenericContractClass::DeclarationHeavy
+                        | GenericContractClass::ConfigManifestHeavy
+                )
+            });
+        if !allow_generic_support && generic_only {
+            collapsed_entries.push(entry);
+        } else {
+            preferred_entries.push(entry);
+        }
+    }
+
+    if preferred_entries.is_empty() && !collapsed_entries.is_empty() {
+        preferred_entries = collapsed_entries.clone();
+        collapsed_entries.clear();
+    }
+
+    if limit != 0 {
+        preferred_entries.truncate(limit);
+    }
+
+    let signal = SignalMatch {
+        matched_keywords: all_keywords.into_iter().collect(),
+        matched_source_ids: preferred_entries
+            .iter()
+            .map(|entry| entry.source_id.clone())
+            .collect(),
+        matched_paths: preferred_entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect(),
+    };
+    let collapse_guard = (!collapsed_entries.is_empty()).then(|| CollapseGuardDecision {
+        reason: CollapseGuardReason::TopicScopeRefinement,
+        owner_title: leaf.title.to_string(),
+        collapsed_source_ids: collapsed_entries
+            .iter()
+            .map(|entry| entry.source_id.clone())
+            .collect(),
+        collapsed_paths: collapsed_entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect(),
+        preserved_source_ids: preferred_entries
+            .iter()
+            .map(|entry| entry.source_id.clone())
+            .collect(),
+        preserved_paths: preferred_entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect(),
+    });
+
+    LeafSignalMatch {
+        signal,
+        collapse_guard,
+    }
+}
+
+fn make_planner_signal_bundle(
+    kind: PlannerSignalKind,
+    key: impl Into<String>,
+    label: impl Into<String>,
+    signal: &SignalMatch,
+) -> PlannerSignalBundle {
+    PlannerSignalBundle {
+        kind,
+        key: key.into(),
+        label: label.into(),
+        matched_keywords: signal.matched_keywords.clone(),
+        matched_source_ids: signal.matched_source_ids.clone(),
+        matched_paths: signal.matched_paths.clone(),
+    }
+}
+
+fn append_planner_signal(unit: &mut KnowledgeUnit, bundle: PlannerSignalBundle) {
+    if unit
+        .planner_signal_bundles
+        .iter()
+        .any(|existing| existing.kind == bundle.kind && existing.key == bundle.key)
+    {
+        return;
+    }
+    unit.planner_signal_bundles.push(bundle);
+}
+
+fn append_planner_signal_to_units(units: &mut [KnowledgeUnit], bundle: PlannerSignalBundle) {
+    for unit in units {
+        append_planner_signal(unit, bundle.clone());
+    }
+}
+
+fn surface_cluster_key(title: &str) -> String {
+    format!(
+        "surface_cluster/{}",
+        sanitize_path_segment(title).to_ascii_lowercase()
+    )
+}
+
+fn repo_signal_surface_cluster_key(capability_key: &str, title: &str) -> String {
+    format!(
+        "surface_cluster/{}/{}",
+        sanitize_path_segment(capability_key).to_ascii_lowercase(),
+        sanitize_path_segment(title).to_ascii_lowercase()
+    )
+}
+
+fn leaf_decomposition_key(title: &str) -> String {
+    format!(
+        "leaf_decomposition/{}",
+        sanitize_path_segment(title).to_ascii_lowercase()
+    )
+}
+
+fn repo_signal_leaf_decomposition_key(capability_key: &str, title: &str) -> String {
+    format!(
+        "leaf_decomposition/{}/{}",
+        sanitize_path_segment(capability_key).to_ascii_lowercase(),
+        sanitize_path_segment(title).to_ascii_lowercase()
+    )
+}
+
+fn repo_archetype_key(label: &str) -> String {
+    format!(
+        "repo_archetype/{}",
+        sanitize_path_segment(label).to_ascii_lowercase()
+    )
+}
+
+fn collect_repo_signal_candidates<'a>(
+    domain: &KnowledgeDomain,
+    report: &'a ScanReport,
+) -> Vec<&'a crate::repo::scanner::ScannedFile> {
+    let candidate_paths: BTreeSet<&str> = domain.source_files.iter().map(String::as_str).collect();
+    report
+        .files
+        .iter()
+        .filter(|file| candidate_paths.contains(file.path.as_str()))
+        .collect()
+}
+
+fn plan_repo_signal_capabilities(
+    domain: &KnowledgeDomain,
+    report: &ScanReport,
+    capabilities: &[RepoSignalCapabilitySpec],
+) -> Vec<KnowledgeUnit> {
+    let candidate_files = collect_repo_signal_candidates(domain, report);
+    let mut units = Vec::new();
+
+    for capability in capabilities {
+        units.extend(plan_repo_signal_capability_units(
+            domain,
+            capability,
+            &candidate_files,
+        ));
+    }
+
+    units
+}
+
+fn plan_repo_signal_capability_units(
+    domain: &KnowledgeDomain,
+    capability: &RepoSignalCapabilitySpec,
+    candidate_files: &[&crate::repo::scanner::ScannedFile],
+) -> Vec<KnowledgeUnit> {
+    let mut units = Vec::new();
+
+    for materialization in &capability.materializations {
+        match materialization {
+            RepoSignalMaterializationSpec::Family(spec) => {
+                units.extend(plan_repo_signal_family_units_from_candidates(
+                    domain,
+                    candidate_files,
+                    capability.capability_key,
+                    spec.root_prefix,
+                    spec.family_title,
+                    spec.family_unit_type.clone(),
+                    spec.family_profile.clone(),
+                    spec.family_priority,
+                    spec.leaves,
+                ))
+            }
+            RepoSignalMaterializationSpec::Standalone(spec) => {
+                units.extend(plan_repo_signal_leaf_units_from_candidates(
+                    domain,
+                    candidate_files,
+                    capability.capability_key,
+                    spec.root_prefix,
+                    spec.leaves,
+                ))
+            }
+        }
+    }
+
+    units
 }
 
 fn plan_domain_signal_family_units(
@@ -2480,7 +3914,7 @@ fn plan_domain_signal_family_units(
 ) -> Vec<KnowledgeUnit> {
     let candidate_files = collect_domain_signal_candidates(domain, report);
     let mut child_units = Vec::new();
-    let mut family_source_ids = BTreeSet::new();
+    let mut family_signal = SignalMatch::default();
     let family_relative_path = format!("{domain_label}/{}.md", sanitize_path_segment(family_title));
     let family_id = crate::domain::stable_id::stable_id(
         "unit",
@@ -2493,11 +3927,17 @@ fn plan_domain_signal_family_units(
     );
 
     for child in children {
-        let matched_source_ids = matching_signal_source_ids(&candidate_files, child.keywords);
-        if matched_source_ids.len() < child.min_hits {
+        let matched_signal = refine_signal_match_for_leaf(
+            domain,
+            report,
+            child,
+            &candidate_files,
+            signal_scope_limit(&child.profile, false),
+        );
+        if matched_signal.signal.source_count() < child.min_hits {
             continue;
         }
-        family_source_ids.extend(matched_source_ids.iter().cloned());
+        family_signal.extend(&matched_signal.signal);
         let mut unit = KnowledgeUnit::new(
             child.unit_type.clone(),
             child.title,
@@ -2511,11 +3951,20 @@ fn plan_domain_signal_family_units(
         unit.decomposition_profile = Some(child.profile.clone());
         unit.parent_unit_id = Some(family_id.clone());
         unit.scope = UnitScope {
-            module_ids: domain.source_modules.clone(),
-            source_ids: matched_source_ids,
+            source_ids: matched_signal.signal.matched_source_ids.clone(),
             ..Default::default()
         };
         unit.priority = child.priority;
+        unit.collapse_guard = matched_signal.collapse_guard;
+        append_planner_signal(
+            &mut unit,
+            make_planner_signal_bundle(
+                PlannerSignalKind::SurfaceCluster,
+                surface_cluster_key(child.title),
+                child.title,
+                &matched_signal.signal,
+            ),
+        );
         child_units.push(unit);
     }
 
@@ -2529,16 +3978,158 @@ fn plan_domain_signal_family_units(
         &domain.id,
         family_relative_path,
     );
+    family_signal = trim_signal_match(family_signal, signal_scope_limit(&family_profile, true));
     family.decomposition_profile = Some(family_profile);
     family.scope = UnitScope {
-        module_ids: domain.source_modules.clone(),
-        source_ids: family_source_ids.into_iter().collect(),
+        source_ids: family_signal.matched_source_ids.clone(),
         ..Default::default()
     };
     family.priority = family_priority;
+    append_planner_signal(
+        &mut family,
+        make_planner_signal_bundle(
+            PlannerSignalKind::LeafDecomposition,
+            leaf_decomposition_key(family_title),
+            family_title,
+            &family_signal,
+        ),
+    );
 
     let mut units = vec![family];
     units.extend(child_units);
+    units
+}
+
+fn plan_repo_signal_family_units_from_candidates(
+    domain: &KnowledgeDomain,
+    candidate_files: &[&crate::repo::scanner::ScannedFile],
+    capability_key: &str,
+    root_prefix: &str,
+    family_title: &str,
+    family_unit_type: UnitType,
+    family_profile: DecompositionProfile,
+    family_priority: f32,
+    children: &[DomainSignalLeafSpec],
+) -> Vec<KnowledgeUnit> {
+    let mut child_units = Vec::new();
+    let mut family_signal = SignalMatch::default();
+    let family_relative_path =
+        format!("{}/{}.md", root_prefix, sanitize_path_segment(family_title));
+    let family_id = crate::domain::stable_id::stable_id(
+        "unit",
+        format!(
+            "{}:{}:{}",
+            family_unit_type.as_str(),
+            &domain.id,
+            family_title
+        ),
+    );
+
+    for child in children {
+        let matched_signal = matching_signal(&candidate_files, child.keywords);
+        if matched_signal.source_count() < child.min_hits {
+            continue;
+        }
+        let matched_signal =
+            trim_signal_match(matched_signal, signal_scope_limit(&child.profile, false));
+        family_signal.extend(&matched_signal);
+        let mut unit = KnowledgeUnit::new(
+            child.unit_type.clone(),
+            child.title,
+            &domain.id,
+            format!("{}/{}.md", root_prefix, sanitize_path_segment(child.title)),
+        );
+        unit.decomposition_profile = Some(child.profile.clone());
+        unit.parent_unit_id = Some(family_id.clone());
+        unit.scope = UnitScope {
+            source_ids: matched_signal.matched_source_ids.clone(),
+            ..Default::default()
+        };
+        unit.priority = child.priority;
+        append_planner_signal(
+            &mut unit,
+            make_planner_signal_bundle(
+                PlannerSignalKind::SurfaceCluster,
+                repo_signal_surface_cluster_key(capability_key, child.title),
+                child.title,
+                &matched_signal,
+            ),
+        );
+        child_units.push(unit);
+    }
+
+    if child_units.is_empty() {
+        return Vec::new();
+    }
+
+    let mut family = KnowledgeUnit::new(
+        family_unit_type,
+        family_title,
+        &domain.id,
+        family_relative_path,
+    );
+    family_signal = trim_signal_match(family_signal, signal_scope_limit(&family_profile, true));
+    family.decomposition_profile = Some(family_profile);
+    family.scope = UnitScope {
+        source_ids: family_signal.matched_source_ids.clone(),
+        ..Default::default()
+    };
+    family.priority = family_priority;
+    append_planner_signal(
+        &mut family,
+        make_planner_signal_bundle(
+            PlannerSignalKind::LeafDecomposition,
+            repo_signal_leaf_decomposition_key(capability_key, family_title),
+            family_title,
+            &family_signal,
+        ),
+    );
+
+    let mut units = vec![family];
+    units.extend(child_units);
+    units
+}
+
+fn plan_repo_signal_leaf_units_from_candidates(
+    domain: &KnowledgeDomain,
+    candidate_files: &[&crate::repo::scanner::ScannedFile],
+    capability_key: &str,
+    root_prefix: &str,
+    leaves: &[DomainSignalLeafSpec],
+) -> Vec<KnowledgeUnit> {
+    let mut units = Vec::new();
+
+    for leaf in leaves {
+        let matched_signal = matching_signal(&candidate_files, leaf.keywords);
+        if matched_signal.source_count() < leaf.min_hits {
+            continue;
+        }
+        let matched_signal =
+            trim_signal_match(matched_signal, signal_scope_limit(&leaf.profile, false));
+        let mut unit = KnowledgeUnit::new(
+            leaf.unit_type.clone(),
+            leaf.title,
+            &domain.id,
+            format!("{root_prefix}/{}.md", sanitize_path_segment(leaf.title)),
+        );
+        unit.decomposition_profile = Some(leaf.profile.clone());
+        unit.scope = UnitScope {
+            source_ids: matched_signal.matched_source_ids.clone(),
+            ..Default::default()
+        };
+        unit.priority = leaf.priority;
+        append_planner_signal(
+            &mut unit,
+            make_planner_signal_bundle(
+                PlannerSignalKind::SurfaceCluster,
+                repo_signal_surface_cluster_key(capability_key, leaf.title),
+                leaf.title,
+                &matched_signal,
+            ),
+        );
+        units.push(unit);
+    }
+
     units
 }
 
@@ -2552,8 +4143,14 @@ fn plan_domain_signal_leaf_units(
     let mut units = Vec::new();
 
     for leaf in leaves {
-        let matched_source_ids = matching_signal_source_ids(&candidate_files, leaf.keywords);
-        if matched_source_ids.len() < leaf.min_hits {
+        let matched_signal = refine_signal_match_for_leaf(
+            domain,
+            report,
+            leaf,
+            &candidate_files,
+            signal_scope_limit(&leaf.profile, false),
+        );
+        if matched_signal.signal.source_count() < leaf.min_hits {
             continue;
         }
 
@@ -2565,11 +4162,20 @@ fn plan_domain_signal_leaf_units(
         );
         unit.decomposition_profile = Some(leaf.profile.clone());
         unit.scope = UnitScope {
-            module_ids: domain.source_modules.clone(),
-            source_ids: matched_source_ids,
+            source_ids: matched_signal.signal.matched_source_ids.clone(),
             ..Default::default()
         };
         unit.priority = leaf.priority;
+        unit.collapse_guard = matched_signal.collapse_guard;
+        append_planner_signal(
+            &mut unit,
+            make_planner_signal_bundle(
+                PlannerSignalKind::SurfaceCluster,
+                surface_cluster_key(leaf.title),
+                leaf.title,
+                &matched_signal.signal,
+            ),
+        );
         units.push(unit);
     }
 
@@ -2587,6 +4193,14 @@ fn collect_domain_signal_candidates<'a>(
         .filter(|file| source_paths.contains(file.path.as_str()))
         .filter(|file| match domain.domain_type {
             DomainType::ConfigReference => !file.is_asset_like(),
+            DomainType::ApiReference => {
+                !is_markdown_path(&file.path)
+                    && !file.is_asset_like()
+                    && (!file.is_config_like()
+                        || looks_like_runtime_config_entry(&file.path)
+                        || api_signal_candidate_accepts_config_path(&file.path))
+                    && !file.is_docs_like()
+            }
             _ => {
                 !is_markdown_path(&file.path)
                     && !file.is_asset_like()
@@ -2597,19 +4211,57 @@ fn collect_domain_signal_candidates<'a>(
         .collect()
 }
 
-fn domain_matches_keywords(domain: &KnowledgeDomain, keywords: &[&str]) -> bool {
+fn api_signal_candidate_accepts_config_path(path: &str) -> bool {
+    let lower = normalize_path(path).to_ascii_lowercase();
+    lower.contains("preset")
+        || lower.contains("builder")
+        || lower.contains("build-config")
+        || lower.contains("vite-config")
+}
+
+fn domain_matches_keywords(
+    domain: &KnowledgeDomain,
+    report: &ScanReport,
+    keywords: &[&str],
+) -> Option<SignalMatch> {
     let label = domain.label.to_ascii_lowercase();
-    if keywords.iter().any(|keyword| label.contains(keyword)) {
-        return true;
+    let mut matched_keywords = keywords
+        .iter()
+        .filter(|keyword| label.contains(**keyword))
+        .map(|keyword| (*keyword).to_string())
+        .collect::<BTreeSet<_>>();
+    let mut matched_paths = BTreeSet::new();
+
+    for path in &domain.source_files {
+        let lower = normalize_path(path).to_ascii_lowercase();
+        for keyword in keywords {
+            if lower.contains(keyword) {
+                matched_keywords.insert((*keyword).to_string());
+                matched_paths.insert(normalize_path(path));
+            }
+        }
     }
 
-    domain.source_files.iter().any(|path| {
-        let lower = normalize_path(path).to_ascii_lowercase();
-        keywords.iter().any(|keyword| lower.contains(keyword))
+    if matched_keywords.is_empty() {
+        return None;
+    }
+
+    if matched_paths.is_empty() {
+        matched_paths.extend(domain.source_files.iter().map(|path| normalize_path(path)));
+    }
+
+    let matched_paths = matched_paths.into_iter().collect::<Vec<_>>();
+    Some(SignalMatch {
+        matched_keywords: matched_keywords.into_iter().collect(),
+        matched_source_ids: source_ids_for_paths(report, &matched_paths),
+        matched_paths,
     })
 }
 
-fn domain_has_annotation_di_signal(domain: &KnowledgeDomain) -> bool {
+fn domain_has_annotation_di_signal(
+    domain: &KnowledgeDomain,
+    report: &ScanReport,
+) -> Option<SignalMatch> {
     let signals = [
         ".java",
         ".kt",
@@ -2628,10 +4280,7 @@ fn domain_has_annotation_di_signal(domain: &KnowledgeDomain) -> bool {
         "providesmethodvalidator",
         "bindsmethodvalidator",
     ];
-    domain.source_files.iter().any(|path| {
-        let lower = normalize_path(path).to_ascii_lowercase();
-        signals.iter().any(|signal| lower.contains(signal))
-    })
+    domain_matches_keywords(domain, report, &signals)
 }
 
 fn module_has_explicit_api_signal(module: &ModuleNode) -> bool {
@@ -2677,17 +4326,236 @@ fn module_explicit_api_symbols(module: &ModuleNode, report: &ScanReport) -> Vec<
         .collect()
 }
 
-fn matching_signal_source_ids(
-    files: &[&crate::repo::scanner::ScannedFile],
-    keywords: &[&str],
-) -> Vec<String> {
-    files
+fn matching_signal(files: &[&crate::repo::scanner::ScannedFile], keywords: &[&str]) -> SignalMatch {
+    let mut matched_keywords = BTreeSet::new();
+    let mut ranked_matches = Vec::new();
+
+    for file in files {
+        let normalized_path = normalize_path(&file.path);
+        let lower = normalized_path.to_ascii_lowercase();
+        let file_keywords = keywords
+            .iter()
+            .filter(|keyword| lower.contains(**keyword))
+            .map(|keyword| (*keyword).to_string())
+            .collect::<BTreeSet<_>>();
+        if file_keywords.is_empty() {
+            continue;
+        }
+
+        matched_keywords.extend(file_keywords.iter().cloned());
+        ranked_matches.push((
+            signal_match_score(&lower, &file_keywords),
+            signal_match_noise_penalty(&lower),
+            normalized_path,
+            file.id.clone(),
+        ));
+    }
+
+    ranked_matches.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(&right.2))
+    });
+
+    let mut matched_source_ids = Vec::new();
+    let mut matched_paths = Vec::new();
+    for (_, _, path, source_id) in ranked_matches {
+        if !matched_source_ids
+            .iter()
+            .any(|existing| existing == &source_id)
+        {
+            matched_source_ids.push(source_id);
+        }
+        if !matched_paths.iter().any(|existing| existing == &path) {
+            matched_paths.push(path);
+        }
+    }
+
+    SignalMatch {
+        matched_keywords: matched_keywords.into_iter().collect(),
+        matched_source_ids,
+        matched_paths,
+    }
+}
+
+fn trim_signal_match(signal: SignalMatch, limit: usize) -> SignalMatch {
+    let mut clean_entries = Vec::new();
+    let mut noisy_entries = Vec::new();
+    for (source_id, path) in signal
+        .matched_source_ids
+        .into_iter()
+        .zip(signal.matched_paths.into_iter())
+    {
+        if signal_path_is_secondary_noise(&path) {
+            noisy_entries.push((source_id, path));
+        } else {
+            clean_entries.push((source_id, path));
+        }
+    }
+
+    let mut preferred_entries = if clean_entries.len() >= 2 {
+        clean_entries
+    } else {
+        let mut merged = clean_entries;
+        merged.extend(noisy_entries);
+        merged
+    };
+
+    if limit != 0 {
+        preferred_entries.truncate(limit);
+    }
+
+    let (matched_source_ids, matched_paths): (Vec<_>, Vec<_>) =
+        preferred_entries.into_iter().unzip();
+
+    SignalMatch {
+        matched_keywords: signal.matched_keywords,
+        matched_source_ids,
+        matched_paths,
+    }
+}
+
+fn signal_path_is_secondary_noise(path: &str) -> bool {
+    signal_match_noise_penalty(path) >= 4
+}
+
+fn signal_scope_limit(profile: &DecompositionProfile, is_family: bool) -> usize {
+    match (profile, is_family) {
+        (DecompositionProfile::ConfigSurface, true) => 8,
+        (DecompositionProfile::ConfigSurface, false) => 6,
+        (DecompositionProfile::ApiSurface, true) => 10,
+        (DecompositionProfile::CompilerPipeline, true)
+        | (DecompositionProfile::IntegrationPlatform, true)
+        | (DecompositionProfile::Runtime, true) => 12,
+        (DecompositionProfile::CompilerPipeline, false)
+        | (DecompositionProfile::IntegrationPlatform, false)
+        | (DecompositionProfile::Runtime, false) => 8,
+        (_, true) => 10,
+        (_, false) => 8,
+    }
+}
+
+fn signal_match_score(path: &str, matched_keywords: &BTreeSet<String>) -> usize {
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+    let stem = file_name.split('.').next().unwrap_or(file_name);
+    let keyword_score = matched_keywords
         .iter()
-        .filter(|file| {
-            let lower = normalize_path(&file.path).to_ascii_lowercase();
-            keywords.iter().any(|keyword| lower.contains(keyword))
+        .map(|keyword| {
+            let mut score = 4usize;
+            if file_name.contains(keyword) {
+                score += 2;
+            }
+            if stem.eq_ignore_ascii_case(keyword) {
+                score += 2;
+            }
+            if path
+                .split('/')
+                .any(|segment| segment.eq_ignore_ascii_case(keyword))
+            {
+                score += 1;
+            }
+            score
         })
-        .map(|file| file.id.clone())
+        .sum::<usize>();
+
+    keyword_score + signal_match_implementation_bonus(path)
+}
+
+fn signal_match_implementation_bonus(path: &str) -> usize {
+    let mut bonus = 0usize;
+    if path.contains("/src/") || path.contains("/lib/") {
+        bonus += 3;
+    }
+    if path.contains("/main/java/") || path.contains("/main/kotlin/") {
+        bonus += 4;
+    }
+    if path.contains("/internal/") || path.contains("/modules/") {
+        bonus += 1;
+    }
+    bonus
+}
+
+fn signal_match_noise_penalty(path: &str) -> usize {
+    let mut penalty = 0usize;
+    if path.contains(".test.")
+        || path.contains(".spec.")
+        || path.contains("/test/")
+        || path.contains("/tests/")
+        || path.contains("/__tests__/")
+        || path.contains("/javatests/")
+    {
+        penalty += 4;
+    }
+    if path.contains(".stories.") || path.contains("/stories/") {
+        penalty += 3;
+    }
+    if path.contains("/template/") || path.contains("/templates/") {
+        penalty += 3;
+    }
+    if path.contains("/__mocks__/") || path.contains("/fixtures/") {
+        penalty += 4;
+    }
+    if path.contains("/examples/")
+        || path.contains("/example/")
+        || path.contains("/test-storybooks/")
+        || path.contains("/golden/")
+        || path.contains("/snapshots/")
+    {
+        penalty += 4;
+    }
+    if path.ends_with("/build.gradle")
+        || path.ends_with("/build.gradle.kts")
+        || path.ends_with("/package.json")
+        || path.ends_with("/project.json")
+        || path.ends_with("/pom.xml")
+        || path.ends_with("/androidmanifest.xml")
+        || path.ends_with("/package-info.java")
+        || path.ends_with("/build.bazel")
+        || path.ends_with("/build.bzl")
+        || path.ends_with("/buildsrc/build.gradle.kts")
+        || path.ends_with("/settings.gradle.kts")
+    {
+        penalty += 5;
+    }
+    if path.contains("/buildsrc/") || path.contains("/build/") {
+        penalty += 4;
+    }
+    if path.ends_with(".patch") || path.ends_with(".diff") {
+        penalty += 6;
+    }
+    if path.ends_with(".xml") || path.ends_with(".json") || path.ends_with(".gradle.kts") {
+        penalty += 2;
+    }
+    penalty
+}
+
+fn signal_match_for_paths(
+    report: &ScanReport,
+    paths: &[String],
+    keywords: Vec<String>,
+) -> SignalMatch {
+    SignalMatch {
+        matched_keywords: keywords
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        matched_source_ids: source_ids_for_paths(report, paths),
+        matched_paths: paths
+            .iter()
+            .map(|path| normalize_path(path))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+    }
+}
+
+fn signal_keywords_for_path(path: &str) -> Vec<String> {
+    normalize_path(path)
+        .split('/')
+        .flat_map(lexical_topic_tokens)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -2722,6 +4590,31 @@ fn plan_config_doc_units(
         .iter()
         .filter(|surface| config_surface_keeps_standalone_unit(&surface.file_path))
         .count();
+    let preserved_candidate_paths = domain
+        .evidence
+        .config_surfaces
+        .iter()
+        .filter(|surface| config_surface_keeps_standalone_unit(&surface.file_path))
+        .map(|surface| normalize_path(&surface.file_path))
+        .chain(domain.source_files.iter().filter_map(|path| {
+            (is_markdown_path(path)
+                && matches!(
+                    classify_docs_unit_profile(path).1,
+                    DecompositionProfile::ConfigSurface
+                ))
+            .then(|| normalize_path(path))
+        }))
+        .collect::<BTreeSet<_>>();
+    let collapsed_candidate_paths = domain
+        .source_files
+        .iter()
+        .filter(|path| !is_markdown_path(path))
+        .map(|path| normalize_path(path))
+        .filter(|path| !preserved_candidate_paths.contains(path))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let preserved_candidate_paths = preserved_candidate_paths.into_iter().collect::<Vec<_>>();
     let collapse_raw_config_surfaces = !has_docs_backed_config
         && (raw_config_surface_count >= 5
             || raw_config_file_count >= 5
@@ -2750,16 +4643,29 @@ fn plan_config_doc_units(
         );
         unit.decomposition_profile = Some(DecompositionProfile::ConfigSurface);
         unit.scope = UnitScope {
-            source_ids: report
-                .files
-                .iter()
-                .filter(|f| f.path == surface.file_path)
-                .map(|f| f.id.clone())
-                .collect(),
+            source_ids: source_ids_for_path(report, &surface.file_path),
             config_surfaces: vec![surface.clone()],
             ..Default::default()
         };
         unit.priority = 0.6;
+        append_planner_signal(
+            &mut unit,
+            make_planner_signal_bundle(
+                PlannerSignalKind::SurfaceCluster,
+                surface_cluster_key(&title),
+                &title,
+                &signal_match_for_paths(
+                    report,
+                    &[normalize_path(&surface.file_path)],
+                    surface
+                        .keys
+                        .iter()
+                        .cloned()
+                        .chain(signal_keywords_for_path(&surface.file_path))
+                        .collect(),
+                ),
+            ),
+        );
         units.push(unit);
     }
 
@@ -2823,6 +4729,7 @@ fn plan_config_doc_units(
     if units.is_empty() || collapse_raw_config_surfaces {
         units.retain(|unit| {
             unit.scope.docs_anchors.first().is_some()
+                || (unit.scope.config_surfaces.is_empty() && !unit.scope.source_ids.is_empty())
                 || unit
                     .scope
                     .config_surfaces
@@ -2855,6 +4762,16 @@ fn plan_config_doc_units(
             ..Default::default()
         };
         unit.priority = 0.5;
+        if collapse_raw_config_surfaces {
+            unit.collapse_guard = Some(CollapseGuardDecision {
+                reason: CollapseGuardReason::RawConfigSurfaceAggregation,
+                owner_title: unit.title.clone(),
+                collapsed_source_ids: source_ids_for_paths(report, &collapsed_candidate_paths),
+                collapsed_paths: collapsed_candidate_paths.clone(),
+                preserved_source_ids: source_ids_for_paths(report, &preserved_candidate_paths),
+                preserved_paths: preserved_candidate_paths.clone(),
+            });
+        }
         units.push(unit);
     }
 
@@ -3007,6 +4924,8 @@ fn config_surface_keeps_standalone_unit(path: &str) -> bool {
     let file_name = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
     matches!(
         file_name
+            .trim_end_matches(".tsx")
+            .trim_end_matches(".jsx")
             .trim_end_matches(".ts")
             .trim_end_matches(".js")
             .trim_end_matches(".json")
@@ -3160,6 +5079,142 @@ fn docs_unit_title(path: &str) -> String {
     prettify_segment(raw)
 }
 
+fn planned_docs_unit_title(path: &str, unit_type: &UnitType, report: &ScanReport) -> String {
+    let lower = normalize_path(path).to_ascii_lowercase();
+    let file_name = lower.rsplit('/').next().unwrap_or(lower.as_str());
+    let stem = markdown_stem(file_name);
+
+    if matches!(unit_type, UnitType::TroubleshootDoc)
+        && (stem.eq_ignore_ascii_case("faq") || is_index_like_stem(stem))
+    {
+        return "故障排除".to_string();
+    }
+
+    if lower.contains("/in-ci")
+        || lower.ends_with("/in-ci.mdx")
+        || lower.ends_with("/in-ci.md")
+        || lower.contains("/ci/")
+    {
+        return "CI_CD集成".to_string();
+    }
+
+    if repo_has_source_keyword(report, "chromatic")
+        && (lower.contains("publish-storybook") || lower.contains("/visual-testing"))
+    {
+        return "Chromatic集成".to_string();
+    }
+
+    if let Some(target) = docs_integration_target_title(path) {
+        return format!("{target}集成");
+    }
+
+    docs_unit_title(path)
+}
+
+fn docs_integration_target_title(path: &str) -> Option<String> {
+    let normalized = normalize_path(path);
+    let lower = normalized.to_ascii_lowercase();
+    let segments: Vec<&str> = normalized
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let file_name = segments.last().copied()?;
+    let stem = markdown_stem(file_name);
+    let raw = if is_index_like_stem(stem) {
+        segments
+            .iter()
+            .rev()
+            .nth(1)
+            .copied()
+            .unwrap_or(stem)
+            .to_string()
+    } else {
+        stem.to_string()
+    };
+    let raw_lower = raw.to_ascii_lowercase();
+    let has_integration_context =
+        lower.contains("/integrations/") || lower.contains("/integration/");
+    let has_suffix_signal = raw_lower.ends_with("-addon")
+        || raw_lower.ends_with("_addon")
+        || raw_lower.ends_with(".addon")
+        || raw_lower.ends_with("-plugin")
+        || raw_lower.ends_with("_plugin")
+        || raw_lower.ends_with(".plugin");
+    if !has_integration_context && !has_suffix_signal {
+        return None;
+    }
+
+    let tokens = raw
+        .split(['-', '_', '.'])
+        .filter(|segment| !segment.is_empty())
+        .filter(|segment| {
+            !matches!(
+                segment.to_ascii_lowercase().as_str(),
+                "addon" | "plugin" | "integration" | "integrations"
+            )
+        })
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return None;
+    }
+
+    Some(display_title_from_tokens(&tokens))
+}
+
+fn display_title_from_tokens(tokens: &[&str]) -> String {
+    tokens
+        .iter()
+        .map(|token| match token.to_ascii_lowercase().as_str() {
+            "api" => "API".to_string(),
+            "ci" => "CI".to_string(),
+            "cd" => "CD".to_string(),
+            "cli" => "CLI".to_string(),
+            "eslint" => "ESLint".to_string(),
+            "mdx" => "MDX".to_string(),
+            "vitest" => "Vitest".to_string(),
+            other => prettify_segment(other),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn repo_has_source_keyword(report: &ScanReport, keyword: &str) -> bool {
+    report.files.iter().any(|file| {
+        normalize_path(&file.path)
+            .to_ascii_lowercase()
+            .contains(&keyword.to_ascii_lowercase())
+    })
+}
+
+fn module_unit_title(domain: &KnowledgeDomain, module: &ModuleNode) -> String {
+    if matches!(domain.domain_type, DomainType::PluginEcosystem) {
+        if let Some(addon_name) = addon_module_name(module) {
+            return format!(
+                "{} Addon",
+                display_title_from_tokens(&[addon_name.as_str()])
+            );
+        }
+    }
+
+    module.name.clone()
+}
+
+fn addon_module_name(module: &ModuleNode) -> Option<String> {
+    module.root_paths.iter().find_map(|path| {
+        let normalized = normalize_path(path);
+        let segments = normalized
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        let addon_index = segments.iter().position(|segment| {
+            matches!(segment.to_ascii_lowercase().as_str(), "addon" | "addons")
+        })?;
+        segments
+            .get(addon_index + 1)
+            .map(|segment| segment.to_string())
+    })
+}
+
 fn config_unit_title(path: &str) -> String {
     let normalized = path.replace('\\', "/");
     let file_name = normalized.rsplit('/').next().unwrap_or(path);
@@ -3281,14 +5336,14 @@ where
             continue;
         }
 
-        let title = docs_unit_title(path);
+        let title = planned_docs_unit_title(path, &unit_type, report);
         let mut unit = KnowledgeUnit::new(
             unit_type,
             &title,
             &domain.id,
             docs_output_relative_path(domain_label, path, &title),
         );
-        unit.decomposition_profile = Some(profile);
+        unit.decomposition_profile = Some(profile.clone());
         unit.scope = UnitScope {
             source_ids: source_ids_for_path(report, path),
             docs_anchors: vec![DocsAnchor {
@@ -3300,6 +5355,19 @@ where
             ..Default::default()
         };
         unit.priority = 0.6;
+        append_planner_signal(
+            &mut unit,
+            make_planner_signal_bundle(
+                PlannerSignalKind::SurfaceCluster,
+                format!("docs_anchor/{}", profile.as_str()),
+                format!("Docs anchor {}", title),
+                &signal_match_for_paths(
+                    report,
+                    &[normalize_path(path)],
+                    signal_keywords_for_path(path),
+                ),
+            ),
+        );
         units.push(unit);
     }
 
@@ -3587,7 +5655,209 @@ fn build_docs_anchors(docs_files: &[String]) -> Vec<DocsAnchor> {
         .collect()
 }
 
-fn dedup_units_by_relative_path(units: Vec<KnowledgeUnit>) -> Vec<KnowledgeUnit> {
+#[derive(Clone)]
+struct ExampleSourceCluster {
+    reference_paths: Vec<String>,
+}
+
+fn repo_root_readme_path(report: &ScanReport) -> Option<String> {
+    report.files.iter().find_map(|file| {
+        let normalized = normalize_path(&file.path);
+        matches!(
+            normalized.as_str(),
+            "README.md" | "README.mdx" | "readme.md" | "readme.mdx"
+        )
+        .then_some(file.path.clone())
+    })
+}
+
+fn select_representative_example_source_cluster(
+    report: &ScanReport,
+) -> Option<ExampleSourceCluster> {
+    let mut clusters: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for file in &report.files {
+        if !is_primary_example_source_path(&file.path) {
+            continue;
+        }
+        let Some(cluster_key) = example_source_cluster_key(&file.path) else {
+            continue;
+        };
+        clusters
+            .entry(cluster_key)
+            .or_default()
+            .push(file.path.clone());
+    }
+
+    let best_cluster = clusters
+        .into_iter()
+        .filter_map(|(key, mut paths)| {
+            sort_and_dedup_strings(&mut paths);
+            let score = example_source_cluster_score(&key, &paths);
+            (score > 0).then_some((score, key, paths))
+        })
+        .max_by(|left, right| left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1)))?;
+
+    Some(ExampleSourceCluster {
+        reference_paths: summarize_example_cluster_paths(&best_cluster.2),
+    })
+}
+
+fn summarize_example_cluster_paths(paths: &[String]) -> Vec<String> {
+    let mut selected = paths
+        .iter()
+        .filter(|path| is_example_manifest_path(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    selected.extend(
+        paths
+            .iter()
+            .filter(|path| is_example_source_file(path))
+            .take(8)
+            .cloned(),
+    );
+    if selected.is_empty() {
+        selected.extend(paths.iter().take(8).cloned());
+    }
+    sort_and_dedup_strings(&mut selected);
+    selected
+}
+
+fn example_source_cluster_score(cluster_key: &str, paths: &[String]) -> isize {
+    let source_count = paths
+        .iter()
+        .filter(|path| is_example_source_file(path))
+        .count() as isize;
+    if source_count < 3 {
+        return 0;
+    }
+
+    let manifest_bonus = paths.iter().any(|path| is_example_manifest_path(path)) as isize * 6;
+    let readme_bonus = paths.iter().any(|path| {
+        matches!(
+            normalize_path(path).rsplit('/').next(),
+            Some("README.md" | "README.mdx" | "readme.md" | "readme.mdx")
+        )
+    }) as isize
+        * 2;
+    let depth_penalty = cluster_key.split('/').count() as isize;
+
+    source_count * 4 + manifest_bonus + readme_bonus - depth_penalty
+}
+
+fn example_source_cluster_key(path: &str) -> Option<String> {
+    let normalized = normalize_path(path);
+    let segments = normalized
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let example_index = segments.iter().position(|segment| {
+        matches!(
+            segment.to_ascii_lowercase().as_str(),
+            "example" | "examples" | "sample" | "samples"
+        )
+    })?;
+    if example_index + 1 >= segments.len() {
+        return None;
+    }
+
+    let mut end = example_index + 2;
+    while end < segments.len() {
+        let lower = segments[end].to_ascii_lowercase();
+        if matches!(
+            lower.as_str(),
+            "src"
+                | "main"
+                | "test"
+                | "tests"
+                | "javatests"
+                | "java"
+                | "kotlin"
+                | "scala"
+                | "resources"
+                | "app"
+        ) {
+            break;
+        }
+        end += 1;
+        if end - example_index >= 4 {
+            break;
+        }
+    }
+
+    Some(segments[..end].join("/"))
+}
+
+fn is_primary_example_source_path(path: &str) -> bool {
+    let normalized = normalize_path(path).to_ascii_lowercase();
+    if !(normalized.starts_with("examples/")
+        || normalized.contains("/examples/")
+        || normalized.starts_with("example/")
+        || normalized.contains("/example/"))
+    {
+        return false;
+    }
+
+    !normalized.contains("/test/")
+        && !normalized.contains("/tests/")
+        && !normalized.contains("/javatests/")
+        && !normalized.contains("/fixtures/")
+        && !normalized.contains("/docs/")
+        && !normalized.ends_with(".png")
+        && !normalized.ends_with(".jpg")
+        && !normalized.ends_with(".jpeg")
+        && !normalized.ends_with(".gif")
+        && !normalized.ends_with(".svg")
+        && !normalized.ends_with(".snap")
+}
+
+fn is_example_manifest_path(path: &str) -> bool {
+    matches!(
+        normalize_path(path)
+            .to_ascii_lowercase()
+            .rsplit('/')
+            .next()
+            .unwrap_or_default(),
+        "pom.xml"
+            | "build.gradle"
+            | "build.gradle.kts"
+            | "package.json"
+            | "cargo.toml"
+            | "settings.gradle"
+            | "settings.gradle.kts"
+            | "build"
+    )
+}
+
+fn is_example_source_file(path: &str) -> bool {
+    let normalized = normalize_path(path).to_ascii_lowercase();
+    [
+        ".java", ".kt", ".kts", ".groovy", ".scala", ".js", ".jsx", ".ts", ".tsx", ".py", ".rs",
+        ".go",
+    ]
+    .iter()
+    .any(|suffix| normalized.ends_with(suffix))
+}
+
+fn dedup_units_by_relative_path(mut units: Vec<KnowledgeUnit>) -> Vec<KnowledgeUnit> {
+    units.sort_by(|left, right| {
+        left.relative_path
+            .cmp(&right.relative_path)
+            .then_with(|| {
+                right
+                    .scope
+                    .docs_anchors
+                    .is_empty()
+                    .cmp(&left.scope.docs_anchors.is_empty())
+            })
+            .then(
+                right
+                    .scope
+                    .source_ids
+                    .len()
+                    .cmp(&left.scope.source_ids.len()),
+            )
+            .then(left.title.cmp(&right.title))
+    });
     let mut seen = BTreeSet::new();
     units
         .into_iter()
@@ -4037,12 +6307,18 @@ fn looks_like_runtime_config_entry(path: &str) -> bool {
         file_name,
         "main.js"
             | "main.ts"
+            | "main.jsx"
+            | "main.tsx"
             | "main.mjs"
             | "preview.js"
             | "preview.ts"
+            | "preview.jsx"
+            | "preview.tsx"
             | "preview.mjs"
             | "manager.js"
             | "manager.ts"
+            | "manager.jsx"
+            | "manager.tsx"
             | "manager.mjs"
     ) && normalized.split('/').any(|segment| {
         matches!(
@@ -4127,12 +6403,20 @@ fn looks_like_api_surface_path(path: &str) -> bool {
             | "addons.js"
             | "addon-types.ts"
             | "addon-types.js"
+            | "androidinjector.java"
+            | "hasandroidinjector.java"
+            | "androidinjection.java"
             | "installin.java"
             | "entrypoint.java"
             | "definecomponent.java"
             | "generatesrootinput.java"
             | "hiltandroidapp.java"
             | "androidentrypoint.java"
+            | "componentprocessor.java"
+            | "delegatecomponentprocessor.java"
+            | "bindinggraphfactory.java"
+            | "sourcefilegenerator.java"
+            | "validationreport.java"
             | "csf.ts"
             | "csf.js"
             | "preview-web.ts"
