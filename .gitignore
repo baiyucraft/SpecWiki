@@ -5,6 +5,7 @@ docs/
 # openspec/
 openspec/changes/archive/
 .worktrees/
+.archive/
 .wiki/
 wiki.dev.yaml
 
@@ -12,6 +13,7 @@ wiki.dev.yaml
 DESIGN*.md
 AGENTS.md
 COMMENTING.md
+SCENE-*.md
 
 tmp/
 .claude/

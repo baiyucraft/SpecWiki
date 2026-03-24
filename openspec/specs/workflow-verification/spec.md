@@ -4,7 +4,7 @@
 定义 Repo Wiki workflow 的验证面，确保主链行为、graph 能力、progress 协议和热路径优化都能被自动化测试覆盖。
 ## Requirements
 ### Requirement: 系统必须提供端到端验证适配层到 Wiki 产物的主链路
-系统 MUST 提供自动化测试，验证适配层调用 Rust core 后能够在目标仓库完成 Wiki 初始化、手工编辑同步、增量更新、强制重建并执行查询，且生成的 `.wiki/` 产物与返回结果符合预期。针对迭代 7 收口，验证 MUST 继续覆盖 page identity 稳定性（增删少量源文件后核心页面 `page_id` 不变）、steering 配置生效（忽略路径、模块提升/降级、合并阈值）、页面合并/拆分正确性、父子关系按模块树层级分配、扩展 section 模板的内容密度，并新增覆盖多语言 symbol parsing 质量、`symbols` / `symbols_fts` 写盘、一致性的增量重解析、symbol BM25 query 和解析失败隔离。验证脚本还 MUST 使用与当前源码一致的 release binary，并允许对 `init / update / rebuild` 这类重 workflow 使用更长超时，避免把大型 monorepo 的正常初始化误判为失败。每轮与迭代 7 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init` 分析；如果目标仓库存在 reference，则必须对照 `.wiki/*.md` 与 `wiki.metadata.json`。项目集分析报告 MUST 按项目逐个输出，而不是只给总表或总括结论。
+系统 MUST 提供自动化测试，验证适配层调用 Rust core 后能够在目标仓库完成 Wiki 初始化、手工编辑同步、增量更新、强制重建并执行查询，且生成的 `.wiki/` 产物与返回结果符合预期。针对迭代 7 收口，验证 MUST 继续覆盖 page identity 稳定性（增删少量源文件后核心页面 `page_id` 不变）、steering 配置生效（忽略路径、模块提升/降级、合并阈值）、页面合并/拆分正确性、父子关系按模块树层级分配、扩展 section 模板的内容密度，并新增覆盖多语言 symbol parsing 质量、`symbols` / `symbols_fts` 写盘、一致性的增量重解析、symbol BM25 query 和解析失败隔离。验证脚本还 MUST 使用与当前源码一致的 release binary，并允许对 `init / update / rebuild` 这类重 workflow 使用更长超时，避免把大型 monorepo 的正常初始化误判为失败。每轮与迭代 7 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN-3.0.md § 测试项目集` 的完整项目集执行 `init` 分析；如果目标仓库存在 reference，则必须对照 `.wiki/*.md` 与 `wiki.metadata.json`。项目集分析报告 MUST 按项目逐个输出，而不是只给总表或总括结论。
 
 #### Scenario: page identity 稳定性验证
 - **WHEN** 测试在临时仓库中执行 `init`，然后增加一个源文件并执行 `update`
@@ -82,7 +82,7 @@
 
 #### Scenario: 测试项目集全量 init 分析
 - **WHEN** 迭代 7 的 tasks 设计或测试阶段
-- **THEN** 必须对 `DESIGN2.0.md § 测试项目集` 的完整项目集执行 `init` 分析
+- **THEN** 必须对 `DESIGN-3.0.md § 测试项目集` 的完整项目集执行 `init` 分析
 - **THEN** 必须重点关注多语言 symbol 提取质量、symbol query 命中、增量重解析结果以及既有页面拓扑不变量
 - **THEN** 如果存在 reference，必须对照 `.wiki/*.md` 与 `wiki.metadata.json`
 - **THEN** 必须输出 `test-project-analysis.md`
@@ -113,7 +113,7 @@
 - **THEN** 测试 MUST 观察到 provenance 区分 BM25 与 graph 命中来源
 
 ### Requirement: 包装语言与项目集验证必须覆盖 Vue / Svelte graph 解析
-系统 MUST 在 fixture、integration test 或项目集分析中覆盖 Vue / Svelte 单文件组件的 script wrapper 解析，验证定义类符号、raw relation captures 与 graph resolution 都能映射回原始组件文件。每轮与迭代 8 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN2.0.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出 graph facts、graph query 命中表现与 reference 差异。
+系统 MUST 在 fixture、integration test 或项目集分析中覆盖 Vue / Svelte 单文件组件的 script wrapper 解析，验证定义类符号、raw relation captures 与 graph resolution 都能映射回原始组件文件。每轮与迭代 8 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN-3.0.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出 graph facts、graph query 命中表现与 reference 差异。
 
 #### Scenario: Vue 或 Svelte wrapper 解析通过
 - **WHEN** 测试在包含 Vue 或 Svelte 单文件组件的 fixture 或项目中执行 `init`
@@ -190,7 +190,7 @@
 - **THEN** 测试 MUST 同时验证父页晚于子页、总真实调用数不超过预算、缓存命中页不占用真实并行槽
 
 ### Requirement: 项目集验证必须覆盖增强后的页面信息密度与 graph 落地
-每轮与迭代 9 相关的 tasks 设计、实现或测试时，系统 MUST 对 `DESIGN2.0.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出增强后的页面信息密度、graph facts 是否进入页面正文、workflow/architecture 页面表现，以及与 reference 的差异。9.3 还 MUST 逐项目统计 `section_plan` 覆盖率、overview/architecture research 命中和精准 evidence 引用密度；验证可以按 deterministic baseline 与增强模式做对照，但不得只给总表结论。
+每轮与迭代 9 相关的 tasks 设计、实现或测试时，系统 MUST 对 `DESIGN-3.0.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出增强后的页面信息密度、graph facts 是否进入页面正文、workflow/architecture 页面表现，以及与 reference 的差异。9.3 还 MUST 逐项目统计 `section_plan` 覆盖率、overview/architecture research 命中和精准 evidence 引用密度；验证可以按 deterministic baseline 与增强模式做对照，但不得只给总表结论。
 
 #### Scenario: 项目集分析逐项目输出增强表现
 - **WHEN** 迭代 9 的 tasks 设计或测试阶段执行完整项目集 `init` 分析
@@ -354,4 +354,3 @@
 - **THEN** 验证 MUST 指出 workflow 当前停在 `research`、`compose` 还是 `assemble` 阶段
 - **THEN** 验证 MUST 输出对应 unit 的 gate/readiness 原因
 - **THEN** 当 workflow 成功完成时，验证 MUST 观察到 `page_drafts`、最终 wiki 页面和 `wiki.metadata.json` 一并落盘
-

@@ -5,7 +5,7 @@ context: |
 
 rules:
   proposal:
-    - 提案时必须参考 DESIGN-CORE.md 和 DESIGN.md。
+    - 提案时必须参考 DESIGN-3.0.md、DESIGN-RUNTIME.md、SCENE-1.md 和 SCENE-2.md。
   design: 
     - 设计时必须参考 AGENTS.md 中的 “开发参考” 部分。
     - 设计时，必须召唤一个言辞犀利、标准很高的资深工程师 reviewer（gpt-5.4-mini high subagent）。参考相关项目与现有代码，对设计进行全面评估，只有设计被审核通过了，才可以继续执行下一步。

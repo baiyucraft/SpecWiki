@@ -13,7 +13,7 @@
 
 目标是构建一个 Repo Wiki Core + Agents 体系：自动扫描代码仓库，生成并持续更新 `.wiki/`，让人和 Agent 都能共享同一层项目知识。
 
-设计与边界优先看 [DESIGN2.0.md](E:/project/!byAI/spec-wiki/DESIGN2.0.md) 和 [DESIGN-CORE2.0.md](E:/project/!byAI/spec-wiki/DESIGN-CORE2.0.md)。
+设计与边界优先看 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md)、[DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md)、[SCENE-1.md](E:/project/!byAI/spec-wiki/SCENE-1.md) 和 [SCENE-2.md](E:/project/!byAI/spec-wiki/SCENE-2.md)。
 代码注释规范单独见 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md)。
 
 # 开发参考
@@ -25,21 +25,25 @@
 - `deepwiki-open`[tmp/upstream/deepwiki-open](E:/project/!byAI/spec-wiki/tmp/upstream/deepwiki-open)
 - `GitNexus`本地路径：[tmp/upstream/GitNexus](E:/project/!byAI/spec-wiki/tmp/upstream/GitNexus)
 
-引用这些参考实现时，以当前仓库的 [DESIGN2.0.md](E:/project/!byAI/spec-wiki/DESIGN2.0.md) 和 [DESIGN-CORE2.0.md](E:/project/!byAI/spec-wiki/DESIGN-CORE2.0.md) 为最终边界，不直接照搬其产品形态或目录结构。
+引用这些参考实现时，以当前仓库的 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md) 和 [DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md) 为最终边界，不直接照搬其产品形态或目录结构。若旧设计中的参考结论未被重新验证到这些本地仓库的实际源码实现，可以直接推翻。
 
 # 当前核心设计约束
 
-- 当前 `wiki-core` 主路径以 [DESIGN-CORE2.0.md](E:/project/!byAI/spec-wiki/DESIGN-CORE2.0.md) 为准：
+- 当前系统设计主路径以 [DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md) 为准：
   - `Facts -> Knowledge Planning -> Research -> Compose -> Assemble`
+- 当前 crate 目标边界以 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md) 为准：
+  - `wiki-model / wiki-index / wiki-knowledge / wiki-runtime`
 - “知识单元（KnowledgeUnit）”是一等抽象，“页面类型”是结果，不要再回到 `module/topic/family` 直接驱动一切的旧思路。
 - `overview / architecture / module / topic / family-*` 这些页面语义如果需要新增或调整，必须先回答：
   - 它对应的 KnowledgeDomain / KnowledgeUnit 是什么
   - 它属于哪一层输出
-- 生成链优先参考：
-  - `CodeWiki` 的 `leaf-first + parent-consume-child`
-  - `deepwiki-rs` 的 `research-first + compose consume research`
-  - `GitNexus` 的厚 facts / 图事实层
-- `deepwiki-open` 只用于 query / RAG / session / 消费层参考，不作为 core 生成主链模板。
+- 生成链可优先从这些仓库的实际源码中寻找实现灵感：
+  - `CodeWiki`
+  - `deepwiki-rs`
+  - `GitNexus`
+  - `deepwiki-open`
+- 但这些参考映射不是固定教条；只有当本地源码阅读能支撑时，才允许沉淀为当前设计依据。
+- `deepwiki-open` 默认仍偏 query / RAG / session / 消费层参考，不自动视为 core 生成主链模板。
 
 # 当前验收约束
 
@@ -73,7 +77,7 @@
 # 分层规则
 
 - 命名统一使用 `Agents`，不要回退到 `Adapters`。
-- `.wiki/*.md`、`.wiki/wiki.metadata.json`、`.wiki/.cache/**` 是三层 runtime，职责不能混用。
+- `.wiki/.knowledge/**`、`.wiki/pages/**`、`.wiki/wiki.metadata.json`、`.wiki/.cache/**` 是当前 runtime 分层，职责不能混用。
 - `Facts -> Knowledge Planning -> Research -> Compose -> Assemble` 是当前 core 的主路径，新增实现不要绕过这条链路直接拼页面。
 - `PageContext`、`PlannedPage`、`renderer` 都应服务于 KnowledgeUnit 主线，避免重新长出独立的旧页面语义层。
 - `crates/*/package.json`
@@ -99,7 +103,7 @@
 - 任何行为变化都要补对应层级的测试。
 - 先看 `openspec/**` 当前 change；需求或设计变了，先改 OpenSpec，再改代码。
 - 每轮 OpenSpec tasks 测试阶段，运行 `node scripts/run-test-projects.mjs` 批量对 19 个测试项目执行 `init`（也可指定项目：`node scripts/run-test-projects.mjs axum chi`）。
-  - 测试项目集详见 [DESIGN2.0.md § 测试项目集](E:/project/!byAI/spec-wiki/DESIGN2.0.md)，覆盖 Rust/Go/Python/Java/TS/Vue/React/Android/运维等场景。
+  - 测试项目集详见 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md) 和 [DESIGN-ITER.md](E:/project/!byAI/spec-wiki/DESIGN-ITER.md)，覆盖 Rust/Go/Python/Java/TS/Vue/React/Android/运维等场景，并以 [SCENE-1.md](E:/project/!byAI/spec-wiki/SCENE-1.md) / [SCENE-2.md](E:/project/!byAI/spec-wiki/SCENE-2.md) 作为场景边界参考。
   - aLocal 和 spec-wiki 指向真实仓库 init 后拷贝回来，其余直接用 release 二进制 JSON IPC。
   - 脚本会保留 `.wiki/` 目录（已有则先删再重建），跑完后可直接检查 `tmp/test/*/.wiki/`。
   - 有 reference 的项目（`tmp/reference/*`）需对比页面结构和 `wiki.metadata.json`，发现差异后调整实现，并输出 `test-project-analysis.md`。

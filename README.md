@@ -4,18 +4,26 @@
 
 它的目标是自动扫描本地代码目录，生成并持续更新 `.wiki/`，让人和 Agent 都能把这份 Wiki 当作项目知识层来使用。Git 只是一种可选元信息来源，不是核心功能的硬前置。当前阶段优先实现 Windows 下的 CodeBuddy Agent 接入。
 
+当前正式设计入口：
+
+- [DESIGN-3.0.md](./DESIGN-3.0.md)
+- [DESIGN-RUNTIME.md](./DESIGN-RUNTIME.md)
+- [DESIGN-ITER.md](./DESIGN-ITER.md)
+- [SCENE-1.md](./SCENE-1.md)
+- [SCENE-2.md](./SCENE-2.md)
+
 ## 当前状态
 
 - 当前仅支持 Windows
 - 当前仅支持 CodeBuddy Agent
-- Rust `wiki-core` 负责扫描、生成、更新、查询和同步
+- Rust 当前主包仍是 `wiki-core`，设计目标将其收束并改名为 `wiki-runtime`
 - `agents/*` 负责将这些能力暴露成 Agent 工具
 
 ## 仓库结构
 
 ```text
 .
-├─ crates/wiki-core/      # Repo Wiki core
+├─ crates/wiki-core/      # 当前实现主包，设计目标将演进为 wiki-runtime
 │  └─ package.json        # core build / test 脚本入口
 ├─ agents/codebuddy/      # CodeBuddy Agent
 │  └─ src/*.test.ts       # Agent 自身测试
@@ -24,8 +32,11 @@
 │  ├─ testing/            # 测试共享工具与 lifecycle phase wrapper
 │  └─ tests/              # 根级整体测试：staging / e2e / 工作区检查
 ├─ openspec/              # proposal / design / tasks
-├─ DESIGN2.0.md           # 项目级设计（2.0）
-└─ DESIGN-CORE2.0.md      # core 四层 pipeline 设计（2.0）
+├─ DESIGN-3.0.md          # 主设计入口
+├─ DESIGN-RUNTIME.md      # 总运行架构
+├─ DESIGN-ITER.md         # 3.0 实施路线
+├─ SCENE-1.md             # 第一版核心用户故事
+└─ SCENE-2.md             # 补充场景
 ```
 
 ## 运行产物
@@ -34,17 +45,17 @@
 
 ```text
 .wiki/
-├─ 项目概述.md
-├─ 系统架构.md
-├─ 核心模块/
+├─ .knowledge/
+├─ pages/
 ├─ wiki.metadata.json
 └─ .cache/
 ```
 
-- `.wiki/*.md` 是正式 Wiki 页面
+- `.wiki/.knowledge/` 是正式知识层
+- `.wiki/pages/` 是正式页面投影
 - `wiki.metadata.json` 是正式索引
 - `.wiki/.cache/` 是运行时缓存
-- 当前生成会围绕模块层级组织总览页、架构页和模块页
+- 详细边界见 [DESIGN-RUNTIME.md](./DESIGN-RUNTIME.md)
 
 ## 编译
 
