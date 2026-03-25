@@ -38,7 +38,7 @@ project knowledge runtime + auditable long-term memory
 | 文档 | 内容 | 状态 |
 |------|------|------|
 | [DESIGN-RUNTIME.md](./DESIGN-RUNTIME.md) | 整个 wiki 系统的总运行架构、`.wiki/` 结构、query route、生命周期与恢复策略 | **当前** |
-| [DESIGN-ITER.md](./DESIGN-ITER.md) | 3.0 的拆包顺序、迁移路线、验收重点 | **当前** |
+| [DESIGN-ITER.md](./DESIGN-ITER.md) | 3.0 的拆包顺序、迁移路线、验收重点、**迭代参考** | **当前** |
 | [SCENE-1.md](./SCENE-1.md) | 第一版 9 个核心用户故事 | **当前** |
 | [SCENE-2.md](./SCENE-2.md) | 第一版之外的重要扩展场景 | **当前** |
 | [.archive/design/README.md](./.archive/design/README.md) | 旧 DESIGN 文档归档说明与映射关系 | 历史归档 |
