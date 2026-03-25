@@ -1,0 +1,8 @@
+{
+  "name": "wiki-model",
+  "private": true,
+  "scripts": {
+    "build": "cargo build -p wiki-model --manifest-path ../../Cargo.toml --target-dir ../../target",
+    "test": "cargo test -p wiki-model --manifest-path ../../Cargo.toml --target-dir ../../target"
+  }
+}

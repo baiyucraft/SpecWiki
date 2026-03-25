@@ -1,8 +1,8 @@
 /**
- * 这个文件收口 `wiki-core` 的最小响应协议校验。
+ * 这个文件收口 `wiki-runtime` 的最小响应协议校验。
  * Agent 只依赖稳定的外壳字段，不把 core 的内部数据结构写死在这里。
  */
-/** `wiki-core` 的最小终态响应外壳。 */
+/** `wiki-runtime` 的最小终态响应外壳。 */
 export type CoreResponse = {
   /** 是否执行成功。 */
   ok: boolean;
@@ -54,7 +54,7 @@ export type CoreErrorEvent = {
   response: CoreResponse;
 };
 
-/** `wiki-core` 长流程允许输出的完整事件集合。 */
+/** `wiki-runtime` 长流程允许输出的完整事件集合。 */
 export type CoreStreamEvent =
   | CoreProgressEvent
   | CoreLlmRequestEvent
@@ -65,17 +65,17 @@ function parseCoreResponse(value: unknown): CoreResponse {
   const parsed = value as Partial<CoreResponse>;
 
   if (typeof parsed !== "object" || parsed === null || typeof parsed.ok !== "boolean") {
-    throw new Error("invalid wiki-core response");
+    throw new Error("invalid wiki-runtime response");
   }
 
   return parsed as CoreResponse;
 }
 
 /**
- * 校验 `wiki-core` 的最小响应协议。
+ * 校验 `wiki-runtime` 的最小响应协议。
  * 当前只强校验 `ok` 字段，其他字段允许随着 core 能力继续扩展。
  *
- * @param stdout `wiki-core` 写到标准输出的 JSON 文本。
+ * @param stdout `wiki-runtime` 写到标准输出的 JSON 文本。
  * @returns 返回通过最小协议校验的响应对象。
  */
 export function parseResult(stdout: string): CoreResponse {
@@ -83,7 +83,7 @@ export function parseResult(stdout: string): CoreResponse {
 }
 
 /**
- * 校验 `wiki-core` 长流程使用的 NDJSON 事件行。
+ * 校验 `wiki-runtime` 长流程使用的 NDJSON 事件行。
  *
  * @param line 单行事件 JSON。
  * @returns 返回结构化的 progress/result/error 事件。
@@ -103,7 +103,7 @@ export function parseEventLine(line: string): CoreStreamEvent {
       !("processed" in parsed) ||
       !("total" in parsed)
     ) {
-      throw new Error("invalid wiki-core progress event");
+      throw new Error("invalid wiki-runtime progress event");
     }
 
     return {
@@ -130,7 +130,7 @@ export function parseEventLine(line: string): CoreStreamEvent {
       typeof request.system !== "string" ||
       typeof request.instruction !== "string"
     ) {
-      throw new Error("invalid wiki-core llm_request event");
+      throw new Error("invalid wiki-runtime llm_request event");
     }
 
     return {
@@ -157,7 +157,7 @@ export function parseEventLine(line: string): CoreStreamEvent {
     };
   }
 
-  throw new Error("invalid wiki-core stream event");
+  throw new Error("invalid wiki-runtime stream event");
 }
 
 /**

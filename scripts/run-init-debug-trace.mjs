@@ -1,5 +1,5 @@
 /**
- * 运行单个仓库的 `init`，并把进度与 `wiki-core` debug trace 一起落盘。
+ * 运行单个仓库的 `init`，并把进度与 `wiki-runtime` debug trace 一起落盘。
  * 默认目标是 `tmp/test/storybook`，日志默认输出到 `tmp/debug-init-traces/`。
  *
  * 用法：
@@ -27,7 +27,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { ROOT_DIR, TEST_DIR, removePathWithRetry } from "./testing/helpers.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
-const BINARY_NAME = process.platform === "win32" ? "wiki-core.exe" : "wiki-core";
+const BINARY_NAME = process.platform === "win32" ? "wiki-runtime.exe" : "wiki-runtime";
 const DEBUG_BINARY = path.join(ROOT_DIR, "target", "debug", BINARY_NAME);
 const RELEASE_BINARY = path.join(ROOT_DIR, "target", "release", BINARY_NAME);
 const ROOT_DEV_CONFIG_PATH = path.join(ROOT_DIR, "wiki.dev.yaml");
@@ -35,7 +35,7 @@ const DEFAULT_LOG_ROOT_DIR = path.join(ROOT_DIR, "tmp", "debug-init-traces");
 
 function resolveBinaryPath() {
   if (!existsSync(DEBUG_BINARY) && !existsSync(RELEASE_BINARY)) {
-    throw new Error(`缺少 wiki-core binary: ${DEBUG_BINARY} / ${RELEASE_BINARY}`);
+    throw new Error(`缺少 wiki-runtime binary: ${DEBUG_BINARY} / ${RELEASE_BINARY}`);
   }
   if (!existsSync(DEBUG_BINARY)) {
     return RELEASE_BINARY;
@@ -298,11 +298,11 @@ async function runInitTrace(target, logRootDir) {
           writeFileSync(path.join(runDir, "stderr.log"), stderrBuffer);
         }
         if (code !== 0) {
-          reject(new Error(stderrBuffer || `wiki-core exited with code ${code}`));
+          reject(new Error(stderrBuffer || `wiki-runtime exited with code ${code}`));
           return;
         }
         if (!terminalEvent) {
-          reject(new Error("wiki-core 输出中缺少终态事件"));
+          reject(new Error("wiki-runtime 输出中缺少终态事件"));
           return;
         }
         resolve(terminalEvent);

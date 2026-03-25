@@ -33,8 +33,8 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..", "..");
 const e2eTargetDir = path.join(rootDir, "target", "e2e");
 
-test("built wiki-core streams NDJSON progress for init", async () => {
-  const repoRoot = mkdtempSync(path.join(os.tmpdir(), "wiki-core-stream-"));
+test("built wiki-runtime streams NDJSON progress for init", async () => {
+  const repoRoot = mkdtempSync(path.join(os.tmpdir(), "wiki-runtime-stream-"));
 
   try {
     writeFileSync(path.join(repoRoot, "package.json"), JSON.stringify({ name: "stream-demo" }));

@@ -8,7 +8,7 @@ TBD - created by archiving change bootstrap-windows-codebuddy-core. Update Purpo
 
 #### Scenario: 在 Windows 下使用 Agent
 - **WHEN** 用户在 Windows 环境中加载 CodeBuddy Agent
-- **THEN** Agent 必须能够解析并调用本地 `wiki-core` binary
+- **THEN** Agent 必须能够解析并调用本地 `wiki-runtime` binary
 
 #### Scenario: 非当前阶段宿主
 - **WHEN** 用户尝试在非 Windows 或非 CodeBuddy 宿主中复用当前第一阶段集成
@@ -23,21 +23,21 @@ CodeBuddy Agent MUST 暴露 `wikiInit`、`wikiStatus`、`wikiUpdate`、`wikiQuer
 - **THEN** 每个工具必须映射到对应的 core action
 
 ### Requirement: CodeBuddy Agent 必须保持 thin Agent 边界
-CodeBuddy Agent MUST 通过本地进程调用 `wiki-core`，并只负责参数收集、binary 定位、结果解析和错误透传，不在 Agent 层实现 Wiki 业务逻辑。
+CodeBuddy Agent MUST 通过本地进程调用 `wiki-runtime`，并只负责参数收集、binary 定位、结果解析和错误透传，不在 Agent 层实现 Wiki 业务逻辑。
 
-#### Scenario: 调用 Wiki core
+#### Scenario: 调用 Wiki runtime
 - **WHEN** 任一 Wiki 工具被调用
-- **THEN** Agent 必须将请求转换为 core 可识别的命令
+- **THEN** Agent 必须将请求转换为 runtime 可识别的命令
 - **THEN** Agent 必须调用本地 binary
 - **THEN** Agent 必须将结果转换为宿主可消费的返回值
 
-#### Scenario: core 返回错误
-- **WHEN** `wiki-core` 返回错误
+#### Scenario: runtime 返回错误
+- **WHEN** `wiki-runtime` 返回错误
 - **THEN** Agent 必须向宿主返回明确错误信息
 - **THEN** Agent 不得在 TS 层静默改写 Wiki 业务状态
 
 ### Requirement: CodeBuddy Agent 必须消费并透传长流程 progress 事件
-CodeBuddy Agent 在调用 `wiki-core` 的 `init`、`update` 和 `rebuild` 时 MUST 直接消费 progress 事件流。Agent MUST 逐行解析 core 输出的 `progress / result / error` 事件，并在保持 thin Agent 边界的前提下把 progress 转交给宿主侧可用的 observer、callback 或等价桥接；若宿主当前不消费 progress，Agent 也 MUST 正常 drain 整个事件流并返回最终结果。
+CodeBuddy Agent 在调用 `wiki-runtime` 的 `init`、`update` 和 `rebuild` 时 MUST 直接消费 progress 事件流。Agent MUST 逐行解析 core 输出的 `progress / result / error` 事件，并在保持 thin Agent 边界的前提下把 progress 转交给宿主侧可用的 observer、callback 或等价桥接；若宿主当前不消费 progress，Agent 也 MUST 正常 drain 整个事件流并返回最终结果。
 
 #### Scenario: 宿主订阅 progress 时 Agent 透传阶段事件
 - **WHEN** 宿主通过 Agent 调用长流程 workflow，且提供可消费 progress 的桥接
@@ -50,7 +50,7 @@ CodeBuddy Agent 在调用 `wiki-core` 的 `init`、`update` 和 `rebuild` 时 MU
 - **THEN** Agent MUST 向宿主返回与非流式模式兼容的最终结果或错误
 
 ### Requirement: CodeBuddy Agent 必须在保持 thin Agent 边界的前提下桥接可选 LLM 请求
-CodeBuddy Agent 在调用 `wiki-core` 的长流程 workflow 时，MUST 能在协商开启的前提下桥接 `llm_request` 事件。Agent MUST 只负责协议解析、provider 调用、响应透传和错误上报，不得在 TS 层重写 prompt、重建页面上下文或实现 Wiki 业务规则。若宿主或 provider 不可用，Agent MUST 明确返回“不可用”响应，让 core 自行回退。
+CodeBuddy Agent 在调用 `wiki-runtime` 的长流程 workflow 时，MUST 能在协商开启的前提下桥接 `llm_request` 事件。Agent MUST 只负责协议解析、provider 调用、响应透传和错误上报，不得在 TS 层重写 prompt、重建页面上下文或实现 Wiki 业务规则。若宿主或 provider 不可用，Agent MUST 明确返回“不可用”响应，让 core 自行回退。
 
 #### Scenario: 宿主支持 LLM 时 Agent 透传请求与响应
 - **WHEN** Agent 调用长流程 workflow，且当前宿主或 provider 支持执行 LLM 请求

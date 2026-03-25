@@ -1,5 +1,5 @@
 /**
- * 这个文件负责定位 `wiki-core` 可执行文件。
+ * 这个文件负责定位 `wiki-runtime` 可执行文件。
  * 它优先使用已安装的平台包，其次回退到工作区里的本地构建产物。
  */
 import { existsSync } from "node:fs";
@@ -14,8 +14,8 @@ const __dirname = path.dirname(__filename);
 const MAIN_PACKAGE_NAME = "codebuddy-wiki";
 /** Windows 平台包名称；当前阶段只支持这个平台包。 */
 const WIN32_PLATFORM_PACKAGE_NAME = `${MAIN_PACKAGE_NAME}-win32-x64-msvc`;
-/** `wiki-core` 在 Windows 下的可执行文件名。 */
-const WIN32_BINARY_NAME = "wiki-core.exe";
+/** `wiki-runtime` 在 Windows 下的可执行文件名。 */
+const WIN32_BINARY_NAME = "wiki-runtime.exe";
 
 /**
  * 从当前文件位置向上回溯 package 根目录。
@@ -47,7 +47,7 @@ function findPackageRoot(startDir: string): string {
  * 列出所有可能的二进制位置，按“已发布平台包 -> 本地开发构建”顺序回退。
  *
  * @param packageRoot 当前 codebuddy 包的根目录。
- * @returns 返回按优先级排序的 `wiki-core` 二进制候选路径列表。
+ * @returns 返回按优先级排序的 `wiki-runtime` 二进制候选路径列表。
  */
 function collectBinaryCandidates(packageRoot: string): string[] {
   // 已发布包优先使用可选平台包里的二进制。
@@ -61,15 +61,15 @@ function collectBinaryCandidates(packageRoot: string): string[] {
 }
 
 /**
- * 解析 `wiki-core` 二进制位置。
+ * 解析 `wiki-runtime` 二进制位置。
  * 当前只支持 Windows，因此其他平台直接在这里给出明确错误。
  *
  * @param platform 当前运行平台；默认取 `process.platform`。
- * @returns 返回最终应被 `spawn` 调用的 `wiki-core` 路径。
+ * @returns 返回最终应被 `spawn` 调用的 `wiki-runtime` 路径。
  */
 export function resolveBinary(platform = process.platform): string {
-  if (process.env.CODEBUDDY_WIKI_CORE_BIN) {
-    return process.env.CODEBUDDY_WIKI_CORE_BIN;
+  if (process.env.CODEBUDDY_WIKI_RUNTIME_BIN) {
+    return process.env.CODEBUDDY_WIKI_RUNTIME_BIN;
   }
 
   if (platform !== "win32") {

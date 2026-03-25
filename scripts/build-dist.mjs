@@ -188,7 +188,7 @@ export async function buildDistribution({ rootDir = DEFAULT_ROOT_DIR, profile = 
     retryDelay: 50,
   });
 
-  await runCommand("cargo", ["build", "-p", "wiki-core", "--target-dir", "target"], {
+  await runCommand("cargo", ["build", "-p", "wiki-runtime", "--target-dir", "target"], {
     cwd: rootDir,
   });
   await runCommand("pnpm", ["build"], { cwd: agentRootDir });

@@ -22,7 +22,7 @@
 - **THEN** `init`、`update` 或 `rebuild` 不得因为辅助判断不可用而失败
 
 ### Requirement: core 必须优先使用本地 provider 直连，再回退到 Agent bridge
-系统 MUST 同时支持 `wiki-core` 直连供应商 API 和通过 Agent bridge 代调用两种 LLM 路径。当 provider 直连配置完整可用时，core MUST 优先使用 provider 直连；只有在 provider 配置缺失或不可用时，系统才 MAY 使用 Agent bridge。两条路径 MUST 共享同一组 prompt 契约、输入哈希和缓存语义。
+系统 MUST 同时支持 `wiki-runtime` 直连供应商 API 和通过 Agent bridge 代调用两种 LLM 路径。当 provider 直连配置完整可用时，core MUST 优先使用 provider 直连；只有在 provider 配置缺失或不可用时，系统才 MAY 使用 Agent bridge。两条路径 MUST 共享同一组 prompt 契约、输入哈希和缓存语义。
 
 #### Scenario: provider 配置完整时优先直连
 - **WHEN** 当前 workflow 的 LLM 配置中已经解析出可用的 provider 端点、认证信息和模型标识
@@ -223,4 +223,5 @@
 - **WHEN** 用户分别执行 `init`、`update` 和 `rebuild`
 - **THEN** 这三个 workflow MUST 通过统一的 provider 选择逻辑决定 runtime provider
 - **THEN** 系统不得在某个 workflow 中偷偷回退到结构型 provider 而其它 workflow 不回退
+
 

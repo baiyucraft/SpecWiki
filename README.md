@@ -16,14 +16,14 @@
 
 - 当前仅支持 Windows
 - 当前仅支持 CodeBuddy Agent
-- Rust 当前主包仍是 `wiki-core`，设计目标将其收束并改名为 `wiki-runtime`
+- Rust 当前主包仍是 `wiki-runtime`，设计目标将其收束并改名为 `wiki-runtime`
 - `agents/*` 负责将这些能力暴露成 Agent 工具
 
 ## 仓库结构
 
 ```text
 .
-├─ crates/wiki-core/      # 当前实现主包，设计目标将演进为 wiki-runtime
+├─ crates/wiki-runtime/      # 当前实现主包，设计目标将演进为 wiki-runtime
 │  └─ package.json        # core build / test 脚本入口
 ├─ agents/codebuddy/      # CodeBuddy Agent
 │  └─ src/*.test.ts       # Agent 自身测试
@@ -61,15 +61,15 @@
 
 ```bash
 pnpm install
-cargo build -p wiki-core --target-dir target
+cargo build -p wiki-runtime --target-dir target
 pnpm --dir agents/codebuddy build
 pnpm run lint
 ```
 
 这几组命令都从 workspace 根目录执行，职责不同：
 
-- `cargo build -p wiki-core --target-dir target`
-  - 只编译 `wiki-core`
+- `cargo build -p wiki-runtime --target-dir target`
+  - 只编译 `wiki-runtime`
 - `pnpm --dir agents/codebuddy build`
   - 只编译 `codebuddy`
 - `pnpm run lint`
@@ -78,7 +78,7 @@ pnpm run lint
 各模块单独编译后的产物位置：
 
 ```text
-target/debug/wiki-core.exe
+target/debug/wiki-runtime.exe
 agents/codebuddy/dist/
 ```
 
@@ -107,14 +107,14 @@ dist/
 
 当前仓库没有单独的 dev server。日常开发主要是：
 
-- 修改 `crates/wiki-core/` 后运行 core 自身测试
+- 修改 `crates/wiki-runtime/` 后运行 core 自身测试
 - 修改 `agents/codebuddy/` 后运行 Agent 自身的 build / test
 - 根级整体测试负责 staging / e2e / 工作区级联验证
 
 常用命令：
 
 ```bash
-cargo test -p wiki-core --target-dir target
+cargo test -p wiki-runtime --target-dir target
 pnpm --dir agents/codebuddy build
 pnpm --dir agents/codebuddy test
 pnpm run test
@@ -122,7 +122,7 @@ pnpm run test
 
 测试也遵循同样的分层原则：
 
-- `cargo test -p wiki-core --target-dir target`
+- `cargo test -p wiki-runtime --target-dir target`
   - 只跑 core 自身测试
 - `pnpm --dir agents/codebuddy test`
   - 只跑 Agent 自身测试
@@ -132,8 +132,8 @@ pnpm run test
 说明：
 
 - 当前仓库使用 Cargo workspace，Rust 产物统一输出到根目录 `target/`
-- CodeBuddy Agent 默认会在 `target/debug/wiki-core.exe` 查找本地 binary
-- 如需手动指定 binary，可设置环境变量 `CODEBUDDY_WIKI_CORE_BIN`
+- CodeBuddy Agent 默认会在 `target/debug/wiki-runtime.exe` 查找本地 binary
+- 如需手动指定 binary，可设置环境变量 `CODEBUDDY_WIKI_RUNTIME_BIN`
 - `pnpm run test` 会依次执行：core 自测、codebuddy 自测、根级 Vitest 整体测试
 
 ## Baseline 验收
@@ -145,7 +145,7 @@ pnpm run test
 - `wiki.metadata.json` 需要导出页面父子关系、模块层级和页面 provenance
 - `query` 需要优先返回页面、模块、源码、关系等结构化命中，Markdown 只作为回退
 
-当前用于这一轮验收的中型 fixture 在 [crates/wiki-core/tests/fixtures/baseline-hierarchy-repo](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/fixtures/baseline-hierarchy-repo)。它覆盖：
+当前用于这一轮验收的中型 fixture 在 [crates/wiki-runtime/tests/fixtures/baseline-hierarchy-repo](E:/project/!byAI/spec-wiki/crates/wiki-runtime/tests/fixtures/baseline-hierarchy-repo)。它覆盖：
 
 - nested workspace 模块：`apps/web`、`packages/domain/auth`、`packages/domain/shared`
 - 非 workspace 模块：`spider`
@@ -153,10 +153,10 @@ pnpm run test
 
 如果你要手工验证 baseline，优先看这些测试：
 
-- [crates/wiki-core/tests/hierarchy/hierarchy_planning.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/hierarchy/hierarchy_planning.rs)
-- [crates/wiki-core/tests/repo/repo_scan.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/repo/repo_scan.rs)
-- [crates/wiki-core/tests/acceptance/baseline_acceptance.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/acceptance/baseline_acceptance.rs)
-- [crates/wiki-core/tests/runtime/query_sync_rebuild.rs](E:/project/!byAI/spec-wiki/crates/wiki-core/tests/runtime/query_sync_rebuild.rs)
+- [crates/wiki-runtime/tests/hierarchy/hierarchy_planning.rs](E:/project/!byAI/spec-wiki/crates/wiki-runtime/tests/hierarchy/hierarchy_planning.rs)
+- [crates/wiki-runtime/tests/repo/repo_scan.rs](E:/project/!byAI/spec-wiki/crates/wiki-runtime/tests/repo/repo_scan.rs)
+- [crates/wiki-runtime/tests/acceptance/baseline_acceptance.rs](E:/project/!byAI/spec-wiki/crates/wiki-runtime/tests/acceptance/baseline_acceptance.rs)
+- [crates/wiki-runtime/tests/runtime/query_sync_rebuild.rs](E:/project/!byAI/spec-wiki/crates/wiki-runtime/tests/runtime/query_sync_rebuild.rs)
 
 # 一些想法
 
@@ -167,3 +167,4 @@ pnpm run test
 - [ ] 参考Qoder的文件，查看中间产物，看看有什么值得借鉴的
 
 - [ ] 内容定制
+

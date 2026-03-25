@@ -1,5 +1,5 @@
 /**
- * wiki-core 测试脚本共享工具。
+ * wiki-runtime 测试脚本共享工具。
  *
  * 这里集中维护二进制解析、子进程调用、超时清理与断言辅助，
  * 避免不同脚本各自复制一套 Windows 锁文件与长流程治理逻辑。
@@ -20,7 +20,7 @@ export const TEST_DIR = path.join(TMP_DIR, "test");
 export const ROOT_DEV_CONFIG_PATH = path.join(ROOT_DIR, "wiki.dev.yaml");
 const DEFAULT_PROJECT_JOBS = 8;
 
-const BINARY_NAME = process.platform === "win32" ? "wiki-core.exe" : "wiki-core";
+const BINARY_NAME = process.platform === "win32" ? "wiki-runtime.exe" : "wiki-runtime";
 const DEBUG_BINARY_PATH = path.join(ROOT_DIR, "target", "debug", BINARY_NAME);
 const RELEASE_BINARY_PATH = path.join(ROOT_DIR, "target", "release", BINARY_NAME);
 
@@ -41,7 +41,7 @@ export const COMMAND_TIMEOUT_GRACE_MS = 2 * 60_000;
 // -------------------------------------------------------------------------
 
 /**
- * 确保测试脚本至少有一个可执行的 `wiki-core` binary 可用。
+ * 确保测试脚本至少有一个可执行的 `wiki-runtime` binary 可用。
  *
  * @param options 运行选项；`fresh` 为真时总是先做一次 release build。
  * @returns 无返回值；如果构建失败会直接抛错。
@@ -49,12 +49,12 @@ export const COMMAND_TIMEOUT_GRACE_MS = 2 * 60_000;
 export function ensureBinary(options = {}) {
   if (options.fresh || (!existsSync(DEBUG_BINARY_PATH) && !existsSync(RELEASE_BINARY_PATH))) {
     console.log(`[build] ${options.fresh ? "refreshing" : "release binary not found, building"}...`);
-    execSync("cargo build --release -p wiki-core", { cwd: ROOT_DIR, stdio: "inherit" });
+    execSync("cargo build --release -p wiki-runtime", { cwd: ROOT_DIR, stdio: "inherit" });
   }
 }
 
 /**
- * 解析当前应该使用的 `wiki-core` binary。
+ * 解析当前应该使用的 `wiki-runtime` binary。
  *
  * 优先使用较新的 build 产物，避免测试脚本继续调用过期的 release binary。
  *
@@ -65,7 +65,7 @@ function resolveBinaryPath() {
   const hasRelease = existsSync(RELEASE_BINARY_PATH);
 
   if (!hasDebug && !hasRelease) {
-    throw new Error(`缺少 wiki-core binary: ${DEBUG_BINARY_PATH} / ${RELEASE_BINARY_PATH}`);
+    throw new Error(`缺少 wiki-runtime binary: ${DEBUG_BINARY_PATH} / ${RELEASE_BINARY_PATH}`);
   }
   if (!hasDebug) {
     return RELEASE_BINARY_PATH;
@@ -261,7 +261,7 @@ function tryKillProcessTree(pid) {
 /**
  * 终止测试脚本拉起的子进程。
  *
- * 对 `wiki-core` 这类 leaf 进程，Windows 下需要回收整棵进程树，避免残留句柄继续锁住 `.wiki/.cache`；
+ * 对 `wiki-runtime` 这类 leaf 进程，Windows 下需要回收整棵进程树，避免残留句柄继续锁住 `.wiki/.cache`；
  * 对项目级 node worker，默认只杀当前进程，避免破坏其 `finally` 里的临时 dev config 回滚。
  *
  * @param child Node `spawn()` 返回的子进程句柄。
@@ -485,7 +485,7 @@ export async function callCoreStreaming(command, options = {}) {
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      stderr = appendProcessMessage(stderr, `wiki-core ${command.action} timed out after ${timeout}ms`);
+      stderr = appendProcessMessage(stderr, `wiki-runtime ${command.action} timed out after ${timeout}ms`);
       terminateChildProcess(child, { killTreeOnWindows: true });
     }, timeout);
     timer.unref?.();
@@ -506,15 +506,15 @@ export async function callCoreStreaming(command, options = {}) {
       drainOutput(true);
 
       if (timedOut) {
-        reject(new Error(stderr || `wiki-core ${command.action} timed out after ${timeout}ms`));
+        reject(new Error(stderr || `wiki-runtime ${command.action} timed out after ${timeout}ms`));
         return;
       }
       if (code !== 0) {
-        reject(new Error(stderr || `wiki-core exited with code ${code}`));
+        reject(new Error(stderr || `wiki-runtime exited with code ${code}`));
         return;
       }
       if (!terminal) {
-        reject(new Error("wiki-core stream ended without terminal response"));
+        reject(new Error("wiki-runtime stream ended without terminal response"));
         return;
       }
       resolve({ progressEvents, response: terminal });
@@ -551,12 +551,12 @@ export async function callCoreStreaming(command, options = {}) {
       }
       if ((event.type === "result" || event.type === "error") && event.response) {
         if (terminal) {
-          throw new Error("wiki-core emitted multiple terminal events");
+          throw new Error("wiki-runtime emitted multiple terminal events");
         }
         terminal = event.response;
         return;
       }
-      throw new Error(`unexpected wiki-core event: ${line}`);
+      throw new Error(`unexpected wiki-runtime event: ${line}`);
     }
   });
 }
@@ -564,7 +564,7 @@ export async function callCoreStreaming(command, options = {}) {
 function parseCoreOutput(output) {
   const trimmed = output.trim();
   if (!trimmed) {
-    throw new Error("wiki-core returned empty stdout");
+    throw new Error("wiki-runtime returned empty stdout");
   }
 
   const lines = trimmed.split(/\r?\n/).filter(Boolean);
@@ -580,16 +580,16 @@ function parseCoreOutput(output) {
     }
     if ((parsed.type === "result" || parsed.type === "error") && parsed.response) {
       if (terminal) {
-        throw new Error("wiki-core emitted multiple terminal events");
+        throw new Error("wiki-runtime emitted multiple terminal events");
       }
       terminal = parsed.response;
       continue;
     }
-    throw new Error(`unexpected wiki-core event: ${line}`);
+    throw new Error(`unexpected wiki-runtime event: ${line}`);
   }
 
   if (!terminal) {
-    throw new Error("wiki-core stream ended without terminal response");
+    throw new Error("wiki-runtime stream ended without terminal response");
   }
 
   return terminal;

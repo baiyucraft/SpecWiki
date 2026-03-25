@@ -7,7 +7,7 @@ const PLATFORM_ABI_SUFFIX = {
 };
 
 export function getCoreBinaryName(platform = process.platform) {
-  return platform === "win32" ? "wiki-core.exe" : "wiki-core";
+  return platform === "win32" ? "wiki-runtime.exe" : "wiki-runtime";
 }
 
 export function getCoreTargetDir(rootDir) {
@@ -27,7 +27,7 @@ export function resolveBuiltBinary(
   const binaryPath = path.join(targetDir, profile, binaryName);
 
   if (!existsSync(binaryPath)) {
-    throw new Error(`wiki-core binary not found at ${binaryPath}`);
+    throw new Error(`wiki-runtime binary not found at ${binaryPath}`);
   }
 
   return binaryPath;

@@ -14,7 +14,7 @@ const e2eTargetDir = path.join(rootDir, "target", "e2e");
 
 test("agent init, status, update, query, sync, and rebuild work end to end", async () => {
   const repoRoot = mkdtempSync(path.join(os.tmpdir(), "codebuddy-wiki-e2e-"));
-  const previousBinary = process.env.CODEBUDDY_WIKI_CORE_BIN;
+  const previousBinary = process.env.CODEBUDDY_WIKI_RUNTIME_BIN;
 
   try {
     writeFileSync(path.join(repoRoot, "package.json"), JSON.stringify({ name: "demo-repo" }));
@@ -29,11 +29,11 @@ test("agent init, status, update, query, sync, and rebuild work end to end", asy
       throw new Error(
         error instanceof Error
           ? error.message
-          : "wiki-core binary is required before running the e2e test",
+          : "wiki-runtime binary is required before running the e2e test",
       );
     }
 
-    process.env.CODEBUDDY_WIKI_CORE_BIN = binaryPath;
+    process.env.CODEBUDDY_WIKI_RUNTIME_BIN = binaryPath;
 
     const tools = createTools() as any;
 
@@ -61,14 +61,17 @@ test("agent init, status, update, query, sync, and rebuild work end to end", asy
     expect(updateResult.data.state).toBe("fresh");
     expect(updateResult.data.updated_pages.length).toBeGreaterThan(0);
 
-    const queryResult = await tools.wikiQuery({ repoRoot, term: "项目概述" });
-    expect(queryResult.ok).toBe(true);
+    const pageQueryResult = await tools.wikiQuery({ repoRoot, term: "项目概述" });
+    expect(pageQueryResult.ok).toBe(true);
     expect(
-      queryResult.data.matched_pages.some((page: string) => page.endsWith("项目概述.md")),
+      pageQueryResult.data.matched_pages.some((page: string) => page.endsWith("项目概述.md")),
     ).toBe(true);
-    expect(queryResult.data.matches.length).toBeGreaterThan(0);
-    expect(queryResult.data.matched_modules.length).toBeGreaterThan(0);
-    expect(queryResult.data.matched_sources.length).toBeGreaterThan(0);
+    expect(pageQueryResult.data.matches.length).toBeGreaterThan(0);
+
+    const structureQueryResult = await tools.wikiQuery({ repoRoot, term: "src.ts" });
+    expect(structureQueryResult.ok).toBe(true);
+    expect(structureQueryResult.data.matches.length).toBeGreaterThan(0);
+    expect(structureQueryResult.data.matched_sources.length).toBeGreaterThan(0);
 
     writeFileSync(path.join(repoRoot, ".wiki", "项目概述.md"), "# 项目概述\n\n手动补充说明\n");
     const syncResult = await tools.wikiSync({ repoRoot });
@@ -86,9 +89,9 @@ test("agent init, status, update, query, sync, and rebuild work end to end", asy
     ).toBe(true);
   } finally {
     if (previousBinary === undefined) {
-      delete process.env.CODEBUDDY_WIKI_CORE_BIN;
+      delete process.env.CODEBUDDY_WIKI_RUNTIME_BIN;
     } else {
-      process.env.CODEBUDDY_WIKI_CORE_BIN = previousBinary;
+      process.env.CODEBUDDY_WIKI_RUNTIME_BIN = previousBinary;
     }
 
     rmSync(repoRoot, { recursive: true, force: true });

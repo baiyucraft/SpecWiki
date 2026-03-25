@@ -1,5 +1,5 @@
 /**
- * 这个文件负责 Agent 与 `wiki-core` 的 JSON IPC。
+ * 这个文件负责 Agent 与 `wiki-runtime` 的 JSON IPC。
  * 这里不解释业务语义，只处理进程启动、协议收发和错误透传。
  */
 import { spawn } from "node:child_process";
@@ -53,11 +53,11 @@ export type InvokeCoreOptions = {
 const STREAMING_ACTIONS = new Set(["init", "update", "rebuild"]);
 
 /**
- * 通过子进程调用 `wiki-core`。
+ * 通过子进程调用 `wiki-runtime`。
  * Agent 层只负责 IPC、路径定位和错误透传，不解释返回的数据结构。
  *
- * @param command 要发送给 `wiki-core` 的命令对象。
- * @returns 返回 `wiki-core` 的统一响应对象。
+ * @param command 要发送给 `wiki-runtime` 的命令对象。
+ * @returns 返回 `wiki-runtime` 的统一响应对象。
  */
 export async function invokeCore(
   command: CoreCommand,
@@ -106,7 +106,7 @@ export async function invokeCore(
     });
 
     child.on("error", (error) => {
-      reject(new Error(`failed to launch wiki-core at ${binary}: ${error.message}`));
+      reject(new Error(`failed to launch wiki-runtime at ${binary}: ${error.message}`));
     });
     child.on("close", (code) => {
       if (streamOutput) {
@@ -116,7 +116,7 @@ export async function invokeCore(
       void pendingEventWork
         .then(() => {
           if (code !== 0) {
-            throw new Error(stderr || `wiki-core exited with code ${code}`);
+            throw new Error(stderr || `wiki-runtime exited with code ${code}`);
           }
 
           if (streamError) {
@@ -125,7 +125,7 @@ export async function invokeCore(
 
           if (streamOutput) {
             if (!terminal) {
-              throw new Error("wiki-core stream ended without terminal event");
+              throw new Error("wiki-runtime stream ended without terminal event");
             }
             resolve(terminal);
             return;
@@ -190,7 +190,7 @@ export async function invokeCore(
         }
 
         if (terminal) {
-          throw new Error("received multiple terminal events from wiki-core");
+          throw new Error("received multiple terminal events from wiki-runtime");
         }
 
         terminal = responseFromTerminalEvent(event as CoreResultEvent | CoreErrorEvent);

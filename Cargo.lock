@@ -1723,7 +1723,53 @@ dependencies = [
 ]
 
 [[package]]
-name = "wiki-core"
+name = "wiki-index"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "regex",
+ "serde",
+ "serde_json",
+ "syn",
+ "tempfile",
+ "toml",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-kotlin-ng",
+ "tree-sitter-php",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-swift",
+ "tree-sitter-typescript",
+ "wiki-model",
+]
+
+[[package]]
+name = "wiki-knowledge"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "tempfile",
+ "wiki-index",
+ "wiki-model",
+]
+
+[[package]]
+name = "wiki-model"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+]
+
+[[package]]
+name = "wiki-runtime"
 version = "0.1.0"
 dependencies = [
  "blake3",
@@ -1750,6 +1796,9 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-swift",
  "tree-sitter-typescript",
+ "wiki-index",
+ "wiki-knowledge",
+ "wiki-model",
 ]
 
 [[package]]

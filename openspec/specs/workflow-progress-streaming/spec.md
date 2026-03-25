@@ -1,10 +1,10 @@
 # workflow-progress-streaming Specification
 
 ## Purpose
-定义 `wiki-core` 长流程 workflow 的 NDJSON progress 事件流协议及其终态兼容性约束。
+定义 `wiki-runtime` 长流程 workflow 的 NDJSON progress 事件流协议及其终态兼容性约束。
 ## Requirements
 ### Requirement: 长流程 workflow 必须输出结构化进度事件流
-系统 MUST 为 `init`、`update` 和 `rebuild` 提供结构化 progress 事件流。对这些长流程 action，`wiki-core --json` MUST 通过 stdout 逐行输出 NDJSON 事件，而不是只在结束时输出单个最终对象；调用方需要按 `progress / result / error` 事件流消费结果。
+系统 MUST 为 `init`、`update` 和 `rebuild` 提供结构化 progress 事件流。对这些长流程 action，`wiki-runtime --json` MUST 通过 stdout 逐行输出 NDJSON 事件，而不是只在结束时输出单个最终对象；调用方需要按 `progress / result / error` 事件流消费结果。
 
 #### Scenario: 长流程 action 输出 NDJSON 事件流
 - **WHEN** 调用方执行 `init`、`update` 或 `rebuild`
@@ -38,7 +38,7 @@
 - **THEN** 在该 `error` 事件之后，系统不得继续输出新的 `progress` 或 `result` 事件
 
 ### Requirement: 长流程 NDJSON 协议必须支持可协商的 LLM 请求事件
-系统 MUST 在长流程 JSON IPC 中支持可协商的 LLM 请求事件。当调用方显式声明支持 LLM 桥接时，`wiki-core --json` 除了现有 `progress / result / error` 事件外，还 MAY 输出 `llm_request` 事件；对应请求 MUST 带有稳定 `request_id`、`prompt_type`、作用域信息、消息内容、期望返回格式和是否允许回退。未协商桥接时，系统 MUST 保持当前只输出 `progress / result / error` 的行为，不得对旧调用方输出未识别事件。
+系统 MUST 在长流程 JSON IPC 中支持可协商的 LLM 请求事件。当调用方显式声明支持 LLM 桥接时，`wiki-runtime --json` 除了现有 `progress / result / error` 事件外，还 MAY 输出 `llm_request` 事件；对应请求 MUST 带有稳定 `request_id`、`prompt_type`、作用域信息、消息内容、期望返回格式和是否允许回退。未协商桥接时，系统 MUST 保持当前只输出 `progress / result / error` 的行为，不得对旧调用方输出未识别事件。
 
 #### Scenario: 协商开启时输出 `llm_request`
 - **WHEN** 调用方以支持 LLM 桥接的模式执行 `init`、`update` 或 `rebuild`
@@ -93,4 +93,5 @@
 - **WHEN** 系统上报 usage snapshot
 - **THEN** snapshot MUST 能区分至少一个 `prompt_type` 或 provider/model 维度
 - **THEN** 调用方不得只能拿到没有分组信息的一团总数
+
 

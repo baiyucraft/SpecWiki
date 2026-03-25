@@ -4,7 +4,7 @@ import { shouldResumeInitFromFailure } from "../run-test-projects.mjs";
 import { isPreserveResumeEligibleInitErrorMessage } from "../testing/helpers.mjs";
 
 test("init preserve-resume 错误分类只接受 timeout 与 provider 重试型错误", () => {
-  expect(isPreserveResumeEligibleInitErrorMessage("wiki-core init timed out after 3600000ms")).toBe(true);
+  expect(isPreserveResumeEligibleInitErrorMessage("wiki-runtime init timed out after 3600000ms")).toBe(true);
   expect(isPreserveResumeEligibleInitErrorMessage("provider returned 429")).toBe(true);
   expect(isPreserveResumeEligibleInitErrorMessage("provider returned 503")).toBe(true);
   expect(isPreserveResumeEligibleInitErrorMessage("error sending request for url")).toBe(true);
@@ -26,7 +26,7 @@ test("run-test-projects 仅在真实 incomplete runtime 快照下放行 preserve
   };
 
   expect(shouldResumeInitFromFailure({
-    message: "wiki-core init timed out after 3600000ms",
+    message: "wiki-runtime init timed out after 3600000ms",
     checkpoint: null,
     runtimeSnapshot,
     attempt: 1,
@@ -50,7 +50,7 @@ test("run-test-projects 仅在真实 incomplete runtime 快照下放行 preserve
   })).toBe(true);
 
   expect(shouldResumeInitFromFailure({
-    message: "wiki-core init timed out after 3600000ms",
+    message: "wiki-runtime init timed out after 3600000ms",
     checkpoint: null,
     runtimeSnapshot: {
       ...runtimeSnapshot,

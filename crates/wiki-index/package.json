@@ -1,0 +1,8 @@
+{
+  "name": "wiki-index",
+  "private": true,
+  "scripts": {
+    "build": "cargo build -p wiki-index --manifest-path ../../Cargo.toml --target-dir ../../target",
+    "test": "cargo test -p wiki-index --manifest-path ../../Cargo.toml --target-dir ../../target"
+  }
+}

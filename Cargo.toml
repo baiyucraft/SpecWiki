@@ -1,3 +1,8 @@
 [workspace]
-members = [ "crates/wiki-core" ]
+members = [
+    "crates/wiki-model",
+    "crates/wiki-index",
+    "crates/wiki-knowledge",
+    "crates/wiki-runtime",
+]
 resolver = "2"

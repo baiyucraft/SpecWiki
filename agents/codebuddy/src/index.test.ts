@@ -38,49 +38,49 @@ test("all wiki tools delegate to the expected core action", async () => {
     ]);
 });
 
-test("resolveBinary prefers CODEBUDDY_WIKI_CORE_BIN", () => {
-  const previous = process.env.CODEBUDDY_WIKI_CORE_BIN;
-  process.env.CODEBUDDY_WIKI_CORE_BIN = "C:/custom/wiki-core.exe";
+test("resolveBinary prefers CODEBUDDY_WIKI_RUNTIME_BIN", () => {
+  const previous = process.env.CODEBUDDY_WIKI_RUNTIME_BIN;
+  process.env.CODEBUDDY_WIKI_RUNTIME_BIN = "C:/custom/wiki-runtime.exe";
 
   try {
-    expect(resolveBinary()).toBe("C:/custom/wiki-core.exe");
+    expect(resolveBinary()).toBe("C:/custom/wiki-runtime.exe");
   } finally {
     if (previous === undefined) {
-      delete process.env.CODEBUDDY_WIKI_CORE_BIN;
+      delete process.env.CODEBUDDY_WIKI_RUNTIME_BIN;
     } else {
-      process.env.CODEBUDDY_WIKI_CORE_BIN = previous;
+      process.env.CODEBUDDY_WIKI_RUNTIME_BIN = previous;
     }
   }
 });
 
 test("resolveBinary rejects unsupported platforms without override", () => {
-  const previous = process.env.CODEBUDDY_WIKI_CORE_BIN;
-  delete process.env.CODEBUDDY_WIKI_CORE_BIN;
+  const previous = process.env.CODEBUDDY_WIKI_RUNTIME_BIN;
+  delete process.env.CODEBUDDY_WIKI_RUNTIME_BIN;
 
   try {
     expect(() => resolveBinary("linux")).toThrow(/Windows only/);
   } finally {
     if (previous === undefined) {
-      delete process.env.CODEBUDDY_WIKI_CORE_BIN;
+      delete process.env.CODEBUDDY_WIKI_RUNTIME_BIN;
     } else {
-      process.env.CODEBUDDY_WIKI_CORE_BIN = previous;
+      process.env.CODEBUDDY_WIKI_RUNTIME_BIN = previous;
     }
   }
 });
 
 test("resolveBinary falls back to the workspace build path on Windows", () => {
-  const previous = process.env.CODEBUDDY_WIKI_CORE_BIN;
-  delete process.env.CODEBUDDY_WIKI_CORE_BIN;
+  const previous = process.env.CODEBUDDY_WIKI_RUNTIME_BIN;
+  delete process.env.CODEBUDDY_WIKI_RUNTIME_BIN;
 
   try {
     expect(resolveBinary("win32")).toMatch(
-      /target[\\/]debug[\\/]wiki-core\.exe$/,
+      /target[\\/]debug[\\/]wiki-runtime\.exe$/,
     );
   } finally {
     if (previous === undefined) {
-      delete process.env.CODEBUDDY_WIKI_CORE_BIN;
+      delete process.env.CODEBUDDY_WIKI_RUNTIME_BIN;
     } else {
-      process.env.CODEBUDDY_WIKI_CORE_BIN = previous;
+      process.env.CODEBUDDY_WIKI_RUNTIME_BIN = previous;
     }
   }
 });

@@ -14,7 +14,7 @@ import { createWikiUpdate } from "./tools/wikiUpdate.js";
  * `createTools` 是 Agent 层的总装配入口。
  * 这里仅组合各个薄封装工具，不承载 Repo Wiki 的业务判断。
  *
- * @param invoke 用于调用 `wiki-core` 的底层执行函数；默认使用本地子进程调用。
+ * @param invoke 用于调用 `wiki-runtime` 的底层执行函数；默认使用本地子进程调用。
  * @returns 返回一组可直接暴露给宿主的 Repo Wiki 工具函数。
  */
 export function createTools(invoke: (command: CoreCommand) => Promise<unknown> = invokeCore) {

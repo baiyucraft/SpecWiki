@@ -62,7 +62,7 @@
 # 目录通配
 
 - `crates/*`
-  - Rust 包。`crates/wiki-core/**` 持有 repo facts、runtime、workflow、metadata、query。
+  - Rust 包。`crates/wiki-model/**`、`crates/wiki-index/**`、`crates/wiki-knowledge/**`、`crates/wiki-runtime/**` 分别承载共享模型、facts/index、knowledge、runtime。
 - `agents/*`
   - 宿主接入层。只做参数收集、binary 调用、结果解析，不承载 Wiki 业务规则。
 - `scripts/*.mjs`

@@ -9,7 +9,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("./resolveBinary.js", () => ({
-  resolveBinary: () => "wiki-core-test-bin",
+  resolveBinary: () => "wiki-runtime-test-bin",
 }));
 
 type MockChildProcess = EventEmitter & {
@@ -161,7 +161,7 @@ test("invokeCore 逐行消费长流程进度并返回最终结果", async () => 
     },
   );
 
-  expect(spawnMock).toHaveBeenCalledWith("wiki-core-test-bin", ["--json"], {
+  expect(spawnMock).toHaveBeenCalledWith("wiki-runtime-test-bin", ["--json"], {
     stdio: ["pipe", "pipe", "pipe"],
   });
   expect(child.stdin.write).toHaveBeenCalledWith(

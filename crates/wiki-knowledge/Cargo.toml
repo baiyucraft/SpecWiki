@@ -1,0 +1,16 @@
+[package]
+name = "wiki-knowledge"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+regex = "1.12"
+serde = { version = "1.0", features = [ "derive" ] }
+wiki-index = { path = "../wiki-index" }
+wiki-model = { path = "../wiki-model" }
+
+[dev-dependencies]
+tempfile = "3.16"

@@ -15,10 +15,10 @@ test("workspace skeleton files exist", () => {
     "package.json",
     "pnpm-workspace.yaml",
     "README.md",
-    "crates/wiki-core/Cargo.toml",
-    "crates/wiki-core/package.json",
-    "crates/wiki-core/src/lib.rs",
-    "crates/wiki-core/src/main.rs",
+    "crates/wiki-runtime/Cargo.toml",
+    "crates/wiki-runtime/package.json",
+    "crates/wiki-runtime/src/lib.rs",
+    "crates/wiki-runtime/src/main.rs",
     "agents/codebuddy/package.json",
     "agents/codebuddy/tsconfig.json",
     "agents/codebuddy/vite.config.mjs",
@@ -49,7 +49,7 @@ test("staging script creates platform package manifest", async () => {
   const outputDir = mkdtempSync(path.join(os.tmpdir(), "codebuddy-stage-"));
   const profile = "test-integration";
   const binaryDir = path.join(rootDir, "target", profile);
-  const binaryName = process.platform === "win32" ? "wiki-core.exe" : "wiki-core";
+  const binaryName = process.platform === "win32" ? "wiki-runtime.exe" : "wiki-runtime";
   const binaryPath = path.join(binaryDir, binaryName);
   const adapterManifest = JSON.parse(
     readFileSync(path.join(rootDir, "agents", "codebuddy", "package.json"), "utf8"),

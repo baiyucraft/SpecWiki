@@ -1,8 +1,0 @@
-{
-  "name": "wiki-core",
-  "private": true,
-  "scripts": {
-    "build": "cargo build -p wiki-core --manifest-path ../../Cargo.toml --target-dir ../../target",
-    "test": "cargo test -p wiki-core --manifest-path ../../Cargo.toml --target-dir ../../target"
-  }
-}

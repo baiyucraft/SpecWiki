@@ -1,5 +1,5 @@
 /**
- * wiki-core 生命周期测试脚本。
+ * wiki-runtime 生命周期测试脚本。
  *
  * 这个入口负责把 `init -> status -> sync -> query -> update -> rebuild`
  * 按 phase 组合成可复跑的验收链路；

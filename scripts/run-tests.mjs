@@ -9,7 +9,7 @@ const AGENT_DIR = path.join(DEFAULT_ROOT_DIR, "agents", "codebuddy");
 const TEST_COMMANDS = [
   {
     command: "cargo",
-    args: ["test", "-p", "wiki-core", "--target-dir", "target"],
+    args: ["test", "-p", "wiki-runtime", "--target-dir", "target"],
   },
   {
     command: "pnpm",
@@ -18,7 +18,7 @@ const TEST_COMMANDS = [
   },
   {
     command: "cargo",
-    args: ["build", "-p", "wiki-core", "--target-dir", "target"],
+    args: ["build", "-p", "wiki-runtime", "--target-dir", "target"],
   },
   {
     command: "pnpm",
@@ -27,7 +27,7 @@ const TEST_COMMANDS = [
   },
   {
     command: "cargo",
-    args: ["build", "-p", "wiki-core", "--target-dir", "target/e2e"],
+    args: ["build", "-p", "wiki-runtime", "--target-dir", "target/e2e"],
   },
   {
     command: "pnpm",
