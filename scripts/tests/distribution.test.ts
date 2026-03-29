@@ -82,6 +82,7 @@ test("staging script creates a single publishable Windows x64 spec-wiki package 
   expect(stagedManifest.files).toContain("lib/**");
   expect(existsSync(path.join(outputDir, "bin", "spec-wiki.js"))).toBe(true);
   expect(existsSync(path.join(outputDir, "dist", "index.js"))).toBe(true);
+  expect(existsSync(path.join(outputDir, "README.md"))).toBe(true);
   expect(existsSync(stagedBinaryPath)).toBe(true);
   expect(staged.packageDir).toBe(outputDir);
   expect(staged.stagedBinaryPath).toBe(stagedBinaryPath);
@@ -101,3 +102,4 @@ test("spec-wiki build writes bundle into the main package dist directory", async
     path.normalize(path.join(mainPackageDir, "dist")),
   );
 });
+

@@ -16,6 +16,7 @@ const MAIN_PACKAGE_DIR = path.join("packages", "spec-wiki");
 const MAIN_PACKAGE_PATH = path.join(MAIN_PACKAGE_DIR, "package.json");
 const STAGED_PACKAGE_DIR = path.join("dist", "spec-wiki");
 const STAGED_RUNTIME_DIR = path.join("lib", "x64-win32");
+const README_PATH = "README.md";
 const REMOVE_RETRY_DELAY_MS = 500;
 const REMOVE_RETRY_ATTEMPTS = 40;
 
@@ -160,6 +161,7 @@ export function stagePackage({
   );
   copyMainPackageAssets(rootDir, outputDir, sourceManifest);
   cpSync(path.join(rootDir, "LICENSE"), path.join(outputDir, "LICENSE"));
+  cpSync(path.join(rootDir, README_PATH), path.join(outputDir, README_PATH));
   cpSync(binaryPath, stagedBinaryPath);
 
   return {
