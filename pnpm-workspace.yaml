@@ -1,6 +1,6 @@
 packages:
   - "crates/*"
-  - "agents/*"
+  - "packages/*"
 catalog:
   "@antfu/eslint-config": ^4.14.1
   "@types/node": ^22.15.21

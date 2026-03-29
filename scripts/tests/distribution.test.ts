@@ -1,3 +1,7 @@
+/**
+ * 这个文件覆盖 spec-wiki 的单包分发骨架和 staging 结果。
+ * 它确保 dist 发布真相已经收口到 `dist/spec-wiki`。
+ */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,11 +23,11 @@ test("workspace skeleton files exist", () => {
     "crates/wiki-runtime/package.json",
     "crates/wiki-runtime/src/lib.rs",
     "crates/wiki-runtime/src/main.rs",
-    "agents/codebuddy/package.json",
-    "agents/codebuddy/tsconfig.json",
-    "agents/codebuddy/vite.config.mjs",
-    "agents/codebuddy/src/index.ts",
-    "agents/codebuddy/bin/codebuddy.js",
+    "packages/spec-wiki/package.json",
+    "packages/spec-wiki/tsconfig.json",
+    "packages/spec-wiki/vite.config.mjs",
+    "packages/spec-wiki/src/index.ts",
+    "packages/spec-wiki/bin/spec-wiki.js",
     "scripts/build/core-paths.mjs",
     "scripts/build-dist.mjs",
     "scripts/publish-packages.mjs",
@@ -37,7 +41,6 @@ test("workspace skeleton files exist", () => {
     "scripts/tests/distribution.test.ts",
     "scripts/tests/e2e.test.ts",
     "scripts/tests/streaming-protocol.test.ts",
-    "scripts/templates/platform-package.json",
   ];
 
   for (const requiredPath of requiredPaths) {
@@ -45,59 +48,56 @@ test("workspace skeleton files exist", () => {
   }
 });
 
-test("staging script creates platform package manifest", async () => {
-  const outputDir = mkdtempSync(path.join(os.tmpdir(), "codebuddy-stage-"));
+test("staging script creates a single publishable Windows x64 spec-wiki package with bundled runtime", async () => {
+  const outputDir = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-stage-"));
   const profile = "test-integration";
+  const stagePlatform = "win32";
   const binaryDir = path.join(rootDir, "target", profile);
-  const binaryName = process.platform === "win32" ? "wiki-runtime.exe" : "wiki-runtime";
+  const binaryName = "wiki-runtime.exe";
   const binaryPath = path.join(binaryDir, binaryName);
-  const adapterManifest = JSON.parse(
-    readFileSync(path.join(rootDir, "agents", "codebuddy", "package.json"), "utf8"),
+  const mainManifestSource = JSON.parse(
+    readFileSync(path.join(rootDir, "packages", "spec-wiki", "package.json"), "utf8"),
   );
 
   mkdirSync(binaryDir, { recursive: true });
   writeFileSync(binaryPath, "mock-binary");
 
-  const { resolvePlatformPackageName } = await import("../build/core-paths.mjs");
-  const { stagePackages } = await import("../build-dist.mjs");
-  const staged = await stagePackages({ rootDir, profile, outputDir });
-  const platformPackageName = resolvePlatformPackageName(adapterManifest.name);
-  const mainManifestPath = path.join(outputDir, adapterManifest.name, "package.json");
-  const platformManifestPath = path.join(outputDir, platformPackageName, "package.json");
-  const mainManifest = JSON.parse(readFileSync(mainManifestPath, "utf8"));
-  const platformManifest = JSON.parse(readFileSync(platformManifestPath, "utf8"));
+  const { stagePackage } = await import("../build-dist.mjs");
+  const staged = stagePackage({ rootDir, profile, outputDir, platform: stagePlatform });
+  const stagedManifestPath = path.join(outputDir, "package.json");
+  const stagedManifest = JSON.parse(readFileSync(stagedManifestPath, "utf8"));
+  const stagedBinaryPath = path.join(outputDir, "lib", "x64-win32", path.basename(binaryPath));
 
-  expect(existsSync(mainManifestPath)).toBe(true);
-  expect(existsSync(platformManifestPath)).toBe(true);
-  expect(mainManifest.name).toBe(adapterManifest.name);
-  expect(mainManifest.version).toBe(adapterManifest.version);
-  expect(mainManifest.bin).toEqual({
-    [adapterManifest.name]: adapterManifest.bin,
-  });
-  expect(mainManifest.main).toBe(adapterManifest.main);
-  expect(mainManifest.exports).toEqual(adapterManifest.exports);
-  expect(mainManifest.optionalDependencies[platformPackageName]).toBe(adapterManifest.version);
-  expect(platformManifest.name).toBe(platformPackageName);
-  expect(platformManifest.version).toBe(adapterManifest.version);
-  expect(platformManifest.os).toEqual([process.platform]);
-  expect(platformManifest.cpu).toEqual([process.arch]);
-  expect(existsSync(path.join(outputDir, adapterManifest.name, "bin", "codebuddy.js"))).toBe(true);
-  expect(existsSync(path.join(outputDir, adapterManifest.name, "dist", "index.js"))).toBe(true);
-  expect(
-    existsSync(path.join(outputDir, platformPackageName, "bin", path.basename(binaryPath))),
-  ).toBe(true);
-  expect(staged.mainManifest.name).toBe(adapterManifest.name);
-  expect(staged.platformManifest.name).toBe(platformPackageName);
+  expect(existsSync(stagedManifestPath)).toBe(true);
+  expect(stagedManifest.name).toBe(mainManifestSource.name);
+  expect(stagedManifest.version).toBe(mainManifestSource.version);
+  expect(stagedManifest.bin).toEqual(mainManifestSource.bin);
+  expect(stagedManifest.main).toBe(mainManifestSource.main);
+  expect(stagedManifest.exports).toEqual(mainManifestSource.exports);
+  expect(stagedManifest.os).toEqual(mainManifestSource.os);
+  expect(stagedManifest.cpu).toEqual(mainManifestSource.cpu);
+  expect(stagedManifest.os).toEqual(["win32"]);
+  expect(stagedManifest.cpu).toEqual(["x64"]);
+  expect(stagedManifest.optionalDependencies).toBeUndefined();
+  expect(stagedManifest.files).toContain("lib/**");
+  expect(existsSync(path.join(outputDir, "bin", "spec-wiki.js"))).toBe(true);
+  expect(existsSync(path.join(outputDir, "dist", "index.js"))).toBe(true);
+  expect(existsSync(stagedBinaryPath)).toBe(true);
+  expect(staged.packageDir).toBe(outputDir);
+  expect(staged.stagedBinaryPath).toBe(stagedBinaryPath);
+  expect(staged.manifest.name).toBe(mainManifestSource.name);
+  expect(staged.manifest.os).toEqual(["win32"]);
+  expect(staged.manifest.cpu).toEqual(["x64"]);
 
   rmSync(outputDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
-test("codebuddy build writes bundle into the agent package dist directory", async () => {
-  const agentDir = path.join(rootDir, "agents", "codebuddy");
-  const viteConfig = (await import("../../agents/codebuddy/vite.config.mjs")).default;
+test("spec-wiki build writes bundle into the main package dist directory", async () => {
+  const mainPackageDir = path.join(rootDir, "packages", "spec-wiki");
+  const viteConfig = (await import("../../packages/spec-wiki/vite.config.mjs")).default;
 
-  expect(path.normalize(viteConfig.root)).toBe(path.normalize(agentDir));
+  expect(path.normalize(viteConfig.root)).toBe(path.normalize(mainPackageDir));
   expect(path.normalize(viteConfig.build.outDir)).toBe(
-    path.normalize(path.join(agentDir, "dist")),
+    path.normalize(path.join(mainPackageDir, "dist")),
   );
 });

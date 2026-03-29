@@ -1,0 +1,137 @@
+/**
+ * 这个文件负责 CLI 形态的 runtime passthrough。
+ * 它只做最小协议感知来决定退出码，stdout/stderr 仍保持原样透传。
+ */
+import type { Buffer } from "node:buffer";
+import { spawn } from "node:child_process";
+
+import type { CoreCommand } from "./invokeCore.js";
+import { STREAMING_ACTIONS } from "./invokeCore.js";
+import { parseEventLine, parseResult, responseFromTerminalEvent } from "./parseResult.js";
+import { resolveBinary } from "./resolveBinary.js";
+import { buildCoreEnv } from "./runtimeEnv.js";
+
+export type ForwardCoreOptions = {
+  /** CLI 当前工作目录。 */
+  cwd?: string;
+  /** 透传给子进程的环境变量。 */
+  env?: NodeJS.ProcessEnv;
+  /** 需要桥接会话时使用的标准输入。 */
+  stdin?: NodeJS.ReadStream;
+  /** 标准输出写入函数。 */
+  stdout?: (text: string) => void;
+  /** 标准错误写入函数。 */
+  stderr?: (text: string) => void;
+  /** 是否开启 stdin/stdout 会话桥接。 */
+  bridgeStdio?: boolean;
+  /** 测试时可替换二进制解析函数。 */
+  binaryResolver?: () => string;
+};
+
+/**
+ * 以原样 passthrough 的方式调用 `wiki-runtime`。
+ *
+ * @param command 发送给 `wiki-runtime` 的命令对象。
+ * @param options CLI 侧的流与环境选项。
+ * @returns 返回子进程的退出码。
+ */
+export async function forwardCoreCommand(
+  command: CoreCommand,
+  options: ForwardCoreOptions = {},
+): Promise<number> {
+  const binary = (options.binaryResolver ?? (() => resolveBinary()))();
+  const streamOutput = STREAMING_ACTIONS.has(command.action);
+  const bridgeStdio = streamOutput && Boolean(options.bridgeStdio);
+  const payload = streamOutput
+    ? {
+        ...command,
+        streamProgress: true,
+        ...(bridgeStdio
+          ? { llmBridge: { protocol: "ndjson_session_v1" as const } }
+          : {}),
+      }
+    : command;
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(binary, ["--json"], {
+      cwd: options.cwd,
+      env: buildCoreEnv(options.env ?? process.env, command.action),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+
+    const handleStdout = (chunk: Buffer | string) => {
+      const text = chunk.toString();
+      stdout += text;
+      options.stdout?.(text);
+    };
+    const handleStderr = (chunk: Buffer | string) => {
+      options.stderr?.(chunk.toString());
+    };
+    const handleStdinData = (chunk: Buffer | string) => {
+      child.stdin.write(chunk);
+    };
+    const handleStdinEnd = () => {
+      child.stdin.end();
+    };
+
+    child.stdout.on("data", handleStdout);
+    child.stderr.on("data", handleStderr);
+
+    child.on("error", (error) => {
+      reject(new Error(`failed to launch wiki-runtime at ${binary}: ${error.message}`));
+    });
+    child.on("close", (code) => {
+      cleanup();
+      if (code !== 0) {
+        resolve(code ?? 1);
+        return;
+      }
+
+      resolve(protocolExitCode(stdout, streamOutput));
+    });
+
+    child.stdin.write(streamOutput ? `${JSON.stringify(payload)}\n` : JSON.stringify(payload));
+
+    if (bridgeStdio && options.stdin) {
+      options.stdin.on("data", handleStdinData);
+      options.stdin.on("end", handleStdinEnd);
+      options.stdin.resume();
+      return;
+    }
+
+    child.stdin.end();
+
+    function cleanup() {
+      if (!options.stdin) {
+        return;
+      }
+
+      options.stdin.off("data", handleStdinData);
+      options.stdin.off("end", handleStdinEnd);
+    }
+  });
+}
+
+function protocolExitCode(stdout: string, streamOutput: boolean): number {
+  try {
+    if (!streamOutput) {
+      return parseResult(stdout.trim()).ok ? 0 : 1;
+    }
+
+    const lines = stdout
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const event = parseEventLine(lines[index]);
+      if (event.type === "result" || event.type === "error") {
+        return responseFromTerminalEvent(event).ok ? 0 : 1;
+      }
+    }
+  } catch {
+    return 1;
+  }
+
+  return 1;
+}

@@ -9,8 +9,6 @@ const __dirname = path.dirname(__filename);
 const DEFAULT_ROOT_DIR = path.resolve(__dirname, "..");
 
 async function runCommand(command, args, { cwd = DEFAULT_ROOT_DIR } = {}) {
-  // Publishing is intentionally explicit and sequential:
-  // the platform package must be available before the main package references it.
   await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
@@ -37,8 +35,7 @@ export async function publishPackages({
   const built = await buildDistribution({ rootDir });
   const publishArgs = dryRun ? ["publish", "--dry-run"] : ["publish"];
 
-  await runCommand("npm", publishArgs, { cwd: built.npm.platformDir });
-  await runCommand("npm", publishArgs, { cwd: built.npm.mainDir });
+  await runCommand("npm", publishArgs, { cwd: built.package.packageDir });
 
   return built;
 }
@@ -46,6 +43,5 @@ export async function publishPackages({
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const built = await publishPackages();
 
-  console.log(`Published platform package from ${built.npm.platformDir}`);
-  console.log(`Published main package from ${built.npm.mainDir}`);
+  console.log(`Published package from ${built.package.packageDir}`);
 }

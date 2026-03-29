@@ -1,3 +1,4 @@
+/* eslint-disable regexp/no-dupe-disjunctions, regexp/no-unused-capturing-group, regexp/no-super-linear-backtracking, no-control-regex */
 /**
  * 统一读取 Markdown 页面，并基于 `reference -> generated` 映射计算 fidelity 指标。
  *
@@ -10,23 +11,23 @@ import path from "node:path";
 
 import { listMarkdownFiles } from "./wiki-runtime-inspection.mjs";
 
-const FILE_MENTION_PATTERN =
-  /[A-Za-z0-9_./-]+\.(?:go|rs|ts|tsx|js|jsx|py|java|kt|php|swift|mdx?|toml|json|ya?ml|conf|ini|sql)/g;
+const FILE_MENTION_PATTERN
+  = /[\w./-]+\.(?:go|rs|ts|tsx|js|jsx|py|java|kt|php|swift|mdx?|toml|json|ya?ml|conf|ini|sql)/g;
 const FILE_LINK_PATTERN = /\(file:\/\/([^)]+)\)/g;
-const ASCII_TOKEN_PATTERN = /[A-Za-z_][A-Za-z0-9_/-]*/g;
+const ASCII_TOKEN_PATTERN = /[A-Z_][\w/-]*/gi;
 const EVIDENCE_HEADING_PATTERN = /\*\*[^*\n]*(来源|证据)[^*\n]*\*\*/g;
-const TOPIC_KEYWORD_PATTERN =
-  /(主题|机制|能力|专题|流程主题|routing|extract|extractor|response|middleware|handler|router)/i;
+const TOPIC_KEYWORD_PATTERN
+  = /(主题|机制|能力|专题|流程主题|routing|extract|extractor|response|middleware|handler|router)/i;
 const HEADING_LINE_PATTERN = /^#{2,3}\s+(.+?)\s*$/;
 const HEADING_IGNORE_PATTERNS = [
-  /^目录$/i,
+  /^目录$/,
   /^table of contents$/i,
-  /^附录$/i,
+  /^附录$/,
   /^appendix$/i,
-  /^章节结构图$/i,
+  /^章节结构图$/,
   /^section structure diagram$/i,
-  /^章节来源$/i,
-  /^图表来源$/i,
+  /^章节来源$/,
+  /^图表来源$/,
   /^sources?$/i,
   /^references?$/i,
 ];
@@ -195,8 +196,8 @@ function extractAsciiTokens(content) {
  * @returns 返回排序后的 decomposition signals。
  */
 export function inferDecompositionSignals(page) {
-  const combined =
-    `${page.relativePath} ${page.title} ${page.content} ${page.fileMentions.join(" ")}`.toLowerCase();
+  const combined
+    = `${page.relativePath} ${page.title} ${page.content} ${page.fileMentions.join(" ")}`.toLowerCase();
   const signals = new Set();
 
   if (/(runtime|engine|kernel|store|preview|manager|renderer|core runtime)/.test(combined)) {
@@ -298,13 +299,13 @@ export function inferTopicLabel(page) {
 function isEnglishRawDocsPage(page) {
   const normalizedPath = normalizePath(page.relativePath);
   const fileName = path.posix.basename(normalizedPath, ".md");
-  const asciiHeavyPath = /^[A-Za-z0-9/_\-. ]+$/.test(normalizedPath);
-  const asciiHeavyTitle = /^[A-Za-z0-9 .:/_\-()]+$/.test(page.title);
-  const docsLike =
-    normalizedPath.startsWith("概念指南/")
-    || normalizedPath.startsWith("API-参考/")
-    || normalizedPath.startsWith("配置参考/")
-    || normalizedPath.startsWith("故障排除/");
+  const asciiHeavyPath = /^[\w/\-. ]+$/.test(normalizedPath);
+  const asciiHeavyTitle = /^[\w .:/\-()]+$/.test(page.title);
+  const docsLike
+    = normalizedPath.startsWith("概念指南/")
+      || normalizedPath.startsWith("API-参考/")
+      || normalizedPath.startsWith("配置参考/")
+      || normalizedPath.startsWith("故障排除/");
   return docsLike && asciiHeavyPath && asciiHeavyTitle && !containsNonAscii(fileName);
 }
 
@@ -319,9 +320,9 @@ export function readMarkdownPage(baseDir, relativePath) {
   const fullPath = path.join(baseDir, relativePath);
   const content = readFileSync(fullPath, "utf-8");
   const lines = content.split(/\r?\n/);
-  const title =
-    lines.find((line) => line.startsWith("# "))?.replace(/^#\s+/, "").trim()
-    || path.basename(relativePath, ".md");
+  const title
+    = lines.find((line) => line.startsWith("# "))?.replace(/^#\s+/, "").trim()
+      || path.basename(relativePath, ".md");
   const sectionTitles = lines
     .filter((line) => line.startsWith("## ") || line.startsWith("### "))
     .map((line) => line.replace(/^#{2,3}\s+/, "").trim());
@@ -616,10 +617,10 @@ function enrichReuseMetrics(comparisons, generatedPages) {
   }));
   const collapsedPairs = enrichedComparisons.filter((comparison) =>
     comparison.matched
-      && (
+    && (
         offenderPaths.has(comparison.generatedPath)
         || comparison.notes.includes("reference 专题被折叠进非专题页")
-      )
+      ),
   );
 
   return {
@@ -721,7 +722,7 @@ export function analyzeReferenceFidelity(options) {
     collapsedPairs: reuse.collapsedPairs,
     collapsedPages: reuse.collapsedPages,
     lowFidelityMatchedPages: matchedComparisons.filter((item) =>
-      item.notes.some((note) => LOW_FIDELITY_NOTE_PATTERNS.includes(note))
+      item.notes.some((note) => LOW_FIDELITY_NOTE_PATTERNS.includes(note)),
     ).length,
     medianSkeletonScore: median(matchedComparisons.map((item) => item.skeletonScore)),
     medianKeySourceCoverage: median(matchedComparisons.map((item) => item.keySource.coverage)),

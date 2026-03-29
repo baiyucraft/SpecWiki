@@ -1,69 +1,50 @@
 # codebuddy-agent-integration Specification
 
 ## Purpose
-TBD - created by archiving change bootstrap-windows-codebuddy-core. Update Purpose after archive.
+定义 `spec-wiki v0.1.0` 中 CodeBuddy 宿主接入层的真实公开合同。这个规范只覆盖 CodeBuddy 侧的 bootstrap 资产、公开 action skills 和 runtime 桥接边界，不把旧版六工具或单宿主阶段性方案继续当作正式发布合同。
+
 ## Requirements
-### Requirement: 第一阶段 Agent 集成必须限定为 Windows 下的 CodeBuddy Agent
-系统 MUST 将第一阶段宿主支持范围限定为 Windows 下的 CodeBuddy Agent，不要求在本阶段支持其他平台或宿主。
+### Requirement: CodeBuddy 必须作为当前三宿主之一接入，而不是唯一宿主
+系统 MUST 将 CodeBuddy 视为 `v0.1.0` 当前支持的宿主之一，并与 Claude、Codex 一起共享同一套公开 workflow 收敛边界。CodeBuddy 集成当前只承诺 Windows x64 打包运行时；该规范 MUST NOT 再把“只有 CodeBuddy、没有其他宿主”描述为当前版本事实。
 
-#### Scenario: 在 Windows 下使用 Agent
-- **WHEN** 用户在 Windows 环境中加载 CodeBuddy Agent
-- **THEN** Agent 必须能够解析并调用本地 `wiki-runtime` binary
+#### Scenario: 通过 bootstrap 生成 CodeBuddy 资产
+- **WHEN** 用户执行 `spec-wiki init --tool codebuddy`
+- **THEN** 系统 MUST 为 CodeBuddy 写入受管宿主资产
+- **THEN** 该资产边界 MUST 与当前版本其他宿主的公开 workflow 合同一致
 
-#### Scenario: 非当前阶段宿主
-- **WHEN** 用户尝试在非 Windows 或非 CodeBuddy 宿主中复用当前第一阶段集成
-- **THEN** 系统不得声称该集成已受支持
+### Requirement: CodeBuddy 当前公开 action skills 必须只暴露 `wiki-init`、`wiki-status`、`wiki-update`、`wiki-query`
+CodeBuddy 当前版本 MUST 只公开 `wiki-init`、`wiki-status`、`wiki-update`、`wiki-query` 四个 action skills。`wiki-sync` 与 `wiki-rebuild` MAY 作为内部历史残留、测试对象或后续迭代能力存在，但 MUST NOT 被当前版本公开暴露为正式 CodeBuddy action skills。
 
-### Requirement: CodeBuddy Agent 必须暴露与 core 对应的一组 Wiki 工具
-CodeBuddy Agent MUST 暴露 `wikiInit`、`wikiStatus`、`wikiUpdate`、`wikiQuery`、`wikiSync`、`wikiRebuild` 六个工具，并与 core action 一一对应。
+#### Scenario: 生成 CodeBuddy action skills
+- **WHEN** 系统为当前版本输出 CodeBuddy skills
+- **THEN** 公开 action skill 列表 MUST 只包含 `wiki-init`、`wiki-status`、`wiki-update`、`wiki-query`
+- **THEN** 生成结果不得把 `wiki-sync` 或 `wiki-rebuild` 当成当前版本正式入口
 
-#### Scenario: 创建工具集合
-- **WHEN** 宿主加载 CodeBuddy Agent 工具
-- **THEN** Agent 必须返回上述六个 Wiki 工具
-- **THEN** 每个工具必须映射到对应的 core action
+### Requirement: CodeBuddy 必须保持 thin host boundary
+CodeBuddy MUST 通过本地进程调用 `wiki-runtime`，并只负责参数收集、binary 定位、事件/结果解析、错误透传和必要上下文注入。CodeBuddy MUST NOT 在宿主层重建 Wiki 状态机、页面语义或 knowledge/page projection。
 
-### Requirement: CodeBuddy Agent 必须保持 thin Agent 边界
-CodeBuddy Agent MUST 通过本地进程调用 `wiki-runtime`，并只负责参数收集、binary 定位、结果解析和错误透传，不在 Agent 层实现 Wiki 业务逻辑。
-
-#### Scenario: 调用 Wiki runtime
-- **WHEN** 任一 Wiki 工具被调用
-- **THEN** Agent 必须将请求转换为 runtime 可识别的命令
-- **THEN** Agent 必须调用本地 binary
-- **THEN** Agent 必须将结果转换为宿主可消费的返回值
+#### Scenario: 调用 runtime
+- **WHEN** 任一 CodeBuddy Wiki skill 被调用
+- **THEN** CodeBuddy MUST 将请求转换为 runtime 可识别的命令并调用本地 binary
+- **THEN** CodeBuddy MUST 直接薄消费 runtime 返回值，而不是在宿主层重写 Wiki 业务语义
 
 #### Scenario: runtime 返回错误
-- **WHEN** `wiki-runtime` 返回错误
-- **THEN** Agent 必须向宿主返回明确错误信息
-- **THEN** Agent 不得在 TS 层静默改写 Wiki 业务状态
+- **WHEN** `wiki-runtime` 返回失败响应
+- **THEN** CodeBuddy MUST 向宿主返回明确错误
+- **THEN** 宿主不得静默改写当前 Wiki 业务状态
 
-### Requirement: CodeBuddy Agent 必须消费并透传长流程 progress 事件
-CodeBuddy Agent 在调用 `wiki-runtime` 的 `init`、`update` 和 `rebuild` 时 MUST 直接消费 progress 事件流。Agent MUST 逐行解析 core 输出的 `progress / result / error` 事件，并在保持 thin Agent 边界的前提下把 progress 转交给宿主侧可用的 observer、callback 或等价桥接；若宿主当前不消费 progress，Agent 也 MUST 正常 drain 整个事件流并返回最终结果。
+### Requirement: CodeBuddy 对长流程只桥接 `init` 与 `update` 的流式事件
+CodeBuddy 在调用当前版本正式公开的长流程 action 时，MUST 直接消费 `progress / result / error` 事件流，并在不扩展业务语义的前提下转交给宿主。当前版本该要求只正式覆盖 `init` 与 `update`；`status` 与 `query` 继续按短流程 JSON 处理即可。
 
-#### Scenario: 宿主订阅 progress 时 Agent 透传阶段事件
-- **WHEN** 宿主通过 Agent 调用长流程 workflow，且提供可消费 progress 的桥接
-- **THEN** Agent MUST 把 core 发出的 `progress` 事件按到达顺序透传给宿主
-- **THEN** Agent 不得在 TS 层重写 workflow 阶段语义或伪造新的业务状态
+#### Scenario: 宿主订阅长流程事件
+- **WHEN** CodeBuddy 调用 `wiki-init` 或 `wiki-update`，且宿主提供事件消费桥接
+- **THEN** CodeBuddy MUST 按到达顺序透传 `progress` 事件
+- **THEN** CodeBuddy MUST 继续返回最终 `result` 或 `error`
 
-#### Scenario: 宿主未订阅 progress 时 Agent 仍返回最终结果
-- **WHEN** 宿主通过 Agent 调用长流程 workflow，但未消费 progress 事件
-- **THEN** Agent MUST 仍然完整读取 core 的事件流
-- **THEN** Agent MUST 向宿主返回与非流式模式兼容的最终结果或错误
+### Requirement: CodeBuddy 可选桥接 LLM 请求，但不得改变当前公开 workflow 合同
+CodeBuddy 在长流程中 MAY 桥接 `llm_request` 事件，但这种桥接只负责协议与 provider 调用，不负责改变当前版本的公开 workflow 合同。无论桥接是否可用，宿主都 MUST 不把 `rebuild`、完整 knowledge/page 生成或宿主侧二次状态机解释成 `v0.1.0` 正式支持面。
 
-### Requirement: CodeBuddy Agent 必须在保持 thin Agent 边界的前提下桥接可选 LLM 请求
-CodeBuddy Agent 在调用 `wiki-runtime` 的长流程 workflow 时，MUST 能在协商开启的前提下桥接 `llm_request` 事件。Agent MUST 只负责协议解析、provider 调用、响应透传和错误上报，不得在 TS 层重写 prompt、重建页面上下文或实现 Wiki 业务规则。若宿主或 provider 不可用，Agent MUST 明确返回“不可用”响应，让 core 自行回退。
-
-#### Scenario: 宿主支持 LLM 时 Agent 透传请求与响应
-- **WHEN** Agent 调用长流程 workflow，且当前宿主或 provider 支持执行 LLM 请求
-- **THEN** Agent MUST 按收到的 `llm_request` 元数据执行对应 LLM 调用
-- **THEN** Agent MUST 把响应结果回写给 core，而不是在 TS 层解释 Wiki 语义
-
-#### Scenario: 宿主不支持 LLM 时 Agent 显式返回不可用
-- **WHEN** Agent 收到 `llm_request`，但当前宿主未配置可用 provider 或明确关闭增强
-- **THEN** Agent MUST 显式回写不可用或跳过响应
-- **THEN** Agent MUST 继续完成事件流消费，并向宿主返回最终 workflow 结果
-
-#### Scenario: core 已配置 provider 直连时 Agent 不介入同一请求
-- **WHEN** 当前 repo 的 LLM 配置已经让 core 侧拿到可用 provider 直连参数
-- **THEN** Agent MUST 不会收到对应的 `llm_request`
-- **THEN** Agent 仍只负责现有 progress/result/error 消费，不得重复发起同一轮 provider 调用
-
+#### Scenario: LLM bridge 不可用时显式回退
+- **WHEN** CodeBuddy 收到 `llm_request`，但当前宿主或 provider 不可用
+- **THEN** CodeBuddy MUST 明确回写不可用或空响应，让 runtime 自行决定后续回退路径
+- **THEN** CodeBuddy MUST 继续保持 thin host boundary

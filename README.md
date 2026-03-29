@@ -1,170 +1,187 @@
 # spec-wiki
 
-一个面向代码仓库的 Repo Wiki 原型项目。
+`spec-wiki` gives agents a lightweight, local Repo Wiki for a codebase on Windows x64.
 
-它的目标是自动扫描本地代码目录，生成并持续更新 `.wiki/`，让人和 Agent 都能把这份 Wiki 当作项目知识层来使用。Git 只是一种可选元信息来源，不是核心功能的硬前置。当前阶段优先实现 Windows 下的 CodeBuddy Agent 接入。
+In `v0.1.0`, it focuses on two practical jobs:
 
-当前正式设计入口：
+- bootstrap repo-local integrations for `Codex`, `Claude`, and `CodeBuddy`
+- build an index-first runtime so you can query files, modules, symbols, and call paths before doing deeper code reading
 
-- [DESIGN-3.0.md](./DESIGN-3.0.md)
-- [DESIGN-RUNTIME.md](./DESIGN-RUNTIME.md)
-- [DESIGN-ITER.md](./DESIGN-ITER.md)
-- [SCENE-1.md](./SCENE-1.md)
-- [SCENE-2.md](./SCENE-2.md)
+## Why Use It
 
-## 当前状态
+When an agent jumps straight into a large repo, it usually wastes tokens on blind search.
 
-- 当前仅支持 Windows
-- 当前仅支持 CodeBuddy Agent
-- Rust 当前主包仍是 `wiki-runtime`，设计目标将其收束并改名为 `wiki-runtime`
-- `agents/*` 负责将这些能力暴露成 Agent 工具
+`spec-wiki` helps by giving the agent a fast structural map first:
 
-## 仓库结构
+- where the important code lives
+- which files and symbols are related
+- whether the local wiki runtime is ready, stale, or needs refresh
 
-```text
-.
-├─ crates/wiki-runtime/      # 当前实现主包，设计目标将演进为 wiki-runtime
-│  └─ package.json        # core build / test 脚本入口
-├─ agents/codebuddy/      # CodeBuddy Agent
-│  └─ src/*.test.ts       # Agent 自身测试
-├─ scripts/               # 根级编排入口与测试脚本
-│  ├─ build/              # 构建/发布共享路径解析
-│  ├─ testing/            # 测试共享工具与 lifecycle phase wrapper
-│  └─ tests/              # 根级整体测试：staging / e2e / 工作区检查
-├─ openspec/              # proposal / design / tasks
-├─ DESIGN-3.0.md          # 主设计入口
-├─ DESIGN-RUNTIME.md      # 总运行架构
-├─ DESIGN-ITER.md         # 3.0 实施路线
-├─ SCENE-1.md             # 第一版核心用户故事
-└─ SCENE-2.md             # 补充场景
+The goal of `v0.1.0` is not full repository documentation yet. The goal is a reliable first-pass repo map.
+
+## Current Scope
+
+`v0.1.0` currently guarantees:
+
+- Windows x64 runtime support
+- public CLI actions: `init`, `status`, `update`, `query`
+- index-only runtime initialization and refresh
+- index-first query results
+
+`v0.1.0` does not yet treat full knowledge/page generation as a formal release contract.
+
+## Quick Start
+
+### 1. Bootstrap your agent host
+
+```bash
+spec-wiki init --tool codex --repo-root .
 ```
 
-## 运行产物
+This writes managed assets for a supported host inside the repo.
 
-插件运行在目标仓库时，会写入：
+Supported hosts:
 
-```text
-.wiki/
-├─ .knowledge/
-├─ pages/
-├─ wiki.metadata.json
-└─ .cache/
+- `codex`
+- `claude`
+- `codebuddy`
+
+### 2. Build the local repo index
+
+```bash
+spec-wiki wiki init --repo-root .
 ```
 
-- `.wiki/.knowledge/` 是正式知识层
-- `.wiki/pages/` 是正式页面投影
-- `wiki.metadata.json` 是正式索引
-- `.wiki/.cache/` 是运行时缓存
-- 详细边界见 [DESIGN-RUNTIME.md](./DESIGN-RUNTIME.md)
+This scans the repository and creates the local wiki cache.
 
-## 编译
+### 3. Check whether the runtime is ready
+
+```bash
+spec-wiki wiki status --repo-root .
+```
+
+Use this before asking an agent to rely on the repo wiki.
+
+### 4. Query the repo map
+
+```bash
+spec-wiki wiki query --repo-root . --term "payment flow"
+```
+
+You can also use positional text:
+
+```bash
+spec-wiki wiki query payment flow
+```
+
+### 5. Refresh after source changes
+
+```bash
+spec-wiki wiki update --repo-root .
+```
+
+## Two Different `init` Commands
+
+This is the most important CLI distinction.
+
+### `spec-wiki init`
+
+This is the bootstrap command.
+
+It installs repo-local host assets such as skills, hooks, or settings.
+
+It does not build the wiki runtime.
+
+### `spec-wiki wiki init`
+
+This is the runtime command.
+
+It scans the repository and initializes the local repo wiki cache.
+
+It does not install host bootstrap assets.
+
+## Install Or Run From Source
+
+If you are running from this repository:
 
 ```bash
 pnpm install
-cargo build -p wiki-runtime --target-dir target
-pnpm --dir agents/codebuddy build
-pnpm run lint
+pnpm build
+node dist/spec-wiki/bin/spec-wiki.js --help
 ```
 
-这几组命令都从 workspace 根目录执行，职责不同：
-
-- `cargo build -p wiki-runtime --target-dir target`
-  - 只编译 `wiki-runtime`
-- `pnpm --dir agents/codebuddy build`
-  - 只编译 `codebuddy`
-- `pnpm run lint`
-  - 根级统一检查仓库文件，忽略 `dist/`、`target/` 等生成产物
-
-各模块单独编译后的产物位置：
-
-```text
-target/debug/wiki-runtime.exe
-agents/codebuddy/dist/
-```
-
-如果要准备发布产物，可以执行：
+After installation, you can use the binary directly:
 
 ```bash
-pnpm run build
+spec-wiki --help
 ```
 
-根级 `build` 会把可发布内容整理到：
+## Command Reference
 
-```text
-dist/
-├─ core/
-└─ npm/
-```
-
-也就是说：
-
-- 子包仍然自管 `build / test` 脚本
-- 实际调用统一从 workspace 根发起
-- `agents/codebuddy/dist/` 持有 Agent 自身 bundle
-- 根级 `dist/` 只作为发布 staging，固定只保留 `core/` 和 `npm/`
-
-## 开发调试
-
-当前仓库没有单独的 dev server。日常开发主要是：
-
-- 修改 `crates/wiki-runtime/` 后运行 core 自身测试
-- 修改 `agents/codebuddy/` 后运行 Agent 自身的 build / test
-- 根级整体测试负责 staging / e2e / 工作区级联验证
-
-常用命令：
+### Bootstrap
 
 ```bash
-cargo test -p wiki-runtime --target-dir target
-pnpm --dir agents/codebuddy build
-pnpm --dir agents/codebuddy test
-pnpm run test
+spec-wiki init [--tool <host> | --tools <host1,host2>] [--repo-root <path>] [--no-interactive]
 ```
 
-测试也遵循同样的分层原则：
+### Runtime
 
-- `cargo test -p wiki-runtime --target-dir target`
-  - 只跑 core 自身测试
-- `pnpm --dir agents/codebuddy test`
-  - 只跑 Agent 自身测试
-- `pnpm run test`
-  - 根级总入口，顺序执行 core 测试、Agent 测试和根级整体测试
+```bash
+spec-wiki wiki init [--repo-root <path>] [--bridge-stdio]
+spec-wiki wiki status [--repo-root <path>]
+spec-wiki wiki update [--repo-root <path>] [--bridge-stdio]
+spec-wiki wiki query [--repo-root <path>] --term <text>
+spec-wiki wiki query [--repo-root <path>] <query text>
+```
 
-说明：
+Notes:
 
-- 当前仓库使用 Cargo workspace，Rust 产物统一输出到根目录 `target/`
-- CodeBuddy Agent 默认会在 `target/debug/wiki-runtime.exe` 查找本地 binary
-- 如需手动指定 binary，可设置环境变量 `CODEBUDDY_WIKI_RUNTIME_BIN`
-- `pnpm run test` 会依次执行：core 自测、codebuddy 自测、根级 Vitest 整体测试
+- `--bridge-stdio` only applies to long-running actions such as `init` and `update`
+- `query` requires either `--term` or positional query text
 
-## Baseline 验收
+## What Gets Created
 
-`Deterministic Structural Baseline` 这一轮的完成口径，不再只看“能不能生成 `.wiki/`”，而是看结构是否稳定：
+The runtime currently writes a local `.wiki/` directory for the repository.
 
-- `ModuleTree` 需要支持递归层级，而不是只有一层子模块
-- 模块页路径需要跟模块祖先链一致，例如 `核心模块/packages/domain/auth.md`
-- `wiki.metadata.json` 需要导出页面父子关系、模块层级和页面 provenance
-- `query` 需要优先返回页面、模块、源码、关系等结构化命中，Markdown 只作为回退
+In `v0.1.0`, the main runtime artifact you should rely on is:
 
-当前用于这一轮验收的中型 fixture 在 [crates/wiki-runtime/tests/fixtures/baseline-hierarchy-repo](E:/project/!byAI/spec-wiki/crates/wiki-runtime/tests/fixtures/baseline-hierarchy-repo)。它覆盖：
+```text
+.wiki/
+└─ .cache/
+   └─ wiki-cache.db
+```
 
-- nested workspace 模块：`apps/web`、`packages/domain/auth`、`packages/domain/shared`
-- 非 workspace 模块：`spider`
-- 基础设施目录：`infra/nginx`
+## Query Contract In v0.1.0
 
-如果你要手工验证 baseline，优先看这些测试：
+For `query`, the stable fields to rely on are:
 
-- [crates/wiki-runtime/tests/hierarchy/hierarchy_planning.rs](E:/project/!byAI/spec-wiki/crates/wiki-runtime/tests/hierarchy/hierarchy_planning.rs)
-- [crates/wiki-runtime/tests/repo/repo_scan.rs](E:/project/!byAI/spec-wiki/crates/wiki-runtime/tests/repo/repo_scan.rs)
-- [crates/wiki-runtime/tests/acceptance/baseline_acceptance.rs](E:/project/!byAI/spec-wiki/crates/wiki-runtime/tests/acceptance/baseline_acceptance.rs)
-- [crates/wiki-runtime/tests/runtime/query_sync_rebuild.rs](E:/project/!byAI/spec-wiki/crates/wiki-runtime/tests/runtime/query_sync_rebuild.rs)
+- `query_mode`
+- `query_trust`
+- `recommended_action`
+- `matched_pages`
+- `provenance_summary`
 
-# 一些想法
+Recommended usage:
 
-- [ ] 这个wiki是给agent用的 reference是不是应该更方便引用
+1. run `query` to narrow the search space
+2. identify the most relevant files, modules, or symbols
+3. read code directly when implementation detail matters
 
-- [ ] 包的体积小一点
+`query` is meant to reduce search cost, not replace code reading.
 
-- [ ] 参考Qoder的文件，查看中间产物，看看有什么值得借鉴的
+## What It Is Good For
 
-- [ ] 内容定制
+- giving agents a fast structural map of a repository
+- reducing blind file reads and wasted tokens
+- deciding whether the repo wiki needs `init` or `update`
+- finding the next files or symbols worth inspecting
 
+## License
+
+This project is licensed under `GNU GPL v3.0`.
+
+## TODO
+
+- formal knowledge/page runtime support
+- richer research and answer assembly
+- broader platform support

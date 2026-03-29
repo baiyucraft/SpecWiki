@@ -44,7 +44,6 @@ export const COMMAND_TIMEOUT_GRACE_MS = 2 * 60_000;
  * 确保测试脚本至少有一个可执行的 `wiki-runtime` binary 可用。
  *
  * @param options 运行选项；`fresh` 为真时总是先做一次 release build。
- * @returns 无返回值；如果构建失败会直接抛错。
  */
 export function ensureBinary(options = {}) {
   if (options.fresh || (!existsSync(DEBUG_BINARY_PATH) && !existsSync(RELEASE_BINARY_PATH))) {
@@ -88,11 +87,11 @@ function resolveBinaryPath() {
  * @returns 返回裁剪到合法范围内的项目并行度。
  */
 export function resolveProjectJobs(requestedJobs, totalProjects) {
-  const platformLimit =
-    typeof availableParallelism === "function" ? availableParallelism() : DEFAULT_PROJECT_JOBS;
+  const platformLimit
+    = typeof availableParallelism === "function" ? availableParallelism() : DEFAULT_PROJECT_JOBS;
   const parsedJobs = Number(requestedJobs);
-  const desiredJobs =
-    Number.isFinite(parsedJobs) && parsedJobs > 0
+  const desiredJobs
+    = Number.isFinite(parsedJobs) && parsedJobs > 0
       ? Math.floor(parsedJobs)
       : Math.min(DEFAULT_PROJECT_JOBS, platformLimit);
   return Math.max(1, Math.min(totalProjects || 1, desiredJobs));
@@ -107,7 +106,7 @@ export function resolveProjectJobs(requestedJobs, totalProjects) {
  * @returns 返回与输入顺序一致的结果数组。
  */
 export async function runTaskPool(items, jobs, worker) {
-  const results = new Array(items.length);
+  const results = Array.from({ length: items.length });
   let nextIndex = 0;
   const workerCount = Math.max(1, Math.min(jobs, items.length || 1));
 
@@ -174,6 +173,9 @@ export function isPreserveResumeEligibleInitErrorMessage(message) {
  * @param command 要执行的命令。
  * @param args 命令参数数组。
  * @param options 运行选项；默认在仓库根目录执行且不走 shell，并可附加超时。
+ * @param options.cwd 执行命令时使用的工作目录。
+ * @param options.shell 是否通过 shell 启动子进程。
+ * @param options.timeoutMs 子进程超时时间。
  * @returns 返回退出码、退出信号、是否超时以及捕获到的标准输出/错误。
  */
 export async function runCommandCapture(
@@ -191,8 +193,8 @@ export async function runCommandCapture(
     let stdout = "";
     let stderr = "";
     let timedOut = false;
-    const timer =
-      Number.isFinite(timeoutMs) && timeoutMs > 0
+    const timer
+      = Number.isFinite(timeoutMs) && timeoutMs > 0
         ? setTimeout(() => {
           timedOut = true;
           stderr = appendProcessMessage(
@@ -266,7 +268,6 @@ function tryKillProcessTree(pid) {
  *
  * @param child Node `spawn()` 返回的子进程句柄。
  * @param options 终止选项；`killTreeOnWindows` 仅应在 leaf 进程上启用。
- * @returns 无返回值。
  */
 export function terminateChildProcess(child, options = {}) {
   if (!child || child.killed) {
@@ -328,7 +329,8 @@ function unlinkFileWithRetry(filePath) {
  *
  * @param targetPath 待删除路径。
  * @param options 删除选项；支持覆盖重试次数和延迟。
- * @returns 无返回值；若重试后仍失败则抛出最后一次错误。
+ * @param options.delayMs 每次重试前的等待时间。
+ * @param options.maxAttempts 最大重试次数。
  */
 export function removePathWithRetry(
   targetPath,
@@ -365,6 +367,8 @@ export function removePathWithRetry(
  * @param dbPath SQLite 文件路径。
  * @param sql 要执行的 SQL 语句。
  * @param options 运行选项；支持覆盖超时和缓冲区。
+ * @param options.timeout sqlite3 命令超时时间。
+ * @param options.maxBuffer sqlite3 输出缓冲区大小。
  * @returns 返回去掉空行后的文本结果。
  */
 export function querySqliteRows(
@@ -442,9 +446,9 @@ export function parseSqliteNumber(value) {
 export function callCore(command, options = {}) {
   const input = JSON.stringify(command);
   const binaryPath = resolveBinaryPath();
-  const timeout =
-    options.timeoutMs
-    ?? (["init", "update", "rebuild"].includes(command.action)
+  const timeout
+    = options.timeoutMs
+      ?? (["init", "update", "rebuild"].includes(command.action)
       ? HEAVY_ACTION_TIMEOUT_MS
       : DEFAULT_TIMEOUT_MS);
   const output = execFileSync(binaryPath, ["--json"], {
@@ -466,9 +470,9 @@ export function callCore(command, options = {}) {
  */
 export async function callCoreStreaming(command, options = {}) {
   const binaryPath = resolveBinaryPath();
-  const timeout =
-    options.timeoutMs
-    ?? (["init", "update", "rebuild"].includes(command.action)
+  const timeout
+    = options.timeoutMs
+      ?? (["init", "update", "rebuild"].includes(command.action)
       ? HEAVY_ACTION_TIMEOUT_MS
       : DEFAULT_TIMEOUT_MS);
 
@@ -607,6 +611,10 @@ export function formatUsageSnapshot(usage) {
   ].join(" ");
 }
 
+export function withDevelopmentMode(command, enabled = false) {
+  return enabled ? { ...command, developmentMode: true } : command;
+}
+
 function applyCacheModeOverride(content, cacheMode) {
   if (!cacheMode) {
     return content;
@@ -632,8 +640,16 @@ function applyCacheModeOverride(content, cacheMode) {
  * @returns 返回回调结果。
  */
 export async function withTemporaryDevConfig(repoRoot, callback, options = {}) {
+  const developmentMode = existsSync(ROOT_DEV_CONFIG_PATH);
+  const devContext = {
+    developmentMode,
+    command(command) {
+      return withDevelopmentMode(command, developmentMode);
+    },
+  };
+
   if (!existsSync(ROOT_DEV_CONFIG_PATH)) {
-    return await callback();
+    return await callback(devContext);
   }
 
   const targetPath = path.join(repoRoot, "wiki.dev.yaml");
@@ -643,7 +659,7 @@ export async function withTemporaryDevConfig(repoRoot, callback, options = {}) {
 
   writeFileWithRetry(targetPath, next);
   try {
-    return await callback();
+    return await callback(devContext);
   } finally {
     if (previous === null) {
       unlinkFileWithRetry(targetPath);
@@ -658,31 +674,45 @@ export async function withTemporaryDevConfig(repoRoot, callback, options = {}) {
 // -------------------------------------------------------------------------
 
 export function countMdFiles(dir) {
-  if (!existsSync(dir)) return 0;
+  if (!existsSync(dir)) {
+    return 0;
+  }
+
   let count = 0;
-  const walk = (d) => {
-    for (const entry of readdirSync(d, { withFileTypes: true })) {
-      if (entry.isDirectory()) walk(path.join(d, entry.name));
-      else if (entry.name.endsWith(".md")) count++;
+  const walk = (currentDir) => {
+    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        walk(path.join(currentDir, entry.name));
+      } else if (entry.name.endsWith(".md")) {
+        count += 1;
+      }
     }
   };
+
   walk(dir);
   return count;
 }
 
 export function countFilesWithMarker(dir) {
-  if (!existsSync(dir)) return 0;
+  if (!existsSync(dir)) {
+    return 0;
+  }
+
   let count = 0;
-  const walk = (d) => {
-    for (const entry of readdirSync(d, { withFileTypes: true })) {
-      const full = path.join(d, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (entry.name.endsWith(".md")) {
-        const content = readFileSync(full, "utf-8");
-        if (content.includes("<!-- wiki:managed:start")) count++;
+  const walk = (currentDir) => {
+    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.name.endsWith(".md")) {
+        const content = readFileSync(fullPath, "utf-8");
+        if (content.includes("<!-- wiki:managed:start")) {
+          count += 1;
+        }
       }
     }
   };
+
   walk(dir);
   return count;
 }
@@ -701,18 +731,20 @@ export class TestRunner {
   pass(label) {
     this.total++;
     this.passed++;
-    console.log(`    \x1b[32mPASS\x1b[0m ${label}`);
+    console.log(`    \x1B[32mPASS\x1B[0m ${label}`);
   }
 
   fail(label, detail) {
     this.total++;
     this.failed++;
-    console.log(`    \x1b[31mFAIL\x1b[0m ${label}`);
-    if (detail) console.log(`         ${detail}`);
+    console.log(`    \x1B[31mFAIL\x1B[0m ${label}`);
+    if (detail) {
+      console.log(`         ${detail}`);
+    }
   }
 
   skip(label) {
-    console.log(`    \x1b[33mSKIP\x1b[0m ${label}`);
+    console.log(`    \x1B[33mSKIP\x1B[0m ${label}`);
   }
 
   assertOk(label, result) {
@@ -748,7 +780,7 @@ export class TestRunner {
     console.log("");
     console.log("=== Results ===");
     console.log(
-      `Total: ${this.total}  \x1b[32mPassed: ${this.passed}\x1b[0m  \x1b[31mFailed: ${this.failed}\x1b[0m`,
+      `Total: ${this.total}  \x1B[32mPassed: ${this.passed}\x1B[0m  \x1B[31mFailed: ${this.failed}\x1B[0m`,
     );
     return this.failed === 0;
   }

@@ -268,13 +268,13 @@ function readResearchProgressSummary(cacheDbPath, runtimeSummary) {
     "current_research_started_at",
     "currentResearchStartedAt",
   ]);
-  const lastUnitId =
-    readJsonString(runtimeSummary, ["last_researched_unit_id", "lastResearchedUnitId"])
-    ?? findLatestUnitResearchId(cacheDbPath);
+  const lastUnitId
+    = readJsonString(runtimeSummary, ["last_researched_unit_id", "lastResearchedUnitId"])
+      ?? findLatestUnitResearchId(cacheDbPath);
   const lastResearchResult = readUnitResearchResult(cacheDbPath, lastUnitId);
-  const lastElapsedMs =
-    readJsonNumber(runtimeSummary, ["last_research_elapsed_ms", "lastResearchElapsedMs"])
-    ?? readJsonNumber(
+  const lastElapsedMs
+    = readJsonNumber(runtimeSummary, ["last_research_elapsed_ms", "lastResearchElapsedMs"])
+      ?? readJsonNumber(
       readJsonValue(lastResearchResult, ["provider_session_stats", "providerSessionStats"]),
       ["elapsed_ms", "elapsedMs"],
     );
@@ -558,9 +558,7 @@ function readPageDigestDiagnostics(cacheDbPath) {
     const skeletonProfile = digest?.skeleton_profile && typeof digest.skeleton_profile === "object"
       ? digest.skeleton_profile
       : null;
-    const plannedBasenames = new Set(
-      plannedKeySources.map((item) => path.posix.basename(normalizeSourcePath(item)).toLowerCase()),
-    );
+
     const groundedBasenames = new Set(
       groundedKeySources.map((item) => path.posix.basename(normalizeSourcePath(item)).toLowerCase()),
     );
@@ -684,20 +682,20 @@ function readPageRuntimeByPath(cacheDbPath, metadata, pageDigestDiagnostics) {
 }
 
 function classifyRuntimeState(snapshot) {
-  const hasAnyRuntimeArtifact =
-    snapshot.metadataExists
-    || snapshot.cacheDbExists
-    || snapshot.markdownPageCount > 0
-    || hasRuntimeSignals(snapshot.dbCounts);
+  const hasAnyRuntimeArtifact
+    = snapshot.metadataExists
+      || snapshot.cacheDbExists
+      || snapshot.markdownPageCount > 0
+      || hasRuntimeSignals(snapshot.dbCounts);
   if (!hasAnyRuntimeArtifact) {
     return "missing";
   }
 
-  const hasRenderablePages =
-    snapshot.metadataExists
-    && snapshot.markdownPageCount > 0
-    && snapshot.cacheDbExists
-    && snapshot.dbCounts.wiki_pages > 0;
+  const hasRenderablePages
+    = snapshot.metadataExists
+      && snapshot.markdownPageCount > 0
+      && snapshot.cacheDbExists
+      && snapshot.dbCounts.wiki_pages > 0;
   if (hasRenderablePages) {
     return "ready";
   }

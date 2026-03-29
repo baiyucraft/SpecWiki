@@ -1,3 +1,4 @@
+/* eslint-disable regexp/no-dupe-disjunctions, regexp/no-unused-capturing-group, no-control-regex */
 /**
  * 针对带 reference 的测试项目，批量执行带 provider 的 init，
  * 并把 generated `.wiki/*.md` 与 reference content 目录下的 Markdown 文件
@@ -19,7 +20,6 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
   statSync,
   writeFileSync,
@@ -53,13 +53,6 @@ const REAL_REPO_MAP = {
   aLocal: "E:\\project\\aLocal",
 };
 
-const FILE_MENTION_PATTERN =
-  /[A-Za-z0-9_./-]+\.(?:go|rs|ts|tsx|js|jsx|py|java|kt|php|swift|md|toml|json|ya?ml|conf|ini|sql)/g;
-const ASCII_TOKEN_PATTERN = /[A-Za-z_][A-Za-z0-9_/-]*/g;
-const EVIDENCE_HEADING_PATTERN = /\*\*[^*\n]*(来源|证据)[^*\n]*\*\*/g;
-const FILE_LINK_PATTERN = /\(file:\/\/([^)]+)\)/g;
-const TOPIC_KEYWORD_PATTERN =
-  /(主题|机制|能力|专题|流程主题|routing|extract|extractor|response|middleware|handler|router)/i;
 const LOW_FIDELITY_NOTE_PATTERNS = [
   "内容明显短于 reference",
   "解释性段落明显不足",
@@ -86,14 +79,14 @@ const REFERENCE_OUTLINE_PATTERNS = [
   ["appendix", ["附录", "appendix"]],
 ];
 const RESEARCH_PROFILE_LABELS = {
-  runtime: "Runtime",
+  "runtime": "Runtime",
   "compiler-pipeline": "CompilerPipeline",
   "api-surface": "ApiSurface",
   "config-surface": "ConfigSurface",
   "docs-guide": "DocsGuide",
-  testing: "Testing",
+  "testing": "Testing",
   "example-tutorial": "ExampleTutorial",
-  troubleshooting: "Troubleshooting",
+  "troubleshooting": "Troubleshooting",
   "integration-platform": "IntegrationPlatform",
 };
 const STOP_REASON_ORDER = [
@@ -118,29 +111,6 @@ function discoverProjects() {
     .filter((entry) => statSync(path.join(REFERENCE_DIR, entry)).isDirectory())
     .filter((entry) => VALIDATION_PROJECTS.includes(entry))
     .sort();
-}
-
-function listMarkdownFiles(dir) {
-  if (!existsSync(dir)) {
-    return [];
-  }
-
-  const files = [];
-  const walk = (currentDir) => {
-    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
-      const fullPath = path.join(currentDir, entry.name);
-      if (entry.isDirectory()) {
-        walk(fullPath);
-        continue;
-      }
-      if (entry.name.endsWith(".md")) {
-        files.push(path.relative(dir, fullPath).replaceAll("\\", "/"));
-      }
-    }
-  };
-
-  walk(dir);
-  return files.sort();
 }
 
 function querySqliteRows(dbPath, sql) {
@@ -220,9 +190,9 @@ function readPipelineCheckpointSummary(projectRoot) {
 async function runInitAttempt(projectRoot, repoRootArg, progressPrinter, cacheMode, timeoutMs) {
   return await withTemporaryDevConfig(
     projectRoot,
-    () =>
+    (devContext) =>
       callCoreStreaming(
-        { action: "init", repoRoot: repoRootArg },
+        devContext.command({ action: "init", repoRoot: repoRootArg }),
         {
           onProgress: (event) => progressPrinter.onProgress(event),
           timeoutMs,
@@ -351,10 +321,10 @@ function createProjectProgressPrinter(project, runLabel) {
       if (event.processed != null && event.total != null && event.total > 0) {
         const percent = Math.floor((event.processed / event.total) * 100);
         const lastPercent = countedPercents.get(event.phase) ?? -1;
-        const shouldPrint =
-          event.processed === 0
-          || event.processed === event.total
-          || percent >= lastPercent + 10;
+        const shouldPrint
+          = event.processed === 0
+            || event.processed === event.total
+            || percent >= lastPercent + 10;
         if (!shouldPrint) {
           return;
         }
@@ -378,63 +348,9 @@ function ensureDir(dir) {
   mkdirSync(dir, { recursive: true });
 }
 
-function readPage(baseDir, relativePath) {
-  const fullPath = path.join(baseDir, relativePath);
-  const content = readFileSync(fullPath, "utf-8");
-  const lines = content.split(/\r?\n/);
-  const title =
-    lines.find((line) => line.startsWith("# "))?.replace(/^#\s+/, "").trim()
-    || path.basename(relativePath, ".md");
-  const sectionTitles = lines
-    .filter((line) => line.startsWith("## "))
-    .map((line) => line.replace(/^##\s+/, "").trim());
-  const nonEmptyLines = lines.filter((line) => line.trim()).length;
-  const proseLines = lines.filter((line) => {
-    const trimmed = line.trim();
-    return trimmed && !trimmed.startsWith("#") && !trimmed.startsWith("- ") && !trimmed.startsWith("```") && !trimmed.startsWith("<!--");
-  }).length;
-  const bulletLines = lines.filter((line) => line.trim().startsWith("- ")).length;
-  const mermaidBlocks = lines.filter((line) => line.trim() === "```mermaid").length;
-  const citations = [...content.matchAll(FILE_LINK_PATTERN)].map((match) => match[1]);
-  const fileMentions = extractFileMentions(content);
-  const tokens = extractAsciiTokens(`${relativePath}\n${title}\n${content}`);
-  const evidenceBlocks = [...content.matchAll(EVIDENCE_HEADING_PATTERN)].length;
-  const category = pageCategory({ relativePath, title, content });
-  const topicLabel = inferTopicLabel({ relativePath, title, sectionTitles, fileMentions });
-  const decompositionSignals = inferDecompositionSignals({
-    relativePath,
-    title,
-    content,
-    fileMentions,
-    category,
-  });
-  const outlineSkeleton = extractOutlineSkeleton(sectionTitles, content);
-  const englishRawDocsLike = isEnglishRawDocsPage({ relativePath, title, sectionTitles });
-
-  return {
-    title,
-    relativePath,
-    content,
-    sectionTitles,
-    nonEmptyLines,
-    proseLines,
-    bulletLines,
-    mermaidBlocks,
-    evidenceBlocks,
-    citations,
-    fileMentions,
-    tokens,
-    category,
-    topicLabel,
-    decompositionSignals,
-    outlineSkeleton,
-    englishRawDocsLike,
-  };
-}
-
 function inferDecompositionSignals(page) {
-  const combined =
-    `${page.relativePath} ${page.title} ${page.content} ${page.fileMentions.join(" ")}`.toLowerCase();
+  const combined
+    = `${page.relativePath} ${page.title} ${page.content} ${page.fileMentions.join(" ")}`.toLowerCase();
   const signals = new Set();
 
   if (/(runtime|engine|kernel|store|preview|manager|renderer|core runtime)/.test(combined)) {
@@ -468,25 +384,6 @@ function inferDecompositionSignals(page) {
   return [...signals].sort();
 }
 
-function extractFileMentions(content) {
-  const mentions = new Set();
-  for (const match of content.matchAll(FILE_MENTION_PATTERN)) {
-    mentions.add(match[0].replaceAll("\\", "/"));
-  }
-  return [...mentions].sort();
-}
-
-function extractAsciiTokens(content) {
-  const tokens = new Set();
-  for (const match of content.matchAll(ASCII_TOKEN_PATTERN)) {
-    const token = match[0].toLowerCase();
-    if (token.length >= 3) {
-      tokens.add(token);
-    }
-  }
-  return tokens;
-}
-
 function containsNonAscii(value) {
   return /[^\x00-\x7F]/.test(value);
 }
@@ -494,13 +391,13 @@ function containsNonAscii(value) {
 function isEnglishRawDocsPage(page) {
   const normalizedPath = page.relativePath.replaceAll("\\", "/");
   const fileName = path.posix.basename(normalizedPath, ".md");
-  const asciiHeavyPath = /^[A-Za-z0-9/_\-. ]+$/.test(normalizedPath);
-  const asciiHeavyTitle = /^[A-Za-z0-9 .:/_\-()]+$/.test(page.title);
-  const docsLike =
-    normalizedPath.startsWith("概念指南/")
-    || normalizedPath.startsWith("API-参考/")
-    || normalizedPath.startsWith("配置参考/")
-    || normalizedPath.startsWith("故障排除/");
+  const asciiHeavyPath = /^[\w/\-. ]+$/.test(normalizedPath);
+  const asciiHeavyTitle = /^[\w .:/\-()]+$/.test(page.title);
+  const docsLike
+    = normalizedPath.startsWith("概念指南/")
+      || normalizedPath.startsWith("API-参考/")
+      || normalizedPath.startsWith("配置参考/")
+      || normalizedPath.startsWith("故障排除/");
   return docsLike && asciiHeavyPath && asciiHeavyTitle && !containsNonAscii(fileName);
 }
 
@@ -537,121 +434,6 @@ function fileBasename(filePath) {
       .replaceAll("\\", "/")
       .replace(/#L\d+(?:-L?\d+)?$/i, ""),
   );
-}
-
-function pageCategory(page) {
-  const combined = `${page.relativePath} ${page.title}`.toLowerCase();
-  if (combined.includes("项目概述")) {
-    return "overview";
-  }
-  if (
-    combined.includes("系统架构")
-    || combined.includes("核心架构")
-    || combined.includes("架构")
-  ) {
-    return "architecture";
-  }
-  if (combined.includes("工作流") || combined.includes("部署")) {
-    return "workflow";
-  }
-  if (page.relativePath.startsWith("专题/") || combined.includes("主题：") || combined.includes("流程主题")) {
-    return "topic";
-  }
-  if (combined.includes("模块") || combined.includes("component")) {
-    return "module";
-  }
-  if (TOPIC_KEYWORD_PATTERN.test(`${page.relativePath} ${page.title}`)) {
-    return "topic";
-  }
-  return "other";
-}
-
-function inferTopicLabel(page) {
-  const relativePath = page.relativePath.toLowerCase();
-  const title = page.title.toLowerCase();
-  const content = `${page.sectionTitles?.join(" ")} ${page.fileMentions.join(" ")}`.toLowerCase();
-  const combined = `${relativePath} ${title} ${content}`;
-
-  if (combined.includes("flow") || combined.includes("流程")) {
-    return "流程主题";
-  }
-  if (combined.includes("middleware")) {
-    return "中间件主题";
-  }
-  if (combined.includes("router") || combined.includes("routing")) {
-    return "路由主题";
-  }
-  if (combined.includes("extract")) {
-    return "提取器主题";
-  }
-  if (combined.includes("response")) {
-    return "响应主题";
-  }
-  if (combined.includes("handler")) {
-    return "处理器主题";
-  }
-  if (combined.includes("context") || combined.includes("chain") || combined.includes("tree")) {
-    return "核心机制主题";
-  }
-  if (page.category === "topic") {
-    return "专题页";
-  }
-  return null;
-}
-
-function scorePageMatch(referencePage, generatedPage) {
-  let score = 0;
-
-  if (referencePage.relativePath === generatedPage.relativePath) {
-    score += 240;
-  }
-  if (referencePage.title === generatedPage.title) {
-    score += 220;
-  }
-  if (pageCategory(referencePage) === pageCategory(generatedPage) && pageCategory(referencePage) !== "other") {
-    score += 80;
-  }
-
-  const referenceMentionSet = new Set(referencePage.fileMentions.map((item) => item.toLowerCase()));
-  const generatedMentionSet = new Set(generatedPage.fileMentions.map((item) => item.toLowerCase()));
-  const referenceBasenames = new Set(referencePage.fileMentions.map((item) => fileBasename(item).toLowerCase()));
-  const generatedBasenames = new Set(generatedPage.fileMentions.map((item) => fileBasename(item).toLowerCase()));
-  const fileOverlap = intersectionSize(referenceMentionSet, generatedMentionSet);
-  const basenameOverlap = intersectionSize(referenceBasenames, generatedBasenames);
-  score += fileOverlap * 18;
-  score += basenameOverlap * 8;
-
-  const tokenOverlap = intersectionSize(referencePage.tokens, generatedPage.tokens);
-  score += Math.min(tokenOverlap, 20) * 2;
-
-  if (referencePage.title.includes(generatedPage.title) || generatedPage.title.includes(referencePage.title)) {
-    score += 16;
-  }
-
-  return score;
-}
-
-function intersectionSize(left, right) {
-  let size = 0;
-  for (const item of left) {
-    if (right.has(item)) {
-      size += 1;
-    }
-  }
-  return size;
-}
-
-function chooseGeneratedCounterpart(referencePage, generatedPages) {
-  let best = null;
-
-  for (const generatedPage of generatedPages) {
-    const score = scorePageMatch(referencePage, generatedPage);
-    if (!best || score > best.score) {
-      best = { generatedPage, score };
-    }
-  }
-
-  return best && best.score >= 60 ? best : null;
 }
 
 function comparePagePair(referencePage, generatedPage, score) {
@@ -737,14 +519,14 @@ function classificationCounts(comparisons) {
   const missingPages = comparisons.filter((item) => !item.matched).length;
   const collapsedPages = comparisons.filter((item) =>
     item.matched
-      && (
+    && (
         (item.reuseCount ?? 1) > 1
         || item.notes?.some((note) => COLLAPSE_NOTE_PATTERNS.includes(note))
-      )
+      ),
   ).length;
   const lowFidelityMatchedPages = comparisons.filter((item) =>
     item.matched
-      && item.notes?.some((note) => LOW_FIDELITY_NOTE_PATTERNS.includes(note))
+    && item.notes?.some((note) => LOW_FIDELITY_NOTE_PATTERNS.includes(note)),
   ).length;
   return { missingPages, collapsedPages, lowFidelityMatchedPages };
 }
@@ -1158,7 +940,7 @@ function summarizeCoverage(comparisons, generatedPages, referencePages) {
   const generatedDiagramPages = generatedPages.filter((page) => page.mermaidBlocks > 0);
   const referenceDiagramPages = referencePages.filter((page) => page.mermaidBlocks > 0);
   const archetypeTopicPages = generatedPages.filter((page) =>
-    page.relativePath.startsWith("专题/repo-archetype/")
+    page.relativePath.startsWith("专题/repo-archetype/"),
   ).length;
   const generatedCitationUnits = generatedPages.reduce(
     (sum, page) => sum + page.evidenceBlocks + page.citations.length,
@@ -1212,7 +994,7 @@ function summarizeCoverage(comparisons, generatedPages, referencePages) {
     matchedKeySourceShortfall: matched.filter((item) => (item.keySource?.coverage ?? 1) < 0.7).length,
     matchedEnglishNamingShortfall: matched.filter((item) => item.notes.includes("文件名仍偏向英文 raw docs")).length,
     extraEnglishRawDocsPages: generatedPages.filter((page) =>
-      page.englishRawDocsLike && !comparisons.some((comparison) => comparison.generatedPath === page.relativePath)
+      page.englishRawDocsLike && !comparisons.some((comparison) => comparison.generatedPath === page.relativePath),
     ).length,
     topicLabels: [...topicLabelCounts.entries()].sort((left, right) => right[1] - left[1]),
     missingTopicLabels: [...missingTopicLabels.entries()].sort((left, right) => right[1] - left[1]),
@@ -1223,12 +1005,12 @@ function summarizeProjectGaps(comparisons, generatedPages, referencePages, cover
   const gaps = [];
   const matched = comparisons.filter((item) => item.matched);
   const reusedGeneratedPages = countReusedGeneratedPages(comparisons).length;
-  const citationDensityGap =
-    coverage.referenceCitationDensity === 0
+  const citationDensityGap
+    = coverage.referenceCitationDensity === 0
       ? 0
       : 1 - (coverage.generatedCitationDensity / coverage.referenceCitationDensity);
-  const diagramCoverageGap =
-    coverage.referenceDiagramPages === 0
+  const diagramCoverageGap
+    = coverage.referenceDiagramPages === 0
       ? 0
       : 1 - (coverage.generatedDiagramPages / coverage.referenceDiagramPages);
 
@@ -1339,7 +1121,7 @@ function remediationContract(kind, comparison) {
     notes.some((note) =>
       note.includes("引用/出处")
       || note.includes("evidence block")
-      || note.includes("图表少于 reference")
+      || note.includes("图表少于 reference"),
     )
   ) {
     return "renderer markdown contract / citation / mermaid";
@@ -1480,14 +1262,14 @@ function keySourceContractHypothesis(pageDiagnostics, comparison) {
   }
 
   const plannedMissesReference = missing.some((source) =>
-    !planned.some((candidate) => sourceMatches(candidate, source))
+    !planned.some((candidate) => sourceMatches(candidate, source)),
   );
   if (plannedMissesReference) {
     return "planner/research planned_key_sources drift";
   }
 
   const groundedMissesPlanned = missing.some((source) =>
-    !grounded.some((candidate) => sourceMatches(candidate, source))
+    !grounded.some((candidate) => sourceMatches(candidate, source)),
   );
   if (groundedMissesPlanned || pageDiagnostics?.groundingGap) {
     return "compose grounded_key_sources 未落到最终 section";
@@ -1512,12 +1294,12 @@ function gateDecision(result) {
     };
   }
 
-  const pass =
-    (result.fidelity_metrics?.overall_match_rate ?? 0) >= 95
-    && (result.fidelity_metrics?.reuse_overage ?? 0) === 0
-    && (result.fidelity_metrics?.median_skeleton_fidelity ?? 0) >= 0.8
-    && (result.fidelity_metrics?.median_key_source_coverage ?? 0) >= 0.7
-    && (result.stability?.stable ?? true);
+  const pass
+    = (result.fidelity_metrics?.overall_match_rate ?? 0) >= 95
+      && (result.fidelity_metrics?.reuse_overage ?? 0) === 0
+      && (result.fidelity_metrics?.median_skeleton_fidelity ?? 0) >= 0.8
+      && (result.fidelity_metrics?.median_key_source_coverage ?? 0) >= 0.7
+      && (result.stability?.stable ?? true);
   return {
     label: pass ? "pass-candidate" : "not-pass",
     reason: [
@@ -1586,11 +1368,11 @@ function buildWarmStability(projects, repeats) {
       const reuse = summarizeStabilitySeries(samples.map((sample) => sample.reuseOverage));
       const skeleton = summarizeStabilitySeries(samples.map((sample) => sample.medianSkeletonFidelity));
       const keySource = summarizeStabilitySeries(samples.map((sample) => sample.medianKeySourceCoverage));
-      const stable =
-        samples.every((sample) => sample.runtimeState === "ready")
-        && (reuse.delta ?? Number.POSITIVE_INFINITY) <= 0
-        && (skeleton.delta ?? Number.POSITIVE_INFINITY) <= 0.02
-        && (keySource.delta ?? Number.POSITIVE_INFINITY) <= 0.02;
+      const stable
+        = samples.every((sample) => sample.runtimeState === "ready")
+          && (reuse.delta ?? Number.POSITIVE_INFINITY) <= 0
+          && (skeleton.delta ?? Number.POSITIVE_INFINITY) <= 0.02
+          && (keySource.delta ?? Number.POSITIVE_INFINITY) <= 0.02;
       return {
         project,
         stable,
@@ -2021,8 +1803,8 @@ function parseCliArgs(argv) {
 
   const parsedTimeoutMinutes = Number(initTimeoutMinutes);
   const parsedWarmReruns = Number(warmReruns);
-  const initTimeoutMs =
-    Number.isFinite(parsedTimeoutMinutes) && parsedTimeoutMinutes > 0
+  const initTimeoutMs
+    = Number.isFinite(parsedTimeoutMinutes) && parsedTimeoutMinutes > 0
       ? Math.floor(parsedTimeoutMinutes * 60_000)
       : DEFAULT_INIT_TIMEOUT_MS;
 
@@ -2048,9 +1830,9 @@ async function main(argv) {
   const snapshotPath = path.join(reportDir, "_snapshot.json");
   const projects = argv.names.length > 0 ? argv.names : discoverProjects();
   const jobs = argv.jobs == null ? 1 : resolveProjectJobs(argv.jobs, projects.length);
-  const stabilityReruns =
-    argv.warmReruns
-    ?? ((argv.runMode === "warm" || argv.skipInit) ? 2 : 0);
+  const stabilityReruns
+    = argv.warmReruns
+      ?? ((argv.runMode === "warm" || argv.skipInit) ? 2 : 0);
   const results = await runTaskPool(projects, jobs, async (project, index) => {
     const progressPrinter = createProjectProgressPrinter(project, argv.runMode);
     progressPrinter.info(`queue ${index + 1}/${projects.length}`);

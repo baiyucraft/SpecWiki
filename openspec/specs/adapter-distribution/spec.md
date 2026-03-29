@@ -1,27 +1,26 @@
 # adapter-distribution Specification
 
 ## Purpose
-TBD - created by archiving change complete-packaging-and-e2e. Update Purpose after archive.
+定义 `spec-wiki v0.1.0` 当前真实发布的单包分发合同。这个规范只描述当前 Windows x64 单包 staging/publish 形态，不再沿用旧的 optionalDependencies 平台包方案。
+
 ## Requirements
-### Requirement: 主包清单必须从真实适配层包元数据生成
-系统 MUST 从 `agents/codebuddy/package.json` 读取主包名称、版本和可执行入口信息来生成 staging 后的主包 manifest，而不是在 staging 脚本中维护独立常量副本。
+### Requirement: 主包清单必须从真实全局 CLI 包元数据生成
+系统 MUST 从正式发布的全局 CLI 包元数据读取主包名称、版本和可执行入口信息来生成 staging 后的主包 manifest，而不是在 staging 脚本中维护独立常量副本。
 
 #### Scenario: 生成主包清单
-- **WHEN** 开发者执行平台包 staging 流程
-- **THEN** `dist/npm/<main-package>/package.json` 必须使用适配层包中的名称、版本和 bin 配置生成
+- **WHEN** 开发者执行 staging 流程
+- **THEN** `dist/spec-wiki/package.json` MUST 使用 `packages/spec-wiki/package.json` 中的名称、版本和 `bin` 配置生成
 
-#### Scenario: 更新版本后重新 staging
-- **WHEN** 适配层包版本发生变化并重新执行 staging
-- **THEN** 新生成的主包 manifest 必须反映最新版本，而不需要手动修改 staging 脚本常量
+### Requirement: `v0.1.0` staging 必须收敛为单个 Windows x64 主包并内置 runtime
+系统 MUST 将 `v0.1.0` 的 staging 产物收敛为单个 `spec-wiki` 主包，并在主包内直接携带 Windows x64 runtime 二进制。staged manifest MUST 显式声明 `os=["win32"]` 与 `cpu=["x64"]`，而不是继续依赖 optionalDependencies 平台包分发。
 
-### Requirement: 平台包名称和二进制复制目标必须可由当前平台推导
-系统 MUST 根据当前运行平台生成稳定的平台包目录名，并将对应的 Rust runtime 二进制复制到该平台包目录中，使主包能够通过 `optionalDependencies` 指向正确的平台包。
+#### Scenario: 生成当前版本 staging 产物
+- **WHEN** 开发者执行当前版本 staging 流程
+- **THEN** 系统 MUST 生成 `dist/spec-wiki/` 作为唯一 publish 目录
+- **THEN** 系统 MUST 将 runtime 复制到 `dist/spec-wiki/lib/x64-win32/wiki-runtime.exe`
+- **THEN** staged manifest MUST 显式写出 Windows x64 安装边界
 
-#### Scenario: 在当前平台生成 staging 产物
-- **WHEN** 开发者在任意受支持平台执行 staging 流程
-- **THEN** 系统必须生成与当前平台匹配的平台包目录和 manifest，并复制对应的 `wiki-runtime` 二进制文件
-
-#### Scenario: 主包引用平台包
+#### Scenario: 当前版本主包不得继续声明平台包 optionalDependencies
 - **WHEN** staging 流程完成
-- **THEN** 主包 manifest 中的 `optionalDependencies` 必须包含当前平台包名和与主包一致的版本
-
+- **THEN** `dist/spec-wiki/package.json` MUST NOT 继续包含平台包 `optionalDependencies`
+- **THEN** 当前发布说明 MUST 与这一单包分发形态保持一致

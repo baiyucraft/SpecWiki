@@ -1,11 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-const PLATFORM_ABI_SUFFIX = {
-  win32: "msvc",
-  linux: "gnu",
-};
-
 export function getCoreBinaryName(platform = process.platform) {
   return platform === "win32" ? "wiki-runtime.exe" : "wiki-runtime";
 }
@@ -31,34 +26,4 @@ export function resolveBuiltBinary(
   }
 
   return binaryPath;
-}
-
-export function resolvePlatformPackageSuffix({
-  platform = process.platform,
-  arch = process.arch,
-} = {}) {
-  if (platform === "darwin") {
-    return `${platform}-${arch}`;
-  }
-
-  const abi = PLATFORM_ABI_SUFFIX[platform];
-  if (abi) {
-    return `${platform}-${arch}-${abi}`;
-  }
-
-  return `${platform}-${arch}`;
-}
-
-export function resolvePlatformPackageName(mainPackageName, options = {}) {
-  return `${mainPackageName}-${resolvePlatformPackageSuffix(options)}`;
-}
-
-export function resolvePlatformManifestConstraints({
-  platform = process.platform,
-  arch = process.arch,
-} = {}) {
-  return {
-    os: [platform],
-    cpu: [arch],
-  };
 }

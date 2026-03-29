@@ -1,0 +1,36 @@
+{
+  "name": "spec-wiki",
+  "type": "module",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Global CLI for Repo Wiki bootstrap and wiki-runtime forwarding.",
+  "license": "GPL-3.0-or-later",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "bin": {
+    "spec-wiki": "bin/spec-wiki.js"
+  },
+  "files": [
+    "bin/**",
+    "dist/**"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ]
+}

@@ -17,29 +17,29 @@ use crate::domain::checkpoint::{
     compute_facts_input_hash, PipelineCheckpoint, PipelineRuntimeSummary, PipelineStage,
     UnitRuntimeGate,
 };
-use wiki_knowledge::domain::compose::PageDraft;
-use wiki_knowledge::{KnowledgeArtifactStore, KnowledgeSnapshotStore, ModuleContext, RepoContext};
 use crate::domain::knowledge::{KnowledgeTree, KnowledgeUnit, UnitType};
 use crate::domain::module_tree::ModuleTree;
-use wiki_knowledge::domain::research::{
-    DomainResearch, PageDiagramDigest, PageDigest, PageSectionDigest, SystemResearch, UnitResearch,
-};
+use crate::domain::runtime_profile::{summarize_runtime_gates, RuntimeGateSummary};
 use crate::domain::steering::SteeringConfig;
-use wiki_knowledge::compose::compose_contract_page_for_unit;
-use wiki_knowledge::planning::{
-    build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
+use crate::storage::sqlite::{
+    knowledge_store::SqliteKnowledgeStore, runtime_store::SqliteRuntimeStore,
 };
-use wiki_knowledge::{plan_pages_from_knowledge_tree, PlannedPage};
-use wiki_knowledge::research::{ResearchDataSource, ResearchProvider};
+use crate::storage::sqlite_store;
 use wiki_index::fingerprint::fingerprint_bytes;
 use wiki_index::scanner::ScanReport;
 use wiki_index::symbol_graph::{GraphAnalysisSnapshot, GraphSummary, ResolvedGraphSnapshot};
 use wiki_index::symbols::ParsedSymbolsSnapshot;
-use crate::storage::sqlite::{
-    knowledge_store::SqliteKnowledgeStore,
-    runtime_store::SqliteRuntimeStore,
+use wiki_knowledge::compose::compose_contract_page_for_unit;
+use wiki_knowledge::domain::compose::PageDraft;
+use wiki_knowledge::domain::research::{
+    DomainResearch, PageDiagramDigest, PageDigest, PageSectionDigest, SystemResearch, UnitResearch,
 };
-use crate::storage::sqlite_store;
+use wiki_knowledge::planning::{
+    build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
+};
+use wiki_knowledge::research::{ResearchDataSource, ResearchProvider};
+use wiki_knowledge::{plan_pages_from_knowledge_tree, PlannedPage};
+use wiki_knowledge::{KnowledgeArtifactStore, KnowledgeSnapshotStore, ModuleContext, RepoContext};
 
 /// 新 compose pipeline 的统一输出。
 pub struct ComposePipelineOutput {
@@ -446,7 +446,8 @@ fn initialize_runtime_gates(
 ) -> io::Result<BTreeMap<String, UnitRuntimeGate>> {
     let runtime_store = SqliteRuntimeStore::new(conn);
     let existing_gates = if resume_enabled {
-        runtime_store.read_unit_runtime_gates()?
+        runtime_store
+            .read_unit_runtime_gates()?
             .into_iter()
             .map(|gate| (gate.unit_id.clone(), gate))
             .collect::<BTreeMap<_, _>>()
@@ -573,31 +574,6 @@ fn current_runtime_timestamp() -> String {
         .unwrap_or_else(|_| "0".to_string())
 }
 
-fn write_unit_gate(
-    conn: &Connection,
-    unit: &KnowledgeUnit,
-    research_status: &str,
-    compose_status: &str,
-    assemble_status: &str,
-    last_ready_stage: Option<String>,
-    blocked_reason: Option<String>,
-    missing_dependencies: Vec<String>,
-) -> io::Result<()> {
-    let runtime_store = SqliteRuntimeStore::new(conn);
-    runtime_store.write_unit_runtime_gate(&UnitRuntimeGate {
-            unit_id: unit.id.clone(),
-            unit_type: unit.unit_type.as_str().to_string(),
-            research_status: research_status.to_string(),
-            compose_status: compose_status.to_string(),
-            assemble_status: assemble_status.to_string(),
-            last_ready_stage,
-            blocked_reason,
-            missing_dependencies,
-            updated_at: current_runtime_timestamp(),
-        },
-    )
-}
-
 fn persist_research_progress(
     conn: &Connection,
     runtime_summary: &mut PipelineRuntimeSummary,
@@ -665,7 +641,9 @@ where
 {
     let knowledge_store = SqliteKnowledgeStore::new(conn);
     let runtime_store = SqliteRuntimeStore::new(conn);
-    if let Some(cached) = read_cached_research(&knowledge_store, research_type, target_id, input_hash)? {
+    if let Some(cached) =
+        read_cached_research(&knowledge_store, research_type, target_id, input_hash)?
+    {
         return Ok(cached);
     }
 
@@ -689,8 +667,7 @@ fn read_cached_research<T: DeserializeOwned>(
     target_id: &str,
     input_hash: &str,
 ) -> io::Result<Option<T>> {
-    let Some(raw) = store.read_research_cache(research_type, target_id, input_hash)?
-    else {
+    let Some(raw) = store.read_research_cache(research_type, target_id, input_hash)? else {
         return Ok(None);
     };
     serde_json::from_str(&raw)
@@ -735,14 +712,14 @@ fn build_research_digest(unit: &KnowledgeUnit, research: &UnitResearch) -> PageD
             .iter()
             .flat_map(|cluster| cluster.citations.iter().cloned())
             .fold(Vec::new(), |mut acc, citation| {
-                let already_present =
-                    acc.iter()
-                        .any(|existing: &wiki_knowledge::domain::research::SourceCitation| {
-                            existing.path == citation.path
-                                && existing.start_line == citation.start_line
-                                && existing.end_line == citation.end_line
-                                && existing.note == citation.note
-                        });
+                let already_present = acc.iter().any(
+                    |existing: &wiki_knowledge::domain::research::SourceCitation| {
+                        existing.path == citation.path
+                            && existing.start_line == citation.start_line
+                            && existing.end_line == citation.end_line
+                            && existing.note == citation.note
+                    },
+                );
                 if !already_present && acc.len() < 12 {
                     acc.push(citation);
                 }
@@ -1255,6 +1232,24 @@ pub fn finalize_pipeline_runtime(
     Ok(())
 }
 
+/// 读取当前仓库最新落盘的 workflow runtime 摘要。
+pub fn load_runtime_summary_for_repo(
+    repo_root: &Path,
+) -> io::Result<Option<PipelineRuntimeSummary>> {
+    let conn = sqlite_store::open_db(repo_root)?;
+    load_runtime_summary(&conn)
+}
+
+/// 读取当前仓库的 gate 聚合摘要。
+pub fn load_runtime_gate_summary_for_repo(
+    repo_root: &Path,
+) -> io::Result<Option<RuntimeGateSummary>> {
+    let conn = sqlite_store::open_db(repo_root)?;
+    let runtime_store = SqliteRuntimeStore::new(&conn);
+    summarize_runtime_gates(&runtime_store.read_unit_runtime_gates()?)
+        .map_or(Ok(None), |summary| Ok(Some(summary)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::unit_uses_seed_backed_research;
@@ -1269,24 +1264,24 @@ mod tests {
 
     use crate::debug_trace;
     use crate::domain::checkpoint::{PipelineRuntimeSummary, PipelineStage, UnitRuntimeGate};
-    use wiki_knowledge::domain::compose::PageDraft;
     use crate::domain::knowledge::{KnowledgeDomain, KnowledgeTree, KnowledgeUnit, UnitType};
-    use wiki_knowledge::domain::research::{
-        DomainResearch, PageDigest, ResearchSessionStats, ResearchStopReason, SystemResearch,
-        UnitResearch,
-    };
     use crate::domain::steering::{load_steering_config, DebugConfig, SteeringConfig};
     use crate::generation::context::{
         build_module_contexts_with_graph, build_repo_context_with_graph,
     };
-    use wiki_knowledge::research::{
-        ResearchDataSource, ResearchProvider, StructuralResearchProvider,
-    };
+    use crate::storage::sqlite_store;
     use wiki_index::hierarchy::build_module_tree_with_graph;
     use wiki_index::scanner::scan_repo_with_boundary;
     use wiki_index::symbol_graph::{build_graph_summary, resolve_symbol_graph};
     use wiki_index::symbols::parse_symbols;
-use crate::storage::sqlite_store;
+    use wiki_knowledge::domain::compose::PageDraft;
+    use wiki_knowledge::domain::research::{
+        DomainResearch, PageDigest, ResearchSessionStats, ResearchStopReason, SystemResearch,
+        UnitResearch,
+    };
+    use wiki_knowledge::research::{
+        ResearchDataSource, ResearchProvider, StructuralResearchProvider,
+    };
 
     use super::{
         collect_compose_input_digests, compute_unit_input_hash, enrich_parent_research,
@@ -2631,6 +2626,34 @@ use crate::storage::sqlite_store;
 
     #[test]
     fn research_stop_trace_records_extended_provider_stats() {
+        fn read_trace_entries(trace_path: &std::path::Path) -> Vec<serde_json::Value> {
+            for _ in 0..250 {
+                let trace_text = fs::read_to_string(trace_path).unwrap_or_default();
+                let entries = trace_text
+                    .lines()
+                    .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                    .collect::<Vec<_>>();
+                let has_unit = entries.iter().any(|entry| {
+                    entry.get("kind").and_then(serde_json::Value::as_str)
+                        == Some("workflow_unit_research_stop")
+                });
+                let has_summary = entries.iter().any(|entry| {
+                    entry.get("kind").and_then(serde_json::Value::as_str)
+                        == Some("workflow_research_stop_summary")
+                });
+                if has_unit && has_summary {
+                    return entries;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+
+            fs::read_to_string(trace_path)
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .collect()
+        }
+
         let trace_root = tempdir().unwrap();
         debug_trace::clear_startup_options();
         let trace_path = debug_trace::begin_session(
@@ -2682,12 +2705,9 @@ use crate::storage::sqlite_store;
         unit_researches.insert(unit.id.clone(), research);
         unit_researches.insert("unit-baseline".to_string(), baseline);
         super::record_workflow_research_stop_summary(&unit_researches);
+        debug_trace::clear_startup_options();
 
-        let trace_text = fs::read_to_string(&trace_path).unwrap();
-        let entries = trace_text
-            .lines()
-            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-            .collect::<Vec<_>>();
+        let entries = read_trace_entries(&trace_path);
         let unit_payload = entries
             .iter()
             .find(|entry| {
@@ -2825,24 +2845,5 @@ use crate::storage::sqlite_store;
         }));
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 

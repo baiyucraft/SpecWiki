@@ -1,7 +1,8 @@
 {
-  "name": "spec-wiki",
+  "name": "spec-wiki-workspace",
   "private": true,
   "packageManager": "pnpm@10.6.3",
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "build": "node scripts/build-dist.mjs",
     "lint": "eslint .",
