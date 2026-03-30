@@ -1294,7 +1294,10 @@ fn discover_troubleshooting(
 
 // ─── Steering overrides ─────────────────────────────────────
 
-fn apply_steering_overrides(domains: &mut Vec<KnowledgeDomain>, planner_config: &KnowledgePlannerConfig) {
+fn apply_steering_overrides(
+    domains: &mut Vec<KnowledgeDomain>,
+    planner_config: &KnowledgePlannerConfig,
+) {
     let suppress = &planner_config.suppress_domains;
     if !suppress.is_empty() {
         domains.retain(|d| {
@@ -6010,6 +6013,11 @@ pub fn build_knowledge_tree(
         }
         if unit.unit_type == UnitType::Architecture {
             unit.parent_unit_id = Some(tree.overview_unit_id.clone());
+            for did in &domain_index_ids {
+                if !unit.child_unit_ids.contains(did) {
+                    unit.child_unit_ids.push(did.clone());
+                }
+            }
         }
         if unit.unit_type == UnitType::DomainIndex {
             unit.parent_unit_id = Some(tree.overview_unit_id.clone());
@@ -6449,11 +6457,3 @@ fn looks_like_api_surface_path(path: &str) -> bool {
         || lower.contains("composeconfigs")
         || lower.contains("processcsffile")
 }
-
-
-
-
-
-
-
-

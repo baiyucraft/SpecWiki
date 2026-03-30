@@ -62,6 +62,142 @@
 迭代 15: AGENT/provider 深化消费层
 ```
 
+## v0.2.0 发布收口规划
+
+`v0.1.0` 的正式发布面仍然收敛在 `index-only init / status / update / query`。
+`v0.2.0` 不追求直接完成 3.0 终态，而是把已经存在但尚未成为正式发布面的
+`Facts -> Knowledge Planning -> Research -> Compose -> Assemble`
+主链扶正为可承诺的 `knowledge runtime`。
+
+版本定位：
+
+- `v0.1.0 = index substrate release`
+- `v0.2.0 = knowledge runtime first-class release`
+- `v0.3.0 = declared knowledge + full lifecycle + richer consumption`
+
+`v0.2.0` 的总目标：
+
+- `init / status / update / query` 不再以 `index_only` 作为正式成功语义
+- `KnowledgeDomain / KnowledgeUnit / KnowledgeTree` 成为正式运行主线
+- 高层 parent unit 拥有真正的 `UnitResearch`
+- 正式 workflow 不再默认 `StructuralResearchProvider` fallback
+- `.wiki/.knowledge/**` 落最小正式知识产物集
+- query 保持 `index-first -> knowledge -> page fallback`
+
+`v0.2.0` 的总非目标：
+
+- 不承诺完整 `declared knowledge` 生命周期
+- 不把 `sync / rebuild` 升级成完整公开支持面
+- 不做宿主高级 bridge / session
+- 不做 retrieval / RAG
+- 不做 3.0 最终 page projection 全细化
+- 不把 19 项目全量回归设为前置发布门槛
+
+建议按发布风险拆成 5 个迭代：
+
+```text
+迭代 A: Parent Contract 扶正
+    ↓
+迭代 B: Production Research Policy 收口
+    ↓
+迭代 C: Knowledge Runtime 产物最小集落盘
+    ↓
+迭代 D: Knowledge-First Update 收口
+    ↓
+迭代 E: Query Route 与 v0.2.0 Release 验收
+```
+
+### 迭代 A：Parent Contract 扶正
+
+目标：
+
+- 去掉高层父页的 seed-only 短路
+- `Overview / Architecture / DomainIndex / config-surface parent` 全部产出真实 `UnitResearch`
+- `SystemResearch / DomainResearch` 降为 seed / overlay
+
+通过线：
+
+- 高层父页不再跳过 unit research
+- 父页 compose 不越层抓 leaf
+- `storybook + dagger` 上可以证明 parent contract 成立
+
+### 迭代 B：Production Research Policy 收口
+
+目标：
+
+- 正式 workflow 默认走 provider-backed research
+- `StructuralResearchProvider` 只保留给测试 / 显式开发模式
+- provider 失败、中断、恢复路径可诊断
+
+通过线：
+
+- 无 provider 时正式 workflow 失败并留 checkpoint
+- 不再 silently structural fallback
+- `status` 能区分 `runtime_incomplete / blocker / needs_update`
+
+### 迭代 C：Knowledge Runtime 产物最小集落盘
+
+目标：
+
+- 把最小正式知识产物写入 `.wiki/.knowledge/**`
+- SQLite 回到 cache / working state 角色
+- 形成 `.knowledge + pages + metadata + cache` 最小恢复闭环
+
+建议最小落盘集：
+
+- `knowledge_domains`
+- `knowledge_units`
+- `knowledge_tree`
+- parent / unit research 摘要
+- `page_digests`
+- runtime gates / readiness 摘要
+
+通过线：
+
+- Git-tracked 正式产物不再只剩 pages / metadata
+- B 用户可基于正式产物恢复 `.cache`
+- 恢复后可以直接 `status / query`
+
+### 迭代 D：Knowledge-First Update 收口
+
+目标：
+
+- `update` 从 page-first 改成 knowledge-first
+- 主线变成
+  `ChangeSet -> affected knowledge scope -> refresh derived knowledge -> refresh projections`
+
+通过线：
+
+- 小改动不会默认重写整批页面
+- 能定位受影响 knowledge scope
+- `storybook + dagger` 上增量行为可解释、可验证
+
+### 迭代 E：Query Route 与 v0.2.0 Release 验收
+
+目标：
+
+- 对外继续保留 `term-only`
+- 内部正式收口 `index -> knowledge -> page fallback`
+- 完成 `v0.2.0` 发布门槛验收
+
+通过线：
+
+- page fallback 不再伪装成 facts / index 命中
+- query 能回连 knowledge 层
+- `storybook + dagger` 证明知识单元拆分、parent contract、citation/evidence/diagram 落页与 runtime readiness 已成立
+- 再补 `1-2` 个 smoke 项目后，最后回到 `19` 项目回归
+
+`v0.2.0` 的统一发布门槛：
+
+- `init / status / update / query` 不再以 `index_only` 为正式语义
+- 高层 parent unit 全部有独立 `UnitResearch`
+- 正式 workflow 无默认 structural fallback
+- `.wiki/.knowledge/**` 有最小正式对象集
+- `storybook + dagger` 专项通过
+- 至少 `1-2` 个小规模 smoke 项目通过
+- 完成一次 `COMMENTING.md` 合规检查
+- 最后再跑 `19` 项目回归
+
 ## 迭代 10：四包拆分与基础测试收口
 
 状态：

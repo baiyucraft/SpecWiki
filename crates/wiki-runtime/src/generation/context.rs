@@ -3,19 +3,19 @@ use std::fs;
 use std::path::Path;
 
 use crate::domain::context::{
-    PageContext, PageDiagramEdge, PageDiagramInput, PageDiagramNode,
-    PageEvidenceGroup, PageEvidenceItem, ResearchSurface,
+    PageContext, PageDiagramEdge, PageDiagramInput, PageDiagramNode, PageEvidenceGroup,
+    PageEvidenceItem, ResearchSurface,
 };
 use crate::domain::module_tree::{ModuleNode, ModuleTree};
 use crate::domain::stable_id::stable_id;
-use wiki_knowledge::PlannedPage;
 use crate::generation::sections::section_key_for_title;
-use wiki_index::TopicSeed;
-use wiki_knowledge::{ModuleContext, RepoContext};
 use wiki_index::hierarchy::discover_root_topic_seeds;
 use wiki_index::scanner::{FilePurpose, ScanReport};
 use wiki_index::symbol_graph::{GraphAnalysisSnapshot, GraphSummary};
 use wiki_index::symbols::{ParsedSymbolsSnapshot, SymbolNode};
+use wiki_index::TopicSeed;
+use wiki_knowledge::PlannedPage;
+use wiki_knowledge::{ModuleContext, RepoContext};
 
 /// 构建仓库级上下文。
 /// 这一步把扫描事实和模块树压缩成“项目概述 / 系统架构”真正会用到的信息。
@@ -1026,12 +1026,12 @@ pub fn build_page_context_with_graph_inputs(
         }
         _ => {
             facts.push(format!("页面类型：{}", page.page_type));
-            summary_inputs.push("由 codebuddy-wiki 自动生成。".to_string());
+            summary_inputs.push("由 spec-wiki 自动生成。".to_string());
         }
     }
 
     if summary_inputs.is_empty() {
-        summary_inputs.push("由 codebuddy-wiki 自动生成。".to_string());
+        summary_inputs.push("由 spec-wiki 自动生成。".to_string());
     }
     facts = dedupe_lines(facts);
     summary_inputs = dedupe_lines(summary_inputs);
@@ -1056,6 +1056,9 @@ pub fn build_page_context_with_graph_inputs(
         readiness_status: String::new(),
         citation_digest_refs: Vec::new(),
         diagram_digest_refs: Vec::new(),
+        has_unit_research_contract: false,
+        unit_research_input_hash: None,
+        missing_child_unit_ids: Vec::new(),
         evidence_groups,
         diagram_inputs,
     }
@@ -1766,14 +1769,3 @@ fn build_research_surface(report: &ScanReport, surface_type: &str, path: &str) -
         summary,
     }
 }
-
-
-
-
-
-
-
-
-
-
-

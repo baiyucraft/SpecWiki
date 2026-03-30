@@ -11,36 +11,45 @@ use std::time::SystemTime;
 
 use crate::debug_trace;
 use crate::domain::checkpoint::PipelineRuntimeSummary;
-use wiki_knowledge::domain::compose::PageDraft;
 use crate::domain::context::PageContext;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
+use crate::domain::runtime_profile::{LlmExecutionMode, RuntimeSummaryProjection};
 use crate::domain::state::{assemble_state, PageBuildResult};
-use crate::domain::steering::load_steering_config;
 use crate::domain::steering::LlmCacheMode;
+use crate::domain::steering::{
+    check_user_config_file, ensure_default_user_config_file, load_steering_config_with_mode,
+    SteeringLoadMode,
+};
 use crate::generation::context::{build_module_contexts_with_graph, build_repo_context_with_graph};
 use crate::generation::renderer::render_page_draft;
 use crate::llm::{LlmRuntime, LlmService};
 use crate::repo::git::{current_branch, current_commit};
-use wiki_index::hierarchy::build_module_tree_with_graph_and_assist;
-use wiki_index::scanner::scan_repo_with_boundary_and_assist;
-use wiki_index::symbol_graph::{analyze_symbol_graph, build_graph_summary, resolve_symbol_graph};
 use crate::storage::cache_store::{
-    ensure_cache_dir, ensure_page_cache_dirs, write_module_tree_cache, write_page_context_cache,
-    write_page_generation_cache, write_scan_cache, PageContextCacheEntry, PageGenerationCacheEntry,
+    ensure_cache_dir, ensure_page_cache_dirs, write_page_context_cache,
+    write_page_generation_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::metadata_store::metadata_exists;
 use crate::storage::metadata_store::write_metadata;
-use crate::storage::sqlite_store;
 use crate::storage::sqlite::runtime_store::SqliteRuntimeStore;
-use crate::storage::state_store::write_state_with_symbol_graph;
+use crate::storage::sqlite_store;
+use crate::storage::state_store::{write_facts_snapshot, write_state};
 use crate::storage::wiki_fs::{remove_runtime_with_cache_mode, write_page};
-use crate::workflows::page_render::{finalize_pipeline_runtime, run_compose_pipeline_with_action};
+use crate::workflows::page_render::{
+    finalize_pipeline_runtime, load_runtime_summary_for_repo, run_compose_pipeline_with_action,
+};
 use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
+};
+use crate::workflows::release_scope::{
+    persist_index_only_release_scope, v0_1_index_only_enabled, INDEX_ONLY_RUNTIME_STATE,
 };
 use crate::workflows::research_provider::select_runtime_research_provider;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use wiki_index::hierarchy::build_module_tree_with_graph_and_assist;
+use wiki_index::scanner::scan_repo_with_boundary_and_assist;
+use wiki_index::symbol_graph::{analyze_symbol_graph, build_graph_summary, resolve_symbol_graph};
+use wiki_knowledge::domain::compose::PageDraft;
 
 /// `init` 会全量生成 Repo Wiki 运行时。
 /// 它是当前最完整的一条链路：扫描 -> 模块树 -> 页面 -> WikiState -> metadata/cache。
@@ -48,10 +57,17 @@ use time::OffsetDateTime;
 pub struct InitReport {
     /// 当前命令是否真正完成了初始化流程。
     pub initialized: bool,
-    /// 初始化结束后的 runtime 状态，正常情况为 `fresh`。
+    /// 初始化结束后的 runtime 状态。
+    /// `v0.1.0 index-only` 收敛路径会显式返回 `index_only`。
     pub state: String,
     /// 本次初始化实际写出的页面路径集合。
+    /// `v0.1.0 index-only` 收敛路径不会产出页面。
     pub generated_pages: Vec<String>,
+    /// 当前 workflow 成功结束后的 runtime 摘要。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_summary: Option<RuntimeSummaryProjection>,
+    /// 当前长流程真实采用的执行路径。
+    pub llm_execution_mode: LlmExecutionMode,
 }
 
 /// 初始化 `.wiki/` 运行时。
@@ -77,7 +93,13 @@ pub fn run_init_with_progress_as(
     repo_root: &Path,
     progress_sink: &mut dyn ProgressSink,
 ) -> io::Result<InitReport> {
-    run_init_with_progress_and_llm_as(action, repo_root, progress_sink, None)
+    run_init_with_progress_and_llm_as_with_mode(
+        action,
+        repo_root,
+        progress_sink,
+        None,
+        SteeringLoadMode::Production,
+    )
 }
 
 /// 在保留旧进度接口的同时，允许 transport 注入可选 LLM 桥接。
@@ -96,6 +118,22 @@ pub fn run_init_with_progress_and_llm_as<'a>(
     progress_sink: &'a mut dyn ProgressSink,
     _llm_service: Option<&'a mut dyn LlmService>,
 ) -> io::Result<InitReport> {
+    run_init_with_progress_and_llm_as_with_mode(
+        action,
+        repo_root,
+        progress_sink,
+        _llm_service,
+        SteeringLoadMode::Production,
+    )
+}
+
+pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
+    action: &'static str,
+    repo_root: &Path,
+    progress_sink: &'a mut dyn ProgressSink,
+    _llm_service: Option<&'a mut dyn LlmService>,
+    steering_mode: SteeringLoadMode,
+) -> io::Result<InitReport> {
     if !repo_root.exists() || !repo_root.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -107,10 +145,16 @@ pub fn run_init_with_progress_and_llm_as<'a>(
     let started_at = Instant::now();
     let mut reporter_sink = SharedProgressSink::new(shared_sink.clone());
     let mut reporter = WorkflowReporter::from_started_at(action, &mut reporter_sink, started_at);
+    let index_only_release = v0_1_index_only_enabled(action);
 
     // 按 deterministic pipeline 的顺序串起整条生成链。
-    let steering = load_steering_config(repo_root);
-    if !should_preserve_incomplete_init_runtime(action, repo_root, steering.llm.cache_mode)? {
+    reporter.phase("user_config", "检查用户配置");
+    ensure_default_user_config_file()?;
+    check_user_config_file()?;
+    let steering = load_steering_config_with_mode(repo_root, steering_mode);
+    let should_preserve_incomplete = !index_only_release
+        && should_preserve_incomplete_init_runtime(action, repo_root, steering.llm.cache_mode)?;
+    if index_only_release || !should_preserve_incomplete {
         remove_runtime_with_cache_mode(repo_root, steering.llm.cache_mode)?;
     }
     debug_trace::begin_session(action, repo_root, &steering.debug)?;
@@ -162,8 +206,38 @@ pub fn run_init_with_progress_and_llm_as<'a>(
     let graph_summary =
         build_graph_summary(&scan_report, &symbol_snapshot, &resolved_graph, &analysis);
     reporter.phase("build_module_tree", "构建模块树");
-    let module_tree =
-        build_module_tree_with_graph_and_assist(&scan_report, &graph_summary, Some(&mut llm_runtime));
+    let module_tree = build_module_tree_with_graph_and_assist(
+        &scan_report,
+        &graph_summary,
+        Some(&mut llm_runtime),
+    );
+    reporter.phase("write_facts_snapshot", "提交 facts snapshot");
+    write_facts_snapshot(
+        repo_root,
+        &scan_report,
+        &module_tree,
+        &symbol_snapshot.symbols,
+        &resolved_graph,
+        &analysis,
+    )?;
+    if index_only_release {
+        persist_index_only_release_scope(repo_root)?;
+        reporter.phase(
+            "v0_1_index_only_short_circuit",
+            "v0.1.0 index-only 收敛：跳过 knowledge/page runtime",
+        );
+        return Ok(InitReport {
+            initialized: true,
+            state: INDEX_ONLY_RUNTIME_STATE.to_string(),
+            generated_pages: Vec::new(),
+            runtime_summary: None,
+            llm_execution_mode: match llm_runtime.selected_path() {
+                Some(crate::llm::SelectedLlmPath::ProviderApi) => LlmExecutionMode::ProviderDirect,
+                Some(crate::llm::SelectedLlmPath::AgentBridge) => LlmExecutionMode::AgentBridge,
+                None => LlmExecutionMode::DeterministicOnly,
+            },
+        });
+    }
     reporter.phase("build_contexts", "构建页面上下文");
     let repo_context = build_repo_context_with_graph(&scan_report, &module_tree, &graph_summary);
     let module_contexts =
@@ -194,8 +268,10 @@ pub fn run_init_with_progress_and_llm_as<'a>(
         &steering,
         research_provider.provider.as_ref(),
     )?;
+    drop(research_provider);
     let page_drafts = pipeline.page_drafts;
     let _digests = pipeline.digests;
+    let unit_researches = pipeline.unit_researches;
     let knowledge_tree = pipeline.knowledge_tree;
     let pages = pipeline.planned_pages;
     let pages_by_id: BTreeMap<String, _> =
@@ -203,8 +279,6 @@ pub fn run_init_with_progress_and_llm_as<'a>(
 
     ensure_cache_dir(repo_root)?;
     ensure_page_cache_dirs(repo_root)?;
-    write_scan_cache(repo_root, &scan_report)?;
-    write_module_tree_cache(repo_root, &module_tree)?;
 
     // ── Render & Write ──
     let page_total = page_drafts.len();
@@ -225,8 +299,13 @@ pub fn run_init_with_progress_and_llm_as<'a>(
         let content_hash = wiki_index::fingerprint::fingerprint_bytes(rendered.content.as_bytes());
 
         let planned_page = find_or_build_planned_page(draft, &pages_by_id);
-        let page_context =
-            build_minimal_page_context(draft, &planned_page, &knowledge_tree, &_digests);
+        let page_context = build_minimal_page_context(
+            draft,
+            &planned_page,
+            &knowledge_tree,
+            &_digests,
+            &unit_researches,
+        );
         let input_hash = wiki_index::fingerprint::fingerprint_bytes(
             format!("{}:{}", draft.page_id, draft.citation_count).as_bytes(),
         );
@@ -286,13 +365,7 @@ pub fn run_init_with_progress_and_llm_as<'a>(
     // 先装配 WikiState 并持久化，再通过 MetadataMapper 导出 WikiMetadata。
     let state = assemble_state(&page_results, &scan_report, &module_tree, &generated_at);
     reporter.phase("write_state", "写入运行时状态");
-    write_state_with_symbol_graph(
-        repo_root,
-        &state,
-        &symbol_snapshot.symbols,
-        &resolved_graph,
-        &analysis,
-    )?;
+    write_state(repo_root, &state)?;
 
     let export_context = ExportContext {
         schema_version: "1".to_string(),
@@ -306,6 +379,8 @@ pub fn run_init_with_progress_and_llm_as<'a>(
     reporter.phase("write_metadata", "写入元数据");
     write_metadata(repo_root, &metadata)?;
     finalize_pipeline_runtime(repo_root, action, generated_pages.len())?;
+    let runtime_summary =
+        load_runtime_summary_for_repo(repo_root)?.map(RuntimeSummaryProjection::from_summary);
     let conn = sqlite_store::open_db(repo_root)?;
     SqliteRuntimeStore::new(&conn).clear_pipeline_checkpoint()?;
 
@@ -313,6 +388,12 @@ pub fn run_init_with_progress_and_llm_as<'a>(
         initialized: true,
         state: state.dirty_state.status,
         generated_pages,
+        runtime_summary,
+        llm_execution_mode: match llm_runtime.selected_path() {
+            Some(crate::llm::SelectedLlmPath::ProviderApi) => LlmExecutionMode::ProviderDirect,
+            Some(crate::llm::SelectedLlmPath::AgentBridge) => LlmExecutionMode::AgentBridge,
+            None => LlmExecutionMode::DeterministicOnly,
+        },
     })
 }
 
@@ -338,8 +419,7 @@ fn should_preserve_incomplete_init_runtime(
 
     let conn = sqlite_store::open_db(repo_root)?;
     let runtime_store = SqliteRuntimeStore::new(&conn);
-    let Some(raw_summary) = runtime_store.runtime_meta_get("pipeline_runtime_summary")?
-    else {
+    let Some(raw_summary) = runtime_store.runtime_meta_get("pipeline_runtime_summary")? else {
         return Ok(false);
     };
     let runtime_summary: PipelineRuntimeSummary = serde_json::from_str(&raw_summary)
@@ -484,6 +564,7 @@ pub(crate) fn build_minimal_page_context(
     planned_page: &wiki_knowledge::PlannedPage,
     knowledge_tree: &crate::domain::knowledge::KnowledgeTree,
     digests: &BTreeMap<String, wiki_knowledge::domain::research::PageDigest>,
+    unit_researches: &BTreeMap<String, wiki_knowledge::domain::research::UnitResearch>,
 ) -> PageContext {
     let mut ctx = PageContext::default();
     if let Some(unit) = knowledge_tree.get_unit(&draft.unit_id) {
@@ -523,11 +604,27 @@ pub(crate) fn build_minimal_page_context(
             .iter()
             .map(|digest| digest.digest_id.clone())
             .collect();
-        ctx.readiness_status = if child_digests.is_empty() && !unit.is_leaf() {
-            "waiting_children".to_string()
-        } else {
+        ctx.missing_child_unit_ids = unit
+            .child_unit_ids
+            .iter()
+            .filter(|child_id| {
+                !ctx.child_unit_ids
+                    .iter()
+                    .any(|existing| existing == *child_id)
+            })
+            .cloned()
+            .collect();
+        ctx.readiness_status = if ctx.missing_child_unit_ids.is_empty() {
             "compose_ready".to_string()
+        } else {
+            "waiting_children".to_string()
         };
+        if let Some(unit_research) = unit_researches.get(&unit.id) {
+            ctx.has_unit_research_contract = true;
+            if !unit_research.input_hash.trim().is_empty() {
+                ctx.unit_research_input_hash = Some(unit_research.input_hash.clone());
+            }
+        }
         ctx.citation_digest_refs = child_digests
             .iter()
             .flat_map(|digest| {
@@ -568,21 +665,59 @@ pub(crate) fn current_timestamp() -> String {
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
+    use std::path::Path;
+    use std::sync::Mutex;
 
     use tempfile::tempdir;
 
-    use super::{build_minimal_page_context, should_preserve_incomplete_init_runtime};
+    use super::{
+        build_minimal_page_context, run_init_with_progress_as,
+        should_preserve_incomplete_init_runtime,
+    };
     use crate::domain::checkpoint::UnitRuntimeGate;
-    use wiki_knowledge::domain::compose::PageDraft;
     use crate::domain::knowledge::{
         DomainType, KnowledgeDomain, KnowledgeTree, KnowledgeUnit, UnitType,
     };
-    use wiki_knowledge::domain::research::{
-        PageDiagramDigest, PageDigest, PageSectionDigest, SourceCitation,
-    };
-    use crate::domain::steering::LlmCacheMode;
-    use wiki_knowledge::plan_pages_from_knowledge_tree;
+    use crate::domain::steering::{spec_wiki_user_config_path, LlmCacheMode};
     use crate::storage::sqlite_store;
+    use crate::workflows::progress::NoopProgressSink;
+    use crate::workflows::release_scope::V0_1_INDEX_ONLY_ENV;
+    use wiki_knowledge::domain::compose::PageDraft;
+    use wiki_knowledge::domain::research::{
+        PageDiagramDigest, PageDigest, PageSectionDigest, SourceCitation, UnitResearch,
+    };
+    use wiki_knowledge::plan_pages_from_knowledge_tree;
+
+    static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set_path(key: &'static str, value: &Path) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value.as_os_str());
+            Self { key, previous }
+        }
+
+        fn set_str(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     #[test]
     fn build_minimal_page_context_persists_child_contract_and_unit_identity() {
@@ -655,7 +790,17 @@ mod tests {
         };
         let digests = BTreeMap::from([(child.id.clone(), child_digest)]);
 
-        let context = build_minimal_page_context(&draft, &planned_page, &tree, &digests);
+        let unit_researches = BTreeMap::from([(
+            parent.id.clone(),
+            UnitResearch {
+                unit_id: parent.id.clone(),
+                input_hash: "parent-research-hash".to_string(),
+                ..UnitResearch::default()
+            },
+        )]);
+
+        let context =
+            build_minimal_page_context(&draft, &planned_page, &tree, &digests, &unit_researches);
 
         assert_eq!(context.unit_id.as_deref(), Some(parent.id.as_str()));
         assert_eq!(
@@ -679,6 +824,12 @@ mod tests {
             vec!["digest-child-runtime".to_string()]
         );
         assert_eq!(context.readiness_status, "compose_ready");
+        assert!(context.has_unit_research_contract);
+        assert_eq!(
+            context.unit_research_input_hash.as_deref(),
+            Some("parent-research-hash")
+        );
+        assert!(context.missing_child_unit_ids.is_empty());
         assert_eq!(
             context.citation_digest_refs,
             vec!["section-runtime".to_string()]
@@ -687,6 +838,57 @@ mod tests {
             context.diagram_digest_refs,
             vec!["diagram-runtime".to_string()]
         );
+    }
+
+    #[test]
+    fn build_minimal_page_context_marks_missing_child_rollup_as_waiting() {
+        let parent = KnowledgeUnit::new(
+            UnitType::DomainIndex,
+            "核心模块",
+            "domain-runtime",
+            "核心模块/核心模块.md",
+        );
+        let mut tree = KnowledgeTree::new(parent.id.clone());
+        let child = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "运行时",
+            "domain-runtime",
+            "核心模块/运行时.md",
+        );
+        let mut parent_with_child = parent.clone();
+        parent_with_child.child_unit_ids = vec![child.id.clone()];
+        tree.add_unit(parent_with_child.clone());
+        tree.add_unit(child.clone());
+        let draft = PageDraft {
+            page_id: crate::domain::stable_id::stable_id("page", &parent_with_child.relative_path),
+            unit_id: parent_with_child.id.clone(),
+            title: parent_with_child.title.clone(),
+            relative_path: parent_with_child.relative_path.clone(),
+            sections: Vec::new(),
+            diagrams: Vec::new(),
+            citation_count: 0,
+        };
+        let planned_page = super::find_or_build_planned_page(&draft, &BTreeMap::new());
+        let unit_researches = BTreeMap::from([(
+            parent_with_child.id.clone(),
+            UnitResearch {
+                unit_id: parent_with_child.id.clone(),
+                input_hash: "missing-child-hash".to_string(),
+                ..UnitResearch::default()
+            },
+        )]);
+
+        let context = build_minimal_page_context(
+            &draft,
+            &planned_page,
+            &tree,
+            &BTreeMap::new(),
+            &unit_researches,
+        );
+
+        assert_eq!(context.readiness_status, "waiting_children");
+        assert_eq!(context.missing_child_unit_ids, vec![child.id.clone()]);
+        assert!(context.has_unit_research_contract);
     }
 
     #[test]
@@ -827,8 +1029,59 @@ mod tests {
         )
         .unwrap());
     }
+
+    #[test]
+    fn init_creates_default_user_config_when_missing() {
+        let _home_lock = HOME_ENV_LOCK.lock().unwrap();
+        let home = tempdir().unwrap();
+        let _home_guard = EnvVarGuard::set_path("HOME", home.path());
+        let _userprofile_guard = EnvVarGuard::set_path("USERPROFILE", home.path());
+        let _index_only_guard = EnvVarGuard::set_str(V0_1_INDEX_ONLY_ENV, "1");
+
+        let repo = tempdir().unwrap();
+        fs::write(
+            repo.path().join("package.json"),
+            r#"{"name":"config-bootstrap","private":true}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(repo.path().join("src")).unwrap();
+        fs::write(repo.path().join("src/main.ts"), "export const main = 1;\n").unwrap();
+
+        let mut sink = NoopProgressSink;
+        let report = run_init_with_progress_as("init", repo.path(), &mut sink).unwrap();
+        let config_path = spec_wiki_user_config_path().expect("expected user config path");
+        let content = fs::read_to_string(&config_path).unwrap();
+
+        assert!(report.initialized);
+        assert!(config_path.exists());
+        assert!(content.contains("debug: {}"));
+        assert!(content.contains("llm: {}"));
+    }
+
+    #[test]
+    fn init_fails_when_user_config_is_invalid() {
+        let _home_lock = HOME_ENV_LOCK.lock().unwrap();
+        let home = tempdir().unwrap();
+        let _home_guard = EnvVarGuard::set_path("HOME", home.path());
+        let _userprofile_guard = EnvVarGuard::set_path("USERPROFILE", home.path());
+        let _index_only_guard = EnvVarGuard::set_str(V0_1_INDEX_ONLY_ENV, "1");
+
+        let user_dir = home.path().join(".spec-wiki");
+        fs::create_dir_all(&user_dir).unwrap();
+        fs::write(user_dir.join("config.yaml"), "{{{{not valid yaml").unwrap();
+
+        let repo = tempdir().unwrap();
+        fs::write(
+            repo.path().join("package.json"),
+            r#"{"name":"config-bootstrap","private":true}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(repo.path().join("src")).unwrap();
+        fs::write(repo.path().join("src/main.ts"), "export const main = 1;\n").unwrap();
+
+        let mut sink = NoopProgressSink;
+        let error = run_init_with_progress_as("init", repo.path(), &mut sink)
+            .expect_err("invalid user config should fail init");
+        assert!(error.to_string().contains("failed to parse"));
+    }
 }
-
-
-
-

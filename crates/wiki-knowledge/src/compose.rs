@@ -1,13 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::domain::compose::{ComposeSectionDraft, DiagramDraft, PageDraft};
-use wiki_model::domain::knowledge::{DecompositionProfile, KnowledgeTree, KnowledgeUnit, UnitType};
 use crate::domain::research::{
     canonical_reference_outline_title, DiagramSuggestion, DomainResearch, EvidenceCluster,
     KeySourceCluster, PageDiagramDigest, PageDigest, PageSectionDigest, PlannedSection,
     ResearchPageSeed, ResearchProfile, SectionGroundingRef, SkeletonProfile, SourceCitation,
     SystemResearch, UnitResearch,
 };
+use wiki_model::domain::knowledge::{DecompositionProfile, KnowledgeTree, KnowledgeUnit, UnitType};
 use wiki_model::domain::stable_id::stable_id;
 
 /// 最低 citation 密度——整页不低于此数。
@@ -58,6 +58,10 @@ pub struct ComposePageContract {
     pub child_key_sources: Vec<String>,
     /// 子页 readiness 摘要；避免父页在未就绪时误装配。
     pub child_readiness: Vec<ComposeChildReadiness>,
+    /// 当前 parent contract 期望消费的直接 child unit 集合。
+    pub expected_child_unit_ids: Vec<String>,
+    /// 当前 compose 阶段仍未就绪的直接 child unit 集合。
+    pub missing_child_unit_ids: Vec<String>,
 }
 
 /// 子页 contract 的 readiness 摘要。
@@ -277,6 +281,8 @@ fn build_compose_page_contract_from_parts(
     diagram_suggestions: Vec<DiagramSuggestion>,
     child_digests: &[PageDigest],
 ) -> ComposePageContract {
+    let missing_child_unit_ids = collect_missing_child_unit_ids(unit, child_digests);
+
     ComposePageContract {
         page_id: stable_id("page", &unit.relative_path),
         unit_id: unit.id.clone(),
@@ -309,7 +315,25 @@ fn build_compose_page_contract_from_parts(
                 readiness_stage: digest.readiness_stage.clone(),
             })
             .collect(),
+        expected_child_unit_ids: unit.child_unit_ids.clone(),
+        missing_child_unit_ids,
     }
+}
+
+fn collect_missing_child_unit_ids(
+    unit: &KnowledgeUnit,
+    child_digests: &[PageDigest],
+) -> Vec<String> {
+    let ready_child_ids = child_digests
+        .iter()
+        .map(|digest| digest.unit_id.as_str())
+        .collect::<BTreeSet<_>>();
+
+    unit.child_unit_ids
+        .iter()
+        .filter(|child_id| !ready_child_ids.contains(child_id.as_str()))
+        .cloned()
+        .collect()
 }
 
 fn merge_seed_overlay(
@@ -361,62 +385,25 @@ pub fn compose_contract_page_for_unit(
     unit_research: Option<&UnitResearch>,
     child_digests: &[PageDigest],
 ) -> Option<(PageDraft, PageDigest)> {
-    match unit.unit_type {
+    let compose_seed = match unit.unit_type {
         UnitType::Overview | UnitType::Architecture => {
-            let seed = system_research.map(|research| match unit.unit_type {
+            system_research.map(|research| match unit.unit_type {
                 UnitType::Architecture => &research.architecture_seed,
                 _ => &research.overview_seed,
-            });
-            if let Some(research) = unit_research {
-                Some(compose_page_from_contract(&build_compose_page_contract(
-                    unit,
-                    research,
-                    child_digests,
-                    seed,
-                )))
-            } else {
-                system_research.map(|research| {
-                    compose_seed_backed_page(
-                        unit,
-                        seed.expect("system page seed should exist"),
-                        child_digests,
-                        Some(research.description.as_str()),
-                        unit.decomposition_profile.clone(),
-                        None,
-                    )
-                })
-            }
+            })
         }
-        UnitType::DomainIndex => {
-            if let Some(research) = unit_research {
-                Some(compose_page_from_contract(&build_compose_page_contract(
-                    unit,
-                    research,
-                    child_digests,
-                    domain_research.map(|research| &research.compose_seed),
-                )))
-            } else {
-                domain_research.map(|research| {
-                    compose_seed_backed_page(
-                        unit,
-                        &research.compose_seed,
-                        child_digests,
-                        Some(research.domain_summary.as_str()),
-                        unit.decomposition_profile.clone(),
-                        None,
-                    )
-                })
-            }
-        }
-        _ => unit_research.map(|research| {
-            compose_page_from_contract(&build_compose_page_contract(
-                unit,
-                research,
-                child_digests,
-                None,
-            ))
-        }),
-    }
+        UnitType::DomainIndex => domain_research.map(|research| &research.compose_seed),
+        _ => None,
+    };
+
+    unit_research.map(|research| {
+        compose_page_from_contract(&build_compose_page_contract(
+            unit,
+            research,
+            child_digests,
+            compose_seed,
+        ))
+    })
 }
 
 fn build_digest_star_diagram(
@@ -489,23 +476,13 @@ pub fn compose_knowledge_tree(
             .iter()
             .filter_map(|cid| digests.get(cid).cloned())
             .collect();
-        let effective_child_digests =
-            if matches!(unit.unit_type, UnitType::Overview | UnitType::Architecture) {
-                tree.units
-                    .values()
-                    .filter(|candidate| candidate.unit_type == UnitType::DomainIndex)
-                    .filter_map(|candidate| digests.get(&candidate.id).cloned())
-                    .collect::<Vec<_>>()
-            } else {
-                child_digests
-            };
 
         if let Some((draft, digest)) = compose_contract_page_for_unit(
             unit,
             Some(system_research),
             domain_researches.get(&unit.domain_id),
             unit_researches.get(&unit.id),
-            &effective_child_digests,
+            &child_digests,
         ) {
             digests.insert(unit.id.clone(), digest);
             drafts.push(draft);
@@ -534,7 +511,7 @@ fn compose_section_from_contract(
     let key_source_clusters =
         collect_section_key_source_clusters(contract, &section_clusters, grounding);
     let section_diagram_titles = collect_section_diagram_titles(contract, grounding);
-    let child_section_digests = collect_section_child_section_digests(contract, grounding);
+    let child_section_digests = collect_section_child_section_digests(contract, planned, grounding);
     let child_digests = collect_section_child_digests(contract, planned, grounding);
 
     if !reference_outline_contract && !planned.intent.trim().is_empty() {
@@ -967,16 +944,23 @@ fn collect_section_child_digests<'a>(
 
 fn collect_section_child_section_digests<'a>(
     contract: &'a ComposePageContract,
+    planned: &PlannedSection,
     grounding: Option<&SectionGroundingRef>,
 ) -> Vec<&'a PageSectionDigest> {
-    let Some(grounding) = grounding else {
-        return Vec::new();
-    };
+    let references = grounding
+        .map(|grounding| grounding.child_digest_refs.clone())
+        .unwrap_or_default();
+    if references.is_empty() {
+        return planned
+            .child_digest_slot
+            .then(|| contract.child_section_citation_digest.iter().collect())
+            .unwrap_or_default();
+    }
     contract
         .child_section_citation_digest
         .iter()
         .filter(|digest| {
-            grounding.child_digest_refs.iter().any(|reference| {
+            references.iter().any(|reference| {
                 digest.digest_id == *reference
                     || digest.section_key == *reference
                     || digest.title == *reference
@@ -1210,10 +1194,11 @@ fn contract_digest_citations(contract: &ComposePageContract) -> Vec<SourceCitati
 }
 
 fn contract_digest_readiness(contract: &ComposePageContract) -> String {
-    if contract
-        .child_readiness
-        .iter()
-        .any(|readiness| readiness.readiness_stage != "compose_ready")
+    if !contract.missing_child_unit_ids.is_empty()
+        || contract
+            .child_readiness
+            .iter()
+            .any(|readiness| readiness.readiness_stage != "compose_ready")
     {
         "waiting_children".to_string()
     } else {
@@ -2102,6 +2087,8 @@ mod tests {
             child_section_citation_digest: Vec::new(),
             child_diagram_digest: Vec::new(),
             child_readiness: Vec::new(),
+            expected_child_unit_ids: vec!["unit-child".to_string()],
+            missing_child_unit_ids: Vec::new(),
             decomposition_profile: None,
             research_profile: None,
         };
@@ -2510,6 +2497,62 @@ mod tests {
                 input_hash: String::new(),
             },
         );
+        unit_researches.insert(
+            domain_index.id.clone(),
+            UnitResearch {
+                unit_id: domain_index.id.clone(),
+                decomposition_profile: domain_index.decomposition_profile.clone(),
+                research_profile: None,
+                positioning: "domain parent".to_string(),
+                summary: "domain summary".to_string(),
+                section_plan: vec![PlannedSection {
+                    section_key: "child-rollup".to_string(),
+                    title: "能力汇总".to_string(),
+                    intent: "收拢叶子页面".to_string(),
+                    section_summary: "通过子页章节 digest 汇总依赖注入基础。".to_string(),
+                    evidence_cluster_keys: Vec::new(),
+                    child_digest_slot: true,
+                    preserve_source_markdown: false,
+                }],
+                skeleton_profile: None,
+                key_source_clusters: Vec::new(),
+                section_grounding_refs: Vec::new(),
+                evidence_clusters: vec![dense_cluster("cluster-domain")],
+                diagram_suggestions: Vec::new(),
+                key_sources: vec!["src/domain.ts".to_string()],
+                provider_stop_reason: None,
+                provider_session_stats: None,
+                input_hash: String::new(),
+            },
+        );
+        unit_researches.insert(
+            overview.id.clone(),
+            UnitResearch {
+                unit_id: overview.id.clone(),
+                decomposition_profile: overview.decomposition_profile.clone(),
+                research_profile: None,
+                positioning: "overview parent".to_string(),
+                summary: "overview summary".to_string(),
+                section_plan: vec![PlannedSection {
+                    section_key: "domain-map".to_string(),
+                    title: "知识域概览".to_string(),
+                    intent: "总览知识域".to_string(),
+                    section_summary: "通过 parent rollup 串联项目。".to_string(),
+                    evidence_cluster_keys: Vec::new(),
+                    child_digest_slot: true,
+                    preserve_source_markdown: false,
+                }],
+                skeleton_profile: None,
+                key_source_clusters: Vec::new(),
+                section_grounding_refs: Vec::new(),
+                evidence_clusters: vec![dense_cluster("cluster-overview")],
+                diagram_suggestions: Vec::new(),
+                key_sources: vec!["src/overview.ts".to_string()],
+                provider_stop_reason: None,
+                provider_session_stats: None,
+                input_hash: String::new(),
+            },
+        );
 
         let (drafts, digests) = compose_knowledge_tree(
             &tree,
@@ -2548,7 +2591,3 @@ mod tests {
         }
     }
 }
-
-
-
-

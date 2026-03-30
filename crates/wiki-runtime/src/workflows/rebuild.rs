@@ -11,8 +11,9 @@ use std::time::Instant;
 
 use crate::debug_trace;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
+use crate::domain::runtime_profile::{LlmExecutionMode, RuntimeSummaryProjection};
 use crate::domain::state::{assemble_state, PageBuildResult};
-use crate::domain::steering::load_steering_config;
+use crate::domain::steering::{load_steering_config_with_mode, SteeringLoadMode};
 use crate::generation::context::{build_module_contexts_with_graph, build_repo_context_with_graph};
 use crate::generation::managed_sections::{
     merge_sections, parse_wiki_page, ManagedSectionBlock, PageBlock,
@@ -20,29 +21,31 @@ use crate::generation::managed_sections::{
 use crate::generation::renderer::{assemble_page_from_merge, render_page_draft};
 use crate::generation::sections::section_titles_for_page_type;
 use crate::llm::{LlmRuntime, LlmService};
-use wiki_index::fingerprint::fingerprint_bytes;
 use crate::repo::git::{current_branch, current_commit};
-use wiki_index::hierarchy::build_module_tree_with_graph_and_assist;
-use wiki_index::scanner::scan_repo_with_boundary_and_assist;
-use wiki_index::symbol_graph::{analyze_symbol_graph, build_graph_summary, resolve_symbol_graph};
 use crate::storage::cache_store::{
-    ensure_cache_dir, ensure_page_cache_dirs, write_module_tree_cache, write_page_context_cache,
-    write_page_generation_cache, write_scan_cache, PageContextCacheEntry, PageGenerationCacheEntry,
+    ensure_cache_dir, ensure_page_cache_dirs, write_page_context_cache,
+    write_page_generation_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite::runtime_store::SqliteRuntimeStore;
 use crate::storage::sqlite_store;
-use crate::storage::state_store::write_state_with_symbol_graph;
+use crate::storage::state_store::{write_facts_snapshot, write_state};
 use crate::storage::wiki_fs::{resolve_page_path, write_page};
 use crate::workflows::init::{
     ancestor_ids_for_page, build_minimal_page_context, current_timestamp,
     find_or_build_planned_page, page_provenance, source_paths_for_page,
 };
-use crate::workflows::page_render::{finalize_pipeline_runtime, run_compose_pipeline_with_action};
+use crate::workflows::page_render::{
+    finalize_pipeline_runtime, load_runtime_summary_for_repo, run_compose_pipeline_with_action,
+};
 use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
 };
 use crate::workflows::research_provider::select_runtime_research_provider;
+use wiki_index::fingerprint::fingerprint_bytes;
+use wiki_index::hierarchy::build_module_tree_with_graph_and_assist;
+use wiki_index::scanner::scan_repo_with_boundary_and_assist;
+use wiki_index::symbol_graph::{analyze_symbol_graph, build_graph_summary, resolve_symbol_graph};
 
 /// `rebuild` 是显式的"强制重建"入口。
 /// 迭代 5 之后，rebuild 会保留同 page_id 页面中已同步的 user sections。
@@ -50,6 +53,9 @@ use crate::workflows::research_provider::select_runtime_research_provider;
 pub struct RebuildReport {
     pub state: String,
     pub updated_pages: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_summary: Option<RuntimeSummaryProjection>,
+    pub llm_execution_mode: LlmExecutionMode,
     /// rebuild 过程中产生的警告信息。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
@@ -67,7 +73,13 @@ pub fn run_rebuild_with_progress_as(
     repo_root: &Path,
     progress_sink: &mut dyn ProgressSink,
 ) -> io::Result<RebuildReport> {
-    run_rebuild_with_progress_and_llm_as(action, repo_root, progress_sink, None)
+    run_rebuild_with_progress_and_llm_as_with_mode(
+        action,
+        repo_root,
+        progress_sink,
+        None,
+        SteeringLoadMode::Production,
+    )
 }
 
 /// 在保留旧进度接口的同时，允许 transport 注入可选 LLM 桥接。
@@ -86,6 +98,22 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
     progress_sink: &'a mut dyn ProgressSink,
     _llm_service: Option<&'a mut dyn LlmService>,
 ) -> io::Result<RebuildReport> {
+    run_rebuild_with_progress_and_llm_as_with_mode(
+        action,
+        repo_root,
+        progress_sink,
+        _llm_service,
+        SteeringLoadMode::Production,
+    )
+}
+
+pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
+    action: &'static str,
+    repo_root: &Path,
+    progress_sink: &'a mut dyn ProgressSink,
+    _llm_service: Option<&'a mut dyn LlmService>,
+    steering_mode: SteeringLoadMode,
+) -> io::Result<RebuildReport> {
     if !repo_root.exists() || !repo_root.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -98,7 +126,7 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
     let mut reporter_sink = SharedProgressSink::new(shared_sink.clone());
     let mut reporter = WorkflowReporter::from_started_at(action, &mut reporter_sink, started_at);
 
-    let steering = load_steering_config(repo_root);
+    let steering = load_steering_config_with_mode(repo_root, steering_mode);
 
     // 在清理前，读取旧页面的磁盘内容用于 user section 恢复
     let old_page_contents = read_old_page_contents(repo_root);
@@ -157,8 +185,20 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
     let graph_summary =
         build_graph_summary(&scan_report, &symbol_snapshot, &resolved_graph, &analysis);
     reporter.phase("build_module_tree", "构建模块树");
-    let module_tree =
-        build_module_tree_with_graph_and_assist(&scan_report, &graph_summary, Some(&mut llm_runtime));
+    let module_tree = build_module_tree_with_graph_and_assist(
+        &scan_report,
+        &graph_summary,
+        Some(&mut llm_runtime),
+    );
+    reporter.phase("write_facts_snapshot", "提交 facts snapshot");
+    write_facts_snapshot(
+        repo_root,
+        &scan_report,
+        &module_tree,
+        &symbol_snapshot.symbols,
+        &resolved_graph,
+        &analysis,
+    )?;
     reporter.phase("build_contexts", "构建页面上下文");
     let repo_context = build_repo_context_with_graph(&scan_report, &module_tree, &graph_summary);
     let module_contexts =
@@ -190,8 +230,10 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
         &steering,
         research_provider.provider.as_ref(),
     )?;
+    drop(research_provider);
     let page_drafts = pipeline.page_drafts;
     let digests = pipeline.digests;
+    let unit_researches = pipeline.unit_researches;
     let knowledge_tree = pipeline.knowledge_tree;
     let pages_by_id: BTreeMap<String, _> = pipeline
         .planned_pages
@@ -201,8 +243,6 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
 
     ensure_cache_dir(repo_root)?;
     ensure_page_cache_dirs(repo_root)?;
-    write_scan_cache(repo_root, &scan_report)?;
-    write_module_tree_cache(repo_root, &module_tree)?;
 
     let page_total = page_drafts.len();
     reporter.counted("render_pages", "渲染页面", 0, page_total);
@@ -216,8 +256,13 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
     for (index, draft) in page_drafts.iter().enumerate() {
         let rendered = render_page_draft(draft);
         let planned_page = find_or_build_planned_page(draft, &pages_by_id);
-        let page_context =
-            build_minimal_page_context(draft, &planned_page, &knowledge_tree, &digests);
+        let page_context = build_minimal_page_context(
+            draft,
+            &planned_page,
+            &knowledge_tree,
+            &digests,
+            &unit_researches,
+        );
 
         let final_content = match old_page_contents.get(&planned_page.id) {
             Some(old_content) => merge_old_user_sections(
@@ -291,13 +336,7 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
 
     let state = assemble_state(&page_results, &scan_report, &module_tree, &generated_at);
     reporter.phase("write_state", "写入运行时状态");
-    write_state_with_symbol_graph(
-        repo_root,
-        &state,
-        &symbol_snapshot.symbols,
-        &resolved_graph,
-        &analysis,
-    )?;
+    write_state(repo_root, &state)?;
 
     let export_context = ExportContext {
         schema_version: "1".to_string(),
@@ -311,12 +350,20 @@ pub fn run_rebuild_with_progress_and_llm_as<'a>(
     reporter.phase("write_metadata", "写入元数据");
     write_metadata(repo_root, &metadata)?;
     finalize_pipeline_runtime(repo_root, action, generated_pages.len())?;
+    let runtime_summary =
+        load_runtime_summary_for_repo(repo_root)?.map(RuntimeSummaryProjection::from_summary);
     let conn = sqlite_store::open_db(repo_root)?;
     SqliteRuntimeStore::new(&conn).clear_pipeline_checkpoint()?;
 
     Ok(RebuildReport {
         state: state.dirty_state.status,
         updated_pages: generated_pages,
+        runtime_summary,
+        llm_execution_mode: match llm_runtime.selected_path() {
+            Some(crate::llm::SelectedLlmPath::ProviderApi) => LlmExecutionMode::ProviderDirect,
+            Some(crate::llm::SelectedLlmPath::AgentBridge) => LlmExecutionMode::AgentBridge,
+            None => LlmExecutionMode::DeterministicOnly,
+        },
         warnings: all_warnings,
     })
 }
@@ -372,7 +419,3 @@ fn merge_old_user_sections(
     }
     assemble_page_from_merge(&planned_page.title, &merge_plan)
 }
-
-
-
-

@@ -47,6 +47,7 @@ pub struct ComposePipelineOutput {
     pub digests: BTreeMap<String, PageDigest>,
     pub knowledge_tree: KnowledgeTree,
     pub planned_pages: Vec<PlannedPage>,
+    pub unit_researches: BTreeMap<String, UnitResearch>,
 }
 
 /// 封装 knowledge planning → research → compose 全链路。
@@ -214,20 +215,6 @@ pub fn run_compose_pipeline_with_action(
         save_runtime_summary(&conn, &runtime_summary)?;
         let child_digests =
             collect_compose_input_digests(unit, &knowledge_tree, &unit_digests_for_research);
-        if unit_uses_seed_backed_research(unit) {
-            runtime_summary.current_research_unit_id = None;
-            runtime_summary.current_research_unit_type = None;
-            runtime_summary.current_research_started_at = None;
-            runtime_summary.last_researched_unit_id = Some(unit.id.clone());
-            runtime_summary.last_research_elapsed_ms = Some(
-                research_started_at
-                    .elapsed()
-                    .as_millis()
-                    .min(u64::MAX as u128) as u64,
-            );
-            persist_research_progress(&conn, &mut runtime_summary, &mut unit_runtime_gates, unit)?;
-            continue;
-        }
         let unit_input_hash =
             compute_unit_input_hash(&facts_input_hash, unit, &child_digests, steering);
         let mut research = load_or_compute_research(
@@ -312,6 +299,24 @@ pub fn run_compose_pipeline_with_action(
         }
 
         let child_digests = collect_compose_input_digests(unit, &knowledge_tree, &digests);
+        if let Err(issue) = validate_compose_contract_inputs(unit, &child_digests, &unit_researches)
+        {
+            persist_compose_contract_block(
+                &conn,
+                &mut runtime_summary,
+                &mut unit_runtime_gates,
+                unit,
+                &issue,
+                stage_for_compose_error(unit),
+            )?;
+            return Err(save_checkpoint_and_return(
+                &conn,
+                &facts_input_hash,
+                stage_for_compose_error(unit),
+                Some(unit.id.clone()),
+                issue.into_error(),
+            ));
+        }
         let (draft, digest, stage) = compose_unit_page(
             unit,
             &child_digests,
@@ -356,6 +361,7 @@ pub fn run_compose_pipeline_with_action(
         digests,
         knowledge_tree,
         planned_pages,
+        unit_researches,
     })
 }
 
@@ -428,15 +434,6 @@ fn build_pipeline_unit_order(knowledge_tree: &KnowledgeTree) -> Vec<String> {
 
     non_system.extend(system_units);
     non_system
-}
-
-/// `SystemResearch / DomainResearch` 已经为高层页产出了可直接 compose 的 seed。
-/// 这些 unit 若再跑一轮 provider-backed research，只会重复消耗吞吐，不会引入新的 child digest。
-fn unit_uses_seed_backed_research(unit: &KnowledgeUnit) -> bool {
-    matches!(
-        unit.unit_type,
-        UnitType::Overview | UnitType::Architecture | UnitType::DomainIndex
-    )
 }
 
 fn initialize_runtime_gates(
@@ -598,6 +595,9 @@ fn persist_research_progress(
     }
     runtime_summary.last_interrupted_stage = None;
     runtime_summary.summary_reason = None;
+    runtime_summary
+        .blocked_units
+        .retain(|blocked| blocked != &unit.id);
 
     let next_gate = UnitRuntimeGate {
         unit_id: unit.id.clone(),
@@ -636,20 +636,22 @@ fn load_or_compute_research<T, F>(
     compute: F,
 ) -> io::Result<T>
 where
-    T: Serialize + DeserializeOwned,
+    T: Serialize + DeserializeOwned + CachedResearchResult,
     F: FnOnce() -> io::Result<T>,
 {
     let knowledge_store = SqliteKnowledgeStore::new(conn);
     let runtime_store = SqliteRuntimeStore::new(conn);
     if let Some(cached) =
-        read_cached_research(&knowledge_store, research_type, target_id, input_hash)?
+        read_cached_research::<T>(&knowledge_store, research_type, target_id, input_hash)?
     {
-        return Ok(cached);
+        return Ok(cached.with_cache_input_hash(input_hash));
     }
 
-    let result = compute().map_err(|error| {
-        save_checkpoint_and_return(conn, facts_input_hash, stage, interrupted_target_id, error)
-    })?;
+    let result = compute()
+        .map(|result| result.with_cache_input_hash(input_hash))
+        .map_err(|error| {
+            save_checkpoint_and_return(conn, facts_input_hash, stage, interrupted_target_id, error)
+        })?;
     let result_json = serde_json::to_string(&result)
         .map_err(|error| io::Error::other(format!("serialize research cache: {error}")))?;
     knowledge_store.write_research_cache(research_type, target_id, input_hash, &result_json)?;
@@ -659,6 +661,25 @@ where
     }
 
     Ok(result)
+}
+
+trait CachedResearchResult: Sized {
+    /// 把 cache key 对应的输入哈希挂回 research 结果，
+    /// 让后续 page context 能区分真实 unit research 与缺省 seed。
+    fn with_cache_input_hash(self, _input_hash: &str) -> Self {
+        self
+    }
+}
+
+impl CachedResearchResult for SystemResearch {}
+
+impl CachedResearchResult for DomainResearch {}
+
+impl CachedResearchResult for UnitResearch {
+    fn with_cache_input_hash(mut self, input_hash: &str) -> Self {
+        self.input_hash = input_hash.to_string();
+        self
+    }
 }
 
 fn read_cached_research<T: DeserializeOwned>(
@@ -829,22 +850,68 @@ fn build_diagram_digests_from_research(research: &UnitResearch) -> Vec<PageDiagr
 
 pub(crate) fn collect_compose_input_digests(
     unit: &KnowledgeUnit,
-    knowledge_tree: &KnowledgeTree,
+    _knowledge_tree: &KnowledgeTree,
     digests: &BTreeMap<String, PageDigest>,
 ) -> Vec<PageDigest> {
-    if matches!(unit.unit_type, UnitType::Overview | UnitType::Architecture) {
-        return knowledge_tree
-            .units
-            .values()
-            .filter(|candidate| candidate.unit_type == UnitType::DomainIndex)
-            .filter_map(|candidate| digests.get(&candidate.id).cloned())
-            .collect();
-    }
-
     unit.child_unit_ids
         .iter()
         .filter_map(|child_id| digests.get(child_id).cloned())
         .collect()
+}
+
+#[derive(Debug, Clone)]
+struct ComposeContractIssue {
+    message: String,
+    blocked_reason: String,
+    missing_dependencies: Vec<String>,
+}
+
+impl ComposeContractIssue {
+    fn into_error(self) -> io::Error {
+        io::Error::other(self.message)
+    }
+}
+
+fn validate_compose_contract_inputs(
+    unit: &KnowledgeUnit,
+    child_digests: &[PageDigest],
+    unit_researches: &BTreeMap<String, UnitResearch>,
+) -> Result<(), ComposeContractIssue> {
+    let missing_child_unit_ids = unit
+        .child_unit_ids
+        .iter()
+        .filter(|child_id| {
+            !child_digests
+                .iter()
+                .any(|digest| digest.unit_id.as_str() == child_id.as_str())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing_child_unit_ids.is_empty() {
+        return Err(ComposeContractIssue {
+            message: format!(
+                "missing child rollup for {}: {}",
+                unit.id,
+                missing_child_unit_ids.join(", ")
+            ),
+            blocked_reason: "waiting_child_rollup".to_string(),
+            missing_dependencies: missing_child_unit_ids,
+        });
+    }
+
+    let requires_unit_research = matches!(
+        unit.unit_type,
+        UnitType::Overview | UnitType::Architecture | UnitType::DomainIndex
+    ) || !unit.child_unit_ids.is_empty();
+    if requires_unit_research && !unit_researches.contains_key(&unit.id) {
+        return Err(ComposeContractIssue {
+            message: format!("missing unit research contract for {}", unit.id),
+            blocked_reason: "missing_unit_research_contract".to_string(),
+            missing_dependencies: vec![format!("unit_research:{}", unit.id)],
+        });
+    }
+
+    Ok(())
 }
 
 fn compose_unit_page(
@@ -986,6 +1053,9 @@ fn persist_compose_progress(
     runtime_summary.last_ready_stage = Some(stage.as_str().to_string());
     runtime_summary.last_interrupted_stage = None;
     runtime_summary.summary_reason = None;
+    runtime_summary
+        .blocked_units
+        .retain(|blocked| blocked != &unit.id);
     let next_gate = UnitRuntimeGate {
         unit_id: unit.id.clone(),
         unit_type: unit.unit_type.as_str().to_string(),
@@ -1011,6 +1081,45 @@ fn persist_compose_progress(
     save_runtime_summary(conn, runtime_summary)
 }
 
+fn persist_compose_contract_block(
+    conn: &Connection,
+    runtime_summary: &mut PipelineRuntimeSummary,
+    runtime_gates: &mut BTreeMap<String, UnitRuntimeGate>,
+    unit: &KnowledgeUnit,
+    issue: &ComposeContractIssue,
+    stage: PipelineStage,
+) -> io::Result<()> {
+    let existing_gate = runtime_gates
+        .get(&unit.id)
+        .cloned()
+        .unwrap_or_else(|| pending_runtime_gate(unit));
+    runtime_summary.runtime_state = "interrupted".to_string();
+    runtime_summary.last_interrupted_stage = Some(stage.as_str().to_string());
+    runtime_summary.summary_reason = Some(issue.message.clone());
+    if !runtime_summary
+        .blocked_units
+        .iter()
+        .any(|blocked| blocked == &unit.id)
+    {
+        runtime_summary.blocked_units.push(unit.id.clone());
+    }
+
+    let next_gate = UnitRuntimeGate {
+        unit_id: unit.id.clone(),
+        unit_type: unit.unit_type.as_str().to_string(),
+        research_status: existing_gate.research_status,
+        compose_status: "blocked".to_string(),
+        assemble_status: existing_gate.assemble_status,
+        last_ready_stage: existing_gate.last_ready_stage,
+        blocked_reason: Some(issue.blocked_reason.clone()),
+        missing_dependencies: issue.missing_dependencies.clone(),
+        updated_at: current_runtime_timestamp(),
+    };
+    let runtime_store = SqliteRuntimeStore::new(conn);
+    runtime_store.write_unit_runtime_gate(&next_gate)?;
+    runtime_gates.insert(unit.id.clone(), next_gate);
+    save_runtime_summary(conn, runtime_summary)
+}
 fn compute_system_input_hash(
     facts_input_hash: &str,
     ds: &ResearchDataSource<'_>,
@@ -1252,7 +1361,6 @@ pub fn load_runtime_gate_summary_for_repo(
 
 #[cfg(test)]
 mod tests {
-    use super::unit_uses_seed_backed_research;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::fs;
@@ -1285,9 +1393,11 @@ mod tests {
 
     use super::{
         collect_compose_input_digests, compute_unit_input_hash, enrich_parent_research,
-        initialize_runtime_gates, initialize_runtime_summary, load_runtime_summary,
-        pending_runtime_gate, persist_compose_progress, persist_research_progress,
-        prepare_resume_state, run_compose_pipeline, save_runtime_summary,
+        initialize_runtime_gates, initialize_runtime_summary, load_or_compute_research,
+        load_runtime_summary, pending_runtime_gate, persist_compose_contract_block,
+        persist_compose_progress, persist_research_progress, prepare_resume_state,
+        run_compose_pipeline, save_runtime_summary, validate_compose_contract_inputs,
+        ComposeContractIssue,
     };
 
     #[test]
@@ -2272,42 +2382,26 @@ mod tests {
             .iter()
             .filter_map(|entry| entry.strip_prefix("unit:"))
             .collect::<Vec<_>>();
-        let expected_unit_researches = output
-            .knowledge_tree
-            .processing_order
-            .iter()
-            .filter(|unit_id| {
-                output
-                    .knowledge_tree
-                    .get_unit(unit_id)
-                    .map(|unit| !unit_uses_seed_backed_research(unit))
-                    .unwrap_or(false)
-            })
-            .count();
+        let expected_unit_researches = output.knowledge_tree.processing_order.len();
         assert_eq!(unit_research_ids.len(), expected_unit_researches);
         for unit_id in unit_research_ids {
-            let unit = output
-                .knowledge_tree
-                .get_unit(unit_id)
-                .expect("logged unit should exist in knowledge tree");
             assert!(
-                !unit_uses_seed_backed_research(unit),
-                "seed-backed unit should not trigger duplicate unit research: {} {:?}",
-                unit.title,
-                unit.unit_type
+                output.knowledge_tree.get_unit(unit_id).is_some(),
+                "logged unit should exist in knowledge tree: {}",
+                unit_id
             );
         }
     }
 
     #[test]
     fn collect_compose_input_digests_uses_domain_indexes_for_system_pages() {
-        let overview = KnowledgeUnit::new(
+        let mut overview = KnowledgeUnit::new(
             UnitType::Overview,
             "项目概述",
             "domain-system",
             "项目概述.md",
         );
-        let architecture = KnowledgeUnit::new(
+        let mut architecture = KnowledgeUnit::new(
             UnitType::Architecture,
             "系统架构",
             "domain-system",
@@ -2325,6 +2419,9 @@ mod tests {
             "domain-runtime",
             "核心模块/运行时.md",
         );
+        overview.child_unit_ids = vec![architecture.id.clone(), domain_index.id.clone()];
+        architecture.child_unit_ids = vec![domain_index.id.clone()];
+
         let mut tree = KnowledgeTree::new(overview.id.clone());
 
         tree.add_unit(overview.clone());
@@ -2364,6 +2461,146 @@ mod tests {
         assert_eq!(overview_digests[0].title, "核心模块");
         assert_eq!(architecture_digests.len(), 1);
         assert!(leaf_digests.is_empty());
+    }
+
+    #[test]
+    fn validate_compose_contract_inputs_requires_parent_unit_research() {
+        let overview = KnowledgeUnit::new(UnitType::Overview, "项目概述", "system", "项目概述.md");
+
+        let issue = validate_compose_contract_inputs(&overview, &[], &BTreeMap::new())
+            .expect_err("overview should require its own unit research contract");
+
+        assert_eq!(issue.blocked_reason, "missing_unit_research_contract");
+        assert_eq!(
+            issue.missing_dependencies,
+            vec![format!("unit_research:{}", overview.id)]
+        );
+    }
+
+    #[test]
+    fn validate_compose_contract_inputs_reports_missing_child_rollup() {
+        let mut domain_index = KnowledgeUnit::new(
+            UnitType::DomainIndex,
+            "核心模块",
+            "domain-runtime",
+            "核心模块/核心模块.md",
+        );
+        domain_index.child_unit_ids = vec!["unit-child".to_string()];
+        let unit_researches = BTreeMap::from([(
+            domain_index.id.clone(),
+            UnitResearch {
+                unit_id: domain_index.id.clone(),
+                ..UnitResearch::default()
+            },
+        )]);
+
+        let issue = validate_compose_contract_inputs(&domain_index, &[], &unit_researches)
+            .expect_err("parent unit should block when direct child rollup is missing");
+
+        assert_eq!(issue.blocked_reason, "waiting_child_rollup");
+        assert_eq!(issue.missing_dependencies, vec!["unit-child".to_string()]);
+    }
+
+    #[test]
+    fn persist_compose_contract_block_marks_runtime_gate() {
+        let fixture = tempdir().unwrap();
+        let conn = sqlite_store::open_db(fixture.path()).unwrap();
+        let overview = KnowledgeUnit::new(UnitType::Overview, "项目概述", "system", "项目概述.md");
+        sqlite_store::write_knowledge_units(&conn, &[overview.clone()]).unwrap();
+        let mut runtime_summary = PipelineRuntimeSummary::default();
+        let mut runtime_gates = BTreeMap::new();
+        runtime_gates.insert(overview.id.clone(), pending_runtime_gate(&overview));
+
+        persist_compose_contract_block(
+            &conn,
+            &mut runtime_summary,
+            &mut runtime_gates,
+            &overview,
+            &ComposeContractIssue {
+                message: "missing parent contract".to_string(),
+                blocked_reason: "missing_unit_research_contract".to_string(),
+                missing_dependencies: vec![format!("unit_research:{}", overview.id)],
+            },
+            PipelineStage::ComposeSystem,
+        )
+        .unwrap();
+
+        let gate = runtime_gates.get(&overview.id).unwrap();
+        assert_eq!(gate.compose_status, "blocked");
+        assert_eq!(
+            gate.blocked_reason.as_deref(),
+            Some("missing_unit_research_contract")
+        );
+        assert_eq!(runtime_summary.runtime_state, "interrupted");
+        assert!(runtime_summary.blocked_units.contains(&overview.id));
+    }
+
+    #[test]
+    fn load_or_compute_research_stamps_unit_input_hash_on_fresh_result() {
+        let fixture = tempdir().unwrap();
+        let conn = sqlite_store::open_db(fixture.path()).unwrap();
+
+        let research: UnitResearch = load_or_compute_research(
+            &conn,
+            "unit",
+            "unit-demo",
+            "facts-demo",
+            "unit-input-demo",
+            false,
+            PipelineStage::ResearchUnit,
+            Some("unit-demo".to_string()),
+            || {
+                Ok(UnitResearch {
+                    unit_id: "unit-demo".to_string(),
+                    ..UnitResearch::default()
+                })
+            },
+        )
+        .unwrap();
+
+        assert_eq!(research.input_hash, "unit-input-demo");
+
+        let stored =
+            sqlite_store::read_research_cache(&conn, "unit", "unit-demo", "unit-input-demo")
+                .unwrap()
+                .expect("fresh unit research should be cached");
+        let stored_research: UnitResearch = serde_json::from_str(&stored).unwrap();
+        assert_eq!(stored_research.input_hash, "unit-input-demo");
+    }
+
+    #[test]
+    fn load_or_compute_research_stamps_unit_input_hash_on_cached_result() {
+        let fixture = tempdir().unwrap();
+        let conn = sqlite_store::open_db(fixture.path()).unwrap();
+        let cached_json = serde_json::to_string(&UnitResearch {
+            unit_id: "unit-demo".to_string(),
+            ..UnitResearch::default()
+        })
+        .unwrap();
+        sqlite_store::write_research_cache(
+            &conn,
+            "unit",
+            "unit-demo",
+            "unit-input-cached",
+            &cached_json,
+            None,
+        )
+        .unwrap();
+
+        let research: UnitResearch = load_or_compute_research(
+            &conn,
+            "unit",
+            "unit-demo",
+            "facts-demo",
+            "unit-input-cached",
+            true,
+            PipelineStage::ResearchUnit,
+            Some("unit-demo".to_string()),
+            || panic!("cached unit research should not recompute"),
+        )
+        .unwrap();
+
+        assert_eq!(research.input_hash, "unit-input-cached");
     }
 
     #[test]
@@ -2845,5 +3082,3 @@ mod tests {
         }));
     }
 }
-
-

@@ -270,6 +270,15 @@ pub struct PageContext {
     /// 当前页面引用的 diagram digest 摘要 IDs。
     #[serde(default)]
     pub diagram_digest_refs: Vec<String>,
+    /// 当前页面是否已经拥有自己的 unit-scoped research contract。
+    #[serde(default)]
+    pub has_unit_research_contract: bool,
+    /// 对应 unit research 的输入哈希；帮助区分真实 parent research 与 seed-only 页面。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_research_input_hash: Option<String>,
+    /// 当前 parent contract 仍缺失的直接 child unit IDs。
+    #[serde(default)]
+    pub missing_child_unit_ids: Vec<String>,
     /// 页面稳定 evidence groups，供 renderer、LLM 和验证脚本共享。
     #[serde(default)]
     pub evidence_groups: Vec<PageEvidenceGroup>,
@@ -277,12 +286,3 @@ pub struct PageContext {
     #[serde(default)]
     pub diagram_inputs: Vec<PageDiagramInput>,
 }
-
-
-
-
-
-
-
-
-
