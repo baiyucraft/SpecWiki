@@ -7,42 +7,42 @@ use crate::domain::context::{
     PageEvidenceItem,
 };
 use crate::domain::knowledge::{KnowledgeTree, KnowledgeUnit, UnitType};
-use wiki_knowledge::domain::research::{
-    DiagramEdgeSuggestion, DiagramNodeSuggestion, DiagramSuggestion, DomainResearch,
-    EvidenceCluster, KeySourceCluster, PageDigest, PageResearchDiagramRollup,
-    PageResearchEvidenceGroup, PageResearchResult,
-    PageResearchSectionPlan, ResearchPageSeed, ResearchProfile, ResearchStopReason,
-    SectionGroundingRef, SourceCitation, SystemResearch, UnitResearch,
-};
 use crate::domain::stable_id::stable_id;
-use crate::domain::steering::SteeringConfig;
+use crate::domain::steering::{SteeringConfig, SteeringLoadMode};
 use crate::generation::context::build_page_context_with_graph_inputs;
-use wiki_knowledge::PlannedPage;
-use wiki_knowledge::research::{
-    ResearchDataSource, ResearchProvider, StructuralResearchProvider,
-};
 use crate::llm::{
     LlmRuntime, PageResearchInput, PageResearchRuntimeContext, PageResearchSectionSlot,
     PageResearchSessionResult, SelectedLlmPath,
 };
-use wiki_index::scanner::ScanReport;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
+use wiki_index::scanner::ScanReport;
+use wiki_knowledge::domain::research::{
+    DiagramEdgeSuggestion, DiagramNodeSuggestion, DiagramSuggestion, DomainResearch,
+    EvidenceCluster, KeySourceCluster, PageDigest, PageResearchDiagramRollup,
+    PageResearchEvidenceGroup, PageResearchResult, PageResearchSectionPlan, ResearchPageSeed,
+    ResearchProfile, ResearchStopReason, SectionGroundingRef, SourceCitation, SystemResearch,
+    UnitResearch,
+};
+use wiki_knowledge::research::{ResearchDataSource, ResearchProvider, StructuralResearchProvider};
+use wiki_knowledge::PlannedPage;
 
 use serde_json::json;
 
 /// 当前 runtime 最终选择的 research provider 结果。
 pub struct SelectedResearchProvider<'a> {
-    pub provider: Box<dyn ResearchProvider + 'a>,
+    pub provider: Option<Box<dyn ResearchProvider + 'a>>,
     pub mode: &'static str,
     pub summary: String,
     pub fallback_reason: Option<String>,
+    pub blocked_reason: Option<String>,
 }
 
 struct ProviderBackedResearchProvider<'rt, 'cfg, 'svc> {
     runtime: RefCell<&'rt mut LlmRuntime<'cfg, 'svc>>,
     structural: StructuralResearchProvider,
+    strict_failure: bool,
 }
 
 const RETRY_FACT_LIMIT: usize = 8;
@@ -50,6 +50,20 @@ const RETRY_HINT_LIMIT: usize = 6;
 const RETRY_SUMMARY_LIMIT: usize = 6;
 const RETRY_EVIDENCE_LIMIT: usize = 4;
 const RETRY_DIAGRAM_LIMIT: usize = 3;
+
+fn structural_runtime_allowed(steering_mode: SteeringLoadMode) -> bool {
+    if steering_mode == SteeringLoadMode::Development {
+        return true;
+    }
+
+    match std::env::var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME") {
+        Ok(value) if matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on") => true,
+        Ok(value) if matches!(value.as_str(), "0" | "false" | "FALSE" | "no" | "off") => false,
+        Ok(_) => false,
+        Err(_) => false,
+    }
+}
+
 impl ResearchProvider for ProviderBackedResearchProvider<'_, '_, '_> {
     fn research_system(&self, ds: &ResearchDataSource) -> io::Result<SystemResearch> {
         let mut merged = self.structural.research_system(ds)?;
@@ -74,17 +88,23 @@ impl ResearchProvider for ProviderBackedResearchProvider<'_, '_, '_> {
             );
             let input = apply_provider_tools_policy(input, None, page.page_type.as_str());
             let (input, pretrim_applied) = canonicalize_provider_input(&input);
-            if let Ok(session_result) =
-                execute_provider_request(self, &page, &page_context, input, pretrim_applied, ds)
-            {
-                if let Some(output) = session_result.output {
-                    merge_provider_seed(
-                        &mut merged.overview_seed,
-                        &output.result,
-                        &page_context,
-                        ds.report,
-                    );
+            match execute_provider_request(self, &page, &page_context, input, pretrim_applied, ds) {
+                Ok(session_result) => {
+                    if let Some(output) = session_result.output {
+                        merge_provider_seed(
+                            &mut merged.overview_seed,
+                            &output.result,
+                            &page_context,
+                            ds.report,
+                        );
+                    }
                 }
+                Err(error) if self.strict_failure => {
+                    return Err(io::Error::other(format!(
+                        "provider system research failed for overview: {error}"
+                    )));
+                }
+                Err(_) => {}
             }
         }
 
@@ -108,17 +128,23 @@ impl ResearchProvider for ProviderBackedResearchProvider<'_, '_, '_> {
             );
             let input = apply_provider_tools_policy(input, None, page.page_type.as_str());
             let (input, pretrim_applied) = canonicalize_provider_input(&input);
-            if let Ok(session_result) =
-                execute_provider_request(self, &page, &page_context, input, pretrim_applied, ds)
-            {
-                if let Some(output) = session_result.output {
-                    merge_provider_seed(
-                        &mut merged.architecture_seed,
-                        &output.result,
-                        &page_context,
-                        ds.report,
-                    );
+            match execute_provider_request(self, &page, &page_context, input, pretrim_applied, ds) {
+                Ok(session_result) => {
+                    if let Some(output) = session_result.output {
+                        merge_provider_seed(
+                            &mut merged.architecture_seed,
+                            &output.result,
+                            &page_context,
+                            ds.report,
+                        );
+                    }
                 }
+                Err(error) if self.strict_failure => {
+                    return Err(io::Error::other(format!(
+                        "provider system research failed for architecture: {error}"
+                    )));
+                }
+                Err(_) => {}
             }
         }
 
@@ -149,10 +175,22 @@ impl ResearchProvider for ProviderBackedResearchProvider<'_, '_, '_> {
             .with_allowed_sections(provider_allowed_sections(&merged.compose_seed.section_plan));
         let input = apply_provider_tools_policy(input, None, page.page_type.as_str());
         let (input, pretrim_applied) = canonicalize_provider_input(&input);
-        let Ok(session_result) =
-            execute_provider_request(self, &page, &page_context, input, pretrim_applied, ds)
-        else {
-            return Ok(merged);
+        let session_result = match execute_provider_request(
+            self,
+            &page,
+            &page_context,
+            input,
+            pretrim_applied,
+            ds,
+        ) {
+            Ok(session_result) => session_result,
+            Err(error) if self.strict_failure => {
+                return Err(io::Error::other(format!(
+                    "provider domain research failed for {}: {error}",
+                    domain.id
+                )));
+            }
+            Err(_) => return Ok(merged),
         };
         if let Some(output) = session_result.output {
             merge_provider_seed(
@@ -195,24 +233,26 @@ impl ResearchProvider for ProviderBackedResearchProvider<'_, '_, '_> {
             page.page_type.as_str(),
         );
         let (input, pretrim_applied) = canonicalize_provider_input(&input);
-        if let Some(reason) = force_no_tools_short_circuit_reason(
-            unit,
-            merged.research_profile.as_ref(),
-            child_digests,
-            &input,
-        ) {
-            merged.provider_stop_reason = Some(ResearchStopReason::NotRun);
-            debug_trace::record_json(
-                "provider_research_stop",
-                &json!({
-                    "page_id": page.id,
-                    "unit_id": unit.id,
-                    "stop_reason": ResearchStopReason::NotRun.as_str(),
-                    "force_no_tools_short_circuited_units": 1,
-                    "force_no_tools_short_circuit_reason": reason,
-                }),
-            );
-            return Ok(merged);
+        if !self.strict_failure {
+            if let Some(reason) = force_no_tools_short_circuit_reason(
+                unit,
+                merged.research_profile.as_ref(),
+                child_digests,
+                &input,
+            ) {
+                merged.provider_stop_reason = Some(ResearchStopReason::NotRun);
+                debug_trace::record_json(
+                    "provider_research_stop",
+                    &json!({
+                        "page_id": page.id,
+                        "unit_id": unit.id,
+                        "stop_reason": ResearchStopReason::NotRun.as_str(),
+                        "force_no_tools_short_circuited_units": 1,
+                        "force_no_tools_short_circuit_reason": reason,
+                    }),
+                );
+                return Ok(merged);
+            }
         }
         let session_result = match execute_provider_request(
             self,
@@ -224,6 +264,12 @@ impl ResearchProvider for ProviderBackedResearchProvider<'_, '_, '_> {
         ) {
             Ok(result) => result,
             Err(error) => {
+                if self.strict_failure {
+                    return Err(io::Error::other(format!(
+                        "provider unit research failed for {}: {error}",
+                        unit.id
+                    )));
+                }
                 mark_provider_error(&mut merged, &page.id, &unit.id, &error);
                 return Ok(merged);
             }
@@ -855,48 +901,85 @@ fn trim_vec<T>(items: &mut Vec<T>, limit: usize) -> bool {
 pub fn select_runtime_research_provider<'a, 'cfg, 'svc>(
     steering: &SteeringConfig,
     llm_runtime: &'a mut LlmRuntime<'cfg, 'svc>,
+    steering_mode: SteeringLoadMode,
 ) -> SelectedResearchProvider<'a> {
+    let structural_allowed = structural_runtime_allowed(steering_mode);
     if steering.llm.enabled && llm_runtime.selected_path() == Some(SelectedLlmPath::ProviderApi) {
         return SelectedResearchProvider {
-            provider: Box::new(ProviderBackedResearchProvider {
+            provider: Some(Box::new(ProviderBackedResearchProvider {
                 runtime: RefCell::new(llm_runtime),
                 structural: StructuralResearchProvider,
-            }),
+                strict_failure: !structural_allowed,
+            })),
             mode: "provider_backed",
-            summary: "当前 workflow 使用 provider-backed unit research，并保留 structural research 作为稳定基线".to_string(),
+            summary: "当前 workflow 使用 provider-backed unit research；structural baseline 仅作为内部 seed，不构成正式成功语义".to_string(),
             fallback_reason: None,
+            blocked_reason: None,
+        };
+    }
+
+    if structural_allowed {
+        return SelectedResearchProvider {
+            provider: Some(Box::new(StructuralResearchProvider)),
+            mode: if steering_mode == SteeringLoadMode::Development {
+                "development_structural_fallback"
+            } else {
+                "test_fixture_structural_fallback"
+            },
+            summary: if steering_mode == SteeringLoadMode::Development {
+                "当前 workflow 处于显式开发模式；允许使用 structural provider 作为开发调试路径"
+                    .to_string()
+            } else {
+                "当前 workflow 运行在测试或 fixture 进程内；允许使用 structural provider 维持确定性验证".to_string()
+            },
+            fallback_reason: Some(if steering_mode == SteeringLoadMode::Development {
+                "development mode allows structural research fallback".to_string()
+            } else {
+                "test/fixture runtime allows structural research fallback".to_string()
+            }),
+            blocked_reason: None,
         };
     }
 
     if steering.llm.enabled && llm_runtime.service_available() {
         return SelectedResearchProvider {
-            provider: Box::new(StructuralResearchProvider),
-            mode: "agent_runtime_structural_fallback",
-            summary: "LLM runtime 已启用，但当前不是 provider 直连路径，research 继续显式回退到 structural provider".to_string(),
+            provider: None,
+            mode: "agent_bridge_blocked",
+            summary: "正式 workflow 已启用 LLM research，但当前仅有 agent bridge 路径；按 production policy 阻止 structural fallback".to_string(),
             fallback_reason: Some(
                 "research_page 当前仅支持 provider-backed runtime，agent bridge 仍未接入".to_string(),
+            ),
+            blocked_reason: Some(
+                "provider research unavailable: production workflow requires provider_direct path".to_string(),
             ),
         };
     }
 
     if steering.llm.enabled && !llm_runtime.service_available() {
         return SelectedResearchProvider {
-            provider: Box::new(StructuralResearchProvider),
-            mode: "provider_unavailable_structural_fallback",
-            summary: "LLM research 已启用，但当前 runtime 不可用，显式回退到 structural provider"
-                .to_string(),
+            provider: None,
+            mode: "provider_unavailable_blocked",
+            summary: "正式 workflow 已启用 LLM research，但当前不存在可用 provider；按 production policy 阻止 structural fallback".to_string(),
             fallback_reason: Some(
                 "llm runtime unavailable: provider/api bridge not ready for this workflow"
                     .to_string(),
+            ),
+            blocked_reason: Some(
+                "provider research unavailable: no reachable provider configured for production workflow".to_string(),
             ),
         };
     }
 
     SelectedResearchProvider {
-        provider: Box::new(StructuralResearchProvider),
-        mode: "structural_only",
-        summary: "当前 workflow 使用 structural research provider".to_string(),
-        fallback_reason: None,
+        provider: None,
+        mode: "llm_disabled_blocked",
+        summary: "正式 workflow 未启用 provider-backed research；按 production policy 阻止 structural success".to_string(),
+        fallback_reason: Some(
+            "production workflow no longer accepts structural-only success".to_string(),
+        ),
+        blocked_reason: Some(
+            "provider research unavailable: production workflow requires llm.enabled provider_direct path".to_string(),
+        ),
     }
 }
 
@@ -1152,28 +1235,28 @@ mod tests {
     };
     use crate::domain::knowledge::{KnowledgeTree, KnowledgeUnit, UnitScope, UnitType};
     use crate::domain::module_tree::ModuleTree;
-    use wiki_knowledge::domain::research::{
-        PageDigest, PageResearchDiagramRollup, PageResearchEvidenceGroup,
-        PageResearchEvidenceItem, PageResearchResult, PageResearchSectionPlan,
-        PlannedSection, ResearchProfile, ResearchStopReason, UnitResearch,
-    };
-    use wiki_knowledge::RepoContext;
     use crate::domain::steering::{
         LlmProviderCapabilitiesConfig, LlmProviderConfig, LlmProviderModelConfig, LlmToolsMode,
-    };
-    use wiki_knowledge::research::{
-        ResearchDataSource, ResearchProvider, StructuralResearchProvider,
     };
     use crate::llm::{
         LlmCompletion, LlmPromptRequest, LlmRuntime, LlmService, PageResearchInput,
         PageResearchSectionSlot,
     };
-    use wiki_index::scanner::{ScanReport, ScannedFile};
-    use wiki_index::symbol_graph::{GraphAnalysisSnapshot, GraphSummary, ResolvedGraphSnapshot};
-    use wiki_index::symbols::ParsedSymbolsSnapshot;
     use std::cell::RefCell;
     use std::io;
     use std::path::Path;
+    use wiki_index::scanner::{ScanReport, ScannedFile};
+    use wiki_index::symbol_graph::{GraphAnalysisSnapshot, GraphSummary, ResolvedGraphSnapshot};
+    use wiki_index::symbols::ParsedSymbolsSnapshot;
+    use wiki_knowledge::domain::research::{
+        PageDigest, PageResearchDiagramRollup, PageResearchEvidenceGroup, PageResearchEvidenceItem,
+        PageResearchResult, PageResearchSectionPlan, PlannedSection, ResearchProfile,
+        ResearchStopReason, UnitResearch,
+    };
+    use wiki_knowledge::research::{
+        ResearchDataSource, ResearchProvider, StructuralResearchProvider,
+    };
+    use wiki_knowledge::RepoContext;
 
     fn provider_enabled_steering() -> crate::domain::steering::SteeringConfig {
         let mut steering = crate::domain::steering::SteeringConfig::default();
@@ -1220,21 +1303,149 @@ mod tests {
         let steering = provider_enabled_steering();
         let mut runtime = LlmRuntime::new(Path::new("."), &steering.llm, None);
 
-        let selected = select_runtime_research_provider(&steering, &mut runtime);
+        let selected = select_runtime_research_provider(
+            &steering,
+            &mut runtime,
+            crate::domain::steering::SteeringLoadMode::Production,
+        );
 
         assert_eq!(selected.mode, "provider_backed");
         assert!(selected.fallback_reason.is_none());
+        assert!(selected.blocked_reason.is_none());
     }
 
     #[test]
-    fn provider_selection_stays_structural_when_llm_disabled() {
+    fn provider_selection_blocks_when_llm_disabled_in_production() {
         let steering = crate::domain::steering::SteeringConfig::default();
         let mut runtime = LlmRuntime::new(Path::new("."), &steering.llm, None);
 
-        let selected = select_runtime_research_provider(&steering, &mut runtime);
+        let previous = std::env::var_os("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
+        std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", "0");
 
-        assert_eq!(selected.mode, "structural_only");
-        assert!(selected.fallback_reason.is_none());
+        let selected = select_runtime_research_provider(
+            &steering,
+            &mut runtime,
+            crate::domain::steering::SteeringLoadMode::Production,
+        );
+
+        if let Some(previous) = previous {
+            std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", previous);
+        } else {
+            std::env::remove_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
+        }
+
+        assert_eq!(selected.mode, "llm_disabled_blocked");
+        assert!(selected.provider.is_none());
+        assert!(selected.fallback_reason.is_some());
+        assert!(selected.blocked_reason.is_some());
+    }
+
+    #[test]
+    fn provider_selection_blocks_agent_bridge_in_production() {
+        let mut steering = crate::domain::steering::SteeringConfig::default();
+        steering.llm.enabled = true;
+        steering.llm.model = "bridge/mock-model".to_string();
+        let mut service = CountingLlmService::default();
+        let mut runtime = LlmRuntime::new(Path::new("."), &steering.llm, Some(&mut service));
+        let previous = std::env::var_os("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
+        std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", "0");
+
+        let selected = select_runtime_research_provider(
+            &steering,
+            &mut runtime,
+            crate::domain::steering::SteeringLoadMode::Production,
+        );
+
+        if let Some(previous) = previous {
+            std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", previous);
+        } else {
+            std::env::remove_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
+        }
+
+        assert_eq!(selected.mode, "agent_bridge_blocked");
+        assert!(selected.provider.is_none());
+        assert!(selected.blocked_reason.is_some());
+    }
+
+    #[test]
+    fn provider_selection_allows_structural_fallback_in_development_mode() {
+        let mut steering = crate::domain::steering::SteeringConfig::default();
+        steering.llm.enabled = true;
+        steering.llm.model = "bridge/mock-model".to_string();
+        let mut service = CountingLlmService::default();
+        let mut runtime = LlmRuntime::new(Path::new("."), &steering.llm, Some(&mut service));
+
+        let selected = select_runtime_research_provider(
+            &steering,
+            &mut runtime,
+            crate::domain::steering::SteeringLoadMode::Development,
+        );
+
+        assert_eq!(selected.mode, "development_structural_fallback");
+        assert!(selected.provider.is_some());
+        assert!(selected.blocked_reason.is_none());
+    }
+
+    #[test]
+    fn provider_selection_allows_structural_provider_when_development_mode_disables_llm() {
+        let steering = crate::domain::steering::SteeringConfig::default();
+        let mut runtime = LlmRuntime::new(Path::new("."), &steering.llm, None);
+
+        let selected = select_runtime_research_provider(
+            &steering,
+            &mut runtime,
+            crate::domain::steering::SteeringLoadMode::Development,
+        );
+
+        assert_eq!(selected.mode, "development_structural_fallback");
+        assert!(selected.provider.is_some());
+        assert!(selected.blocked_reason.is_none());
+    }
+
+    #[test]
+    fn provider_selection_requires_explicit_structural_runtime_flag_outside_development() {
+        let steering = crate::domain::steering::SteeringConfig::default();
+        let mut runtime = LlmRuntime::new(Path::new("."), &steering.llm, None);
+        let previous = std::env::var_os("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
+        std::env::remove_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
+
+        let selected = select_runtime_research_provider(
+            &steering,
+            &mut runtime,
+            crate::domain::steering::SteeringLoadMode::Production,
+        );
+
+        if let Some(previous) = previous {
+            std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", previous);
+        }
+
+        assert_eq!(selected.mode, "llm_disabled_blocked");
+        assert!(selected.provider.is_none());
+        assert!(selected.blocked_reason.is_some());
+    }
+
+    #[test]
+    fn provider_selection_allows_structural_runtime_only_with_explicit_flag_in_production() {
+        let steering = crate::domain::steering::SteeringConfig::default();
+        let mut runtime = LlmRuntime::new(Path::new("."), &steering.llm, None);
+        let previous = std::env::var_os("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
+        std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", "1");
+
+        let selected = select_runtime_research_provider(
+            &steering,
+            &mut runtime,
+            crate::domain::steering::SteeringLoadMode::Production,
+        );
+
+        if let Some(previous) = previous {
+            std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", previous);
+        } else {
+            std::env::remove_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
+        }
+
+        assert_eq!(selected.mode, "test_fixture_structural_fallback");
+        assert!(selected.provider.is_some());
+        assert!(selected.blocked_reason.is_none());
     }
 
     #[test]
@@ -1840,6 +2051,7 @@ mod tests {
         let provider = ProviderBackedResearchProvider {
             runtime: RefCell::new(&mut runtime),
             structural: StructuralResearchProvider,
+            strict_failure: false,
         };
 
         let research = provider.research_unit(&unit, &ds, &[]).unwrap();
@@ -1937,16 +2149,3 @@ mod tests {
         assert!(reason.is_none());
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-

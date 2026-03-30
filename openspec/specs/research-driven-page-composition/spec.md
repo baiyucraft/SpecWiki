@@ -75,17 +75,22 @@ TBD - created by archiving change iteration-9-3-targeted-dossier-and-research-dr
 - **THEN** 系统 MUST NOT 使用模板填充继续生成页面
 
 ### Requirement: 高层父页必须具备 unit-scoped parent research contract
-系统 MUST 让 `Overview`、`Architecture`、`DomainIndex` 与 `config_surface` parent unit 在进入正式 compose 前拥有自己的 unit-scoped parent research contract。该 contract MUST 至少表达稳定的 `section_plan`、evidence/diagram 引用和 child-backed research 输入。系统 MUST NOT 再允许这些高层父页仅依赖 `SystemResearch`、`DomainResearch` 或固定 section 模板直接成页。
+系统 MUST 让 `Overview`、`Architecture`、`DomainIndex` 与 `config_surface` parent unit 在进入正式 compose 前拥有自己的 unit-scoped parent research contract。该 contract MUST 至少表达稳定的 `section_plan`、evidence/diagram 引用和 child-backed research 输入。系统 MUST NOT 再允许这些高层父页仅依赖 `SystemResearch`、`DomainResearch` 或固定 section 模板直接成页；`SystemResearch / DomainResearch` 若存在，MUST 只作为 parent `UnitResearch` 的 seed / overlay 输入。
 
 #### Scenario: overview 不再只靠 system research 直接成页
 - **WHEN** 系统生成 `Overview` 页面
-- **THEN** 该页面 MUST 先具备面向该 parent unit 的 research contract
+- **THEN** 该页面 MUST 先具备面向该 parent unit 的 `UnitResearch`
 - **THEN** compose MUST 依据该 research contract 组织 section，而不是只把 `SystemResearch` 插入固定骨架
 
 #### Scenario: domain index 不再只靠固定骨架消费 child 摘要
 - **WHEN** 系统生成某个 domain 的 `DomainIndex`
 - **THEN** 该页面 MUST 具备该 parent unit 自己的 `section_plan`
 - **THEN** compose MUST 消费 child-backed evidence、citation 或 diagram 摘要，而不是只把 child summary 拼进固定 section
+
+#### Scenario: system 和 domain research 只作为 overlay
+- **WHEN** 系统已生成某个高层 parent unit 的 `UnitResearch`
+- **THEN** `SystemResearch` 或 `DomainResearch` MUST 只作为该 `UnitResearch` 的 seed / overlay 输入
+- **THEN** 系统 MUST NOT 让这些 seed 直接替代 parent unit 自己的 research contract
 
 ### Requirement: 父页 compose 输入必须按 child rollup 逐层上卷
 系统 MUST 让 parent compose 输入以 child rollup 的形式逐层上卷。高层父页 MUST 通过直接 child unit 持久化出的 rollup 消费下层结果，而不是跨层直接抓取更深层 leaf 输入。上卷结果 MUST 至少包含 child digest、section-scoped citation digest、diagram digest、key sources 和 readiness 摘要。
@@ -99,5 +104,4 @@ TBD - created by archiving change iteration-9-3-targeted-dossier-and-research-dr
 #### Scenario: config surface 父页消费 child rollup 而非子页摘要拼接
 - **WHEN** 某个 `config_surface` parent unit 存在多个 child unit
 - **THEN** parent compose 输入 MUST 包含这些 child unit 的 rollup 摘要
-- **THEN** 系统 MUST NOT 仅通过 `PageDigest.summary` 或 `render_child_digest_summary` 直接拼出父页正文
-
+- **THEN** 系统 MUST NOT 仅通过 `PageDigest.summary` 或等价 child summary 直接拼出父页正文

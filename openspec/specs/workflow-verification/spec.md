@@ -12,9 +12,9 @@
 - **THEN** 测试必须观察到 overview 和 architecture 页面的 `page_id` 保持不变
 
 #### Scenario: steering 配置忽略路径生效
-- **WHEN** 测试在临时仓库中创建 `.wiki/wiki.steering.yaml` 并声明全局忽略路径和按语言忽略路径，然后执行 `init`
+- **WHEN** 测试在临时仓库中创建 `.wiki/config.yaml` 并声明扫描忽略路径，然后执行 `init`
 - **THEN** 测试必须观察到全局忽略路径下的文件不出现在 `wiki.metadata.json` 的 source_files 中
-- **THEN** 测试必须观察到当仓库主语言匹配时，按语言忽略路径下的文件也不出现在 source_files 中
+- **THEN** 测试必须观察到 repo 级 steering 配置覆盖用户级 `~/.spec-wiki/config.yaml` 的同名项
 - **THEN** 测试必须观察到被忽略路径下的模块不生成独立页面
 
 #### Scenario: steering 配置模块提升/降级生效
@@ -180,7 +180,7 @@
 - **THEN** Agent bridge 不得收到同一请求对应的 `llm_request`
 
 #### Scenario: dev 配置文件可驱动本地 provider 验证
-- **WHEN** repo 根存在 `wiki.dev.yaml` 并声明可用的 provider 直连配置
+- **WHEN** repo 根存在 `wiki.dev.yaml` 并声明可用的 provider 直连配置，且显式开发模式已开启
 - **THEN** 测试 MUST 观察到 workflow 读取该文件并通过 provider 路径完成请求
 - **THEN** 删除该文件后，workflow MUST 回退到共享 steering + Agent/fallback 行为
 
@@ -340,20 +340,19 @@
 - **THEN** 报告 MUST 判断这些指标的波动是否处于允许范围
 - **THEN** 若波动超出范围，系统 MUST 将该快照标记为不稳定，而不是直接作为 9.7-9.9 的验收基线
 
-### Requirement: 9.7 专项验证必须同时覆盖父页 contract 与 runtime readiness
-系统 MUST 在 `storybook + dagger` 专项验证中同时验证高层父页 contract 与 runtime readiness，而不是继续只看最终 Markdown 匹配率。验证 MUST 直接读取最终 `.wiki/*.md`、runtime SQLite 状态与 parent contract 摘要，确认高层父页是否消费 child-backed rollup，及 runtime incomplete 是否能定位到具体 gate。
+### Requirement: 本 change 的专项验证必须先覆盖 storybook 的父页 contract
+系统 MUST 在本 change 的专项验证中先验证 `storybook` 的高层父页 contract，而不是继续只看最终 Markdown 匹配率。验证 MUST 直接读取最终 `.wiki/*.md`、runtime SQLite 状态与 parent contract 摘要，确认高层父页是否真实产出自己的 `UnitResearch`、是否消费 child-backed rollup。`dagger` 的 runtime readiness 专项 MAY 保留到后续 change，但本 change 不得把其作为前置通过条件。
 
 #### Scenario: storybook 专项验证高层父页 contract
 - **WHEN** 系统对 `storybook` 运行 9.7 专项验证
 - **THEN** 报告 MUST 指出高层 `Overview`、`Architecture`、`DomainIndex` 或 `config_surface` parent unit 的 reuse 收敛情况
-- **THEN** 验证 MUST 证明这些父页存在 child-backed compose contract 或对应的 runtime 摘要
+- **THEN** 验证 MUST 证明这些父页存在自己的 `UnitResearch`，并存在 child-backed compose contract 或对应的 runtime 摘要
 - **THEN** 系统 MUST NOT 仅凭 `overall_match_rate` 或页面数量判断通过
 
-#### Scenario: dagger 专项验证 runtime readiness
-- **WHEN** 系统对 `dagger` 运行 9.7 专项验证
-- **THEN** 验证 MUST 指出 workflow 当前停在 `research`、`compose` 还是 `assemble` 阶段
-- **THEN** 验证 MUST 输出对应 unit 的 gate/readiness 原因
-- **THEN** 当 workflow 成功完成时，验证 MUST 观察到 `page_drafts`、最终 wiki 页面和 `wiki.metadata.json` 一并落盘
+#### Scenario: 本 change 不把 dagger 作为前置通过条件
+- **WHEN** 系统执行 `parent-unit-research-contract` 的专项验收
+- **THEN** `storybook` MUST 作为当前唯一的专项门禁样本
+- **THEN** 系统 MAY 记录 `dagger` 的观察结果，但 MUST NOT 将其作为本 change 的前置通过条件
 
 ### Requirement: 迭代 10 验证必须证明四 crate 边界成立且 workflow 不回退
 系统 MUST 在 `迭代 10` 的验证中同时覆盖多 crate workspace build/test、crate 边界 smoke、正式 workflow smoke 与命名迁移面。通过条件 MUST 建立在“边界成立且 workflow 不回退”上，而不是页面质量提升或 runtime lifecycle 最终定型。
@@ -396,4 +395,3 @@
 - **THEN** 验证 MUST 观察到 symbol/source 命中使用 `match_basis`，并在可用时暴露 `score`
 - **THEN** 验证 MUST 观察到 graph-derived 命中在可用时暴露 `confidence / reason`
 - **THEN** 验证 MUST 观察到系统没有为所有命中统一伪造 `tier`
-

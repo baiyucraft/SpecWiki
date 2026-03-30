@@ -212,7 +212,7 @@
 系统 MUST 移除 `LlmConfig` 中的 `content_enrichment_enabled` / `session_enabled` / `uncertainty_gate_enabled` / `page_enrichment_max_input_tokens` / `page_enrichment_parallel_requests` / `session_max_context_tokens` / `session_max_recent_turns` / `uncertainty_gate_max_input_tokens` / `uncertainty_gate_parallel_requests` 等废弃字段。LLM 调用限制 MUST 统一为 `max_research_calls` 和 `max_compose_calls`。
 
 #### Scenario: Steering 配置只保留简化后的 LLM 字段
-- **WHEN** 用户编写 `wiki.dev.yaml` 或 `wiki.steering.yaml`
+- **WHEN** 用户编写 `.wiki/config.yaml`，或在显式开发模式下编写 `wiki.dev.yaml`
 - **THEN** LLM 配置 MUST 只包含 `enabled` / `model` / `max_research_calls` / `max_compose_calls` / `cache_ttl_seconds` / `cache_mode` / `allow_mermaid` / `providers` 等字段
 - **THEN** 旧的 `content_enrichment_enabled` 等字段 MUST 被忽略或报 warning
 

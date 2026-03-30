@@ -10,7 +10,7 @@ use std::time::Instant;
 use std::time::SystemTime;
 
 use crate::debug_trace;
-use crate::domain::checkpoint::PipelineRuntimeSummary;
+use crate::domain::checkpoint::{compute_facts_input_hash, PipelineRuntimeSummary, PipelineStage};
 use crate::domain::context::PageContext;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
 use crate::domain::runtime_profile::{LlmExecutionMode, RuntimeSummaryProjection};
@@ -35,7 +35,8 @@ use crate::storage::sqlite_store;
 use crate::storage::state_store::{write_facts_snapshot, write_state};
 use crate::storage::wiki_fs::{remove_runtime_with_cache_mode, write_page};
 use crate::workflows::page_render::{
-    finalize_pipeline_runtime, load_runtime_summary_for_repo, run_compose_pipeline_with_action,
+    finalize_pipeline_runtime, load_runtime_summary_for_repo, persist_runtime_blocker_for_repo,
+    plan_runtime_knowledge_tree, run_compose_pipeline_with_action,
 };
 use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
@@ -246,7 +247,8 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
     reporter.phase("knowledge_planning", "知识域发现与单元规划");
     reporter.phase("research", "执行分层研究");
     reporter.phase("compose", "组合生成页面内容");
-    let research_provider = select_runtime_research_provider(&steering, &mut llm_runtime);
+    let research_provider =
+        select_runtime_research_provider(&steering, &mut llm_runtime, steering_mode);
     reporter.phase(
         "research_provider",
         format!(
@@ -254,6 +256,30 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
             research_provider.summary, research_provider.mode
         ),
     );
+    let Some(research_provider_impl) = research_provider.provider.as_ref() else {
+        let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
+        let knowledge_tree = plan_runtime_knowledge_tree(
+            &scan_report,
+            &module_tree,
+            &repo_context,
+            &module_contexts,
+            &graph_summary,
+            &steering,
+        );
+        let reason = research_provider
+            .blocked_reason
+            .as_deref()
+            .unwrap_or("provider research blocked by production policy");
+        persist_runtime_blocker_for_repo(
+            repo_root,
+            action,
+            &facts_input_hash,
+            PipelineStage::ResearchSystem,
+            reason,
+            Some(&knowledge_tree),
+        )?;
+        return Err(io::Error::other(reason.to_string()));
+    };
     let pipeline = run_compose_pipeline_with_action(
         action,
         repo_root,
@@ -266,7 +292,7 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
         &analysis,
         &graph_summary,
         &steering,
-        research_provider.provider.as_ref(),
+        research_provider_impl.as_ref(),
     )?;
     drop(research_provider);
     let page_drafts = pipeline.page_drafts;
@@ -415,6 +441,13 @@ fn should_preserve_incomplete_init_runtime(
     let db_path = sqlite_store::db_path(repo_root);
     if !db_path.exists() {
         return Ok(false);
+    }
+
+    // preserve-resume 的首要目标是避免在 timeout 后立即清理 `.wiki/.cache`，
+    // 否则 Windows 上旧进程尚未释放句柄时会把第二次 init 直接打成 os error 32。
+    // 只要还没产出 metadata/markdown，就允许下一次 init 在现有 cache 上继续推进。
+    if count_existing_markdown_pages(repo_root.join(".wiki").as_path())? == 0 {
+        return Ok(true);
     }
 
     let conn = sqlite_store::open_db(repo_root)?;
@@ -1028,6 +1061,19 @@ mod tests {
             LlmCacheMode::Preserve
         )
         .unwrap());
+    }
+
+    #[test]
+    fn incomplete_init_runtime_is_preserved_when_only_cache_db_exists() {
+        let fixture = tempdir().unwrap();
+        let repo_root = fixture.path();
+        fs::create_dir_all(repo_root.join(".wiki/.cache")).unwrap();
+        let _conn = sqlite_store::open_db(repo_root).unwrap();
+
+        assert!(
+            should_preserve_incomplete_init_runtime("init", repo_root, LlmCacheMode::Preserve)
+                .unwrap()
+        );
     }
 
     #[test]
