@@ -1,3 +1,4 @@
+pub mod knowledge_artifact;
 pub mod knowledge;
 pub mod metadata;
 pub mod module_tree;

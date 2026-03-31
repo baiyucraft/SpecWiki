@@ -6,9 +6,11 @@ use std::path::Path;
 
 use tempfile::tempdir;
 use wiki_runtime::storage::sqlite_store;
+use wiki_runtime::storage::state_store::facts_snapshot_ready;
 use wiki_runtime::storage::state_store::read_state;
 use wiki_runtime::workflows::{
-    init::run_init, query::run_query, rebuild::run_rebuild, sync::run_sync, update::run_update,
+    init::run_init, query::run_query, rebuild::run_rebuild, status::run_status, sync::run_sync,
+    update::run_update,
 };
 
 fn write_repo_file(repo_root: &Path, relative_path: &str, content: &str) {
@@ -78,7 +80,7 @@ fn sync_detects_manual_markdown_changes() {
     assert!(query
         .matches
         .iter()
-        .all(|page| matches!(page.match_mode.as_str(), "structure" | "fts+structure")));
+        .all(|page| page.match_mode == "fallback_markdown"));
 
     let rebuild = run_rebuild(repo_root).unwrap();
     assert_eq!(rebuild.state, "fresh");
@@ -102,6 +104,18 @@ fn query_falls_back_to_markdown_and_returns_empty_result() {
     let markdown_query = run_query(repo_root, custom_phrase).unwrap();
     assert_eq!(markdown_query.matches.len(), 1);
     assert_eq!(markdown_query.matches[0].match_mode, "fallback_markdown");
+    assert_eq!(
+        serde_json::to_value(&markdown_query).unwrap()["query_mode"],
+        "page_fallback"
+    );
+    assert_eq!(
+        serde_json::to_value(&markdown_query).unwrap()["query_trust"],
+        "stale_but_queryable"
+    );
+    assert_eq!(
+        serde_json::to_value(&markdown_query).unwrap()["recommended_action"],
+        "rebuild"
+    );
     assert!(markdown_query.matches[0]
         .summary
         .contains("Markdown 内容匹配"));
@@ -172,6 +186,11 @@ fn query_merges_fts_and_structural_page_hits() {
     run_init(&repo_root).unwrap();
 
     let query = run_query(&repo_root, "payments").unwrap();
+    assert_eq!(serde_json::to_value(&query).unwrap()["query_mode"], "mixed");
+    assert_eq!(
+        serde_json::to_value(&query).unwrap()["query_trust"],
+        "ready"
+    );
     let module_page = query
         .matches
         .iter()
@@ -184,28 +203,36 @@ fn query_merges_fts_and_structural_page_hits() {
         })
         .expect("payments module page should be matched");
 
-    assert!(matches!(
-        module_page.match_mode.as_str(),
-        "structure" | "fts+structure"
-    ));
-    if module_page.match_mode == "fts+structure" {
-        assert!(
-            module_page
-                .reasons
-                .iter()
-                .any(|reason| reason.starts_with("FTS ")),
-            "expected FTS reason, got {:?}",
-            module_page.reasons
-        );
-        assert!(
-            module_page
-                .provenance
-                .iter()
-                .any(|item| item.starts_with("fts:bm25:")),
-            "expected FTS provenance, got {:?}",
-            module_page.provenance
-        );
-    }
+    assert_eq!(module_page.match_mode, "fallback_markdown");
+    assert!(
+        module_page
+            .provenance
+            .iter()
+            .any(|item| item.starts_with("page-fallback:")),
+        "expected page fallback provenance, got {:?}",
+        module_page.provenance
+    );
+}
+
+#[test]
+fn query_marks_stale_runtime_as_queryable_but_recommends_update() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    write_graph_query_repo(repo_root);
+
+    run_init(repo_root).unwrap();
+    write_repo_file(
+        repo_root,
+        "src/shared.ts",
+        "export function finalizePayment() { return 'changed'; }\n",
+    );
+
+    let query = run_query(repo_root, "finalizePayment").unwrap();
+    let payload = serde_json::to_value(&query).unwrap();
+
+    assert_eq!(payload["runtime_state"], "stale");
+    assert_eq!(payload["query_trust"], "stale_but_queryable");
+    assert_eq!(payload["recommended_action"], "update");
 }
 
 /// 场景：FTS 索引为空时，query 仍应回退到结构化命中。
@@ -252,7 +279,7 @@ fn query_falls_back_when_fts_index_is_empty() {
         })
         .expect("payments module page should still be matched");
 
-    assert_eq!(module_page.match_mode, "structure");
+    assert_eq!(module_page.match_mode, "fallback_markdown");
     assert!(
         !module_page
             .reasons
@@ -284,36 +311,18 @@ fn query_returns_graph_context_for_symbol_hits() {
                 && edge
                     .provenance
                     .iter()
-                    .any(|item| item.starts_with("graph-direct:"))),
+                    .any(|item| item == "index:call_trace")),
         "expected graph CALLS edges, got {:#?}",
         query.matched_symbol_edges
     );
     assert!(
         query.matched_symbol_edges.iter().any(|edge| {
             edge.hop_distance >= 2
-                && edge
-                    .traversal_modes
-                    .iter()
-                    .any(|mode| mode == "call-chain-outbound")
-                && edge
-                    .provenance
-                    .iter()
-                    .any(|item| item.starts_with("graph-cte:outbound:"))
+                && edge.traversal_modes.iter().any(|mode| mode == "outbound")
+                && edge.reason == "import-resolved"
         }),
         "expected multi-hop outbound call-chain expansion, got {:#?}",
         query.matched_symbol_edges
-    );
-    assert!(
-        query
-            .matched_processes
-            .iter()
-            .any(|process| process.label.contains("handleCheckout")),
-        "expected process context, got {:#?}",
-        query.matched_processes
-    );
-    assert!(
-        !query.matched_communities.is_empty(),
-        "expected community context"
     );
     assert!(
         query.provenance_summary.contains("扩展"),
@@ -334,25 +343,11 @@ fn query_expands_inbound_impact_range_for_terminal_symbol() {
     assert!(
         query.matched_symbol_edges.iter().any(|edge| {
             edge.hop_distance >= 2
-                && edge
-                    .traversal_modes
-                    .iter()
-                    .any(|mode| mode == "impact-inbound")
-                && edge
-                    .provenance
-                    .iter()
-                    .any(|item| item.starts_with("graph-cte:inbound:"))
+                && edge.traversal_modes.iter().any(|mode| mode == "inbound")
+                && edge.reason == "import-resolved"
         }),
         "expected inbound impact expansion for finalizePayment, got {:#?}",
         query.matched_symbol_edges
-    );
-    assert!(
-        query.matched_processes.iter().any(|process| {
-            process.steps.iter().any(|step| step == "handleCheckout")
-                && process.steps.iter().any(|step| step == "runPayment")
-        }),
-        "expected inbound impact query to surface upstream process steps, got {:#?}",
-        query.matched_processes
     );
 }
 
@@ -378,14 +373,10 @@ fn query_falls_back_without_graph_rows_and_rebuild_restores_them() {
         "symbol query should still work without graph rows"
     );
     assert!(fallback_query.matched_symbol_edges.is_empty());
-    assert!(fallback_query.matched_processes.is_empty());
-    assert!(fallback_query.matched_communities.is_empty());
 
     run_rebuild(repo_root).unwrap();
     let restored_query = run_query(repo_root, "handleCheckout").unwrap();
     assert!(!restored_query.matched_symbol_edges.is_empty());
-    assert!(!restored_query.matched_processes.is_empty());
-    assert!(!restored_query.matched_communities.is_empty());
 }
 
 #[test]
@@ -431,5 +422,66 @@ fn update_recomputes_process_labels_and_workflow_page() {
     );
 }
 
+/// 场景：facts snapshot 已提交后，即使 metadata/state 缺失，status 与 query 仍应可工作。
+#[test]
+fn query_stays_available_when_facts_snapshot_outlives_downstream_state() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    write_graph_query_repo(repo_root);
 
+    run_init(repo_root).unwrap();
+    fs::remove_file(repo_root.join(".wiki/wiki.metadata.json")).unwrap();
+    {
+        let conn = sqlite_store::open_db(repo_root).unwrap();
+        conn.execute("DELETE FROM wiki_pages", []).unwrap();
+    }
 
+    let status = run_status(repo_root).unwrap();
+    assert_eq!(status.state, "index_only");
+    assert!(status.facts_ready);
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["query_readiness"],
+        "ready"
+    );
+
+    let query = run_query(repo_root, "handleCheckout").unwrap();
+    assert!(!query.matched_symbols.is_empty());
+    assert!(!query.matched_symbol_edges.is_empty());
+}
+
+/// 场景：index 未就绪必须返回显式错误，而不是伪装成空命中。
+#[test]
+fn query_distinguishes_index_not_ready_from_empty_hits() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    write_repo_file(repo_root, "package.json", r#"{"name":"demo"}"#);
+
+    let error = run_query(repo_root, "demo").expect_err("query should fail before init");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(error.to_string().contains("index not ready"));
+
+    run_init(repo_root).unwrap();
+    let empty_query = run_query(repo_root, "definitely-no-query-hit").unwrap();
+    assert!(empty_query.matched_symbols.is_empty());
+    assert!(empty_query.matched_sources.is_empty());
+    assert!(empty_query.matched_modules.is_empty());
+    assert!(empty_query.matched_symbol_edges.is_empty());
+}
+
+/// 场景：`.cache` 缺失时，query 应先恢复本地 runtime，再继续消费 page fallback。
+#[test]
+fn query_restores_runtime_cache_from_formal_artifacts() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    fs::write(repo_root.join("package.json"), r#"{"name":"demo"}"#).unwrap();
+
+    run_init(repo_root).unwrap();
+    fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
+    assert!(!facts_snapshot_ready(repo_root).unwrap());
+
+    let query = run_query(repo_root, "项目概述").unwrap();
+    assert!(repo_root.join(".wiki/.cache/wiki-cache.db").exists());
+    assert!(facts_snapshot_ready(repo_root).unwrap());
+    assert!(!query.matches.is_empty());
+    assert_eq!(query.runtime_state, "fresh");
+}

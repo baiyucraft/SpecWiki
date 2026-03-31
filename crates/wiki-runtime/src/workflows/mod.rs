@@ -6,10 +6,8 @@ pub mod page_render;
 pub mod progress;
 pub mod query;
 pub mod rebuild;
+pub mod release_scope;
 pub mod research_provider;
 pub mod status;
 pub mod sync;
 pub mod update;
-
-
-

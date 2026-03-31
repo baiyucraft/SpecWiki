@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use crate::debug_trace;
 use crate::domain::change_set::{plan_runtime_changes_with_mode, ChangePlan, FallbackMode};
+use crate::domain::checkpoint::{compute_facts_input_hash, PipelineStage};
 use crate::domain::metadata::DirtyState;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
 use crate::domain::runtime_profile::{LlmExecutionMode, RuntimeSummaryProjection};
@@ -28,6 +29,9 @@ use crate::storage::cache_store::{
     remove_page_caches, write_page_context_cache, write_page_generation_cache,
     PageContextCacheEntry, PageGenerationCacheEntry,
 };
+use crate::storage::knowledge_artifacts::{
+    persist_knowledge_artifacts, PersistKnowledgeArtifactsInput,
+};
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite::{index_store::SqliteIndexStore, runtime_store::SqliteRuntimeStore};
 use crate::storage::sqlite_store;
@@ -41,7 +45,8 @@ use crate::workflows::init::{
     source_paths_for_page,
 };
 use crate::workflows::page_render::{
-    finalize_pipeline_runtime, load_runtime_summary_for_repo, run_compose_pipeline_with_action,
+    finalize_pipeline_runtime, load_runtime_summary_for_repo, persist_runtime_blocker_for_repo,
+    plan_runtime_knowledge_tree, run_compose_pipeline_with_action,
 };
 use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
@@ -429,7 +434,8 @@ fn apply_incremental_update<'a>(
     reporter.phase("knowledge_planning", "知识域发现与单元规划");
     reporter.phase("research", "执行分层研究");
     reporter.phase("compose", "组合生成页面内容");
-    let research_provider = select_runtime_research_provider(&steering, &mut llm_runtime);
+    let research_provider =
+        select_runtime_research_provider(&steering, &mut llm_runtime, steering_mode);
     reporter.phase(
         "research_provider",
         format!(
@@ -437,6 +443,30 @@ fn apply_incremental_update<'a>(
             research_provider.summary, research_provider.mode
         ),
     );
+    let Some(research_provider_impl) = research_provider.provider.as_ref() else {
+        let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
+        let knowledge_tree = plan_runtime_knowledge_tree(
+            &scan_report,
+            &module_tree,
+            &repo_context,
+            &module_contexts,
+            &graph_summary,
+            &steering,
+        );
+        let reason = research_provider
+            .blocked_reason
+            .as_deref()
+            .unwrap_or("provider research blocked by production policy");
+        persist_runtime_blocker_for_repo(
+            repo_root,
+            action,
+            &facts_input_hash,
+            PipelineStage::ResearchSystem,
+            reason,
+            Some(&knowledge_tree),
+        )?;
+        return Err(io::Error::other(reason.to_string()));
+    };
     let pipeline = run_compose_pipeline_with_action(
         action,
         repo_root,
@@ -449,7 +479,7 @@ fn apply_incremental_update<'a>(
         &analysis,
         &graph_summary,
         &steering,
-        research_provider.provider.as_ref(),
+        research_provider_impl.as_ref(),
     )?;
     drop(research_provider);
     let page_drafts = pipeline.page_drafts;
@@ -631,7 +661,7 @@ fn apply_incremental_update<'a>(
         language: "zh".to_string(),
         repo_root: repo_root.to_string_lossy().to_string(),
         branch: current_branch(repo_root),
-        generated_at,
+        generated_at: generated_at.clone(),
         last_indexed_commit: current_commit(repo_root),
     };
     let metadata = export_metadata(&next_state, &export_context);
@@ -639,7 +669,31 @@ fn apply_incremental_update<'a>(
     write_metadata(repo_root, &metadata)?;
     finalize_pipeline_runtime(repo_root, action, next_pages.len())?;
     let conn = sqlite_store::open_db(repo_root)?;
-    SqliteRuntimeStore::new(&conn).clear_pipeline_checkpoint()?;
+    let runtime_store = SqliteRuntimeStore::new(&conn);
+    let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
+    let research_summaries = knowledge_tree
+        .units
+        .values()
+        .filter_map(|unit| {
+            unit_researches
+                .get(&unit.id)
+                .map(|research| research.to_artifact_summary(unit))
+        })
+        .collect::<Vec<_>>();
+    let page_digests = digests.values().cloned().collect::<Vec<_>>();
+    let runtime_gates = runtime_store.read_unit_runtime_gates()?;
+    persist_knowledge_artifacts(PersistKnowledgeArtifactsInput {
+        repo_root,
+        workflow_action: action,
+        generated_at: &generated_at,
+        facts_input_hash: &facts_input_hash,
+        metadata: &metadata,
+        knowledge_tree: &knowledge_tree,
+        research_summaries: &research_summaries,
+        page_digests: &page_digests,
+        runtime_gates: &runtime_gates,
+    })?;
+    runtime_store.clear_pipeline_checkpoint()?;
 
     Ok((
         touched_paths.into_iter().collect(),

@@ -12,6 +12,8 @@ pub struct CoreCommand {
     #[serde(rename = "repoRoot")]
     pub repo_root: Option<String>,
     pub term: Option<String>,
+    #[serde(rename = "developmentMode", default)]
+    pub development_mode: bool,
     #[serde(rename = "streamProgress", default)]
     pub stream_progress: bool,
     #[serde(rename = "llmBridge", default)]
@@ -39,6 +41,19 @@ impl CoreResponse {
             ok: false,
             error: Some(error.into()),
             data: None,
+        }
+    }
+
+    /// 构造带结构化上下文的失败响应。
+    ///
+    /// # 参数
+    /// - `error`：要写入协议层的错误文本。
+    /// - `data`：失败终态附带的结构化上下文。
+    pub fn error_with_data(error: impl Into<String>, data: Value) -> Self {
+        Self {
+            ok: false,
+            error: Some(error.into()),
+            data: Some(data),
         }
     }
 
@@ -175,6 +190,3 @@ pub enum CoreSessionInput {
         reason: String,
     },
 }
-
-
-

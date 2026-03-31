@@ -57,6 +57,13 @@ const REAL_REPO_MAP = {
   "spec-wiki": ROOT_DIR,
 };
 const DIAGNOSTIC_RUNTIME_STATES = new Set(["runtime_incomplete", "blocker"]);
+const WARM_RESTORE_SUPPORTED_STATES = new Set([
+  "fresh",
+  "needs_update",
+  "runtime_incomplete",
+  "blocker",
+  "index_only",
+]);
 
 export const LIFECYCLE_PHASES = {
   full: "完整链路：init → status → sync → query → update → touch/update → rebuild → status",
@@ -265,6 +272,22 @@ export function coerceLifecycleStatusResult(statusResult, runtimeSnapshot) {
   };
 }
 
+export function shouldAttemptWarmRestorePreflight(ctx, runtimeSnapshot) {
+  return !ctx.isRealRepo
+    && ctx.cacheMode === "preserve"
+    && runtimeSnapshot?.metadataExists === true
+    && runtimeSnapshot?.cacheDbExists === false
+    && existsSync(path.join(ctx.wikiDir, ".knowledge", "runtime", "recovery-manifest.json"));
+}
+
+export function shouldSkipInitAfterWarmRestore(statusResult) {
+  return WARM_RESTORE_SUPPORTED_STATES.has(String(statusResult?.data?.state ?? ""));
+}
+
+export function shouldAcceptStatusAfterWarmRestore(statusResult) {
+  return new Set(["fresh", "needs_update"]).has(String(statusResult?.data?.state ?? ""));
+}
+
 function applyLastKnownDiagnosticFallback(ctx, statusResult, runtimeSnapshot) {
   if (statusResult?.data?.state !== "missing" || !ctx.lastKnownDiagnostic?.runtimeSnapshot) {
     return { statusResult, runtimeSnapshot };
@@ -307,6 +330,11 @@ function loadLifecycleRuntimeSnapshot(ctx) {
   });
   const runtimeSnapshot = inspectWikiRuntime(ctx.wikiDir);
   const statusResult = coerceLifecycleStatusResult(rawStatusResult, runtimeSnapshot);
+  applyLifecycleRuntimeSnapshot(ctx, statusResult, runtimeSnapshot);
+  return { runtimeSnapshot, statusResult };
+}
+
+function applyLifecycleRuntimeSnapshot(ctx, statusResult, runtimeSnapshot) {
   ctx.latestStatusResult = statusResult;
   ctx.runtimeSnapshot = runtimeSnapshot;
   ctx.runtimeState = statusResult.data?.state ?? runtimeSnapshot.runtimeState;
@@ -315,7 +343,36 @@ function loadLifecycleRuntimeSnapshot(ctx) {
     : isDiagnosticRuntimeState(ctx.runtimeState)
       ? "diagnostic"
       : "unknown";
-  return { runtimeSnapshot, statusResult };
+}
+
+function tryWarmRestorePreflight(ctx, t) {
+  const runtimeSnapshot = inspectWikiRuntime(ctx.wikiDir);
+  if (!shouldAttemptWarmRestorePreflight(ctx, runtimeSnapshot)) {
+    return false;
+  }
+
+  console.log(`  [init/${ctx.runLabel}] warm-restore-preflight`);
+  const rawStatusResult = callCoreWithProjectTimeout(ctx, {
+    action: "status",
+    repoRoot: ctx.repoArg,
+  });
+  const restoredSnapshot = inspectWikiRuntime(ctx.wikiDir);
+  const statusResult = coerceLifecycleStatusResult(rawStatusResult, restoredSnapshot);
+  if (!statusResult?.ok || !shouldSkipInitAfterWarmRestore(statusResult)) {
+    console.log(
+      `  [init/${ctx.runLabel}] warm-restore-preflight fallback state=${statusResult?.data?.state ?? "unknown"}`,
+    );
+    return false;
+  }
+
+  applyLifecycleRuntimeSnapshot(ctx, statusResult, restoredSnapshot);
+  ctx.warmRestored = true;
+  t.assertOk("warm restore preflight returns ok", statusResult);
+  t.assertFileExists("warm restore rebuilt cache db", restoredSnapshot.cacheDbPath);
+  console.log(
+    `  [init/${ctx.runLabel}] warm-restore-preflight skipped init state=${ctx.runtimeState}`,
+  );
+  return true;
 }
 
 function assertDiagnosticRuntimeState(ctx, t, label, statusResult, runtimeSnapshot) {
@@ -885,6 +942,10 @@ async function initProject(ctx, t) {
     }
   }
 
+  if (tryWarmRestorePreflight(ctx, t)) {
+    return true;
+  }
+
   try {
     if (isRealRepo) {
       const result = await initViaRealRepo(proj, REAL_REPO_MAP[proj], ctx);
@@ -942,6 +1003,17 @@ function runStatusAfterInit(ctx, t) {
     return;
   }
   if (!ctx.isRealRepo) {
+    if (ctx.warmRestored) {
+      if (shouldAcceptStatusAfterWarmRestore(statusAfterInit)) {
+        t.pass("state is warm-restore supported");
+      } else {
+        t.fail(
+          "state is warm-restore supported",
+          `expected state to be fresh/needs_update after warm restore, got ${JSON.stringify(statusAfterInit.data?.state)}`,
+        );
+      }
+      return;
+    }
     t.assertContains("state is fresh", statusAfterInit.data, "state", "fresh");
   }
 }

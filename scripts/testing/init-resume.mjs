@@ -82,46 +82,40 @@ export function shouldResumeInitFromFailure({
   attempt,
   maxAttempts = MAX_INIT_RESUME_ATTEMPTS,
 }) {
+  const workflowRuntimeState = runtimeSnapshot?.runtimeSummary?.runtime_state;
+  const workflowAction = runtimeSnapshot?.runtimeSummary?.workflow_action;
+  const runtimeGateCount = Number(
+    runtimeSnapshot?.runtimeGateSummary?.total
+      ?? runtimeSnapshot?.unitRuntimeGates?.length
+      ?? 0,
+  );
   const retryableMessage = isPreserveResumeEligibleInitErrorMessage(message)
     || isTransientFsErrorMessage(message);
   if (attempt >= maxAttempts || !retryableMessage) {
     return false;
   }
   const normalized = String(message ?? "").toLowerCase();
-  if (
-    normalized.includes("timed out after")
-    && (
-      runtimeSnapshot?.runtimeState === "missing"
-      || runtimeSnapshot?.runtimeState === "runtime_incomplete"
-      || !runtimeSnapshot?.cacheDbExists
-    )
-  ) {
-    return true;
-  }
-  if (
-    isTransientFsErrorMessage(message)
-    && runtimeSnapshot?.cacheDbExists
-    && !runtimeSnapshot?.metadataExists
-    && runtimeSnapshot?.markdownPageCount === 0
-  ) {
-    return true;
-  }
   if (!runtimeSnapshot?.cacheDbExists || runtimeSnapshot.metadataExists) {
-    return false;
-  }
-  if (runtimeSnapshot.markdownPageCount > 0) {
     return false;
   }
   if (runtimeSnapshot.runtimeState !== "runtime_incomplete") {
     return false;
   }
-
-  const workflowRuntimeState = runtimeSnapshot.runtimeSummary?.runtime_state;
+  if (!runtimeSnapshot?.runtimeSummary) {
+    return runtimeSnapshot?.markdownPageCount === 0
+      && (normalized.includes("timed out after") || isTransientFsErrorMessage(message));
+  }
+  if (workflowAction !== "init") {
+    return false;
+  }
   if (
     !["researching", "compose_pending", "compose_complete", "interrupted"].includes(
       workflowRuntimeState,
     )
   ) {
+    return false;
+  }
+  if (runtimeGateCount <= 0) {
     return false;
   }
 

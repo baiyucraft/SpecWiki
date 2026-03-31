@@ -1,14 +1,22 @@
 use std::path::PathBuf;
 
+use serde_json::json;
+
+use crate::domain::runtime_profile::{blocker_hint_from, RuntimeSummaryProjection};
+use crate::domain::steering::SteeringLoadMode;
 use crate::llm::LlmService;
 use crate::transport::dto::{CoreCommand, CoreResponse};
-use crate::workflows::init::run_init_with_progress_and_llm_as;
+use crate::transport::query_payload::map_query_report;
+use crate::workflows::init::run_init_with_progress_and_llm_as_with_mode;
+use crate::workflows::page_render::{
+    load_runtime_gate_summary_for_repo, load_runtime_summary_for_repo,
+};
 use crate::workflows::progress::{NoopProgressSink, ProgressSink};
-use crate::workflows::query::run_query;
-use crate::workflows::rebuild::run_rebuild_with_progress_and_llm_as;
-use crate::workflows::status::run_status;
-use crate::workflows::sync::run_sync;
-use crate::workflows::update::run_update_with_progress_and_llm_as;
+use crate::workflows::query::run_query_with_mode;
+use crate::workflows::rebuild::run_rebuild_with_progress_and_llm_as_with_mode;
+use crate::workflows::status::run_status_with_mode;
+use crate::workflows::sync::run_sync_with_mode;
+use crate::workflows::update::run_update_with_progress_and_llm_as_with_mode;
 
 /// 按 `action` 分发到具体 workflow。
 /// transport 层不直接做业务判断，它只负责把协议转成 workflow 调用。
@@ -37,6 +45,7 @@ pub fn dispatch_with_runtime<'a>(
     progress_sink: &'a mut dyn ProgressSink,
     mut llm_service: Option<&'a mut dyn LlmService>,
 ) -> CoreResponse {
+    let steering_mode = resolve_steering_mode(&command);
     let repo_root = command
         .repo_root
         .map(PathBuf::from)
@@ -44,39 +53,61 @@ pub fn dispatch_with_runtime<'a>(
 
     // `query` 是唯一依赖 `term` 的动作；其他动作只需要 repo_root。
     match command.action.as_str() {
-        "init" => encode_result(
-            run_init_with_progress_and_llm_as(
+        "init" => encode_long_result(
+            &repo_root,
+            run_init_with_progress_and_llm_as_with_mode(
                 "init",
                 &repo_root,
                 progress_sink,
                 llm_service.take(),
+                steering_mode,
             )
             .and_then(as_json),
         ),
-        "status" => encode_result(run_status(&repo_root).and_then(as_json)),
-        "update" => encode_result(
-            run_update_with_progress_and_llm_as(
+        "status" => {
+            encode_result(run_status_with_mode(&repo_root, steering_mode).and_then(as_json))
+        }
+        "update" => encode_long_result(
+            &repo_root,
+            run_update_with_progress_and_llm_as_with_mode(
                 "update",
                 &repo_root,
                 progress_sink,
                 llm_service.take(),
+                steering_mode,
             )
             .and_then(as_json),
         ),
         "query" => encode_result(
-            run_query(&repo_root, command.term.as_deref().unwrap_or("")).and_then(as_json),
+            run_query_with_mode(
+                &repo_root,
+                command.term.as_deref().unwrap_or(""),
+                steering_mode,
+            )
+            .map(map_query_report)
+            .and_then(as_json),
         ),
-        "sync" => encode_result(run_sync(&repo_root).and_then(as_json)),
-        "rebuild" => encode_result(
-            run_rebuild_with_progress_and_llm_as(
+        "sync" => encode_result(run_sync_with_mode(&repo_root, steering_mode).and_then(as_json)),
+        "rebuild" => encode_long_result(
+            &repo_root,
+            run_rebuild_with_progress_and_llm_as_with_mode(
                 "rebuild",
                 &repo_root,
                 progress_sink,
                 llm_service.take(),
+                steering_mode,
             )
             .and_then(as_json),
         ),
         other => CoreResponse::error(format!("unsupported_action:{other}")),
+    }
+}
+
+fn resolve_steering_mode(command: &CoreCommand) -> SteeringLoadMode {
+    if command.development_mode {
+        SteeringLoadMode::Development
+    } else {
+        SteeringLoadMode::Production
     }
 }
 
@@ -94,6 +125,41 @@ fn encode_result(result: std::io::Result<serde_json::Value>) -> CoreResponse {
     }
 }
 
+/// 为长流程终态编码结果；失败时尽量补齐 runtime 摘要与 blocker 线索。
+fn encode_long_result(
+    repo_root: &PathBuf,
+    result: std::io::Result<serde_json::Value>,
+) -> CoreResponse {
+    match result {
+        Ok(data) => CoreResponse::success(data),
+        Err(error) => {
+            let runtime_summary = load_runtime_summary_for_repo(repo_root)
+                .ok()
+                .flatten()
+                .map(RuntimeSummaryProjection::from_summary);
+            let gate_summary = load_runtime_gate_summary_for_repo(repo_root).ok().flatten();
+            let blocker_hint = blocker_hint_from(runtime_summary.as_ref(), gate_summary.as_ref());
+
+            if runtime_summary.is_none() && blocker_hint.is_none() {
+                return CoreResponse::error(error.to_string());
+            }
+
+            let mut data = serde_json::Map::new();
+            if let Some(runtime_summary) = runtime_summary {
+                data.insert(
+                    "runtime_summary".to_string(),
+                    serde_json::to_value(runtime_summary).unwrap_or_else(|_| json!(null)),
+                );
+            }
+            if let Some(blocker_hint) = blocker_hint {
+                data.insert("blocker_hint".to_string(), json!(blocker_hint));
+            }
+
+            CoreResponse::error_with_data(error.to_string(), serde_json::Value::Object(data))
+        }
+    }
+}
+
 /// 把任意可序列化的 workflow 结果提升成 JSON 值。
 ///
 /// # 参数
@@ -107,6 +173,3 @@ where
 {
     serde_json::to_value(value).map_err(|err| std::io::Error::other(err.to_string()))
 }
-
-
-

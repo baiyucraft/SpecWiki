@@ -15,6 +15,3 @@ pub mod workflows;
 pub fn workspace_name() -> &'static str {
     "wiki-runtime"
 }
-
-
-

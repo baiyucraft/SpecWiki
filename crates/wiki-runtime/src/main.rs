@@ -41,8 +41,7 @@ fn main() {
 
         let command = serde_json::from_str::<wiki_runtime::transport::dto::CoreCommand>(trimmed)
             .unwrap_or_else(|error| {
-                let response =
-                    wiki_runtime::transport::dto::CoreResponse::error(error.to_string());
+                let response = wiki_runtime::transport::dto::CoreResponse::error(error.to_string());
                 println!(
                     "{}",
                     serde_json::to_string(&response).expect("response should serialize")
@@ -57,8 +56,7 @@ fn main() {
                 &mut reader,
                 &mut stdout,
             ) {
-                let response =
-                    wiki_runtime::transport::dto::CoreResponse::error(error.to_string());
+                let response = wiki_runtime::transport::dto::CoreResponse::error(error.to_string());
                 let event = wiki_runtime::transport::dto::CoreEvent::terminal(response);
                 serde_json::to_writer(&mut stdout, &event)
                     .expect("terminal event should serialize");
@@ -81,6 +79,3 @@ fn main() {
 
     println!("{}", wiki_runtime::workspace_name());
 }
-
-
-

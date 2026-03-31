@@ -9,25 +9,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::module_tree::ModuleTree;
 use crate::domain::state::{WikiPageState, WikiState};
-use crate::domain::steering::load_steering_config;
+use crate::domain::steering::{load_steering_config_with_mode, SteeringLoadMode};
 use crate::generation::context::{build_module_contexts, build_repo_context};
+use crate::generation::sections::{section_id_for_title, section_titles_for_page_type};
+use crate::storage::cache_store::{
+    missing_incremental_cache_components, read_module_tree_cache, read_scan_cache,
+};
+use crate::storage::knowledge_artifacts::restore_runtime_cache_from_artifacts;
+use crate::storage::metadata_store::metadata_exists;
+use crate::storage::sqlite::index_store::SqliteIndexStore;
+use crate::storage::sqlite_store;
+use crate::storage::state_store::{load_or_rebuild_state, read_state};
+use crate::storage::wiki_fs::{page_exists, wiki_root};
+use wiki_index::hierarchy::build_module_tree;
+use wiki_index::scanner::{scan_repo_with_boundary, ScanReport, ScannedFile};
+use wiki_index::store::IndexQueryStore;
+use wiki_index::symbol_graph::GraphSummary;
 use wiki_knowledge::planning::{
     build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
 };
 use wiki_knowledge::{plan_pages_from_knowledge_tree, PlannedPage};
-use crate::generation::sections::{section_id_for_title, section_titles_for_page_type};
-use wiki_index::hierarchy::build_module_tree;
-use wiki_index::scanner::{scan_repo_with_boundary, ScanReport, ScannedFile};
-use wiki_index::symbol_graph::GraphSummary;
-use crate::storage::cache_store::{
-    missing_incremental_cache_components, read_module_tree_cache, read_scan_cache,
-};
-use crate::storage::sqlite::index_store::SqliteIndexStore;
-use crate::storage::metadata_store::metadata_exists;
-use crate::storage::sqlite_store;
-use wiki_index::store::IndexQueryStore;
-use crate::storage::state_store::{load_or_rebuild_state, read_state};
-use crate::storage::wiki_fs::{page_exists, wiki_root};
 
 /// `ChangeSet` 描述当前仓库相对最近一次 runtime 的源码变化集合。
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -225,6 +226,13 @@ impl ChangePlan {
 /// # 错误
 /// - 当 runtime 状态、metadata、cache 或当前仓库扫描无法读取时返回错误。
 pub fn plan_runtime_changes(repo_root: &Path) -> io::Result<ChangePlan> {
+    plan_runtime_changes_with_mode(repo_root, SteeringLoadMode::Production)
+}
+
+pub fn plan_runtime_changes_with_mode(
+    repo_root: &Path,
+    steering_mode: SteeringLoadMode,
+) -> io::Result<ChangePlan> {
     if !wiki_root(repo_root).exists() || !metadata_exists(repo_root) {
         return Ok(ChangePlan {
             previous_state: None,
@@ -238,8 +246,10 @@ pub fn plan_runtime_changes(repo_root: &Path) -> io::Result<ChangePlan> {
         });
     }
 
+    let _ = restore_runtime_cache_from_artifacts(repo_root);
+
     let previous_state = load_or_rebuild_state(repo_root)?;
-    let steering = load_steering_config(repo_root);
+    let steering = load_steering_config_with_mode(repo_root, steering_mode);
     let previous_scan = read_scan_cache(repo_root).ok();
     let previous_module_tree = read_module_tree_cache(repo_root).ok();
     let mut missing_cache_components =
@@ -791,15 +801,3 @@ fn expand_affected_page_ancestors(
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-

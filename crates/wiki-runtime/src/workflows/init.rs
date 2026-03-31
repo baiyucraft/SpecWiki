@@ -28,6 +28,7 @@ use crate::storage::cache_store::{
     ensure_cache_dir, ensure_page_cache_dirs, write_page_context_cache,
     write_page_generation_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
+use crate::storage::knowledge_artifacts::{persist_knowledge_artifacts, PersistKnowledgeArtifactsInput};
 use crate::storage::metadata_store::metadata_exists;
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite::runtime_store::SqliteRuntimeStore;
@@ -398,17 +399,41 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
         language: "zh".to_string(),
         repo_root: repo_root.to_string_lossy().to_string(),
         branch: current_branch(repo_root),
-        generated_at,
+        generated_at: generated_at.clone(),
         last_indexed_commit: current_commit(repo_root),
     };
     let metadata = export_metadata(&state, &export_context);
     reporter.phase("write_metadata", "写入元数据");
     write_metadata(repo_root, &metadata)?;
     finalize_pipeline_runtime(repo_root, action, generated_pages.len())?;
+    let conn = sqlite_store::open_db(repo_root)?;
+    let runtime_store = SqliteRuntimeStore::new(&conn);
+    let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
+    let research_summaries = knowledge_tree
+        .units
+        .values()
+        .filter_map(|unit| {
+            unit_researches
+                .get(&unit.id)
+                .map(|research| research.to_artifact_summary(unit))
+        })
+        .collect::<Vec<_>>();
+    let page_digests = _digests.values().cloned().collect::<Vec<_>>();
+    let runtime_gates = runtime_store.read_unit_runtime_gates()?;
+    persist_knowledge_artifacts(PersistKnowledgeArtifactsInput {
+        repo_root,
+        workflow_action: action,
+        generated_at: &generated_at,
+        facts_input_hash: &facts_input_hash,
+        metadata: &metadata,
+        knowledge_tree: &knowledge_tree,
+        research_summaries: &research_summaries,
+        page_digests: &page_digests,
+        runtime_gates: &runtime_gates,
+    })?;
     let runtime_summary =
         load_runtime_summary_for_repo(repo_root)?.map(RuntimeSummaryProjection::from_summary);
-    let conn = sqlite_store::open_db(repo_root)?;
-    SqliteRuntimeStore::new(&conn).clear_pipeline_checkpoint()?;
+    runtime_store.clear_pipeline_checkpoint()?;
 
     Ok(InitReport {
         initialized: true,
@@ -432,9 +457,7 @@ fn should_preserve_incomplete_init_runtime(
         return Ok(false);
     }
 
-    if metadata_exists(repo_root)
-        || count_existing_markdown_pages(repo_root.join(".wiki").as_path())? > 0
-    {
+    if metadata_exists(repo_root) {
         return Ok(false);
     }
 
@@ -443,17 +466,13 @@ fn should_preserve_incomplete_init_runtime(
         return Ok(false);
     }
 
-    // preserve-resume 的首要目标是避免在 timeout 后立即清理 `.wiki/.cache`，
-    // 否则 Windows 上旧进程尚未释放句柄时会把第二次 init 直接打成 os error 32。
-    // 只要还没产出 metadata/markdown，就允许下一次 init 在现有 cache 上继续推进。
-    if count_existing_markdown_pages(repo_root.join(".wiki").as_path())? == 0 {
-        return Ok(true);
-    }
-
     let conn = sqlite_store::open_db(repo_root)?;
     let runtime_store = SqliteRuntimeStore::new(&conn);
     let Some(raw_summary) = runtime_store.runtime_meta_get("pipeline_runtime_summary")? else {
-        return Ok(false);
+        // preserve-resume 的首要目标是避免在 timeout 后立即清理 `.wiki/.cache`，
+        // 否则 Windows 上旧进程尚未释放句柄时会把第二次 init 直接打成 os error 32。
+        // 只有在 metadata/markdown 都还没出现、且 summary 尚未成型时，才允许这个最宽松的保留窗口。
+        return Ok(count_existing_markdown_pages(repo_root.join(".wiki").as_path())? == 0);
     };
     let runtime_summary: PipelineRuntimeSummary = serde_json::from_str(&raw_summary)
         .map_err(|error| io::Error::other(format!("deserialize runtime summary: {error}")))?;
@@ -467,6 +486,7 @@ fn should_preserve_incomplete_init_runtime(
         return Ok(false);
     }
 
+    // metadata 还没产出时，即使已经写出部分 markdown，也可能只是 assemble 尚未收尾。
     Ok(!runtime_store.read_unit_runtime_gates()?.is_empty())
 }
 
@@ -1002,7 +1022,7 @@ mod tests {
     }
 
     #[test]
-    fn init_runtime_is_not_preserved_once_metadata_or_markdown_exists() {
+    fn partial_markdown_compose_complete_runtime_is_preserved_for_assemble_resume() {
         let fixture = tempdir().unwrap();
         let repo_root = fixture.path();
         let wiki_root = repo_root.join(".wiki");
@@ -1024,7 +1044,7 @@ mod tests {
             &serde_json::json!({
                 "facts_input_hash": "facts-same",
                 "workflow_action": "init",
-                "runtime_state": "compose_pending"
+                "runtime_state": "compose_complete"
             })
             .to_string(),
         )
@@ -1046,14 +1066,58 @@ mod tests {
         .unwrap();
 
         fs::write(wiki_root.join("运行时.md"), "# runtime\n").unwrap();
-        assert!(!should_preserve_incomplete_init_runtime(
+        assert!(should_preserve_incomplete_init_runtime(
             "init",
             repo_root,
             LlmCacheMode::Preserve
         )
         .unwrap());
+    }
 
-        fs::remove_file(wiki_root.join("运行时.md")).unwrap();
+    #[test]
+    fn init_runtime_is_not_preserved_once_metadata_exists() {
+        let fixture = tempdir().unwrap();
+        let repo_root = fixture.path();
+        let wiki_root = repo_root.join(".wiki");
+        fs::create_dir_all(wiki_root.join(".cache")).unwrap();
+
+        let conn = sqlite_store::open_db(repo_root).unwrap();
+        let domain = KnowledgeDomain::new(DomainType::CoreRuntime, "核心运行时");
+        let unit = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "运行时",
+            domain.id.clone(),
+            "核心运行时/运行时.md",
+        );
+        sqlite_store::write_knowledge_domains(&conn, &[domain]).unwrap();
+        sqlite_store::write_knowledge_units(&conn, &[unit.clone()]).unwrap();
+        sqlite_store::runtime_meta_set(
+            &conn,
+            "pipeline_runtime_summary",
+            &serde_json::json!({
+                "facts_input_hash": "facts-same",
+                "workflow_action": "init",
+                "runtime_state": "compose_complete"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        sqlite_store::write_unit_runtime_gate(
+            &conn,
+            &UnitRuntimeGate {
+                unit_id: unit.id.clone(),
+                unit_type: unit.unit_type.as_str().to_string(),
+                research_status: "ready".to_string(),
+                compose_status: "done".to_string(),
+                assemble_status: "pending".to_string(),
+                last_ready_stage: Some("compose_leaf".to_string()),
+                blocked_reason: None,
+                missing_dependencies: Vec::new(),
+                updated_at: "1".to_string(),
+            },
+        )
+        .unwrap();
+
         fs::write(wiki_root.join("wiki.metadata.json"), "{}").unwrap();
         assert!(!should_preserve_incomplete_init_runtime(
             "init",
@@ -1074,6 +1138,35 @@ mod tests {
             should_preserve_incomplete_init_runtime("init", repo_root, LlmCacheMode::Preserve)
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn partial_markdown_runtime_is_not_preserved_when_runtime_gates_are_missing() {
+        let fixture = tempdir().unwrap();
+        let repo_root = fixture.path();
+        let wiki_root = repo_root.join(".wiki");
+        fs::create_dir_all(wiki_root.join(".cache")).unwrap();
+
+        let conn = sqlite_store::open_db(repo_root).unwrap();
+        sqlite_store::runtime_meta_set(
+            &conn,
+            "pipeline_runtime_summary",
+            &serde_json::json!({
+                "facts_input_hash": "facts-same",
+                "workflow_action": "init",
+                "runtime_state": "compose_complete"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(wiki_root.join("运行时.md"), "# runtime\n").unwrap();
+
+        assert!(!should_preserve_incomplete_init_runtime(
+            "init",
+            repo_root,
+            LlmCacheMode::Preserve
+        )
+        .unwrap());
     }
 
     #[test]

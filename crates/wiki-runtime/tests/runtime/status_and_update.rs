@@ -83,9 +83,9 @@ fn status_reports_missing_before_init() {
     assert!(status.gate_summary.is_none());
 }
 
-/// 场景：仓库级 cache 被删光后，status 必须升级为 `needs_rebuild`。
+/// 场景：仓库级 cache 被删光后，status 应优先基于正式产物恢复本地 runtime。
 #[test]
-fn status_reports_needs_rebuild_when_cache_is_missing() {
+fn status_restores_runtime_from_formal_artifacts_when_cache_is_missing() {
     let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
@@ -96,8 +96,45 @@ fn status_reports_needs_rebuild_when_cache_is_missing() {
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
     let status = run_status(repo_root).unwrap();
+    assert_eq!(status.state, "fresh");
+    assert!(status.facts_ready);
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["query_readiness"],
+        "ready"
+    );
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["recommended_action"],
+        "none"
+    );
+    assert!(repo_root.join(".wiki/.cache/wiki-cache.db").exists());
+}
+
+/// 场景：formal artifact 锚点与当前 metadata 不一致时，status 不得误恢复 runtime。
+#[test]
+fn status_keeps_restore_failure_explicit_when_recovery_manifest_is_stale() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("package.json"), r#"{"name":"demo"}"#).unwrap();
+
+    run_init(repo_root).unwrap();
+
+    let manifest_path = repo_root.join(".wiki/.knowledge/runtime/recovery-manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["metadata_hash"] = serde_json::Value::String("stale-metadata-hash".to_string());
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
+
+    let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "needs_rebuild");
     assert!(!status.facts_ready);
+    assert_eq!(status.needs_rebuild_reason.as_deref(), Some("cache_missing"));
     assert_eq!(
         serde_json::to_value(&status).unwrap()["query_readiness"],
         "blocked"
@@ -105,10 +142,6 @@ fn status_reports_needs_rebuild_when_cache_is_missing() {
     assert_eq!(
         serde_json::to_value(&status).unwrap()["recommended_action"],
         "rebuild"
-    );
-    assert_eq!(
-        status.needs_rebuild_reason.as_deref(),
-        Some("cache_missing")
     );
 }
 
@@ -138,9 +171,9 @@ fn status_exposes_runtime_preflight_after_init() {
     assert!(status.gate_summary.is_some());
 }
 
-/// 场景：单页 cache 缺失时，update 必须回退到 rebuild 并补全 page cache。
+/// 场景：单页 cache 缺失时，update 应优先基于正式产物恢复 cache，而不是直接回退 rebuild。
 #[test]
-fn update_falls_back_to_rebuild_when_page_cache_is_missing() {
+fn update_restores_page_cache_from_formal_artifacts() {
     let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
@@ -162,8 +195,9 @@ fn update_falls_back_to_rebuild_when_page_cache_is_missing() {
     }
 
     let update = run_update(repo_root).unwrap();
-    assert_eq!(update.previous_state, "needs_rebuild");
+    assert_eq!(update.previous_state, "fresh");
     assert_eq!(update.state, "fresh");
+    assert!(update.updated_pages.is_empty());
     {
         let conn = sqlite_store::open_db_readonly(repo_root).unwrap();
         assert!(sqlite_store::page_context_exists(&conn, &overview_page.page_id).unwrap());
@@ -172,6 +206,27 @@ fn update_falls_back_to_rebuild_when_page_cache_is_missing() {
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "fresh");
+}
+
+/// 场景：init 完成后必须落出 `.wiki/.knowledge/**` 最小正式产物。
+#[test]
+fn init_persists_minimal_knowledge_artifacts() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("package.json"), r#"{"name":"demo"}"#).unwrap();
+
+    run_init(repo_root).unwrap();
+
+    let knowledge_root = repo_root.join(".wiki/.knowledge");
+    assert!(knowledge_root.join("derived/knowledge-domains.json").exists());
+    assert!(knowledge_root.join("derived/knowledge-units.jsonl").exists());
+    assert!(knowledge_root.join("derived/knowledge-tree.json").exists());
+    assert!(knowledge_root.join("derived/research-summaries.jsonl").exists());
+    assert!(knowledge_root.join("runtime/page-digests.jsonl").exists());
+    assert!(knowledge_root.join("runtime/runtime-gates.jsonl").exists());
+    assert!(knowledge_root.join("runtime/recovery-manifest.json").exists());
 }
 
 /// 场景：普通源码变更后，update 必须把 runtime 从 `stale` 刷回 `fresh`。
