@@ -1,3 +1,7 @@
+/**
+ * 这个文件覆盖 spec-wiki wiki <action> 的端到端 CLI forwarding。
+ * 它验证共享 CLI 路径可以真正驱动当前阶段的 wiki-runtime。
+ */
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,16 +9,38 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "vitest";
 
-import { createTools } from "../../agents/codebuddy/src/index.ts";
+import { runCli } from "../../packages/spec-wiki/src/index.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..", "..");
 const e2eTargetDir = path.join(rootDir, "target", "e2e");
 
-test("agent init, status, update, query, sync, and rebuild work end to end", async () => {
-  const repoRoot = mkdtempSync(path.join(os.tmpdir(), "codebuddy-wiki-e2e-"));
-  const previousBinary = process.env.CODEBUDDY_WIKI_RUNTIME_BIN;
+function parseJsonLine(text: string) {
+  return JSON.parse(text.trim());
+}
+
+async function runWikiCli(repoRoot: string, ...args: string[]) {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const exitCode = await runCli(args, {
+    cwd: repoRoot,
+    env: process.env,
+    stdin: process.stdin,
+    stdout: (text) => stdout.push(text),
+    stderr: (text) => stderr.push(text),
+  });
+
+  return {
+    exitCode,
+    stdout: stdout.join(""),
+    stderr: stderr.join(""),
+  };
+}
+
+test("spec-wiki wiki init, status, update, and query keep index-only contract end to end", async () => {
+  const repoRoot = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-e2e-"));
+  const previousBinary = process.env.SPEC_WIKI_RUNTIME_BIN;
 
   try {
     writeFileSync(path.join(repoRoot, "package.json"), JSON.stringify({ name: "demo-repo" }));
@@ -33,65 +59,70 @@ test("agent init, status, update, query, sync, and rebuild work end to end", asy
       );
     }
 
-    process.env.CODEBUDDY_WIKI_RUNTIME_BIN = binaryPath;
+    process.env.SPEC_WIKI_RUNTIME_BIN = binaryPath;
 
-    const tools = createTools() as any;
-
-    const initResult = await tools.wikiInit({ repoRoot });
-    expect(initResult.ok).toBe(true);
-    expect(existsSync(path.join(repoRoot, ".wiki", "项目概述.md"))).toBe(true);
-    expect(existsSync(path.join(repoRoot, ".wiki", "系统架构.md"))).toBe(true);
-    expect(existsSync(path.join(repoRoot, ".wiki", "wiki.metadata.json"))).toBe(true);
+    const initResult = await runWikiCli(repoRoot, "wiki", "init");
+    expect(initResult.exitCode).toBe(0);
+    const initLines = initResult.stdout.trim().split(/\r?\n/).filter(Boolean);
+    expect(initLines.some((line) => line.includes("\"type\":\"progress\""))).toBe(true);
+    const initTerminal = parseJsonLine(initLines[initLines.length - 1]);
+    expect(initTerminal.type).toBe("result");
+    expect(initTerminal.response.data.state).toBe("index_only");
+    expect(initTerminal.response.data.generated_pages).toEqual([]);
     expect(existsSync(path.join(repoRoot, ".wiki", ".cache", "wiki-cache.db"))).toBe(true);
+    expect(existsSync(path.join(repoRoot, ".wiki", "项目概述.md"))).toBe(false);
+    expect(existsSync(path.join(repoRoot, ".wiki", "wiki.metadata.json"))).toBe(false);
 
-    const freshStatus = await tools.wikiStatus({ repoRoot });
-    expect(freshStatus.ok).toBe(true);
-    expect(freshStatus.data.state).toBe("fresh");
+    const statusResult = await runWikiCli(repoRoot, "wiki", "status");
+    expect(statusResult.exitCode).toBe(0);
+    const statusJson = parseJsonLine(statusResult.stdout);
+    expect(statusJson.data.state).toBe("index_only");
+    expect(statusJson.data.facts_ready).toBe(true);
+    expect(statusJson.data.query_readiness).toBe("ready");
+    expect(statusJson.data.recommended_action).toBe("none");
+    expect(statusJson.data.runtime_summary ?? null).toBeNull();
 
     writeFileSync(path.join(repoRoot, "src.ts"), "export const version = 2;\n");
 
-    const staleStatus = await tools.wikiStatus({ repoRoot });
-    expect(staleStatus.ok).toBe(true);
-    expect(staleStatus.data.state).toBe("stale");
-    expect(staleStatus.data.dirty_sources.length).toBeGreaterThan(0);
+    const updateResult = await runWikiCli(repoRoot, "wiki", "update");
+    expect(updateResult.exitCode).toBe(0);
+    const updateLines = updateResult.stdout.trim().split(/\r?\n/).filter(Boolean);
+    expect(updateLines.some((line) => line.includes("\"type\":\"progress\""))).toBe(true);
+    const updateTerminal = parseJsonLine(updateLines[updateLines.length - 1]);
+    expect(updateTerminal.type).toBe("result");
+    expect(updateTerminal.response.data.state).toBe("index_only");
+    expect(updateTerminal.response.data.updated_pages).toEqual([]);
+    expect(existsSync(path.join(repoRoot, ".wiki", "wiki.metadata.json"))).toBe(false);
 
-    const updateResult = await tools.wikiUpdate({ repoRoot });
-    expect(updateResult.ok).toBe(true);
-    expect(updateResult.data.previous_state).toBe("stale");
-    expect(updateResult.data.state).toBe("fresh");
-    expect(updateResult.data.updated_pages.length).toBeGreaterThan(0);
-
-    const pageQueryResult = await tools.wikiQuery({ repoRoot, term: "项目概述" });
-    expect(pageQueryResult.ok).toBe(true);
+    const queryResult = await runWikiCli(repoRoot, "wiki", "query", "src.ts");
+    expect(queryResult.exitCode).toBe(0);
+    const queryJson = parseJsonLine(queryResult.stdout);
+    expect(queryJson.ok).toBe(true);
+    expect(queryJson.data.query_mode).toBe("index_first");
+    expect(queryJson.data.matched_pages).toEqual([]);
+    expect(queryJson.data.summary).toBeDefined();
+    expect(Array.isArray(queryJson.data.hits)).toBe(true);
     expect(
-      pageQueryResult.data.matched_pages.some((page: string) => page.endsWith("项目概述.md")),
-    ).toBe(true);
-    expect(pageQueryResult.data.matches.length).toBeGreaterThan(0);
-
-    const structureQueryResult = await tools.wikiQuery({ repoRoot, term: "src.ts" });
-    expect(structureQueryResult.ok).toBe(true);
-    expect(structureQueryResult.data.matches.length).toBeGreaterThan(0);
-    expect(structureQueryResult.data.matched_sources.length).toBeGreaterThan(0);
-
-    writeFileSync(path.join(repoRoot, ".wiki", "项目概述.md"), "# 项目概述\n\n手动补充说明\n");
-    const syncResult = await tools.wikiSync({ repoRoot });
-    expect(syncResult.ok).toBe(true);
-    expect(syncResult.data.state).toBe("fresh");
-    expect(
-      syncResult.data.synced_pages.some((page: string) => page.endsWith("项目概述.md")),
-    ).toBe(true);
-
-    const rebuildResult = await tools.wikiRebuild({ repoRoot });
-    expect(rebuildResult.ok).toBe(true);
-    expect(rebuildResult.data.state).toBe("fresh");
-    expect(
-      rebuildResult.data.updated_pages.some((page: string) => page.endsWith("项目概述.md")),
+      (queryJson.data.hits ?? []).some((hit: {
+        hit_type: string;
+        title: string;
+        location: string;
+        summary?: string;
+        reasons?: string[];
+      }) => {
+        expect(typeof hit.summary).toBe("string");
+        expect(Array.isArray(hit.reasons ?? [])).toBe(true);
+        return (
+          (hit.hit_type === "symbol" && hit.location === "src.ts")
+          || (hit.hit_type === "source" && hit.location.endsWith("src.ts"))
+        );
+      }),
     ).toBe(true);
   } finally {
     if (previousBinary === undefined) {
-      delete process.env.CODEBUDDY_WIKI_RUNTIME_BIN;
+      delete process.env.SPEC_WIKI_RUNTIME_BIN;
     } else {
-      process.env.CODEBUDDY_WIKI_RUNTIME_BIN = previousBinary;
+      process.env.SPEC_WIKI_RUNTIME_BIN = previousBinary;
     }
 
     rmSync(repoRoot, { recursive: true, force: true });

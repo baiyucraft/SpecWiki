@@ -232,7 +232,6 @@ test("runtime inspection 会优先解释 researching / compose_pending / compose
   }
 });
 
-
 test("runtime inspection 会从 runtime/research JSON 提取最小 research 摘要", () => {
   const fixtureDir = createFixtureDir("wiki-runtime-research-summary-");
   const wikiDir = path.join(fixtureDir, ".wiki");
@@ -288,7 +287,6 @@ test("runtime inspection 会从 runtime/research JSON 提取最小 research 摘�
     rmSync(fixtureDir, { recursive: true, force: true });
   }
 });
-
 
 test("runtime inspection 会把 page digest 里的 compose diagnostics 关联回页面路径", () => {
   const fixtureDir = createFixtureDir("wiki-runtime-compose-diagnostics-");
@@ -435,6 +433,3 @@ test("test project analysis Markdown 会输出 research runtime 摘要且保留�
   expect(markdown).toContain("- runtime：runtime_incomplete / diagnostic_only / workflow 仍在 research，尚未进入 compose");
   expect(markdown).toContain("- research runtime：current=unit-current, type=module-doc, since=2026-03-19T10:01:02Z，last_elapsed=4800ms，provider=unit=unit-done, stop=completed, turns=3, tools=2, elapsed=4800ms, cache_hit=false, mode=required");
 });
-
-
-

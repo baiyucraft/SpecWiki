@@ -1,3 +1,7 @@
+/**
+ * 这个脚本是工作区级测试入口。
+ * 它顺序执行 Rust runtime、自测主包和 root e2e / distribution 测试。
+ */
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
@@ -5,7 +9,7 @@ import path from "node:path";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEFAULT_ROOT_DIR = path.resolve(__dirname, "..");
-const AGENT_DIR = path.join(DEFAULT_ROOT_DIR, "agents", "codebuddy");
+const MAIN_PACKAGE_DIR = path.join(DEFAULT_ROOT_DIR, "packages", "spec-wiki");
 const TEST_COMMANDS = [
   {
     command: "cargo",
@@ -14,7 +18,7 @@ const TEST_COMMANDS = [
   {
     command: "pnpm",
     args: ["test"],
-    cwd: AGENT_DIR,
+    cwd: MAIN_PACKAGE_DIR,
   },
   {
     command: "cargo",
@@ -23,7 +27,7 @@ const TEST_COMMANDS = [
   {
     command: "pnpm",
     args: ["build"],
-    cwd: AGENT_DIR,
+    cwd: MAIN_PACKAGE_DIR,
   },
   {
     command: "cargo",
@@ -37,7 +41,7 @@ const TEST_COMMANDS = [
 
 async function runCommand(command, args, { cwd = DEFAULT_ROOT_DIR } = {}) {
   // The root test entry is intentionally narrow:
-  // core self-tests stay in the core package, agent self-tests stay in the agent package,
+  // core self-tests stay in the core package, CLI self-tests stay in the main package,
   // and only end-to-end / distribution checks remain in the root vitest suite.
   await new Promise((resolve, reject) => {
     const child = spawn(command, args, {

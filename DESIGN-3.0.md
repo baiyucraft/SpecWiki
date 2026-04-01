@@ -18,7 +18,7 @@ project knowledge runtime + auditable long-term memory
 
 ## 项目定位
 
-当前项目定位为 `Repo Wiki Core + Agents` 体系，正式宿主边界仍以 Windows + CodeBuddy Agent 为主，但 3.0 的内部架构已经收束为四包：
+当前项目定位为 `Repo Wiki Core + Agents` 体系。core 的内部架构已经收束为四个 crate，宿主接入、bootstrap 与全局 CLI 形态则单独由 `Agents` 层承载，具体见 [DESIGN-AGENTS.md](./DESIGN-AGENTS.md)：
 
 - `wiki-model`
 - `wiki-index`
@@ -31,13 +31,14 @@ project knowledge runtime + auditable long-term memory
 - `wiki-index` 负责代码事实与索引
 - `wiki-knowledge` 负责把事实组织成知识
 - `wiki-runtime` 负责运行时、工作流、查询路由、投影与宿主编排
-- `Agents` 只负责接入宿主，不承载 Wiki 业务规则
+- `Agents` 只负责接入宿主，不承载 Wiki 业务规则；宿主接入与 bootstrap 设计见 [DESIGN-AGENTS.md](./DESIGN-AGENTS.md)
 
 ## 设计文档索引
 
 | 文档 | 内容 | 状态 |
 |------|------|------|
 | [DESIGN-RUNTIME.md](./DESIGN-RUNTIME.md) | 整个 wiki 系统的总运行架构、`.wiki/` 结构、query route、生命周期与恢复策略 | **当前** |
+| [DESIGN-AGENTS.md](./DESIGN-AGENTS.md) | `spec-wiki` 的宿主接入、bootstrap、runtime forwarding 与宿主扩展模型 | **当前** |
 | [DESIGN-ITER.md](./DESIGN-ITER.md) | 3.0 的拆包顺序、迁移路线、验收重点、**迭代参考** | **当前** |
 | [SCENE-1.md](./SCENE-1.md) | 第一版 9 个核心用户故事 | **当前** |
 | [SCENE-2.md](./SCENE-2.md) | 第一版之外的重要扩展场景 | **当前** |
@@ -104,7 +105,7 @@ crates/
 - `wiki-knowledge`：把事实组织成知识
 - `wiki-runtime`：运行时与宿主编排壳
 
-更细的包边界、运行协作和主链说明，见 [DESIGN-RUNTIME.md](./DESIGN-RUNTIME.md)。
+更细的包边界、运行协作和主链说明，见 [DESIGN-RUNTIME.md](./DESIGN-RUNTIME.md)。宿主接入、bootstrap 与扩展适配设计见 [DESIGN-AGENTS.md](./DESIGN-AGENTS.md)。
 
 ## 依赖方向
 
@@ -219,3 +220,5 @@ wiki-runtime    <- 依赖 wiki-model + wiki-index + wiki-knowledge
 Repo Wiki 3.0 的目标不是“生成更多页面”，
 而是把 page 收为投影，把知识做成运行时，把规范和经验做成可审计的长期记忆。
 ```
+
+

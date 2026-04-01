@@ -13,7 +13,7 @@
 
 目标是构建一个 Repo Wiki Core + Agents 体系：自动扫描代码仓库，生成并持续更新 `.wiki/`，让人和 Agent 都能共享同一层项目知识。
 
-设计与边界优先看 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md)、[DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md)、[SCENE-1.md](E:/project/!byAI/spec-wiki/SCENE-1.md) 和 [SCENE-2.md](E:/project/!byAI/spec-wiki/SCENE-2.md)。
+设计与边界优先看 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md)、[DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md)、[DESIGN-AGENTS.md](E:/project/!byAI/spec-wiki/DESIGN-AGENTS.md)、[SCENE-1.md](E:/project/!byAI/spec-wiki/SCENE-1.md) 和 [SCENE-2.md](E:/project/!byAI/spec-wiki/SCENE-2.md)。
 代码注释规范单独见 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md)。
 
 # 开发参考
@@ -25,7 +25,7 @@
 - `deepwiki-open`[tmp/upstream/deepwiki-open](E:/project/!byAI/spec-wiki/tmp/upstream/deepwiki-open)
 - `GitNexus`本地路径：[tmp/upstream/GitNexus](E:/project/!byAI/spec-wiki/tmp/upstream/GitNexus)
 
-引用这些参考实现时，以当前仓库的 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md) 和 [DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md) 为最终边界，不直接照搬其产品形态或目录结构。若旧设计中的参考结论未被重新验证到这些本地仓库的实际源码实现，可以直接推翻。
+引用这些参考实现时，以当前仓库的 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md)、[DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md) 和 [DESIGN-AGENTS.md](E:/project/!byAI/spec-wiki/DESIGN-AGENTS.md) 为最终边界，不直接照搬其产品形态或目录结构。若旧设计中的参考结论未被重新验证到这些本地仓库的实际源码实现，可以直接推翻。
 
 # 当前核心设计约束
 
@@ -77,6 +77,7 @@
 # 分层规则
 
 - 命名统一使用 `Agents`，不要回退到 `Adapters`。
+- 宿主接入、bootstrap、资产模型与扩展适配边界以 [DESIGN-AGENTS.md](E:/project/!byAI/spec-wiki/DESIGN-AGENTS.md) 为准；新增宿主优先走公共内核 + HostAdapter，而不是新增独立宿主包。
 - `.wiki/.knowledge/**`、`.wiki/pages/**`、`.wiki/wiki.metadata.json`、`.wiki/.cache/**` 是当前 runtime 分层，职责不能混用。
 - `Facts -> Knowledge Planning -> Research -> Compose -> Assemble` 是当前 core 的主路径，新增实现不要绕过这条链路直接拼页面。
 - `PageContext`、`PlannedPage`、`renderer` 都应服务于 KnowledgeUnit 主线，避免重新长出独立的旧页面语义层。
@@ -111,3 +112,6 @@
 - 测试报告分析放在 `changes/**/reference-project-reports/*.md`。
 - 当前做页面质量/结构专项时，优先跑 `storybook + dagger`，再决定是否回到全量 19 项目。
 - 本地 provider / retry / timeout / backoff 等调试参数，测试时优先以 [wiki.dev.yaml](E:/project/!byAI/spec-wiki/wiki.dev.yaml) 为准。
+
+
+
