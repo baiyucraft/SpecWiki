@@ -73,4 +73,3 @@ fn collect_typescript_targets(node: Node<'_>, source: &[u8], targets: &mut Vec<S
         collect_typescript_targets(child, source, targets);
     }
 }
-

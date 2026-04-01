@@ -91,4 +91,3 @@ fn normalize_python_import_target(module_name: &str) -> String {
 
     module_name.replace('.', "/")
 }
-

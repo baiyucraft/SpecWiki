@@ -193,4 +193,3 @@ impl SymbolTable {
         self.global_index.get(name).cloned().unwrap_or_default()
     }
 }
-

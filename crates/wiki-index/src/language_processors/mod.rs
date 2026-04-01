@@ -163,4 +163,3 @@ pub(crate) fn extract_script_blocks(content: &str) -> Vec<String> {
         .filter_map(|captures| captures.get(1).map(|capture| capture.as_str().to_string()))
         .collect()
 }
-

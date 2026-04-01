@@ -9,6 +9,44 @@ use crate::symbol_graph::{
 };
 use crate::symbols::SymbolNode;
 
+/// 模块快照读取面暴露的稳定模块视图。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleRecord {
+    pub module_id: String,
+    pub name: String,
+    pub kind: String,
+    pub root_paths: Vec<String>,
+    pub parent_id: Option<String>,
+    pub child_ids: Vec<String>,
+    pub entry_points: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+/// module_source_map 对外暴露的稳定关联记录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleSourceLink {
+    pub module_id: String,
+    pub source_id: String,
+}
+
+/// facts-owned source 视图。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceRecord {
+    pub source_id: String,
+    pub path: String,
+    pub language: String,
+    pub kind: String,
+    pub tags: Vec<String>,
+}
+
+/// facts-owned entrypoint 视图。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntrypointRecord {
+    pub path: String,
+    pub source_id: Option<String>,
+    pub module_ids: Vec<String>,
+}
+
 /// 符号 FTS 查询的稳定结果。
 #[derive(Debug, Clone)]
 pub struct SymbolSearchHit {
@@ -16,6 +54,8 @@ pub struct SymbolSearchHit {
     pub name: String,
     pub label: String,
     pub file_path: String,
+    pub start_line: usize,
+    pub end_line: usize,
     pub language: String,
     pub score: f64,
 }
@@ -39,6 +79,10 @@ pub trait IndexSnapshotStore {
 
     fn write_module_tree(&self, tree: &ModuleTree) -> io::Result<()>;
     fn read_module_tree(&self) -> io::Result<Option<ModuleTree>>;
+    fn list_modules(&self) -> io::Result<Vec<ModuleRecord>>;
+    fn list_module_source_links(&self) -> io::Result<Vec<ModuleSourceLink>>;
+    fn list_sources(&self) -> io::Result<Vec<SourceRecord>>;
+    fn list_entrypoints(&self) -> io::Result<Vec<EntrypointRecord>>;
 
     fn replace_symbol_graph(
         &self,
@@ -68,7 +112,11 @@ pub trait IndexQueryStore {
     fn list_edges(&self) -> io::Result<Vec<ResolvedSymbolEdge>>;
     fn list_edges_for_files(&self, source_paths: &[String]) -> io::Result<Vec<ResolvedSymbolEdge>>;
     fn list_adjacent_symbol_files(&self, source_paths: &[String]) -> io::Result<Vec<String>>;
-    fn trace_call_edges(&self, symbol_id: &str, max_depth: usize) -> io::Result<Vec<ResolvedSymbolEdge>>;
+    fn trace_call_edges(
+        &self,
+        symbol_id: &str,
+        max_depth: usize,
+    ) -> io::Result<Vec<ResolvedSymbolEdge>>;
     fn trace_call_edges_from_seeds(
         &self,
         symbol_ids: &[String],

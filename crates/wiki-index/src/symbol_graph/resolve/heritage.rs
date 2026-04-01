@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use wiki_model::domain::stable_id::stable_id;
 use crate::symbol_graph::{GraphDiagnostic, ResolvedGraphSnapshot, ResolvedSymbolEdge};
 use crate::symbols::{ParsedSymbolsSnapshot, RawHeritageCapture, SymbolNode};
+use wiki_model::domain::stable_id::stable_id;
 
 /// 基于 parsed heritage 和已解析 import edges 构建 `EXTENDS / IMPLEMENTS`。
 ///
@@ -190,4 +190,3 @@ fn heritage_diagnostic(capture: &RawHeritageCapture, kind: &str, message: &str) 
         symbol_id: capture.owner_symbol_id.clone(),
     }
 }
-

@@ -56,4 +56,3 @@ pub fn detect_tech_hints(paths: &[String]) -> Vec<String> {
 
     topics.into_iter().collect()
 }
-

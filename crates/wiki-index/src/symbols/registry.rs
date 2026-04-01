@@ -200,4 +200,3 @@ mod tests {
         assert!(resolve_embedded_language("typescript").is_some());
     }
 }
-

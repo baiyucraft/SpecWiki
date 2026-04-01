@@ -7,11 +7,11 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use serde_json::Value;
 
-use wiki_model::domain::stable_id::stable_id;
 use crate::parsers::{analyze_manifests, normalize_dependency_target};
 use crate::scanner::ScanReport;
 use crate::symbol_graph::{GraphDiagnostic, ResolvedGraphSnapshot, ResolvedSymbolEdge};
 use crate::symbols::{ParsedSymbolsSnapshot, RawImportCapture, SymbolNode, SymbolTable};
+use wiki_model::domain::stable_id::stable_id;
 
 /// `SuffixIndex` 为 import resolution 提供近似 O(1) 的 suffix/path 查找。
 #[derive(Debug, Clone, Default)]
@@ -822,4 +822,3 @@ fn rust_crate_root(file_path: &str) -> Option<String> {
         .rposition(|segment| matches!(*segment, "src"));
     source_index.map(|index| segments[..=index].join("/"))
 }
-

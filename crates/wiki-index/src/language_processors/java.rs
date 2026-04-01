@@ -35,4 +35,3 @@ impl LanguageProcessor for JavaProcessor {
         collect_regex_targets(content, &self.package_regex)
     }
 }
-

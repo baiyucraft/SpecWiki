@@ -18,4 +18,3 @@ pub struct TopicSeed {
     #[serde(default)]
     pub relation_ids: Vec<String>,
 }
-

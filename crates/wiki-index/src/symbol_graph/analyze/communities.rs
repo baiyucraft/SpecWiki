@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use wiki_model::domain::stable_id::stable_id;
 use crate::symbol_graph::{CommunityMember, CommunityNode, ResolvedGraphSnapshot};
 use crate::symbols::ParsedSymbolsSnapshot;
+use wiki_model::domain::stable_id::stable_id;
 
 const COMMUNITY_EDGE_CONFIDENCE_THRESHOLD: f64 = 0.55;
 const LARGE_GRAPH_NODE_THRESHOLD: usize = 10_000;
@@ -287,4 +287,3 @@ fn build_communities(
 
     (communities, members)
 }
-

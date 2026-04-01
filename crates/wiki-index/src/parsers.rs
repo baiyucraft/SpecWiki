@@ -757,4 +757,3 @@ fn normalize_path_like(path: &str) -> String {
         segments.join("/")
     }
 }
-

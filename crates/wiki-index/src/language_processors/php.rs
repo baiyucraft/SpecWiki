@@ -50,4 +50,3 @@ impl LanguageProcessor for PhpProcessor {
         collect_regex_targets(content, &self.namespace_regex)
     }
 }
-

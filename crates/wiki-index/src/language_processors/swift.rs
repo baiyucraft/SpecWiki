@@ -26,4 +26,3 @@ impl LanguageProcessor for SwiftProcessor {
         collect_regex_targets(content, &self.import_regex)
     }
 }
-

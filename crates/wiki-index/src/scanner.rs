@@ -8,8 +8,6 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-
-use wiki_model::domain::stable_id::stable_id;
 use crate::assist::{FactsAssist, FilePurposeAssistInput};
 use crate::detectors::detect_tech_hints;
 use crate::fingerprint::fingerprint_bytes;
@@ -17,6 +15,7 @@ use crate::parsers::{
     analyze_manifests, extract_source_aliases as parse_source_aliases,
     extract_source_dependency_targets, normalize_dependency_target,
 };
+use wiki_model::domain::stable_id::stable_id;
 
 /// `FilePurpose` 是扫描阶段给每个文件打上的稳定角色标签。
 /// 它优先由 deterministic 的路径/文件名规则给出，供 hierarchy / planner / context 复用。
@@ -135,9 +134,6 @@ struct PendingFilePurposeCandidate {
     index: usize,
     input: FilePurposeAssistInput,
 }
-
-/// `FilePurpose` uncertainty gate 需要和 LLM 侧批次大小保持一致，便于诊断请求数。
-const FILE_PURPOSE_GATE_BATCH_SIZE: usize = 16;
 
 impl ScannedFile {
     /// 兼容旧粗分类的配置文件判断。
@@ -559,8 +555,6 @@ fn apply_assist_file_purpose_overrides(
     if pending_file_purposes.is_empty() {
         return Ok(());
     }
-
-
 
     let inputs = pending_file_purposes
         .iter()
@@ -1699,11 +1693,3 @@ mod tests {
         );
     }
 }
-
-
-
-
-
-
-
-

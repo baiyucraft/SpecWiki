@@ -7,6 +7,7 @@ pub mod fingerprint;
 pub mod hierarchy;
 pub mod language_processors;
 pub mod parsers;
+pub mod query;
 pub mod scanner;
 pub mod store;
 pub mod symbol_graph;
@@ -19,6 +20,3 @@ pub use topic_seed::TopicSeed;
 pub fn workspace_name() -> &'static str {
     "wiki-index"
 }
-
-
-

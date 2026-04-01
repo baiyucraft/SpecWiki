@@ -32,4 +32,3 @@ impl LanguageProcessor for SvelteProcessor {
             .collect()
     }
 }
-

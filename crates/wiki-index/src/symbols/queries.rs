@@ -226,4 +226,3 @@ pub const SWIFT_QUERY: &str = r#"
   name: (type_identifier) @heritage.owner
   (inheritance_specifier inherits_from: (user_type (type_identifier) @heritage.target))) @heritage.extends
 "#;
-

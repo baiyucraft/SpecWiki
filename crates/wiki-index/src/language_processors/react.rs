@@ -40,4 +40,3 @@ impl LanguageProcessor for ReactProcessor {
         targets
     }
 }
-

@@ -65,14 +65,11 @@ pub trait FactsAssist {
         inputs: &[TopLevelPromotionAssistInput],
     ) -> io::Result<Vec<Option<bool>>>;
 
-    fn classify_module_kind(
-        &mut self,
-        input: &ModuleKindAssistInput,
-    ) -> io::Result<Option<String>>;
+    fn classify_module_kind(&mut self, input: &ModuleKindAssistInput)
+        -> io::Result<Option<String>>;
 
     fn keep_dependency_edges(
         &mut self,
         inputs: &[DependencyAssistInput],
     ) -> io::Result<Vec<Option<bool>>>;
 }
-

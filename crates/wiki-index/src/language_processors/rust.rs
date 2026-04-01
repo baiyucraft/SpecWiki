@@ -91,4 +91,3 @@ fn collect_use_tree_targets(prefix: String, tree: &UseTree, targets: &mut Vec<St
         }
     }
 }
-

@@ -240,4 +240,3 @@ fn summarize_processes(
         })
         .collect()
 }
-

@@ -73,4 +73,3 @@ pub(crate) fn collect_javascript_targets(node: Node<'_>, source: &[u8], targets:
         collect_javascript_targets(child, source, targets);
     }
 }
-

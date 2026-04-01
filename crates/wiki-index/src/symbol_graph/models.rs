@@ -154,4 +154,3 @@ pub struct SymbolGraphSnapshot {
     /// 面向后续模块消费的聚合摘要。
     pub summary: GraphSummary,
 }
-

@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use wiki_model::domain::stable_id::stable_id;
 use crate::symbol_graph::{CycleSummary, ResolvedGraphSnapshot};
 use crate::symbols::ParsedSymbolsSnapshot;
+use wiki_model::domain::stable_id::stable_id;
 
 /// 对高质量非 import 图边执行 Tarjan SCC，生成 cycle summary。
 pub fn detect_cycles(
@@ -212,4 +212,3 @@ fn condensed_topo_order(
 
     component.iter().cloned().collect()
 }
-

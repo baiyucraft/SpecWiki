@@ -3,6 +3,8 @@ name = "wiki-index"
 version = "0.1.0"
 edition = "2021"
 
+license.workspace = true
+
 [lib]
 path = "src/lib.rs"
 
@@ -27,7 +29,6 @@ tree-sitter-rust = "0.24.0"
 tree-sitter-swift = "0.7.1"
 tree-sitter-typescript = "0.23.2"
 wiki-model = { path = "../wiki-model" }
-
 
 [dev-dependencies]
 tempfile = "3.20"

@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use wiki_model::domain::stable_id::stable_id;
 use crate::symbol_graph::{ProcessNode, ProcessStep, ResolvedGraphSnapshot};
 use crate::symbols::{ParsedSymbolsSnapshot, SymbolNode};
+use wiki_model::domain::stable_id::stable_id;
 
 /// 基于高置信度 `CALLS` 图检测执行流 processes。
 pub fn detect_processes(
@@ -200,4 +200,3 @@ fn matches_name_pattern(name: &str, patterns: &[&str]) -> bool {
     let lower = name.to_ascii_lowercase();
     patterns.iter().any(|pattern| lower.contains(pattern))
 }
-

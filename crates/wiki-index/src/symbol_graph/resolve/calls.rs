@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use wiki_model::domain::stable_id::stable_id;
 use crate::symbol_graph::{GraphDiagnostic, ResolvedGraphSnapshot, ResolvedSymbolEdge};
 use crate::symbols::{ParsedSymbolsSnapshot, RawCallCapture, SymbolNode};
+use wiki_model::domain::stable_id::stable_id;
 
 /// 基于 parsed calls 和已解析 import edges 构建稳定 `CALLS` edges。
 ///
@@ -262,4 +262,3 @@ fn is_builtin_or_noise(capture: &RawCallCapture) -> bool {
             })
             .unwrap_or(false)
 }
-

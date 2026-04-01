@@ -8,4 +8,3 @@ mod processes;
 pub use communities::detect_communities;
 pub use cycles::detect_cycles;
 pub use processes::detect_processes;
-

@@ -12,6 +12,8 @@
 - `init / update / sync / rebuild / status / query` 的状态如何流转
 - A 用户提交后，B 用户如何基于上库产物恢复本地 runtime
 
+宿主接入、bootstrap、全局 CLI 与多宿主扩展模型不在本文档展开，单独见 [DESIGN-AGENTS.md](./DESIGN-AGENTS.md)。
+
 ## 参考实现边界
 
 本文档允许在实现细节上借鉴本地参考仓库，但这些参考不直接构成当前 runtime 的真相来源。
@@ -139,6 +141,7 @@ wiki-runtime    <- 依赖 wiki-model + wiki-index + wiki-knowledge
 ### 宿主边界
 
 - `Agents` 只负责宿主接入、参数收集、binary 调用与结果消费
+- `Agents` 的公共 bootstrap 内核、资产模型与宿主扩展方式见 [DESIGN-AGENTS.md](./DESIGN-AGENTS.md)
 - `Agents` 不承载 Wiki 业务规则，不重写知识模型与 query 语义
 
 ### 当前阶段明确不拆
@@ -392,6 +395,78 @@ symbol first
 - 查规范、查约定、查避坑时优先命中 declared knowledge
 - 查项目理解和稳定阅读入口时再回到 page
 
+## 当前 query 边界与演进方向
+
+### `v0.1.0` 当前 query 边界
+
+当前收敛版发布里，外部 query 合同仍保持：
+
+```text
+term only
+-> runtime route
+-> index-first result
+-> page fallback only if needed
+```
+
+这意味着：
+
+- 当前外部正式输入仍是 `term`
+- runtime 当前优先把 query 路由到 facts/index substrate
+- page 仍然只是 fallback 或补充投影，不是 query 主体
+- process / community 当前虽然属于 Layer A facts，可作为后续 query 扩展依据，但不应被误写成 `v0.1.0` 已正式承诺的稳定命中层
+
+### GitNexus 对 query 的参考边界
+
+GitNexus 对当前系统的 query 演进有明确参考价值，但参考面主要集中在：
+
+- `wiki-index` 的厚索引底座
+- symbol / graph / process / community 的 facts-owned query substrate
+- impact analysis、context drilling 和 process trace 的查询消费组织
+- hybrid ranking、provenance 和结果分组策略
+
+不应把它直接当成：
+
+- `wiki-knowledge` 的知识组织模板
+- `.wiki/pages/**` 的页面语义模板
+- 当前 runtime query contract 的直接真相来源
+
+换句话说：
+
+- GitNexus 更适合作为 `query / impact / graph consumption` 侧参考
+- 它不直接定义当前系统的 `KnowledgeUnit` 主线
+- 它也不直接定义当前系统的 knowledge/page projection 结构
+
+### query 演进原则
+
+后续 query 若继续增强，优先级应是：
+
+1. 先补清晰的 query routing / result shaping 规则
+2. 再定义 process / community 的命中语义、排序规则、截断策略和 provenance
+3. 再把 richer graph projection 正式提升到 transport / DTO 合同
+4. 最后再考虑 semantic search 作为可选增强层，而不是当前主链前提
+
+具体约束：
+
+- 短期内外部可继续保持 `term-only` 合同稳定
+- 内部可以继续演进 intent routing、graph projection 和 result shaping
+- 当前内部已经存在 `callers / callees / impact slice` 一类 graph substrate；后续应明确哪些升级为正式输出，哪些仍保持内部能力
+- process grouping 不应压过 `symbol -> graph -> declared knowledge -> derived knowledge -> page` 这条查询主线
+- 一旦 query 同时返回 facts、knowledge、process 和 page，多层结果必须有统一 ranking 与 provenance，避免宿主消费失真
+
+### 已明确延期到后续设计的 query 能力
+
+这轮 `v0.1.0` 收口后，以下能力明确保留为后续设计，不作为当前 runtime 对外合同：
+
+- `intent-aware query` 外部输入
+  - 当前正式输入仍然只保留 `term`
+  - 后续若要参考 GitNexus 的 query substrate，把 intent 显式升级为外部 payload，必须先定义稳定的 `intent / focus / scope / traversal` 合同，而不是让宿主靠 description 猜
+- 稳定的 `owner / entrypoint / impact` 输出 schema
+  - 当前 index/graph 内部已经有一部分 substrate，但还没有形成稳定 transport 字段、排序规则与置信度解释
+  - 后续只有在字段定义、ranking、provenance 和截断策略稳定后，才适合提升为正式 query contract
+- 更完整的 query 质量信号模型
+  - 当前外部只正式暴露 `runtime_state / query_mode / query_trust / recommended_action`
+  - 后续若要补 richer quality signal，应统一回答“结果是否完整、是否来自 fallback、是否需要 rebuild、覆盖面有多大”，避免宿主继续自己拼状态机
+
 ## Workflow 生命周期
 
 ### `init`
@@ -539,3 +614,6 @@ bug 修复后默认先沉淀为 pitfall record。
 3.0 的运行时不是“把 Markdown 写进 .wiki”这么简单，
 而是让 facts、derived knowledge、declared knowledge、page projection 和 local cache 各归其位，并能被人和 Agent 共同消费。
 ```
+
+
+

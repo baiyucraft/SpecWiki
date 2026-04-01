@@ -32,4 +32,3 @@ impl LanguageProcessor for VueProcessor {
             .collect()
     }
 }
-

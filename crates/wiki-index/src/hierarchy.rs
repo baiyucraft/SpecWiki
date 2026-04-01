@@ -1,15 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::topic_seed::TopicSeed;
-use wiki_model::domain::module_tree::{ModuleNode, ModuleTree, RelationEdge};
-use wiki_model::domain::stable_id::stable_id;
 use crate::assist::{
     DependencyAssistInput, FactsAssist, ModuleKindAssistInput, TopLevelPromotionAssistInput,
 };
 use crate::detectors::detect_tech_hints;
 use crate::scanner::{DependencyHint, ScanReport, ScannedFile};
 use crate::symbol_graph::GraphSummary;
+use crate::topic_seed::TopicSeed;
+use wiki_model::domain::module_tree::{ModuleNode, ModuleTree, RelationEdge};
+use wiki_model::domain::stable_id::stable_id;
 
 /// 模块根路径发现结果会被后续建树和页面规划共用。
 /// 这里把"显式根路径"和"为递归层级补出的祖先根路径"分开保存，避免后续再重复推断。
@@ -104,7 +104,8 @@ pub fn build_module_tree_with_graph_and_assist(
                     None,
                 ));
             }
-            let cross_module_edges = build_cross_module_edges(report, &modules, graph_summary, None);
+            let cross_module_edges =
+                build_cross_module_edges(report, &modules, graph_summary, None);
             (modules, cross_module_edges)
         }
     };
@@ -352,7 +353,7 @@ fn child_ids_for_parent(
 }
 
 /// 固定目录约定主要服务 monorepo 结构。
-/// 它能快速识别 `crates/wiki-runtime`、`agents/codebuddy` 这类明确成员。
+/// 它能快速识别 `crates/wiki-runtime`、`agents/spec-wiki` 这类明确成员。
 fn top_level_boundary(path: &str) -> Option<String> {
     let mut segments = path.split('/').collect::<Vec<_>>();
     if segments.len() < 2 {
@@ -1251,10 +1252,3 @@ fn select_display_paths(paths: &[String], limit: usize) -> Vec<String> {
 
     primary.into_iter().chain(secondary).take(limit).collect()
 }
-
-
-
-
-
-
-

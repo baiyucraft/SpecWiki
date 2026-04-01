@@ -35,4 +35,3 @@ impl LanguageProcessor for CSharpProcessor {
         collect_regex_targets(content, &self.namespace_regex)
     }
 }
-

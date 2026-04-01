@@ -9,8 +9,8 @@ use std::thread;
 use regex::Regex;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
-use wiki_model::domain::stable_id::stable_id;
 use crate::scanner::{ScanReport, ScannedFile};
+use wiki_model::domain::stable_id::stable_id;
 
 use super::models::{
     ParsedFileSymbols, ParsedSymbolsSnapshot, RawCallCapture, RawHeritageCapture, RawImportCapture,
@@ -886,5 +886,3 @@ impl DiagnosticWithFile for SymbolParseDiagnostic {
         self
     }
 }
-
-
