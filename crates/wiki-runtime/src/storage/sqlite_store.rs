@@ -18,12 +18,13 @@ use crate::domain::metadata::DirtyState;
 use crate::domain::module_tree::{ModuleNode, ModuleTree};
 use crate::domain::relation::WikiRelation;
 use crate::domain::state::{BuildState, SourceState, WikiPageState, WikiSectionState, WikiState};
+use crate::storage::cache_store::{cache_dir, ensure_cache_dir};
+use wiki_index::store::{ModuleRecord, ModuleSourceLink};
 use wiki_index::symbol_graph::{
     CommunityMember, CommunityNode, GraphAnalysisSnapshot, ProcessNode, ProcessStep,
     ResolvedGraphSnapshot, ResolvedSymbolEdge,
 };
 use wiki_index::symbols::SymbolNode;
-use crate::storage::cache_store::{cache_dir, ensure_cache_dir};
 
 /// DB 文件名。
 const DB_FILENAME: &str = "wiki-cache.db";
@@ -53,6 +54,10 @@ pub struct FtsSymbolHit {
     pub label: String,
     /// 命中符号所在文件。
     pub file_path: String,
+    /// 命中符号起始行。
+    pub start_line: usize,
+    /// 命中符号结束行。
+    pub end_line: usize,
     /// 命中符号语言。
     pub language: String,
     /// BM25 分数。
@@ -879,11 +884,9 @@ pub fn replace_symbol_graph_for_files(
     resolved_graph: &ResolvedGraphSnapshot,
 ) -> io::Result<()> {
     let mut conn = open_db(repo_root)?;
-    let tx = conn.transaction().map_err(|e| {
-        io::Error::other(format!(
-            "begin replace_symbol_graph_for_files tx: {e}"
-        ))
-    })?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| io::Error::other(format!("begin replace_symbol_graph_for_files tx: {e}")))?;
     let stale_symbol_ids = select_symbol_ids_for_files_tx(&tx, file_paths)?;
     clear_graph_analysis_rows_tx(&tx)?;
     delete_edge_rows_for_symbol_ids_tx(&tx, &stale_symbol_ids)?;
@@ -893,11 +896,8 @@ pub fn replace_symbol_graph_for_files(
     graph_snapshot.edges = edges.to_vec();
     insert_edge_rows_tx(&tx, &graph_snapshot)?;
     insert_graph_analysis_rows_tx(&tx, analysis)?;
-    tx.commit().map_err(|e| {
-        io::Error::other(format!(
-            "commit replace_symbol_graph_for_files tx: {e}"
-        ))
-    })
+    tx.commit()
+        .map_err(|e| io::Error::other(format!("commit replace_symbol_graph_for_files tx: {e}")))
 }
 
 fn delete_symbol_rows_for_files_tx(tx: &Transaction<'_>, file_paths: &[String]) -> io::Result<()> {
@@ -1079,10 +1079,7 @@ pub fn replace_state_and_symbol_graph_for_files(
 /// 把 `ModuleTree` 投影成模块与源码的关联索引。
 fn module_membership_from_tree(
     module_tree: &ModuleTree,
-) -> (
-    Vec<ModuleNode>,
-    BTreeMap<String, Vec<String>>,
-) {
+) -> (Vec<ModuleNode>, BTreeMap<String, Vec<String>>) {
     let mut source_to_module_ids = BTreeMap::<String, Vec<String>>::new();
     for module in &module_tree.modules {
         for source_id in &module.source_ids {
@@ -1322,6 +1319,90 @@ pub fn replace_module_tree_snapshot(conn: &Connection, module_tree: &ModuleTree)
     replace_module_rows_tx(&tx, &module_tree.modules)?;
     tx.commit()
         .map_err(|e| io::Error::other(format!("commit replace_module_tree_snapshot tx: {e}")))
+}
+
+/// 列出当前 DB 内的模块快照视图。
+pub fn list_modules_snapshot(repo_root: &Path) -> io::Result<Vec<ModuleRecord>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    list_modules_snapshot_in_conn(&conn)
+}
+
+fn list_modules_snapshot_in_conn(conn: &Connection) -> io::Result<Vec<ModuleRecord>> {
+    if !table_exists(conn, "modules")? {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT module_id, name, kind, root_paths, parent_id, child_ids, entry_points, tags
+             FROM modules
+             ORDER BY sort_order, module_id",
+        )
+        .map_err(|e| io::Error::other(format!("prepare list modules snapshot: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ModuleRecord {
+                module_id: row.get(0)?,
+                name: row.get(1)?,
+                kind: row.get(2)?,
+                root_paths: parse_string_list(&row.get::<_, String>(3)?)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                parent_id: row.get(4)?,
+                child_ids: parse_string_list(&row.get::<_, String>(5)?)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                entry_points: parse_string_list(&row.get::<_, String>(6)?)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                tags: parse_string_list(&row.get::<_, String>(7)?)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query list modules snapshot: {e}")))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect list modules snapshot: {e}")))
+}
+
+/// 列出当前 DB 内的 `module_source_map` 关联记录。
+pub fn list_module_source_links(repo_root: &Path) -> io::Result<Vec<ModuleSourceLink>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    if !table_exists(&conn, "module_source_map")? {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT module_id, source_id
+             FROM module_source_map
+             ORDER BY module_id, source_id",
+        )
+        .map_err(|e| io::Error::other(format!("prepare list module_source links: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ModuleSourceLink {
+                module_id: row.get(0)?,
+                source_id: row.get(1)?,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query list module_source links: {e}")))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect list module_source links: {e}")))
 }
 
 /// 页面是否已经持久化了 section 行。
@@ -2083,7 +2164,7 @@ fn search_symbols_fts_in_conn(
     };
 
     let mut stmt = match conn.prepare(
-        "SELECT s.id, s.name, s.label, s.file_path, COALESCE(s.language, ''), bm25(symbols_fts) AS score
+        "SELECT s.id, s.name, s.label, s.file_path, COALESCE(s.start_line, 0), COALESCE(s.end_line, 0), COALESCE(s.language, ''), bm25(symbols_fts) AS score
          FROM symbols_fts
          JOIN symbols s ON s.id = symbols_fts.symbol_id
          WHERE symbols_fts MATCH ?1
@@ -2100,8 +2181,10 @@ fn search_symbols_fts_in_conn(
             name: row.get(1)?,
             label: row.get(2)?,
             file_path: row.get(3)?,
-            language: row.get(4)?,
-            score: row.get(5)?,
+            start_line: row.get::<_, i64>(4)? as usize,
+            end_line: row.get::<_, i64>(5)? as usize,
+            language: row.get(6)?,
+            score: row.get(7)?,
         })
     }) {
         Ok(rows) => rows,
@@ -2567,6 +2650,22 @@ pub fn write_knowledge_units(
     Ok(())
 }
 
+pub fn replace_knowledge_snapshot(
+    conn: &Connection,
+    domains: &[crate::domain::knowledge::KnowledgeDomain],
+    units: &[crate::domain::knowledge::KnowledgeUnit],
+) -> io::Result<()> {
+    clear_unit_runtime_gates(conn)?;
+    clear_page_digests(conn)?;
+    clear_page_drafts(conn)?;
+    conn.execute("DELETE FROM knowledge_units", [])
+        .map_err(|e| io::Error::other(format!("clear knowledge_units: {e}")))?;
+    conn.execute("DELETE FROM knowledge_domains", [])
+        .map_err(|e| io::Error::other(format!("clear knowledge_domains: {e}")))?;
+    write_knowledge_domains(conn, domains)?;
+    write_knowledge_units(conn, units)
+}
+
 // ── research_cache CRUD ─────────────────────────────────────────────
 
 pub fn write_research_cache(
@@ -2665,6 +2764,15 @@ pub fn clear_page_digests(conn: &Connection) -> io::Result<()> {
     Ok(())
 }
 
+pub fn remove_page_digest(conn: &Connection, unit_id: &str) -> io::Result<()> {
+    if !table_exists(conn, "page_digests")? {
+        return Ok(());
+    }
+    conn.execute("DELETE FROM page_digests WHERE unit_id = ?1", params![unit_id])
+        .map_err(|e| io::Error::other(format!("remove_page_digest({unit_id}): {e}")))?;
+    Ok(())
+}
+
 // ── page_drafts CRUD ────────────────────────────────────────────────
 
 pub fn write_page_draft(
@@ -2700,6 +2808,15 @@ pub fn clear_page_drafts(conn: &Connection) -> io::Result<()> {
     }
     conn.execute("DELETE FROM page_drafts", [])
         .map_err(|e| io::Error::other(format!("clear_page_drafts: {e}")))?;
+    Ok(())
+}
+
+pub fn remove_page_draft(conn: &Connection, unit_id: &str) -> io::Result<()> {
+    if !table_exists(conn, "page_drafts")? {
+        return Ok(());
+    }
+    conn.execute("DELETE FROM page_drafts WHERE unit_id = ?1", params![unit_id])
+        .map_err(|e| io::Error::other(format!("remove_page_draft({unit_id}): {e}")))?;
     Ok(())
 }
 
@@ -2833,6 +2950,3 @@ pub fn clear_pipeline_checkpoint(conn: &Connection) -> io::Result<()> {
         .map_err(|e| io::Error::other(format!("clear_pipeline_checkpoint: {e}")))?;
     Ok(())
 }
-
-
-

@@ -5,8 +5,8 @@ use std::fs;
 
 use tempfile::TempDir;
 
-use wiki_runtime::domain::steering::load_steering_config;
 use wiki_index::scanner::{scan_repo, scan_repo_with_boundary};
+use wiki_runtime::domain::steering::load_steering_config;
 
 fn make_repo_with_steering(yaml: &str) -> TempDir {
     let dir = TempDir::new().unwrap();
@@ -31,7 +31,7 @@ fn make_repo_with_steering(yaml: &str) -> TempDir {
     fs::write(dir.path().join("scripts/deploy.sh"), "#!/bin/bash\n").unwrap();
 
     fs::create_dir_all(dir.path().join(".wiki")).unwrap();
-    fs::write(dir.path().join(".wiki/wiki.steering.yaml"), yaml).unwrap();
+    fs::write(dir.path().join(".wiki/config.yaml"), yaml).unwrap();
 
     dir
 }

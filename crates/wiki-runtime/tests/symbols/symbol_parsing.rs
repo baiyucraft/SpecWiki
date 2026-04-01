@@ -446,6 +446,3 @@ fn parse_symbols_keeps_single_file_failures_isolated() {
         "good file should still parse"
     );
 }
-
-
-

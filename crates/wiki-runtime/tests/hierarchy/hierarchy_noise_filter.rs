@@ -86,6 +86,3 @@ fn test_files_do_not_dominate_module_promotion() {
         );
     }
 }
-
-
-

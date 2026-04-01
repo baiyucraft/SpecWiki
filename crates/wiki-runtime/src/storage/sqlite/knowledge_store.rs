@@ -36,7 +36,14 @@ impl KnowledgeSnapshotStore for SqliteKnowledgeStore<'_> {
         input_hash: &str,
         result: &str,
     ) -> io::Result<()> {
-        sqlite_store::write_research_cache(self.conn, research_type, target_id, input_hash, result, None)
+        sqlite_store::write_research_cache(
+            self.conn,
+            research_type,
+            target_id,
+            input_hash,
+            result,
+            None,
+        )
     }
 
     fn read_research_cache(
@@ -88,4 +95,3 @@ impl KnowledgeArtifactStore for SqliteKnowledgeStore<'_> {
         sqlite_store::clear_page_drafts(self.conn)
     }
 }
-

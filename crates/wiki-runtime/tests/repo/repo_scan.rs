@@ -2,8 +2,8 @@ use std::io;
 use std::path::PathBuf;
 
 use tempfile::tempdir;
-use wiki_runtime::llm::{LlmCompletion, LlmPromptRequest, LlmRuntime, LlmService};
 use wiki_index::scanner::{scan_repo, scan_repo_with_boundary_and_assist, FilePurpose};
+use wiki_runtime::llm::{LlmCompletion, LlmPromptRequest, LlmRuntime, LlmService};
 
 fn mock_completion(output: serde_json::Value, model: &str) -> LlmCompletion {
     LlmCompletion {
@@ -420,7 +420,8 @@ fn llm_file_purpose_override_does_not_change_structural_sets() {
     };
     let mut service = StructuralOverrideService;
     let mut runtime = LlmRuntime::new(root, &config, Some(&mut service));
-    let llm_report = scan_repo_with_boundary_and_assist(root, &[], &[], Some(&mut runtime)).unwrap();
+    let llm_report =
+        scan_repo_with_boundary_and_assist(root, &[], &[], Some(&mut runtime)).unwrap();
     drop(runtime);
 
     let by_path = llm_report
@@ -611,6 +612,3 @@ fn scan_repo_skips_story_files_but_keeps_internal_bootstrap_reviewable() {
         Some(&FilePurpose::Utility)
     );
 }
-
-
-

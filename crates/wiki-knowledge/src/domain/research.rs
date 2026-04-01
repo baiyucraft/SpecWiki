@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use wiki_model::domain::knowledge::DecompositionProfile;
+use wiki_model::domain::knowledge::{DecompositionProfile, KnowledgeUnit};
+use wiki_model::domain::knowledge_artifact::KnowledgeResearchSummary;
 
 // ─── ResearchProfile ───────────────────────────────────────
 
@@ -364,6 +365,23 @@ impl UnitResearch {
             diagram_suggestions: self.diagram_suggestions.clone(),
         }
     }
+
+    /// 把 unit research 收敛成 `.wiki/.knowledge/**` 可共享的最小摘要。
+    pub fn to_artifact_summary(&self, unit: &KnowledgeUnit) -> KnowledgeResearchSummary {
+        KnowledgeResearchSummary {
+            unit_id: unit.id.clone(),
+            unit_type: unit.unit_type.as_str().to_string(),
+            title: unit.title.clone(),
+            summary: self.summary.clone(),
+            positioning: self.positioning.clone(),
+            input_hash: self.input_hash.clone(),
+            key_sources: self.key_sources.clone(),
+            provider_stop_reason: self
+                .provider_stop_reason
+                .as_ref()
+                .map(|reason| reason.as_str().to_string()),
+        }
+    }
 }
 
 // ─── PlannedSection ─────────────────────────────────────────
@@ -487,7 +505,3 @@ pub struct PageDigest {
     #[serde(default)]
     pub readiness_stage: String,
 }
-
-
-
-

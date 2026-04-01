@@ -152,6 +152,3 @@ impl<'a> WorkflowReporter<'a> {
         });
     }
 }
-
-
-

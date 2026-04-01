@@ -2,7 +2,6 @@ use std::fs;
 use std::path::Path;
 
 use tempfile::tempdir;
-use wiki_runtime::generation::context::build_repo_context_with_graph;
 use wiki_index::hierarchy::build_module_tree_with_graph;
 use wiki_index::scanner::scan_repo;
 use wiki_index::symbol_graph::{
@@ -10,6 +9,7 @@ use wiki_index::symbol_graph::{
     ResolvedSymbolEdge,
 };
 use wiki_index::symbols::{parse_symbols, ParsedSymbolsSnapshot, SymbolNode, SymbolTable};
+use wiki_runtime::generation::context::build_repo_context_with_graph;
 use wiki_runtime::storage::sqlite_store;
 use wiki_runtime::workflows::init::run_init;
 
@@ -274,6 +274,3 @@ fn weighted_call(source_id: &str, target_id: &str, confidence: f64) -> ResolvedS
         reason: "test-call".to_string(),
     }
 }
-
-
-

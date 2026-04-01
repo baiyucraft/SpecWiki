@@ -8,15 +8,12 @@ use std::path::Path;
 
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
 use crate::domain::state::WikiSectionState;
-use crate::domain::steering::load_steering_config;
+use crate::domain::steering::{load_steering_config_with_mode, SteeringLoadMode};
 use crate::generation::managed_sections::{
     content_hash, parse_wiki_page, PageBlock, ParsedWikiPage,
 };
 use crate::generation::sections::section_titles_for_page_type;
-use wiki_index::fingerprint::fingerprint_bytes;
 use crate::repo::git::{current_branch, current_commit};
-use wiki_index::hierarchy::build_module_tree;
-use wiki_index::scanner::scan_repo_with_boundary;
 use crate::storage::cache_store::{
     read_page_generation_cache, write_module_tree_cache, write_scan_cache,
 };
@@ -24,6 +21,9 @@ use crate::storage::metadata_store::write_metadata;
 use crate::storage::state_store::{load_or_rebuild_state, write_state};
 use crate::storage::wiki_fs::resolve_page_path;
 use crate::workflows::init::current_timestamp;
+use wiki_index::fingerprint::fingerprint_bytes;
+use wiki_index::hierarchy::build_module_tree;
+use wiki_index::scanner::scan_repo_with_boundary;
 
 /// `sync` 的输出报告。
 #[derive(Debug, Clone, Serialize)]
@@ -45,6 +45,13 @@ pub struct SyncReport {
 /// # 返回
 /// - 成功时返回同步报告，包含变化页面和警告。
 pub fn run_sync(repo_root: &Path) -> io::Result<SyncReport> {
+    run_sync_with_mode(repo_root, SteeringLoadMode::Production)
+}
+
+pub fn run_sync_with_mode(
+    repo_root: &Path,
+    steering_mode: SteeringLoadMode,
+) -> io::Result<SyncReport> {
     let mut wiki_state = load_or_rebuild_state(repo_root)?;
     let mut synced_pages = Vec::new();
     let mut all_warnings = Vec::new();
@@ -130,7 +137,7 @@ pub fn run_sync(repo_root: &Path) -> io::Result<SyncReport> {
     write_metadata(repo_root, &metadata)?;
 
     // 刷新扫描和模块树缓存
-    let steering = load_steering_config(repo_root);
+    let steering = load_steering_config_with_mode(repo_root, steering_mode);
     let (ignore_paths, include_paths) = steering.scan_boundary();
     let scan_report = scan_repo_with_boundary(repo_root, ignore_paths, include_paths)?;
     let module_tree = build_module_tree(&scan_report);
@@ -214,6 +221,3 @@ fn extract_summary_from_parsed(parsed: &ParsedWikiPage) -> String {
     }
     String::new()
 }
-
-
-

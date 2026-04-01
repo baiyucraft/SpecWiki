@@ -6,14 +6,14 @@ use std::path::Path;
 
 use rusqlite::Connection;
 use tempfile::TempDir;
-use wiki_runtime::domain::metadata::DirtyState;
-use wiki_runtime::domain::module_tree::ModuleTree;
-use wiki_runtime::domain::state::{BuildState, WikiState};
 use wiki_index::symbol_graph::{
     CommunityMember, CommunityNode, GraphAnalysisSnapshot, ProcessNode, ProcessStep,
     ResolvedGraphSnapshot, ResolvedSymbolEdge,
 };
 use wiki_index::symbols::SymbolNode;
+use wiki_runtime::domain::metadata::DirtyState;
+use wiki_runtime::domain::module_tree::ModuleTree;
+use wiki_runtime::domain::state::{BuildState, WikiState};
 use wiki_runtime::storage::cache_store::has_cache_layout;
 use wiki_runtime::storage::sqlite_store;
 use wiki_runtime::storage::state_store::{load_or_rebuild_state, read_state};
@@ -626,6 +626,3 @@ fn load_state_falls_back_to_metadata_on_corrupt_db() {
     let result = load_or_rebuild_state(repo.path());
     assert!(result.is_err());
 }
-
-
-

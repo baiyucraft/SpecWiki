@@ -145,6 +145,3 @@ where
 fn is_retryable_fs_remove_error(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(5 | 32))
 }
-
-
-

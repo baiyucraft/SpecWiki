@@ -190,6 +190,3 @@ fn sync_detects_managed_drift() {
         sync_result.warnings
     );
 }
-
-
-

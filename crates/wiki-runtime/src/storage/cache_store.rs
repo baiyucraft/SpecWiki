@@ -12,10 +12,10 @@ use crate::domain::context::PageContext;
 use crate::domain::module_tree::ModuleTree;
 use crate::domain::state::WikiState;
 use crate::generation::sections::SectionDraft;
-use wiki_index::scanner::ScanReport;
-use wiki_index::store::IndexSnapshotStore;
 use crate::storage::sqlite::index_store::SqliteIndexStore;
 use crate::storage::sqlite_store;
+use wiki_index::scanner::ScanReport;
+use wiki_index::store::IndexSnapshotStore;
 
 /// 确保 `.wiki/.cache/` 存在。
 pub fn ensure_cache_dir(repo_root: &Path) -> io::Result<()> {
@@ -58,9 +58,9 @@ pub fn write_scan_cache(repo_root: &Path, report: &ScanReport) -> io::Result<()>
 /// 从 SQLite scan_cache 读取扫描缓存。
 pub fn read_scan_cache(repo_root: &Path) -> io::Result<ScanReport> {
     let store = SqliteIndexStore::new(repo_root);
-    store.read_scan_report()?.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "repo-scan not found in DB")
-    })
+    store
+        .read_scan_report()?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "repo-scan not found in DB"))
 }
 
 /// 写入模块树缓存到 SQLite scan_cache。
@@ -72,9 +72,9 @@ pub fn write_module_tree_cache(repo_root: &Path, module_tree: &ModuleTree) -> io
 /// 从 SQLite scan_cache 读取模块树缓存。
 pub fn read_module_tree_cache(repo_root: &Path) -> io::Result<ModuleTree> {
     let store = SqliteIndexStore::new(repo_root);
-    store.read_module_tree()?.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "module-tree not found in DB")
-    })
+    store
+        .read_module_tree()?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "module-tree not found in DB"))
 }
 
 /// 确保 DB 已初始化（替代原来的 ensure_page_cache_dirs）。
@@ -276,6 +276,3 @@ pub fn missing_incremental_cache_components(repo_root: &Path, state: &WikiState)
 
     missing
 }
-
-
-

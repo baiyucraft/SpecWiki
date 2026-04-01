@@ -9,13 +9,24 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
-use wiki_runtime::domain::context::{PageEvidenceGroup, PageEvidenceItem};
+use wiki_index::hierarchy::build_module_tree;
+use wiki_index::scanner::scan_repo;
+use wiki_index::symbol_graph::{
+    analyze_symbol_graph, build_graph_summary, resolve_symbol_graph, GraphAnalysisSnapshot,
+    ResolvedGraphSnapshot,
+};
+use wiki_index::symbols::ParsedSymbolsSnapshot;
 use wiki_knowledge::domain::research::ResearchStopReason;
+use wiki_knowledge::plan_pages_from_knowledge_tree;
+use wiki_knowledge::planning::{
+    build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
+};
+use wiki_runtime::domain::context::{PageEvidenceGroup, PageEvidenceItem};
 use wiki_runtime::domain::stable_id::stable_id;
-use wiki_runtime::domain::steering::SteeringConfig;
 use wiki_runtime::domain::steering::{
     persist_learned_tools_mode, resolve_learned_tools_mode, LlmCacheMode, LlmConfig,
     LlmProviderConfig, LlmProviderModelConfig, LlmProviderRequestFormat, LlmToolsMode,
+    SteeringConfig, SteeringLoadMode,
 };
 use wiki_runtime::generation::context::{
     build_module_contexts, build_page_context, build_repo_context,
@@ -24,22 +35,11 @@ use wiki_runtime::llm::{
     FilePurposeAssistInput, LlmCompletion, LlmPromptRequest, LlmRuntime, LlmService,
     PageResearchInput, PageResearchRuntimeContext, PageResearchSectionSlot,
 };
-use wiki_index::hierarchy::build_module_tree;
-use wiki_index::scanner::scan_repo;
-use wiki_index::symbol_graph::{
-    analyze_symbol_graph, build_graph_summary, resolve_symbol_graph, GraphAnalysisSnapshot,
-    ResolvedGraphSnapshot,
-};
-use wiki_knowledge::planning::{
-    build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
-};
-use wiki_knowledge::plan_pages_from_knowledge_tree;
-use wiki_index::symbols::ParsedSymbolsSnapshot;
 use wiki_runtime::storage::sqlite_store::{
     load_all_llm_cache, read_llm_cache, write_llm_cache, LlmCacheEntry,
 };
 use wiki_runtime::storage::wiki_fs::remove_runtime_with_cache_mode;
-use wiki_runtime::workflows::init::run_init_with_progress_and_llm_as;
+use wiki_runtime::workflows::init::run_init_with_progress_and_llm_as_with_mode;
 use wiki_runtime::workflows::progress::NoopProgressSink;
 
 static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -101,18 +101,26 @@ fn plan_pages(
     plan_pages_from_knowledge_tree(&knowledge_tree)
 }
 
-fn first_module_page<'a>(pages: &'a [wiki_knowledge::PlannedPage]) -> &'a wiki_knowledge::PlannedPage {
+fn first_module_page<'a>(
+    pages: &'a [wiki_knowledge::PlannedPage],
+) -> &'a wiki_knowledge::PlannedPage {
     pages
         .iter()
         .find(|page| page.page_type == "module")
         .expect("module page should exist")
 }
 
-fn storybook_addons_page<'a>(pages: &'a [wiki_knowledge::PlannedPage]) -> &'a wiki_knowledge::PlannedPage {
+fn storybook_addons_page<'a>(
+    pages: &'a [wiki_knowledge::PlannedPage],
+) -> &'a wiki_knowledge::PlannedPage {
     pages
         .iter()
         .find(|page| page.relative_path == "插件生态/addons.md")
-        .or_else(|| pages.iter().find(|page| page.relative_path.contains("addons")))
+        .or_else(|| {
+            pages
+                .iter()
+                .find(|page| page.relative_path.contains("addons"))
+        })
         .or_else(|| pages.iter().find(|page| page.page_type == "module"))
         .expect("storybook addons page should exist")
 }
@@ -637,10 +645,7 @@ fn llm_runtime_batches_file_purpose_requests() {
         results[0],
         Some(wiki_index::scanner::FilePurpose::Middleware)
     );
-    assert_eq!(
-        results[1],
-        Some(wiki_index::scanner::FilePurpose::Helper)
-    );
+    assert_eq!(results[1], Some(wiki_index::scanner::FilePurpose::Helper));
     assert_eq!(
         results[2],
         Some(wiki_index::scanner::FilePurpose::Middleware)
@@ -670,10 +675,7 @@ fn llm_runtime_stops_file_purpose_batches_when_budget_is_exhausted() {
 
     drop(runtime);
     assert_eq!(service.calls, 1);
-    assert_eq!(
-        results[0],
-        Some(wiki_index::scanner::FilePurpose::Helper)
-    );
+    assert_eq!(results[0], Some(wiki_index::scanner::FilePurpose::Helper));
     assert!(results.iter().skip(16).all(Option::is_none));
 }
 
@@ -2162,6 +2164,7 @@ fn core_page_research_budget_is_reserved_before_non_core_pages() {
 
 #[test]
 fn init_uses_wiki_dev_yaml_provider_without_agent_bridge() {
+    let _home_lock = HOME_ENV_LOCK.lock().unwrap();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
     let server = FakeProviderServer::start(
@@ -2176,7 +2179,7 @@ fn init_uses_wiki_dev_yaml_provider_without_agent_bridge() {
     );
     write_repo_file(
         repo_root,
-        ".wiki/wiki.steering.yaml",
+        ".wiki/config.yaml",
         concat!(
             "llm:\n",
             "  enabled: false\n",
@@ -2207,7 +2210,14 @@ fn init_uses_wiki_dev_yaml_provider_without_agent_bridge() {
     );
 
     let mut sink = NoopProgressSink;
-    let report = run_init_with_progress_and_llm_as("init", repo_root, &mut sink, None).unwrap();
+    let report = run_init_with_progress_and_llm_as_with_mode(
+        "init",
+        repo_root,
+        &mut sink,
+        None,
+        SteeringLoadMode::Development,
+    )
+    .unwrap();
 
     assert!(
         !report.generated_pages.is_empty(),
@@ -2445,6 +2455,3 @@ fn force_no_tools_request_does_not_override_learned_tools_mode() {
         .iter()
         .all(|request| !request.contains("\"tools\"")));
 }
-
-
-

@@ -1,14 +1,17 @@
 //! 这组测试覆盖 status 与 update 的状态流转和增量更新边界。
 //! 它们重点保护 stale 检测、局部更新、结构变化与 rebuild 回退行为。
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
 use super::test_support::{EnvVarGuard, force_full_runtime, force_index_only_runtime};
 use tempfile::tempdir;
+use wiki_runtime::domain::change_set::plan_runtime_changes;
 use wiki_runtime::domain::steering::SteeringLoadMode;
 use wiki_runtime::llm::{LlmCompletion, LlmPromptRequest, LlmService};
-use wiki_runtime::storage::metadata_store::metadata_exists;
+use wiki_runtime::storage::knowledge_artifacts::load_knowledge_artifacts;
+use wiki_runtime::storage::metadata_store::{metadata_exists, read_metadata};
 use wiki_runtime::storage::sqlite_store;
 use wiki_runtime::storage::state_store::read_state;
 use wiki_runtime::workflows::progress::NoopProgressSink;
@@ -208,6 +211,197 @@ fn update_restores_page_cache_from_formal_artifacts() {
     assert_eq!(status.state, "fresh");
 }
 
+/// 场景：local_refresh 不能让未命中 unit 的 formal records 漂移。
+#[test]
+fn local_refresh_keeps_unaffected_formal_records_stable() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    create_storybook_like_repo(repo_root);
+    run_init(repo_root).unwrap();
+
+    let before = load_knowledge_artifacts(repo_root).unwrap();
+    let before_summaries = before
+        .research_summaries
+        .iter()
+        .map(|summary| (summary.unit_id.clone(), summary.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let before_digests = before
+        .page_digests
+        .iter()
+        .map(|digest| (digest.unit_id.clone(), digest.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+    write_file(
+        repo_root.join("code/addons/a11y/src/types.ts").as_path(),
+        "export type A11yOptions = { enabled: boolean; threshold: number };\n",
+    );
+
+    let status = run_status(repo_root).unwrap();
+    assert_eq!(
+        status.affected_knowledge_scope.escalation.level.as_str(),
+        "local_refresh"
+    );
+
+    let active_unit_ids = status
+        .affected_knowledge_scope
+        .active_unit_ids()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let untouched_unit_id = before
+        .units
+        .iter()
+        .map(|unit| unit.id.clone())
+        .find(|unit_id| {
+            !active_unit_ids.contains(unit_id)
+                && before_summaries.contains_key(unit_id)
+                && before_digests.contains_key(unit_id)
+        })
+        .expect("should keep at least one untouched unit outside local_refresh scope");
+    let before_summary = before_summaries
+        .get(&untouched_unit_id)
+        .expect("untouched unit summary should exist")
+        .clone();
+    let before_digest = before_digests
+        .get(&untouched_unit_id)
+        .expect("untouched unit digest should exist")
+        .clone();
+
+    let update = run_update(repo_root).unwrap();
+    assert_eq!(update.state, "fresh");
+
+    let after = load_knowledge_artifacts(repo_root).unwrap();
+    let after_summary = after
+        .research_summaries
+        .iter()
+        .find(|summary| summary.unit_id == untouched_unit_id)
+        .expect("untouched unit summary should survive update");
+    let after_digest = after
+        .page_digests
+        .iter()
+        .find(|digest| digest.unit_id == untouched_unit_id)
+        .expect("untouched unit digest should survive update");
+
+    assert_eq!(
+        *after_summary, before_summary,
+        "local_refresh must keep unaffected research summaries stable"
+    );
+    assert_eq!(
+        *after_digest, before_digest,
+        "local_refresh must keep unaffected page digests stable"
+    );
+}
+
+/// 场景：结构删除后，update 必须同时回收 formal records、metadata、页面文件和 page caches。
+#[test]
+fn update_reclaims_removed_units_pages_and_caches_after_structural_delete() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    create_storybook_like_repo(repo_root);
+    run_init(repo_root).unwrap();
+
+    write_file(
+        repo_root.join("code/addons/measure/package.json").as_path(),
+        r#"{"name":"@storybook/addon-measure","version":"1.0.0"}"#,
+    );
+    write_file(
+        repo_root.join("code/addons/measure/src/index.ts").as_path(),
+        "export const addonMeasure = () => true;\n",
+    );
+    run_update(repo_root).unwrap();
+
+    let state_before_remove = read_state(repo_root).unwrap();
+    fs::remove_dir_all(repo_root.join("code/addons/measure")).unwrap();
+
+    let plan = plan_runtime_changes(repo_root).unwrap();
+    assert!(
+        !plan.affected_knowledge_scope.removed_unit_ids.is_empty(),
+        "structural delete should surface removed units"
+    );
+    assert!(
+        !plan.affected_set.removed_page_ids.is_empty(),
+        "structural delete should surface removed pages"
+    );
+
+    let removed_page_ids = plan
+        .affected_set
+        .removed_page_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let removed_page_paths = state_before_remove
+        .pages
+        .iter()
+        .filter(|page| removed_page_ids.contains(&page.page_id))
+        .map(|page| (page.page_id.clone(), page.path.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+    let update = run_update(repo_root).unwrap();
+    assert_eq!(update.state, "fresh");
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    let metadata = read_metadata(repo_root).unwrap();
+    let updated_state = read_state(repo_root).unwrap();
+    let conn = sqlite_store::open_db_readonly(repo_root).unwrap();
+
+    for unit_id in &plan.affected_knowledge_scope.removed_unit_ids {
+        assert!(
+            artifacts.units.iter().all(|unit| unit.id != *unit_id),
+            "removed unit should disappear from knowledge units"
+        );
+        assert!(
+            artifacts
+                .research_summaries
+                .iter()
+                .all(|summary| summary.unit_id != *unit_id),
+            "removed unit should disappear from research summaries"
+        );
+        assert!(
+            artifacts
+                .page_digests
+                .iter()
+                .all(|digest| digest.unit_id != *unit_id),
+            "removed unit should disappear from page digests"
+        );
+        assert!(
+            artifacts
+                .runtime_gates
+                .iter()
+                .all(|gate| gate.unit_id != *unit_id),
+            "removed unit should disappear from runtime gates"
+        );
+    }
+
+    for page_id in removed_page_ids {
+        assert!(
+            updated_state.pages.iter().all(|page| page.page_id != page_id),
+            "removed page should disappear from runtime state"
+        );
+        assert!(
+            metadata.wiki_items.iter().all(|item| item.id != page_id),
+            "removed page should disappear from metadata"
+        );
+        assert!(
+            !sqlite_store::page_context_exists(&conn, &page_id).unwrap(),
+            "removed page context cache should be reclaimed"
+        );
+        assert!(
+            !sqlite_store::page_generation_exists(&conn, &page_id).unwrap(),
+            "removed page generation cache should be reclaimed"
+        );
+
+        if let Some(path) = removed_page_paths.get(&page_id) {
+            assert!(
+                !repo_root.join(path).exists(),
+                "removed page markdown should be deleted from disk"
+            );
+        }
+    }
+}
+
 /// 场景：init 完成后必须落出 `.wiki/.knowledge/**` 最小正式产物。
 #[test]
 fn init_persists_minimal_knowledge_artifacts() {
@@ -246,6 +440,17 @@ fn update_refreshes_stale_runtime_to_fresh() {
     assert_eq!(status.state, "needs_update");
     assert!(status.facts_ready);
     assert_eq!(
+        status.affected_knowledge_scope.escalation.level.as_str(),
+        "local_refresh"
+    );
+    assert!(
+        !status
+            .affected_knowledge_scope
+            .direct_unit_ids
+            .is_empty(),
+        "status should expose direct knowledge scope for stale sources"
+    );
+    assert_eq!(
         serde_json::to_value(&status).unwrap()["query_readiness"],
         "needs_update"
     );
@@ -258,6 +463,10 @@ fn update_refreshes_stale_runtime_to_fresh() {
     assert_eq!(update.previous_state, "stale");
     assert_eq!(update.state, "fresh");
     assert!(!update.updated_pages.is_empty());
+    assert_eq!(
+        update.affected_knowledge_scope.escalation.level.as_str(),
+        "local_refresh"
+    );
 
     let refreshed_status = run_status(repo_root).unwrap();
     assert_eq!(refreshed_status.state, "fresh");
@@ -881,6 +1090,13 @@ fn update_marks_storybook_family_parent_pages_dirty_when_family_child_sources_ch
     assert!(
         !status.dirty_pages.is_empty(),
         "at least one page should be dirty"
+    );
+    assert!(
+        !status
+            .affected_knowledge_scope
+            .direct_unit_ids
+            .is_empty(),
+        "family child change should first resolve to direct knowledge scope"
     );
 
     let update = run_update(repo_root).unwrap();

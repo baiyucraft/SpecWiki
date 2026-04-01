@@ -93,6 +93,14 @@ fn mixed_local_fixture_filters_low_signal_key_sources_and_exports_relations() {
 
     let query = run_query(repo_root, "api").unwrap();
     assert!(!query.matched_relations.is_empty());
+    assert!(query
+        .matched_relations
+        .iter()
+        .any(|relation| relation.relation_type == "DEPENDS_ON"));
+    assert!(query
+        .matched_relations
+        .iter()
+        .all(|relation| !relation.reasons.is_empty()));
 }
 
 fn copy_fixture_to_temp(name: &str) -> tempfile::TempDir {
@@ -128,6 +136,3 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> std::io::Result<()> {
 
     Ok(())
 }
-
-
-

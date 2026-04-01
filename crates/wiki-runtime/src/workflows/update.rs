@@ -30,7 +30,9 @@ use crate::storage::cache_store::{
     PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::knowledge_artifacts::{
-    persist_knowledge_artifacts, PersistKnowledgeArtifactsInput,
+    load_knowledge_artifacts, persist_knowledge_artifacts,
+    restore_runtime_cache_from_artifacts, KnowledgeArtifactSnapshot,
+    PersistKnowledgeArtifactsInput,
 };
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite::{index_store::SqliteIndexStore, runtime_store::SqliteRuntimeStore};
@@ -41,12 +43,12 @@ use crate::storage::state_store::{
 use crate::storage::wiki_fs::{resolve_page_path, write_page};
 use crate::workflows::init::{
     ancestor_ids_for_page, build_minimal_page_context, current_timestamp,
-    find_or_build_planned_page, page_provenance, run_init_with_progress_and_llm_as_with_mode,
-    source_paths_for_page,
+    page_provenance, run_init_with_progress_and_llm_as_with_mode, source_paths_for_page,
 };
 use crate::workflows::page_render::{
     finalize_pipeline_runtime, load_runtime_summary_for_repo, persist_runtime_blocker_for_repo,
     plan_runtime_knowledge_tree, run_compose_pipeline_with_action,
+    run_scoped_compose_pipeline_for_update,
 };
 use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
@@ -65,6 +67,7 @@ use wiki_index::symbol_graph::{
     analyze_symbol_graph, build_graph_summary, resolve_symbol_graph, ResolvedGraphSnapshot,
 };
 use wiki_index::symbols::{ParsedSymbolsSnapshot, SymbolTable};
+use wiki_model::domain::update_scope::{AffectedKnowledgeScope, ScopeEscalationLevel};
 
 /// 小范围符号变更仍走 scoped graph refresh；超过阈值直接回退全量图刷新，避免增量拼接丢边。
 const LOCAL_UPDATE_MAX_FILES: usize = 16;
@@ -81,6 +84,8 @@ pub struct UpdateReport {
     /// 本次 update 实际触达的页面路径集合。
     /// `v0.1.0 index-only` 收敛路径不会产出页面。
     pub updated_pages: Vec<String>,
+    /// 本次 update 命中的知识范围摘要。
+    pub affected_knowledge_scope: AffectedKnowledgeScope,
     /// 当前 workflow 终态对应的 runtime 摘要。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_summary: Option<RuntimeSummaryProjection>,
@@ -155,7 +160,14 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
     debug_trace::begin_session(action, repo_root, &steering.debug)?;
     WorkflowReporter::from_started_at(action, progress_sink, started_at)
         .phase("plan_changes", "规划增量变更");
-    let plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+    let mut plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+    if plan.needs_rebuild_reason.as_deref() == Some("cache_missing")
+        && restore_runtime_cache_from_artifacts(repo_root)?
+    {
+        WorkflowReporter::from_started_at(action, progress_sink, started_at)
+            .phase("plan_changes", "基于正式产物恢复 runtime cache");
+        plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+    }
     let previous_state =
         project_external_runtime_state(repo_root, plan.state(), facts_snapshot_ready(repo_root)?);
     if v0_1_index_only_enabled(action) {
@@ -174,6 +186,7 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
             previous_state,
             state: init.state,
             updated_pages: init.generated_pages,
+            affected_knowledge_scope: AffectedKnowledgeScope::default(),
             runtime_summary: init.runtime_summary,
             llm_execution_mode: init.llm_execution_mode,
         });
@@ -194,6 +207,7 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
                 previous_state,
                 state: init.state,
                 updated_pages: init.generated_pages,
+                affected_knowledge_scope: AffectedKnowledgeScope::default(),
                 runtime_summary: init.runtime_summary,
                 llm_execution_mode: init.llm_execution_mode,
             });
@@ -212,6 +226,7 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
                 previous_state,
                 state: rebuild.state,
                 updated_pages: rebuild.updated_pages,
+                affected_knowledge_scope: AffectedKnowledgeScope::default(),
                 runtime_summary: rebuild.runtime_summary,
                 llm_execution_mode: rebuild.llm_execution_mode,
             });
@@ -224,6 +239,7 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
             previous_state,
             state: "fresh".to_string(),
             updated_pages: Vec::new(),
+            affected_knowledge_scope: plan.affected_knowledge_scope.clone(),
             runtime_summary: load_runtime_summary_for_repo(repo_root)?
                 .map(RuntimeSummaryProjection::from_summary),
             llm_execution_mode: LlmExecutionMode::DeterministicOnly,
@@ -249,10 +265,59 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
         previous_state,
         state: "fresh".to_string(),
         updated_pages,
+        affected_knowledge_scope: plan.affected_knowledge_scope.clone(),
         runtime_summary: load_runtime_summary_for_repo(repo_root)?
             .map(RuntimeSummaryProjection::from_summary),
         llm_execution_mode,
     })
+}
+
+fn merge_page_digests_for_update(
+    knowledge_tree: &crate::domain::knowledge::KnowledgeTree,
+    previous_artifacts: Option<&KnowledgeArtifactSnapshot>,
+    fresh_digests: &BTreeMap<String, wiki_knowledge::domain::research::PageDigest>,
+) -> BTreeMap<String, wiki_knowledge::domain::research::PageDigest> {
+    let mut merged = previous_artifacts
+        .map(|artifacts| {
+            artifacts
+                .page_digests
+                .iter()
+                .map(|digest| (digest.unit_id.clone(), digest.clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let current_unit_ids = knowledge_tree.units.keys().cloned().collect::<BTreeSet<_>>();
+    merged.retain(|unit_id, _| current_unit_ids.contains(unit_id));
+    merged.extend(
+        fresh_digests
+            .iter()
+            .map(|(unit_id, digest)| (unit_id.clone(), digest.clone())),
+    );
+    merged
+}
+
+fn merge_research_summaries_for_update(
+    knowledge_tree: &crate::domain::knowledge::KnowledgeTree,
+    previous_artifacts: Option<&KnowledgeArtifactSnapshot>,
+    fresh_unit_researches: &BTreeMap<String, wiki_knowledge::domain::research::UnitResearch>,
+) -> Vec<wiki_model::domain::knowledge_artifact::KnowledgeResearchSummary> {
+    let mut merged = previous_artifacts
+        .map(|artifacts| {
+            artifacts
+                .research_summaries
+                .iter()
+                .map(|summary| (summary.unit_id.clone(), summary.clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let current_unit_ids = knowledge_tree.units.keys().cloned().collect::<BTreeSet<_>>();
+    merged.retain(|unit_id, _| current_unit_ids.contains(unit_id));
+    for unit in knowledge_tree.units.values() {
+        if let Some(research) = fresh_unit_researches.get(&unit.id) {
+            merged.insert(unit.id.clone(), research.to_artifact_summary(unit));
+        }
+    }
+    merged.into_values().collect()
 }
 
 fn apply_incremental_update<'a>(
@@ -467,36 +532,88 @@ fn apply_incremental_update<'a>(
         )?;
         return Err(io::Error::other(reason.to_string()));
     };
-    let pipeline = run_compose_pipeline_with_action(
-        action,
-        repo_root,
-        &scan_report,
-        &module_tree,
-        &repo_context,
-        &module_contexts,
-        &full_symbol_snapshot,
-        &full_resolved_graph,
-        &analysis,
-        &graph_summary,
-        &steering,
-        research_provider_impl.as_ref(),
-    )?;
+    let planned_knowledge_tree = plan.knowledge_tree.clone().unwrap_or_else(|| {
+        plan_runtime_knowledge_tree(
+            &scan_report,
+            &module_tree,
+            &repo_context,
+            &module_contexts,
+            &graph_summary,
+            &steering,
+        )
+    });
+    let update_page_targets = if matches!(
+        plan.affected_knowledge_scope.escalation.level,
+        ScopeEscalationLevel::LocalRefresh
+    ) {
+        plan.affected_set.affected_page_ids.clone()
+    } else {
+        wiki_knowledge::plan_pages_from_knowledge_tree(&planned_knowledge_tree)
+            .into_iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>()
+    };
+    let previous_artifacts = load_knowledge_artifacts(repo_root).ok();
+    let pipeline = if let Some(previous_artifacts) = previous_artifacts.as_ref() {
+        run_scoped_compose_pipeline_for_update(
+            action,
+            repo_root,
+            &scan_report,
+            &module_tree,
+            &repo_context,
+            &module_contexts,
+            &full_symbol_snapshot,
+            &full_resolved_graph,
+            &analysis,
+            &graph_summary,
+            &steering,
+            &planned_knowledge_tree,
+            &previous_artifacts.page_digests,
+            &plan.affected_knowledge_scope,
+            &update_page_targets,
+            research_provider_impl.as_ref(),
+        )?
+    } else {
+        reporter.phase("compose", "formal artifacts 缺失，回退到全量 knowledge pipeline");
+        run_compose_pipeline_with_action(
+            action,
+            repo_root,
+            &scan_report,
+            &module_tree,
+            &repo_context,
+            &module_contexts,
+            &full_symbol_snapshot,
+            &full_resolved_graph,
+            &analysis,
+            &graph_summary,
+            &steering,
+            research_provider_impl.as_ref(),
+        )?
+    };
     drop(research_provider);
     let page_drafts = pipeline.page_drafts;
-    let digests = pipeline.digests;
+    let digests = merge_page_digests_for_update(
+        &pipeline.knowledge_tree,
+        previous_artifacts.as_ref(),
+        &pipeline.digests,
+    );
     let unit_researches = pipeline.unit_researches;
     let knowledge_tree = pipeline.knowledge_tree;
-    let pages_by_id: BTreeMap<String, _> = pipeline
-        .planned_pages
+    let research_summaries = merge_research_summaries_for_update(
+        &knowledge_tree,
+        previous_artifacts.as_ref(),
+        &unit_researches,
+    );
+    let drafts_by_page_id = page_drafts
         .iter()
-        .map(|p| (p.id.clone(), p.clone()))
-        .collect();
-
+        .map(|draft| (draft.page_id.clone(), draft))
+        .collect::<BTreeMap<_, _>>();
     let explicit_affected_page_ids = plan
         .affected_set
         .affected_page_ids
         .iter()
         .cloned()
+        .chain(update_page_targets.iter().cloned())
         .collect::<BTreeSet<_>>();
     let explicit_removed_page_ids = plan
         .affected_set
@@ -510,9 +627,10 @@ fn apply_incremental_update<'a>(
         .map(|page| (page.page_id.clone(), page))
         .collect::<BTreeMap<_, _>>();
 
-    let current_page_ids = page_drafts
+    let current_page_ids = pipeline
+        .planned_pages
         .iter()
-        .map(|d| d.page_id.clone())
+        .map(|page| page.id.clone())
         .collect::<BTreeSet<_>>();
     let removed_page_ids = previous_pages
         .keys()
@@ -522,39 +640,21 @@ fn apply_incremental_update<'a>(
     let mut ancestor_ids_by_page = BTreeMap::new();
     let mut next_pages = Vec::new();
     let mut touched_paths = BTreeSet::new();
-    let page_total = page_drafts.len();
+    let page_total = explicit_affected_page_ids.len();
+    let mut rendered_pages = 0usize;
 
     reporter.counted("render_pages", "渲染页面", 0, page_total);
 
-    for (index, draft) in page_drafts.iter().enumerate() {
-        let rendered = render_page_draft(draft);
-        let planned_page = find_or_build_planned_page(draft, &pages_by_id);
-        let page_context = build_minimal_page_context(
-            draft,
-            &planned_page,
-            &knowledge_tree,
-            &digests,
-            &unit_researches,
-        );
-        let input_hash = wiki_index::fingerprint::fingerprint_bytes(
-            format!("{}:{}", draft.page_id, draft.citation_count).as_bytes(),
-        );
-
-        let ancestor_ids = ancestor_ids_for_page(&planned_page, &ancestor_ids_by_page);
+    for planned_page in &pipeline.planned_pages {
+        let ancestor_ids = ancestor_ids_for_page(planned_page, &ancestor_ids_by_page);
         ancestor_ids_by_page.insert(planned_page.id.clone(), ancestor_ids.clone());
         let current_page_path = format!(".wiki/{}", planned_page.relative_path);
         let previous_page = previous_pages.get(&planned_page.id).copied();
-        let should_rerender = match previous_page {
-            Some(previous_page)
-                if !explicit_affected_page_ids.contains(&planned_page.id)
-                    && !explicit_removed_page_ids.contains(&planned_page.id)
-                    && previous_page.input_hash == input_hash
-                    && previous_page.path == current_page_path =>
-            {
-                false
-            }
-            Some(_) | None => true,
-        };
+        let should_rerender = explicit_affected_page_ids.contains(&planned_page.id)
+            || explicit_removed_page_ids.contains(&planned_page.id)
+            || previous_page
+                .map(|page| page.path != current_page_path)
+                .unwrap_or(true);
 
         if !should_rerender {
             if let Some(previous_page) = previous_page {
@@ -563,10 +663,28 @@ fn apply_incremental_update<'a>(
             }
         }
 
+        let draft = drafts_by_page_id.get(&planned_page.id).copied().ok_or_else(|| {
+            io::Error::other(format!(
+                "missing scoped draft for affected page {}",
+                planned_page.id
+            ))
+        })?;
+        let rendered = render_page_draft(draft);
+        let page_context = build_minimal_page_context(
+            draft,
+            planned_page,
+            &knowledge_tree,
+            &digests,
+            &unit_researches,
+        );
+        let input_hash = wiki_index::fingerprint::fingerprint_bytes(
+            format!("{}:{}", draft.page_id, draft.citation_count).as_bytes(),
+        );
+
         let final_content = merge_user_sections_into_page(
             repo_root,
             previous_page.map(|page| page.path.as_str()),
-            &planned_page,
+            planned_page,
             &rendered.sections,
             &rendered.content,
         );
@@ -619,10 +737,11 @@ fn apply_incremental_update<'a>(
             sections: rendered.sections,
         }));
         touched_paths.insert(current_page_path);
+        rendered_pages += 1;
         reporter.counted(
             "render_pages",
-            format!("渲染页面 {}/{}", index + 1, page_total),
-            index + 1,
+            format!("渲染页面 {rendered_pages}/{page_total}"),
+            rendered_pages,
             page_total,
         );
     }
@@ -671,15 +790,6 @@ fn apply_incremental_update<'a>(
     let conn = sqlite_store::open_db(repo_root)?;
     let runtime_store = SqliteRuntimeStore::new(&conn);
     let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
-    let research_summaries = knowledge_tree
-        .units
-        .values()
-        .filter_map(|unit| {
-            unit_researches
-                .get(&unit.id)
-                .map(|research| research.to_artifact_summary(unit))
-        })
-        .collect::<Vec<_>>();
     let page_digests = digests.values().cloned().collect::<Vec<_>>();
     let runtime_gates = runtime_store.read_unit_runtime_gates()?;
     persist_knowledge_artifacts(PersistKnowledgeArtifactsInput {

@@ -15,7 +15,7 @@ use crate::generation::sections::{section_id_for_title, section_titles_for_page_
 use crate::storage::cache_store::{
     missing_incremental_cache_components, read_module_tree_cache, read_scan_cache,
 };
-use crate::storage::knowledge_artifacts::restore_runtime_cache_from_artifacts;
+use crate::storage::knowledge_artifacts::{load_knowledge_artifacts, KnowledgeArtifactSnapshot};
 use crate::storage::metadata_store::metadata_exists;
 use crate::storage::sqlite::index_store::SqliteIndexStore;
 use crate::storage::sqlite_store;
@@ -27,6 +27,10 @@ use wiki_index::store::IndexQueryStore;
 use wiki_index::symbol_graph::GraphSummary;
 use wiki_knowledge::planning::{
     build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
+};
+use wiki_model::domain::knowledge::{KnowledgeTree, KnowledgeUnit};
+use wiki_model::domain::update_scope::{
+    AffectedKnowledgeScope, ScopeEscalation, ScopeEscalationLevel,
 };
 use wiki_knowledge::{plan_pages_from_knowledge_tree, PlannedPage};
 
@@ -86,8 +90,12 @@ pub struct ChangePlan {
     pub module_tree: Option<ModuleTree>,
     /// 当前模块树和 planner 产出的最新页面计划。
     pub planned_pages: Vec<PlannedPage>,
+    /// 当前 facts/index 规划得到的最新 knowledge tree。
+    pub knowledge_tree: Option<KnowledgeTree>,
     /// 当前仓库相对上一轮 runtime 的源码变化集合。
     pub change_set: ChangeSet,
+    /// 变化集合映射得到的受影响知识范围。
+    pub affected_knowledge_scope: AffectedKnowledgeScope,
     /// 变化集合映射得到的受影响模块、页面与 section。
     pub affected_set: AffectedSet,
     /// status/update 后续应该采取的回退动作。
@@ -239,14 +247,14 @@ pub fn plan_runtime_changes_with_mode(
             scan_report: None,
             module_tree: None,
             planned_pages: Vec::new(),
+            knowledge_tree: None,
             change_set: ChangeSet::default(),
+            affected_knowledge_scope: AffectedKnowledgeScope::default(),
             affected_set: AffectedSet::default(),
             fallback_mode: FallbackMode::Init,
             needs_rebuild_reason: None,
         });
     }
-
-    let _ = restore_runtime_cache_from_artifacts(repo_root);
 
     let previous_state = load_or_rebuild_state(repo_root)?;
     let steering = load_steering_config_with_mode(repo_root, steering_mode);
@@ -283,9 +291,17 @@ pub fn plan_runtime_changes_with_mode(
             scan_report: None,
             module_tree: previous_module_tree,
             planned_pages: Vec::new(),
+            knowledge_tree: None,
             change_set: ChangeSet {
                 requires_rebuild: true,
                 ..ChangeSet::default()
+            },
+            affected_knowledge_scope: AffectedKnowledgeScope {
+                escalation: ScopeEscalation {
+                    level: ScopeEscalationLevel::RebuildRecommended,
+                    reason: "page_missing".to_string(),
+                },
+                ..AffectedKnowledgeScope::default()
             },
             affected_set: affected_pages_for_missing_paths(&previous_state, &missing_pages),
             fallback_mode: FallbackMode::Rebuild,
@@ -299,9 +315,17 @@ pub fn plan_runtime_changes_with_mode(
             scan_report: None,
             module_tree: previous_module_tree,
             planned_pages: Vec::new(),
+            knowledge_tree: None,
             change_set: ChangeSet {
                 requires_rebuild: true,
                 ..ChangeSet::default()
+            },
+            affected_knowledge_scope: AffectedKnowledgeScope {
+                escalation: ScopeEscalation {
+                    level: ScopeEscalationLevel::RebuildRecommended,
+                    reason: "cache_missing".to_string(),
+                },
+                ..AffectedKnowledgeScope::default()
             },
             affected_set: affected_pages_for_missing_cache(
                 &previous_state,
@@ -345,11 +369,23 @@ pub fn plan_runtime_changes_with_mode(
     );
     let knowledge_tree = build_knowledge_tree(domains, units);
     let planned_pages = plan_pages_from_knowledge_tree(&knowledge_tree);
-    let affected_set = build_affected_set(
+    let previous_artifacts = load_knowledge_artifacts(repo_root).ok();
+    let affected_knowledge_scope = build_affected_knowledge_scope(
+        previous_artifacts.as_ref(),
         &previous_state,
         previous_module_tree.as_ref(),
         &current_module_tree,
+        &scan_report,
+        &knowledge_tree,
         &planned_pages,
+        &change_set,
+    );
+    let affected_set = build_affected_set(
+        &previous_state,
+        previous_artifacts.as_ref(),
+        &knowledge_tree,
+        &planned_pages,
+        &affected_knowledge_scope,
         &change_set,
     );
 
@@ -358,7 +394,9 @@ pub fn plan_runtime_changes_with_mode(
         scan_report: Some(scan_report),
         module_tree: Some(current_module_tree),
         planned_pages,
+        knowledge_tree: Some(knowledge_tree),
         change_set,
+        affected_knowledge_scope,
         affected_set,
         fallback_mode: FallbackMode::None,
         needs_rebuild_reason: None,
@@ -451,32 +489,178 @@ fn build_change_set(
     }
 }
 
-fn build_affected_set(
+/// 用 formal knowledge identity 先规划知识范围，再由 runtime 派生投影范围。
+fn build_affected_knowledge_scope(
+    previous_artifacts: Option<&KnowledgeArtifactSnapshot>,
     previous_state: &WikiState,
     previous_module_tree: Option<&ModuleTree>,
     current_module_tree: &ModuleTree,
+    scan_report: &ScanReport,
+    knowledge_tree: &KnowledgeTree,
     planned_pages: &[PlannedPage],
     change_set: &ChangeSet,
-) -> AffectedSet {
+) -> AffectedKnowledgeScope {
     let dirty_source_paths = change_set
         .dirty_sources()
         .into_iter()
         .collect::<BTreeSet<_>>();
-    let previous_pages = previous_state
-        .pages
+    let current_source_ids_by_path = scan_report
+        .files
         .iter()
-        .map(|page| (page.page_id.clone(), page))
+        .map(|file| (file.path.as_str(), file.id.clone()))
         .collect::<BTreeMap<_, _>>();
-    let current_pages = planned_pages
+    let previous_source_ids_by_path = previous_state
+        .sources
         .iter()
-        .map(|page| (page.id.clone(), page))
+        .map(|source| (source.path.as_str(), source.source_id.clone()))
         .collect::<BTreeMap<_, _>>();
+    let current_dirty_source_ids = dirty_source_paths
+        .iter()
+        .filter_map(|path| current_source_ids_by_path.get(path.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let previous_dirty_source_ids = dirty_source_paths
+        .iter()
+        .filter_map(|path| previous_source_ids_by_path.get(path.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let dirty_module_ids = collect_dirty_module_ids(
+        &dirty_source_paths,
+        previous_module_tree,
+        current_module_tree,
+    );
+    let previous_tree = previous_artifacts.map(|artifacts| &artifacts.knowledge_tree);
 
+    let direct_unit_ids = collect_units_for_sources_or_modules(
+        knowledge_tree,
+        &current_dirty_source_ids,
+        &dirty_module_ids,
+    );
+    let previous_direct_unit_ids = previous_tree
+        .map(|tree| collect_units_for_sources_or_modules(tree, &previous_dirty_source_ids, &dirty_module_ids))
+        .unwrap_or_default();
+    let mut removed_unit_ids = previous_direct_unit_ids
+        .iter()
+        .filter(|unit_id| knowledge_tree.get_unit(unit_id).is_none())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    if change_set.requires_replan {
+        removed_unit_ids.extend(collect_removed_unit_ids(previous_tree, knowledge_tree));
+    }
+
+    let mut propagated_parent_unit_ids =
+        collect_propagated_parent_units(knowledge_tree, previous_tree, &direct_unit_ids, &removed_unit_ids);
+    for direct_unit_id in &direct_unit_ids {
+        propagated_parent_unit_ids.remove(direct_unit_id);
+    }
+
+    let mut affected_domain_ids = BTreeSet::new();
+    for unit_id in direct_unit_ids.iter().chain(propagated_parent_unit_ids.iter()) {
+        if let Some(unit) = knowledge_tree.get_unit(unit_id) {
+            affected_domain_ids.insert(unit.domain_id.clone());
+        }
+    }
+    if let Some(previous_tree) = previous_tree {
+        for unit_id in &removed_unit_ids {
+            if let Some(unit) = previous_tree.get_unit(unit_id) {
+                affected_domain_ids.insert(unit.domain_id.clone());
+            }
+        }
+    }
+
+    let active_unit_ids = direct_unit_ids
+        .iter()
+        .chain(propagated_parent_unit_ids.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let projection_unit_ids = collect_projection_unit_ids(knowledge_tree, &active_unit_ids);
+    let mut projection_target_page_ids = planned_pages
+        .iter()
+        .filter(|page| {
+            page.unit_id
+                .as_ref()
+                .map(|unit_id| projection_unit_ids.contains(unit_id))
+                .unwrap_or(false)
+        })
+        .map(|page| page.id.clone())
+        .collect::<BTreeSet<_>>();
+    if let Some(previous_tree) = previous_tree {
+        for previous_page in plan_pages_from_knowledge_tree(previous_tree) {
+            if previous_page
+                .unit_id
+                .as_ref()
+                .map(|unit_id| removed_unit_ids.contains(unit_id))
+                .unwrap_or(false)
+            {
+                projection_target_page_ids.insert(previous_page.id.clone());
+            }
+        }
+    }
+
+    let escalation = if change_set.requires_rebuild {
+        ScopeEscalation {
+            level: ScopeEscalationLevel::RebuildRecommended,
+            reason: "runtime_inconsistent".to_string(),
+        }
+    } else if change_set.requires_replan {
+        let level = if affected_domain_ids.len() <= 1 {
+            ScopeEscalationLevel::SubtreeReplan
+        } else {
+            ScopeEscalationLevel::RepoReplan
+        };
+        let reason = if !change_set.structural_sources.is_empty() {
+            format!("structural_change:{}", change_set.structural_sources.join(","))
+        } else if !change_set.added_sources.is_empty() || !change_set.removed_sources.is_empty() {
+            "knowledge_identity_changed".to_string()
+        } else {
+            "planner_replan_required".to_string()
+        };
+        ScopeEscalation { level, reason }
+    } else {
+        ScopeEscalation {
+            level: ScopeEscalationLevel::LocalRefresh,
+            reason: "direct_unit_refresh".to_string(),
+        }
+    };
+
+    AffectedKnowledgeScope {
+        direct_unit_ids: direct_unit_ids.into_iter().collect(),
+        propagated_parent_unit_ids: propagated_parent_unit_ids.into_iter().collect(),
+        removed_unit_ids: removed_unit_ids.into_iter().collect(),
+        affected_domain_ids: affected_domain_ids.into_iter().collect(),
+        projection_target_page_ids: projection_target_page_ids.into_iter().collect(),
+        escalation,
+    }
+}
+
+fn collect_projection_unit_ids(
+    knowledge_tree: &KnowledgeTree,
+    active_unit_ids: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut projection_unit_ids = active_unit_ids.clone();
+    let mut queue = active_unit_ids.iter().cloned().collect::<Vec<_>>();
+    while let Some(unit_id) = queue.pop() {
+        let Some(unit) = knowledge_tree.get_unit(&unit_id) else {
+            continue;
+        };
+        let Some(parent_id) = unit.parent_unit_id.as_ref() else {
+            continue;
+        };
+        if projection_unit_ids.insert(parent_id.clone()) {
+            queue.push(parent_id.clone());
+        }
+    }
+    projection_unit_ids
+}
+
+fn collect_dirty_module_ids(
+    dirty_source_paths: &BTreeSet<String>,
+    previous_module_tree: Option<&ModuleTree>,
+    current_module_tree: &ModuleTree,
+) -> BTreeSet<String> {
     let mut affected_module_ids = BTreeSet::new();
-    let mut affected_page_ids = BTreeSet::new();
-    let mut removed_page_ids = BTreeSet::new();
-
-    for path in &dirty_source_paths {
+    for path in dirty_source_paths {
         if let Some(module_id) = best_module_id_for_path(path, current_module_tree) {
             affected_module_ids.insert(module_id);
         }
@@ -487,89 +671,266 @@ fn build_affected_set(
             }
         }
     }
+    affected_module_ids
+}
 
-    if let Some(previous_tree) = previous_module_tree {
-        let previous_modules = previous_tree
-            .modules
-            .iter()
-            .map(|module| (module.id.clone(), module))
-            .collect::<BTreeMap<_, _>>();
-        let current_modules = current_module_tree
-            .modules
-            .iter()
-            .map(|module| (module.id.clone(), module))
-            .collect::<BTreeMap<_, _>>();
+fn collect_units_for_sources_or_modules(
+    knowledge_tree: &KnowledgeTree,
+    dirty_source_ids: &BTreeSet<String>,
+    dirty_module_ids: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let candidate_unit_ids = knowledge_tree
+        .units
+        .values()
+        .filter(|unit| {
+            unit.scope
+                .source_ids
+                .iter()
+                .any(|source_id| dirty_source_ids.contains(source_id))
+                || (unit.child_unit_ids.is_empty()
+                    && unit
+                        .scope
+                        .module_ids
+                        .iter()
+                        .any(|module_id| dirty_module_ids.contains(module_id)))
+        })
+        .map(|unit| unit.id.clone())
+        .collect::<BTreeSet<_>>();
 
-        for module_id in previous_modules.keys() {
-            if !current_modules.contains_key(module_id) {
-                affected_module_ids.insert(module_id.clone());
+    candidate_unit_ids
+        .iter()
+        .filter(|unit_id| !has_matching_descendant(knowledge_tree, unit_id, &candidate_unit_ids))
+        .cloned()
+        .collect()
+}
+
+fn has_matching_descendant(
+    knowledge_tree: &KnowledgeTree,
+    unit_id: &str,
+    candidate_unit_ids: &BTreeSet<String>,
+) -> bool {
+    let Some(unit) = knowledge_tree.get_unit(unit_id) else {
+        return false;
+    };
+
+    let mut queue = unit.child_unit_ids.iter().cloned().collect::<Vec<_>>();
+    while let Some(child_unit_id) = queue.pop() {
+        if candidate_unit_ids.contains(&child_unit_id) {
+            return true;
+        }
+        if let Some(child_unit) = knowledge_tree.get_unit(&child_unit_id) {
+            queue.extend(child_unit.child_unit_ids.iter().cloned());
+        }
+    }
+    false
+}
+
+fn collect_removed_unit_ids(
+    previous_tree: Option<&KnowledgeTree>,
+    current_tree: &KnowledgeTree,
+) -> BTreeSet<String> {
+    let Some(previous_tree) = previous_tree else {
+        return BTreeSet::new();
+    };
+
+    previous_tree
+        .units
+        .keys()
+        .filter(|unit_id| current_tree.get_unit(unit_id).is_none())
+        .cloned()
+        .collect()
+}
+
+fn collect_propagated_parent_units(
+    current_tree: &KnowledgeTree,
+    previous_tree: Option<&KnowledgeTree>,
+    direct_unit_ids: &BTreeSet<String>,
+    removed_unit_ids: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut propagated = BTreeSet::new();
+    let mut queue = direct_unit_ids.iter().cloned().collect::<Vec<_>>();
+    let impacted_unit_ids = direct_unit_ids
+        .iter()
+        .chain(removed_unit_ids.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    while let Some(unit_id) = queue.pop() {
+        let Some(unit) = current_tree.get_unit(&unit_id) else {
+            continue;
+        };
+        if !parent_propagation_required(unit, previous_tree.and_then(|tree| tree.get_unit(&unit.id))) {
+            continue;
+        }
+        if let Some(parent_id) = unit.parent_unit_id.as_ref() {
+            if propagated.insert(parent_id.clone()) {
+                queue.push(parent_id.clone());
             }
         }
+    }
 
-        for (module_id, current_module) in &current_modules {
-            match previous_modules.get(module_id) {
-                Some(previous_module) if *previous_module == *current_module => {}
-                _ => {
-                    affected_module_ids.insert(module_id.clone());
+    let mut contract_changed_parent_queue = collect_child_contract_changed_parent_units(
+        current_tree,
+        previous_tree,
+        &impacted_unit_ids,
+    )
+    .into_iter()
+    .collect::<Vec<_>>();
+    while let Some(unit_id) = contract_changed_parent_queue.pop() {
+        if propagated.insert(unit_id.clone()) {
+            if let Some(parent_id) = current_tree
+                .get_unit(&unit_id)
+                .and_then(|unit| unit.parent_unit_id.as_ref())
+            {
+                contract_changed_parent_queue.push(parent_id.clone());
+            }
+        }
+    }
+
+    if let Some(previous_tree) = previous_tree {
+        let mut previous_queue = removed_unit_ids.iter().cloned().collect::<Vec<_>>();
+        while let Some(unit_id) = previous_queue.pop() {
+            let Some(unit) = previous_tree.get_unit(&unit_id) else {
+                continue;
+            };
+            if let Some(parent_id) = unit.parent_unit_id.as_ref() {
+                if current_tree.get_unit(parent_id).is_some() && propagated.insert(parent_id.clone()) {
+                    previous_queue.push(parent_id.clone());
                 }
             }
         }
     }
 
-    for page in previous_state.pages.iter().filter(|page| {
-        page.source_paths
-            .iter()
-            .any(|path| dirty_source_paths.contains(path))
-    }) {
-        affected_page_ids.insert(page.page_id.clone());
-        affected_module_ids.extend(page.module_ids.iter().cloned());
+    propagated
+}
+
+fn collect_child_contract_changed_parent_units(
+    current_tree: &KnowledgeTree,
+    previous_tree: Option<&KnowledgeTree>,
+    impacted_unit_ids: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let Some(previous_tree) = previous_tree else {
+        return BTreeSet::new();
+    };
+
+    current_tree
+        .units
+        .values()
+        .filter(|unit| !unit.child_unit_ids.is_empty())
+        .filter_map(|unit| {
+            let previous_unit = previous_tree.get_unit(&unit.id);
+            if !parent_propagation_required(unit, previous_unit) {
+                return None;
+            }
+
+            let current_children = unit.child_unit_ids.iter().cloned().collect::<BTreeSet<_>>();
+            let previous_children = previous_unit
+                .map(|previous| {
+                    previous
+                        .child_unit_ids
+                        .iter()
+                        .cloned()
+                        .collect::<BTreeSet<_>>()
+                })
+                .unwrap_or_default();
+            let child_delta = current_children
+                .symmetric_difference(&previous_children)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+
+            child_delta
+                .iter()
+                .any(|child_unit_id| impacted_unit_ids.contains(child_unit_id))
+                .then(|| unit.id.clone())
+        })
+        .collect()
+}
+
+fn parent_propagation_required(
+    current_unit: &KnowledgeUnit,
+    previous_unit: Option<&KnowledgeUnit>,
+) -> bool {
+    match previous_unit {
+        Some(previous_unit) => {
+            previous_unit.child_unit_ids != current_unit.child_unit_ids
+                || previous_unit.parent_unit_id != current_unit.parent_unit_id
+                || previous_unit.scope.source_ids != current_unit.scope.source_ids
+                || previous_unit.scope.module_ids != current_unit.scope.module_ids
+                || previous_unit.relative_path != current_unit.relative_path
+        }
+        None => true,
+    }
+}
+
+fn build_affected_set(
+    previous_state: &WikiState,
+    previous_artifacts: Option<&KnowledgeArtifactSnapshot>,
+    knowledge_tree: &KnowledgeTree,
+    planned_pages: &[PlannedPage],
+    affected_knowledge_scope: &AffectedKnowledgeScope,
+    change_set: &ChangeSet,
+) -> AffectedSet {
+    let previous_pages = previous_state
+        .pages
+        .iter()
+        .map(|page| (page.page_id.clone(), page))
+        .collect::<BTreeMap<_, _>>();
+    let current_pages = planned_pages
+        .iter()
+        .map(|page| (page.id.clone(), page))
+        .collect::<BTreeMap<_, _>>();
+    let previous_planned_pages = previous_artifacts
+        .map(|artifacts| plan_pages_from_knowledge_tree(&artifacts.knowledge_tree))
+        .unwrap_or_default();
+    let previous_planned_by_id = previous_planned_pages
+        .iter()
+        .map(|page| (page.id.clone(), page))
+        .collect::<BTreeMap<_, _>>();
+
+    let current_units = affected_knowledge_scope
+        .active_unit_ids()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let removed_units = affected_knowledge_scope
+        .removed_unit_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut affected_module_ids = BTreeSet::new();
+    for unit_id in &current_units {
+        if let Some(unit) = knowledge_tree.get_unit(unit_id) {
+            affected_module_ids.extend(unit.scope.module_ids.iter().cloned());
+        }
+    }
+    if let Some(previous_artifacts) = previous_artifacts {
+        for unit_id in &removed_units {
+            if let Some(unit) = previous_artifacts.knowledge_tree.get_unit(unit_id) {
+                affected_module_ids.extend(unit.scope.module_ids.iter().cloned());
+            }
+        }
     }
 
-    if change_set.requires_replan {
-        let previous_page_ids = previous_pages.keys().cloned().collect::<BTreeSet<_>>();
-        let current_page_ids = current_pages.keys().cloned().collect::<BTreeSet<_>>();
-
-        for page_id in previous_page_ids.difference(&current_page_ids) {
-            removed_page_ids.insert(page_id.clone());
-            if let Some(parent_id) = previous_pages
-                .get(page_id)
-                .and_then(|page| page.parent_id.clone())
-            {
-                affected_page_ids.insert(parent_id);
-            }
-        }
-
-        for page_id in current_page_ids.difference(&previous_page_ids) {
-            affected_page_ids.insert(page_id.clone());
-        }
-
-        for planned_page in planned_pages {
-            if matches!(planned_page.page_type.as_str(), "overview" | "architecture") {
-                affected_page_ids.insert(planned_page.id.clone());
-            }
-
-            if let Some(previous_page) = previous_pages.get(&planned_page.id) {
-                if page_plan_changed(previous_page, planned_page) {
-                    affected_page_ids.insert(planned_page.id.clone());
-                }
-            }
-
-            if planned_page
-                .module_ids
+    let mut affected_page_ids = affected_knowledge_scope
+        .projection_target_page_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !matches!(
+        affected_knowledge_scope.escalation.level,
+        ScopeEscalationLevel::LocalRefresh
+    ) {
+        affected_page_ids.extend(
+            planned_pages
                 .iter()
-                .any(|module_id| affected_module_ids.contains(module_id))
-            {
-                affected_page_ids.insert(planned_page.id.clone());
-            }
-        }
-    } else if !affected_module_ids.is_empty() {
-        for page in &previous_state.pages {
-            if page
-                .module_ids
-                .iter()
-                .any(|module_id| affected_module_ids.contains(module_id))
-            {
-                affected_page_ids.insert(page.page_id.clone());
+                .filter(|page| matches!(page.page_type.as_str(), "overview" | "architecture"))
+                .map(|page| page.id.clone()),
+        );
+    }
+    let mut removed_page_ids = BTreeSet::new();
+    for previous_page in &previous_planned_pages {
+        if let Some(unit_id) = previous_page.unit_id.as_ref() {
+            if removed_units.contains(unit_id) && !current_pages.contains_key(&previous_page.id) {
+                removed_page_ids.insert(previous_page.id.clone());
             }
         }
     }
@@ -591,6 +952,16 @@ fn build_affected_set(
         }
 
         if let Some(page) = current_pages.get(page_id) {
+            affected_section_ids_by_page
+                .insert(page_id.clone(), predicted_section_ids_for_page(page));
+        }
+    }
+
+    for page_id in &removed_page_ids {
+        if let Some(page) = previous_pages.get(page_id) {
+            affected_section_ids_by_page
+                .insert(page_id.clone(), page.managed_section_anchors());
+        } else if let Some(page) = previous_planned_by_id.get(page_id) {
             affected_section_ids_by_page
                 .insert(page_id.clone(), predicted_section_ids_for_page(page));
         }
@@ -760,15 +1131,6 @@ fn path_matches_root(path: &str, root: &str) -> bool {
     }
 
     path == root || path.starts_with(&format!("{root}/"))
-}
-
-fn page_plan_changed(previous_page: &WikiPageState, planned_page: &PlannedPage) -> bool {
-    previous_page.title != planned_page.title
-        || previous_page.path != format!(".wiki/{}", planned_page.relative_path)
-        || previous_page.page_type != planned_page.page_type
-        || previous_page.parent_id != planned_page.parent_id
-        || previous_page.source_ids != planned_page.source_ids
-        || previous_page.module_ids != planned_page.module_ids
 }
 
 fn predicted_section_ids_for_page(page: &PlannedPage) -> Vec<String> {

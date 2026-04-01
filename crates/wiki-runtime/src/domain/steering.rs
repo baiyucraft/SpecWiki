@@ -1,5 +1,6 @@
 //! Steering 配置模块。
-//! 定义 `.wiki/wiki.steering.yaml` / `wiki.dev.yaml` 的 schema、读取、兼容归一化和默认值。
+//! 定义 `~/.spec-wiki/config.yaml` / `.wiki/config.yaml` / `wiki.dev.yaml`
+//! 的 schema、读取、校验、归一化和默认值。
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -404,6 +405,23 @@ struct RawLlmProviderModelConfig {
     model_id: Option<String>,
 }
 
+const DEFAULT_USER_CONFIG_TEMPLATE: &str = concat!(
+    "# spec-wiki user defaults\n",
+    "# Default priority: ~/.spec-wiki/config.yaml < .wiki/config.yaml\n",
+    "# wiki.dev.yaml is only applied when explicit development mode is enabled.\n",
+    "debug: {}\n",
+    "llm: {}\n",
+);
+
+/// `SteeringLoadMode` 控制是否叠加 repo 根 `wiki.dev.yaml`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SteeringLoadMode {
+    /// 正式运行路径；只读取 user + repo 配置。
+    Production,
+    /// 显式开发路径；在 user + repo 之上再叠加 `wiki.dev.yaml`。
+    Development,
+}
+
 fn default_boost() -> i32 {
     1
 }
@@ -627,10 +645,16 @@ impl LlmProviderModelConfig {
     }
 }
 
-/// 从 `.wiki/wiki.steering.yaml` 读取共享 steering，再按需叠加 repo 根 `wiki.dev.yaml`。
+/// 从 `~/.spec-wiki/config.yaml` 读取用户默认配置，再叠加 `.wiki/config.yaml`。
+/// 当显式开发模式开启时，最后再叠加 repo 根 `wiki.dev.yaml`。
 /// 配置文件不存在时返回默认配置，格式非法时输出 warning 并回退到默认值或忽略 dev 覆盖。
 pub fn load_steering_config(repo_root: &Path) -> SteeringConfig {
-    let shared_path = repo_root.join(".wiki").join("wiki.steering.yaml");
+    load_steering_config_with_mode(repo_root, SteeringLoadMode::Production)
+}
+
+/// 按显式加载模式读取 steering 配置。
+pub fn load_steering_config_with_mode(repo_root: &Path, mode: SteeringLoadMode) -> SteeringConfig {
+    let shared_path = spec_wiki_repo_config_path(repo_root);
     let dev_path = repo_root.join("wiki.dev.yaml");
     let user_config_path = spec_wiki_user_config_path();
 
@@ -648,12 +672,14 @@ pub fn load_steering_config(repo_root: &Path) -> SteeringConfig {
     if let Some(raw) = read_yaml_file::<RawSteeringConfig>(&shared_path, "using defaults") {
         apply_raw_steering_config(&mut config, raw);
     }
-    if let Some(raw) = read_yaml_file::<RawDevConfig>(&dev_path, "ignoring dev overrides") {
-        if let Some(raw_debug) = raw.debug {
-            apply_raw_debug_config(&mut config.debug, raw_debug);
-        }
-        if let Some(raw_llm) = raw.llm {
-            apply_raw_llm_config(&mut config.llm, raw_llm);
+    if mode == SteeringLoadMode::Development {
+        if let Some(raw) = read_yaml_file::<RawDevConfig>(&dev_path, "ignoring dev overrides") {
+            if let Some(raw_debug) = raw.debug {
+                apply_raw_debug_config(&mut config.debug, raw_debug);
+            }
+            if let Some(raw_llm) = raw.llm {
+                apply_raw_llm_config(&mut config.llm, raw_llm);
+            }
         }
     }
 
@@ -933,6 +959,35 @@ pub fn spec_wiki_user_config_path() -> Option<std::path::PathBuf> {
     spec_wiki_home_dir().map(|dir| dir.join("config.yaml"))
 }
 
+/// 返回 repo 级共享配置路径。
+pub fn spec_wiki_repo_config_path(repo_root: &Path) -> std::path::PathBuf {
+    repo_root.join(".wiki").join("config.yaml")
+}
+
+/// 确保用户级配置文件存在；缺失时写入默认模板。
+pub fn ensure_default_user_config_file() -> io::Result<Option<std::path::PathBuf>> {
+    let Some(path) = spec_wiki_user_config_path() else {
+        return Ok(None);
+    };
+    if path.exists() {
+        return Ok(Some(path));
+    }
+    write_string_atomically(&path, DEFAULT_USER_CONFIG_TEMPLATE)?;
+    Ok(Some(path))
+}
+
+/// 校验用户级配置文件语法；不存在时视为无需校验。
+pub fn check_user_config_file() -> io::Result<Option<std::path::PathBuf>> {
+    let Some(path) = spec_wiki_user_config_path() else {
+        return Ok(None);
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+    read_yaml_file_strict::<RawDevConfig>(&path)?;
+    Ok(Some(path))
+}
+
 /// 返回用户级 learned state 路径。
 pub fn spec_wiki_user_state_path() -> Option<std::path::PathBuf> {
     spec_wiki_home_dir().map(|dir| dir.join("state.yaml"))
@@ -1017,11 +1072,15 @@ fn write_yaml_atomically<T>(path: &Path, value: &T) -> io::Result<()>
 where
     T: Serialize,
 {
+    let content =
+        serde_yaml::to_string(value).map_err(|error| io::Error::other(error.to_string()))?;
+    write_string_atomically(path, &content)
+}
+
+fn write_string_atomically(path: &Path, content: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let content =
-        serde_yaml::to_string(value).map_err(|error| io::Error::other(error.to_string()))?;
     let tmp_path = path.with_extension("tmp");
     fs::write(&tmp_path, content)?;
     fs::rename(tmp_path, path)
@@ -1056,7 +1115,15 @@ where
     }
 }
 
-
+fn read_yaml_file_strict<T>(path: &Path) -> io::Result<T>
+where
+    T: DeserializeOwned,
+{
+    let content = fs::read_to_string(path)
+        .map_err(|error| io::Error::other(format!("failed to read {}: {error}", path.display())))?;
+    serde_yaml::from_str::<T>(&content)
+        .map_err(|error| io::Error::other(format!("failed to parse {}: {error}", path.display())))
+}
 
 impl SteeringConfig {
     pub fn knowledge_planner_config(&self) -> wiki_knowledge::KnowledgePlannerConfig {

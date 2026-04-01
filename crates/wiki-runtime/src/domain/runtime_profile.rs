@@ -131,15 +131,25 @@ pub fn preflight_for_state(state: &str, facts_ready: bool) -> RuntimePreflight {
             query_readiness: QueryReadiness::Ready,
             recommended_action: RecommendedAction::None,
         },
-        "stale" => RuntimePreflight {
+        "stale" | "needs_update" => RuntimePreflight {
             facts_ready,
             query_readiness: QueryReadiness::NeedsUpdate,
             recommended_action: RecommendedAction::Update,
+        },
+        "runtime_incomplete" => RuntimePreflight {
+            facts_ready,
+            query_readiness: QueryReadiness::Ready,
+            recommended_action: RecommendedAction::None,
         },
         "missing" => RuntimePreflight {
             facts_ready: false,
             query_readiness: QueryReadiness::NeedsInit,
             recommended_action: RecommendedAction::Init,
+        },
+        "blocker" => RuntimePreflight {
+            facts_ready,
+            query_readiness: QueryReadiness::Blocked,
+            recommended_action: RecommendedAction::Rebuild,
         },
         _ => RuntimePreflight {
             facts_ready: false,

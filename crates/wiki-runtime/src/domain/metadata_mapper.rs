@@ -60,6 +60,3 @@ pub fn export_metadata(state: &WikiState, context: &ExportContext) -> WikiMetada
         dirty_state: state.dirty_state.clone(),
     }
 }
-
-
-

@@ -1,6 +1,8 @@
+use super::test_support::force_full_runtime;
 use std::fs;
 use std::path::Path;
 
+use serde_json::Value;
 use tempfile::tempdir;
 use wiki_runtime::debug_trace::{
     clear_startup_options, set_startup_options, StartupDebugTraceOptions,
@@ -31,6 +33,7 @@ impl ProgressSink for ProgressCollector {
 
 #[test]
 fn json_rpc_streams_init_progress_with_single_terminal_event() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -72,6 +75,36 @@ fn json_rpc_streams_init_progress_with_single_terminal_event() {
     );
     assert_eq!(terminals.len(), 1, "expected a single terminal event");
     assert!(matches!(events.last(), Some(CoreEvent::Result { .. })));
+    let terminal_payload = match events.last().unwrap() {
+        CoreEvent::Result { response } => response.data.as_ref().unwrap(),
+        other => panic!("expected result terminal, got {other:#?}"),
+    };
+    assert_eq!(
+        terminal_payload
+            .get("llm_execution_mode")
+            .and_then(Value::as_str),
+        Some("deterministic_only")
+    );
+    assert_eq!(
+        terminal_payload
+            .get("runtime_summary")
+            .and_then(|summary| summary.get("runtime_state"))
+            .and_then(Value::as_str),
+        Some("completed")
+    );
+    let terminal_payload = match events.last().unwrap() {
+        CoreEvent::Result { response } => response.data.clone().unwrap(),
+        other => panic!("expected result event, got {other:#?}"),
+    };
+    assert_eq!(terminal_payload["llm_execution_mode"], "deterministic_only");
+    assert_eq!(
+        terminal_payload["runtime_summary"]["workflow_action"],
+        "init"
+    );
+    assert_eq!(
+        terminal_payload["runtime_summary"]["runtime_state"],
+        "completed"
+    );
 
     let first_occurrence = [
         "scan",
@@ -106,9 +139,13 @@ fn json_rpc_streams_init_progress_with_single_terminal_event() {
 
 #[test]
 fn json_rpc_streams_terminal_error_once_for_invalid_repo() {
+    let missing_root = tempdir().unwrap().path().join("missing-repo");
     let mut output = Vec::new();
     handle_json_stream(
-        r#"{"action":"init","repoRoot":"E:/missing-repo"}"#,
+        &format!(
+            r#"{{"action":"init","repoRoot":"{}"}}"#,
+            missing_root.display().to_string().replace('\\', "/")
+        ),
         &mut output,
     )
     .unwrap();
@@ -141,6 +178,7 @@ fn should_stream_treats_long_running_actions_as_ndjson_by_default() {
 
 #[test]
 fn update_reports_scoped_symbol_edge_refresh_for_small_graph_changes() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -181,13 +219,25 @@ fn update_reports_scoped_symbol_edge_refresh_for_small_graph_changes() {
     let mut collector = ProgressCollector::default();
     run_update_with_progress_as("update", repo_root, &mut collector).unwrap();
 
-    assert!(collector.events.iter().any(|event| {
-        event.phase == "plan_changes" && event.message.contains("局部 symbol/edge 工作集")
-    }));
+    let matched = collector.events.iter().any(|event| {
+        event.phase == "plan_changes"
+            && event.message.contains("局部 parse/resolve 工作集")
+            && event.message.contains("全量 persisted graph")
+    });
+    assert!(
+        matched,
+        "unexpected progress events: {:?}",
+        collector
+            .events
+            .iter()
+            .map(|event| format!("{}:{}", event.phase, event.message))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
 fn json_rpc_can_write_debug_trace_without_polluting_stdout_protocol() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
     let trace_root = tempdir().unwrap();
@@ -225,6 +275,3 @@ fn json_rpc_can_write_debug_trace_without_polluting_stdout_protocol() {
     assert!(trace_text.contains("\"kind\":\"session_start\""));
     assert!(trace_text.contains("\"kind\":\"core_event\""));
 }
-
-
-

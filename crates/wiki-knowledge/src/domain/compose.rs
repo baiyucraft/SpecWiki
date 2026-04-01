@@ -48,6 +48,3 @@ pub struct DiagramDraft {
     pub description: String,
     pub content: String,
 }
-
-
-

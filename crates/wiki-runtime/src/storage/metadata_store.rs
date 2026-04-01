@@ -62,6 +62,3 @@ pub fn metadata_path(repo_root: &Path) -> PathBuf {
 pub fn metadata_exists(repo_root: &Path) -> bool {
     metadata_path(repo_root).exists()
 }
-
-
-

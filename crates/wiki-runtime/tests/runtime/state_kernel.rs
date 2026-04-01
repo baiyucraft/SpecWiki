@@ -1,6 +1,8 @@
 //! 这组测试覆盖 WikiState、change planning 与 cache 回退边界。
 //! 它们保护状态层与正式索引之间的 roundtrip、一致性和降级语义。
 
+use super::test_support::force_full_runtime;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -49,6 +51,7 @@ fn write_storybook_like_repo(repo_root: &Path) {
 /// 8.1 WikiState -> MetadataMapper -> WikiMetadata 的 roundtrip 一致性。
 #[test]
 fn state_metadata_roundtrip_produces_consistent_output() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -117,6 +120,7 @@ fn state_metadata_roundtrip_produces_consistent_output() {
 /// 8.2 query 输出包含 context_pack 和 provenance_summary。
 #[test]
 fn query_output_includes_context_pack_and_provenance_summary() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -147,6 +151,7 @@ fn query_output_includes_context_pack_and_provenance_summary() {
 /// 7.3 + 8.3 删除 wiki-state.json 后 status/query 仍能从 metadata 重建并正常工作。
 #[test]
 fn status_and_query_work_after_state_cache_deleted() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -179,18 +184,16 @@ fn status_and_query_work_after_state_cache_deleted() {
         Some("cache_missing")
     );
 
-    // query 仍然能从 metadata 回退工作
-    let query = run_query(repo_root, "项目概述").unwrap();
-    assert!(
-        !query.matches.is_empty(),
-        "query 应该能从 metadata 回退并返回结果"
-    );
-    assert!(!query.provenance_summary.is_empty());
+    // facts snapshot 已丢失时，query 必须返回显式 `index not ready`。
+    let error = run_query(repo_root, "项目概述").expect_err("query should fail when DB is missing");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(error.to_string().contains("index not ready"));
 }
 
-/// cache 全部删除后，status 仍能从 metadata 回退工作。
+/// cache 全部删除后，status 应优先基于 formal artifacts 恢复本地 runtime。
 #[test]
 fn status_works_after_full_cache_deletion() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -201,18 +204,17 @@ fn status_works_after_full_cache_deletion() {
     // 删除整个 .cache 目录
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    // status 应该报告 needs_rebuild 而不是崩溃
+    // status 应优先恢复 cache 并保持 fresh，而不是直接升级 needs_rebuild
     let status = run_status(repo_root).unwrap();
-    assert_eq!(status.state, "needs_rebuild");
-    assert_eq!(
-        status.needs_rebuild_reason.as_deref(),
-        Some("cache_missing")
-    );
+    assert_eq!(status.state, "fresh");
+    assert!(status.facts_ready);
+    assert!(repo_root.join(".wiki/.cache/wiki-cache.db").exists());
 }
 
 /// 场景：init 必须一次性写出页面 input hash、section 状态和 page-level cache。
 #[test]
 fn init_persists_page_input_hash_sections_and_page_caches() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -249,6 +251,7 @@ fn init_persists_page_input_hash_sections_and_page_caches() {
 
 #[test]
 fn init_persists_compose_plan_in_page_context_cache() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -277,6 +280,7 @@ fn init_persists_compose_plan_in_page_context_cache() {
 
 #[test]
 fn init_persists_runtime_summary_and_unit_gates() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -301,6 +305,7 @@ fn init_persists_runtime_summary_and_unit_gates() {
 
 #[test]
 fn missing_incremental_cache_components_reports_runtime_gate_and_parent_contract_gaps() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -353,6 +358,7 @@ fn missing_incremental_cache_components_reports_runtime_gate_and_parent_contract
 
 #[test]
 fn removing_child_page_marks_parent_page_dirty() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -402,11 +408,19 @@ fn removing_child_page_marks_parent_page_dirty() {
             .any(|page_id| page_id == &overview_page.page_id),
         "parent page should be marked dirty when child page disappears"
     );
+    assert!(
+        !matches!(
+            plan.affected_knowledge_scope.escalation.level.as_str(),
+            "local_refresh"
+        ),
+        "child page disappearance should escalate beyond local_refresh"
+    );
 }
 
 /// 场景：change planning 必须区分普通源码修改与触发 replan 的结构变化。
 #[test]
 fn change_plan_detects_modified_and_structural_sources() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -437,6 +451,24 @@ fn change_plan_detects_modified_and_structural_sources() {
         .iter()
         .any(|path| path == "src/util.ts"));
     assert!(!modified_plan.change_set.requires_replan);
+    assert_eq!(
+        modified_plan.affected_knowledge_scope.escalation.level.as_str(),
+        "local_refresh"
+    );
+    assert!(
+        modified_plan
+            .affected_knowledge_scope
+            .propagated_parent_unit_ids
+            .is_empty(),
+        "plain source edits should not propagate parent units by default"
+    );
+    assert!(
+        !modified_plan
+            .affected_knowledge_scope
+            .direct_unit_ids
+            .is_empty(),
+        "dirty source should first resolve to direct knowledge units"
+    );
 
     run_init(repo_root).unwrap();
     write_file(
@@ -457,11 +489,198 @@ fn change_plan_detects_modified_and_structural_sources() {
         .any(|path| path == "packages/shared/package.json"));
     assert!(structural_plan.change_set.requires_replan);
     assert!(!structural_plan.affected_set.affected_page_ids.is_empty());
+    assert!(
+        matches!(
+            structural_plan.affected_knowledge_scope.escalation.level.as_str(),
+            "subtree_replan" | "repo_replan"
+        ),
+        "structural change should escalate beyond local_refresh"
+    );
+}
+
+/// 场景：child contract 变化时，planning 必须把 parent unit 卷入 propagated scope。
+#[test]
+fn child_contract_change_propagates_parent_units() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    write_storybook_like_repo(repo_root);
+    run_init(repo_root).unwrap();
+
+    write_file(
+        repo_root.join("code/addons/measure/package.json").as_path(),
+        r#"{"name":"@storybook/addon-measure"}"#,
+    );
+    write_file(
+        repo_root.join("code/addons/measure/src/index.ts").as_path(),
+        "export const addonMeasure = true;\n",
+    );
+
+    let plan = plan_runtime_changes(repo_root).unwrap();
+    assert!(
+        !plan.affected_knowledge_scope.direct_unit_ids.is_empty(),
+        "child contract change should still resolve direct units first"
+    );
+    assert!(
+        !plan
+            .affected_knowledge_scope
+            .propagated_parent_unit_ids
+            .is_empty(),
+        "child contract change should propagate parent units: direct={:?} propagated={:?} targets={:?}",
+        plan.affected_knowledge_scope.direct_unit_ids,
+        plan.affected_knowledge_scope.propagated_parent_unit_ids,
+        plan.affected_knowledge_scope.projection_target_page_ids
+    );
+
+    let direct_unit_ids = plan
+        .affected_knowledge_scope
+        .direct_unit_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let propagated_unit_ids = plan
+        .affected_knowledge_scope
+        .propagated_parent_unit_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let projection_target_page_ids = plan
+        .affected_knowledge_scope
+        .projection_target_page_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let projected_parent_targets = plan
+        .planned_pages
+        .iter()
+        .filter(|page| projection_target_page_ids.contains(&page.id))
+        .filter_map(|page| page.unit_id.as_ref())
+        .filter(|unit_id| propagated_unit_ids.contains(*unit_id) && !direct_unit_ids.contains(*unit_id))
+        .count();
+
+    assert!(
+        projected_parent_targets > 0,
+        "propagated parent units should contribute projection target pages"
+    );
+}
+
+/// 场景：local_refresh 的 projection targets 只能来自 scope unit 及其祖先闭包。
+#[test]
+fn local_refresh_projection_targets_follow_scope_closure() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    write_file(
+        repo_root.join("package.json").as_path(),
+        r#"{"name":"projection-scope-test"}"#,
+    );
+    write_file(
+        repo_root.join("src/index.ts").as_path(),
+        "export const main = () => 1;\n",
+    );
+    write_file(
+        repo_root.join("src/util.ts").as_path(),
+        "export const util = () => 1;\n",
+    );
+
+    run_init(repo_root).unwrap();
+    write_file(
+        repo_root.join("src/util.ts").as_path(),
+        "export const util = () => 2;\n",
+    );
+
+    let plan = plan_runtime_changes(repo_root).unwrap();
+    assert_eq!(
+        plan.affected_knowledge_scope.escalation.level.as_str(),
+        "local_refresh"
+    );
+
+    let knowledge_tree = plan
+        .knowledge_tree
+        .as_ref()
+        .expect("local_refresh should keep planned knowledge tree");
+    let mut scope_closure = plan
+        .affected_knowledge_scope
+        .active_unit_ids()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let mut queue = scope_closure.iter().cloned().collect::<Vec<_>>();
+    while let Some(unit_id) = queue.pop() {
+        let Some(parent_id) = knowledge_tree
+            .get_unit(&unit_id)
+            .and_then(|unit| unit.parent_unit_id.clone())
+        else {
+            continue;
+        };
+        if scope_closure.insert(parent_id.clone()) {
+            queue.push(parent_id);
+        }
+    }
+
+    let targeted_unit_ids = plan
+        .planned_pages
+        .iter()
+        .filter(|page| {
+            plan.affected_knowledge_scope
+                .projection_target_page_ids
+                .iter()
+                .any(|page_id| page_id == &page.id)
+        })
+        .filter_map(|page| page.unit_id.clone())
+        .collect::<BTreeSet<_>>();
+
+    assert!(
+        !targeted_unit_ids.is_empty(),
+        "local_refresh should still derive projection targets from scope"
+    );
+    assert!(
+        targeted_unit_ids
+            .iter()
+            .all(|unit_id| scope_closure.contains(unit_id)),
+        "projection targets must be derivable from affected scope closure, not page drift"
+    );
+}
+
+/// 场景：页面 Markdown 变化不能反向主导 knowledge scope planning。
+#[test]
+fn editing_page_markdown_does_not_backdrive_knowledge_scope() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    write_file(
+        repo_root.join("package.json").as_path(),
+        r#"{"name":"page-diff-ignore-test"}"#,
+    );
+    write_file(
+        repo_root.join("src/index.ts").as_path(),
+        "export const main = () => 1;",
+    );
+
+    run_init(repo_root).unwrap();
+    let state = read_state(repo_root).unwrap();
+    let overview_page = state
+        .pages
+        .iter()
+        .find(|page| page.page_type == "overview")
+        .expect("overview page should exist");
+    let overview_path = repo_root.join(&overview_page.path);
+    let mut current = fs::read_to_string(&overview_path).unwrap();
+    current.push_str("\n<!-- user-local-edit -->\n");
+    fs::write(&overview_path, current).unwrap();
+
+    let plan = plan_runtime_changes(repo_root).unwrap();
+    assert_eq!(plan.state(), "fresh");
+    assert!(plan.affected_knowledge_scope.is_empty());
+    assert!(plan.affected_set.is_empty());
 }
 
 /// 场景：源码删除不能被折叠成普通 stale，必须保留 removed source 证据。
 #[test]
 fn change_plan_detects_removed_sources() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -490,6 +709,7 @@ fn change_plan_detects_removed_sources() {
 /// 场景：缺失单页 generation cache 时，status 必须升级为 `needs_rebuild`。
 #[test]
 fn status_reports_needs_rebuild_when_page_level_cache_is_missing() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -535,6 +755,3 @@ fn sorted(mut values: Vec<String>) -> Vec<String> {
     values.sort();
     values
 }
-
-
-

@@ -11,6 +11,8 @@ use crate::domain::runtime_profile::{
 };
 use crate::domain::state::{WikiPageState, WikiState};
 use crate::domain::steering::SteeringLoadMode;
+use crate::storage::cache_store::cache_dir;
+use crate::storage::knowledge_artifacts::restore_runtime_cache_from_artifacts;
 use crate::storage::sqlite::index_store::SqliteIndexStore;
 use crate::storage::state_store::{facts_snapshot_ready, load_or_rebuild_state};
 use crate::storage::wiki_fs::resolve_page_path;
@@ -234,8 +236,16 @@ pub fn run_query_with_mode(
     term: &str,
     steering_mode: SteeringLoadMode,
 ) -> io::Result<QueryReport> {
-    let plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
-    let facts_ready = facts_snapshot_ready(repo_root)?;
+    let mut plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+    let mut facts_ready = facts_snapshot_ready(repo_root)?;
+    if !facts_ready
+        && plan.needs_rebuild_reason.as_deref() == Some("cache_missing")
+        && !cache_dir(repo_root).exists()
+        && restore_runtime_cache_from_artifacts(repo_root)?
+    {
+        plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+        facts_ready = facts_snapshot_ready(repo_root)?;
+    }
     let runtime_state = project_external_runtime_state(
         repo_root,
         plan.state(),

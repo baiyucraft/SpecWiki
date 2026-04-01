@@ -14,6 +14,3 @@ fn metadata_roundtrip_keeps_dirty_state() {
     assert_eq!(decoded.wiki_items.len(), 1);
     assert_eq!(decoded.source_files.len(), 1);
 }
-
-
-

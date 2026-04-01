@@ -6,4 +6,5 @@ pub mod relation;
 pub mod source_citation;
 pub mod stable_id;
 pub mod state;
+pub mod update_scope;
 pub mod wiki_item;

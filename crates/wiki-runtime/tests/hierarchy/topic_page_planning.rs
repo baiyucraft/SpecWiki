@@ -4,15 +4,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use tempfile::TempDir;
-use wiki_runtime::domain::knowledge::{DecompositionProfile, DomainType, UnitType};
-use wiki_runtime::domain::steering::SteeringConfig;
-use wiki_runtime::generation::context::{build_module_contexts, build_repo_context};
-use wiki_knowledge::planning::{
-    build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
-};
 use wiki_index::hierarchy::build_module_tree;
 use wiki_index::scanner::scan_repo;
 use wiki_index::symbol_graph::GraphSummary;
+use wiki_knowledge::planning::{
+    build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
+};
+use wiki_runtime::domain::knowledge::{DecompositionProfile, DomainType, UnitType};
+use wiki_runtime::domain::steering::SteeringConfig;
+use wiki_runtime::generation::context::{build_module_contexts, build_repo_context};
 use wiki_runtime::storage::sqlite_store;
 
 fn default_planner_config() -> wiki_knowledge::KnowledgePlannerConfig {
@@ -3629,7 +3629,3 @@ fn signal_decomposition_unit_ids_stay_stable_after_non_signal_noise() {
 
     assert_eq!(baseline_ids, updated_ids);
 }
-
-
-
-

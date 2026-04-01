@@ -2,11 +2,40 @@
 //! 覆盖新 `scan.ignore/include` schema、legacy ignore 兼容读取和默认值。
 
 use std::fs;
+use std::path::Path;
+use std::sync::Mutex;
 
 use tempfile::TempDir;
 use wiki_runtime::domain::steering::{
-    load_steering_config, LlmProviderConfig, LlmProviderRequestFormat, SteeringConfig,
+    check_user_config_file, ensure_default_user_config_file, load_steering_config,
+    load_steering_config_with_mode, spec_wiki_user_config_path, LlmProviderConfig,
+    LlmProviderRequestFormat, SteeringConfig, SteeringLoadMode,
 };
+
+static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &Path) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, value.as_os_str());
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.as_ref() {
+            std::env::set_var(self.key, previous);
+        } else {
+            std::env::remove_var(self.key);
+        }
+    }
+}
 
 fn make_repo() -> TempDir {
     let dir = TempDir::new().unwrap();
@@ -15,11 +44,7 @@ fn make_repo() -> TempDir {
 }
 
 fn write_steering(repo: &TempDir, content: &str) {
-    fs::write(
-        repo.path().join(".wiki").join("wiki.steering.yaml"),
-        content,
-    )
-    .unwrap();
+    fs::write(repo.path().join(".wiki").join("config.yaml"), content).unwrap();
 }
 
 fn write_dev_config(repo: &TempDir, content: &str) {
@@ -46,6 +71,121 @@ fn missing_file_returns_defaults() {
     assert_eq!(config.llm.max_research_calls, 256);
     assert_eq!(config.llm.max_compose_calls, 160);
     assert_eq!(config.llm.page_research_max_turns, 10);
+}
+
+#[test]
+fn priority_is_user_then_repo_by_default() {
+    let _home_lock = HOME_ENV_LOCK.lock().unwrap();
+    let home = TempDir::new().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", home.path());
+    let _userprofile_guard = EnvVarGuard::set("USERPROFILE", home.path());
+    fs::create_dir_all(home.path().join(".spec-wiki")).unwrap();
+    fs::write(
+        home.path().join(".spec-wiki").join("config.yaml"),
+        r#"
+llm:
+  enabled: false
+  model: "user/default-model"
+"#,
+    )
+    .unwrap();
+
+    let repo = make_repo();
+    write_steering(
+        &repo,
+        r#"
+llm:
+  enabled: true
+  model: "repo/shared-model"
+"#,
+    );
+    write_dev_config(
+        &repo,
+        r#"
+llm:
+  model: "dev/override-model"
+"#,
+    );
+
+    let config = load_steering_config(repo.path());
+    assert!(config.llm.enabled);
+    assert_eq!(config.llm.model, "repo/shared-model");
+}
+
+#[test]
+fn priority_is_user_then_repo_then_dev_when_dev_mode_enabled() {
+    let _home_lock = HOME_ENV_LOCK.lock().unwrap();
+    let home = TempDir::new().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", home.path());
+    let _userprofile_guard = EnvVarGuard::set("USERPROFILE", home.path());
+    fs::create_dir_all(home.path().join(".spec-wiki")).unwrap();
+    fs::write(
+        home.path().join(".spec-wiki").join("config.yaml"),
+        r#"
+llm:
+  enabled: false
+  model: "user/default-model"
+"#,
+    )
+    .unwrap();
+
+    let repo = make_repo();
+    write_steering(
+        &repo,
+        r#"
+llm:
+  enabled: true
+  model: "repo/shared-model"
+"#,
+    );
+    write_dev_config(
+        &repo,
+        r#"
+llm:
+  model: "dev/override-model"
+"#,
+    );
+
+    let config = load_steering_config_with_mode(repo.path(), SteeringLoadMode::Development);
+    assert!(config.llm.enabled);
+    assert_eq!(config.llm.model, "dev/override-model");
+}
+
+#[test]
+fn ensure_default_user_config_creates_template() {
+    let _home_lock = HOME_ENV_LOCK.lock().unwrap();
+    let home = TempDir::new().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", home.path());
+    let _userprofile_guard = EnvVarGuard::set("USERPROFILE", home.path());
+
+    let path = ensure_default_user_config_file()
+        .unwrap()
+        .expect("user config path should be available");
+    let content = fs::read_to_string(&path).unwrap();
+
+    assert_eq!(
+        path,
+        spec_wiki_user_config_path().expect("expected user config path")
+    );
+    assert!(content.contains("debug: {}"));
+    assert!(content.contains("llm: {}"));
+}
+
+#[test]
+fn check_user_config_reports_invalid_yaml() {
+    let _home_lock = HOME_ENV_LOCK.lock().unwrap();
+    let home = TempDir::new().unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", home.path());
+    let _userprofile_guard = EnvVarGuard::set("USERPROFILE", home.path());
+    fs::create_dir_all(home.path().join(".spec-wiki")).unwrap();
+    fs::write(
+        home.path().join(".spec-wiki").join("config.yaml"),
+        "{{{{not valid yaml",
+    )
+    .unwrap();
+
+    let error = check_user_config_file().expect_err("invalid yaml should fail");
+    assert!(error.to_string().contains("failed to parse"));
 }
 
 #[test]
@@ -207,6 +347,7 @@ fn default_config_is_sane() {
 
 #[test]
 fn dev_config_overrides_shared_llm_provider_fields() {
+    let _home_lock = HOME_ENV_LOCK.lock().unwrap();
     let repo = make_repo();
     write_steering(
         &repo,
@@ -244,7 +385,7 @@ llm:
 "#,
     );
 
-    let config = load_steering_config(repo.path());
+    let config = load_steering_config_with_mode(repo.path(), SteeringLoadMode::Development);
     let selected = config.llm.resolve_selected_model().unwrap();
 
     assert!(config.llm.enabled);
@@ -353,6 +494,7 @@ llm:
 
 #[test]
 fn provider_max_retries_can_be_configured_and_zero_falls_back_to_default() {
+    let _home_lock = HOME_ENV_LOCK.lock().unwrap();
     let repo = make_repo();
     write_steering(
         &repo,
@@ -378,7 +520,7 @@ llm:
 "#,
     );
 
-    let config = load_steering_config(repo.path());
+    let config = load_steering_config_with_mode(repo.path(), SteeringLoadMode::Development);
     let selected = config.llm.resolve_selected_model().unwrap();
 
     assert_eq!(selected.provider.max_retries, 5);
@@ -386,6 +528,7 @@ llm:
 
 #[test]
 fn provider_retry_backoff_can_be_configured_and_zero_falls_back_to_default() {
+    let _home_lock = HOME_ENV_LOCK.lock().unwrap();
     let repo = make_repo();
     write_steering(
         &repo,
@@ -411,7 +554,7 @@ llm:
 "#,
     );
 
-    let config = load_steering_config(repo.path());
+    let config = load_steering_config_with_mode(repo.path(), SteeringLoadMode::Development);
     let selected = config.llm.resolve_selected_model().unwrap();
 
     assert_eq!(selected.provider.retry_backoff_ms, 250);
@@ -483,6 +626,7 @@ fn provider_request_format_preserves_explicit_endpoint_suffix() {
 
 #[test]
 fn dev_config_can_enable_debug_trace() {
+    let _home_lock = HOME_ENV_LOCK.lock().unwrap();
     let repo = make_repo();
     write_steering(
         &repo,
@@ -502,7 +646,7 @@ debug:
 "#,
     );
 
-    let config = load_steering_config(repo.path());
+    let config = load_steering_config_with_mode(repo.path(), SteeringLoadMode::Development);
 
     assert!(config.debug.enabled);
     assert_eq!(config.debug.trace_dir, "logs/wiki-runtime");
@@ -513,6 +657,3 @@ fn sorted(mut values: Vec<String>) -> Vec<String> {
     values.sort();
     values
 }
-
-
-

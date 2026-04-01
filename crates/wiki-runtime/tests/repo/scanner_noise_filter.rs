@@ -77,6 +77,3 @@ fn scanner_tags_test_path_files() {
         "test file should have test-file tag"
     );
 }
-
-
-

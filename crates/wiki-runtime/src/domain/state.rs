@@ -9,10 +9,10 @@ use crate::domain::context::PageContext;
 use crate::domain::metadata::{DirtyState, WikiMetadata};
 use crate::domain::module_tree::ModuleTree;
 use crate::domain::relation::WikiRelation;
-use wiki_knowledge::PlannedPage;
 use crate::generation::sections::SectionDraft;
 use wiki_index::fingerprint::fingerprint_bytes;
 use wiki_index::scanner::ScanReport;
+use wiki_knowledge::PlannedPage;
 
 pub use wiki_model::domain::state::{
     BuildState, SourceState, WikiPageState, WikiSectionState, WikiState,
@@ -158,8 +158,6 @@ pub fn rebuild_state_from_metadata(metadata: &WikiMetadata) -> WikiState {
         },
     }
 }
-
-
 
 /// 基于页面计划、页面上下文和当前扫描结果计算稳定输入指纹。
 /// 这里显式把源码 fingerprint 纳入签名，让局部源码内容变化也会驱动相关页面重生成。
@@ -350,8 +348,3 @@ fn build_relations(pages: &[WikiPageState], module_tree: &ModuleTree) -> Vec<Wik
 
     relations
 }
-
-
-
-
-

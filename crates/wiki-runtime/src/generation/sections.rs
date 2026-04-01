@@ -6,11 +6,10 @@ use serde::{Deserialize, Serialize};
 use crate::domain::context::{PageComposePlan, PageComposeSection, PageContext};
 use wiki_knowledge::{
     domain::research::PageResearchSectionPlan,
-    section_key_for_title as knowledge_section_key_for_title,
     section_contract_slots_for_page_type as knowledge_section_contract_slots_for_page_type,
+    section_key_for_title as knowledge_section_key_for_title,
     section_title_for_key as knowledge_section_title_for_key,
-    section_titles_for_page_type as knowledge_section_titles_for_page_type,
-    PlannedPage,
+    section_titles_for_page_type as knowledge_section_titles_for_page_type, PlannedPage,
 };
 
 use crate::domain::stable_id::stable_id;
@@ -86,15 +85,14 @@ pub fn build_page_compose_plan(page: &PlannedPage, context: &PageContext) -> Pag
     let sections = ordered_section_templates(page.page_type.as_str(), &templates, context)
         .into_iter()
         .map(|(section_key, title, content, plan)| {
-            let content =
-                append_supporting_blocks(
-                    page.page_type.as_str(),
-                    &section_key,
-                    &title,
-                    &content,
-                    context,
-                    plan.as_ref(),
-                );
+            let content = append_supporting_blocks(
+                page.page_type.as_str(),
+                &section_key,
+                &title,
+                &content,
+                context,
+                plan.as_ref(),
+            );
             PageComposeSection {
                 section_key,
                 section_title: title,
@@ -240,11 +238,13 @@ fn section_content_for_slot(
         ("family-leaf-doc", "family-leaf-architecture") => family_architecture_section(context),
         ("family-leaf-doc", "family-leaf-sources") => family_sources_section(context),
         ("family-leaf-doc", "family-leaf-related") => family_leaf_related_section(context),
-        ("family-leaf-doc", "family-leaf-performance") => performance_considerations_section(context),
+        ("family-leaf-doc", "family-leaf-performance") => {
+            performance_considerations_section(context)
+        }
         ("family-leaf-doc", "family-leaf-troubleshooting") => troubleshooting_section(context),
         ("family-leaf-doc", "family-leaf-conclusion") => family_conclusion_section(context),
         ("family-leaf-doc", "family-leaf-appendix") => appendix_section(context),
-        (_, "intro") => "由 codebuddy-wiki 自动生成。".to_string(),
+        (_, "intro") => "由 spec-wiki 自动生成。".to_string(),
         _ => String::new(),
     }
 }
@@ -1147,10 +1147,3 @@ fn sanitize_mermaid_id(value: &str) -> String {
         })
         .collect()
 }
-
-
-
-
-
-
-

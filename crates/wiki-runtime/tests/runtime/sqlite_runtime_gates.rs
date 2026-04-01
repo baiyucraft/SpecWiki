@@ -49,6 +49,3 @@ fn unit_runtime_gate_crud_roundtrips_and_clears() {
         .unwrap()
         .is_empty());
 }
-
-
-

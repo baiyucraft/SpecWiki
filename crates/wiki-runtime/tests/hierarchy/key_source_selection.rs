@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use wiki_runtime::generation::context::build_module_contexts;
 use wiki_index::hierarchy::build_module_tree;
 use wiki_index::scanner::scan_repo;
+use wiki_runtime::generation::context::build_module_contexts;
 
 fn fixture_path() -> PathBuf {
     [
@@ -82,6 +82,3 @@ fn key_sources_exclude_fixture_paths() {
         );
     }
 }
-
-
-

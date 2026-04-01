@@ -1,17 +1,17 @@
 //! 渲染层负责把页面上下文和 section 草稿组装成最终 Markdown。
 //! 它只关心表达形式，不参与模块树、变化规划和状态判断。
 
-use wiki_knowledge::domain::compose::{ComposeSectionDraft, DiagramDraft, PageDraft};
 use crate::domain::context::PageComposePlan;
 use crate::domain::context::PageContext;
 use crate::domain::stable_id::stable_id;
 use crate::generation::managed_sections::{
     render_page_with_markers, ManagedSectionBlock, PageBlock, PageMergePlan,
 };
-use wiki_knowledge::PlannedPage;
 use crate::generation::sections::{
     build_page_compose_plan, build_section_drafts_from_compose_plan, SectionDraft,
 };
+use wiki_knowledge::domain::compose::{ComposeSectionDraft, DiagramDraft, PageDraft};
+use wiki_knowledge::PlannedPage;
 
 /// `RenderedPage` 是页面渲染层的标准输出。
 /// 它同时返回 section 草稿和最终 Markdown，供缓存和状态层复用。
@@ -249,7 +249,9 @@ fn insert_generated_toc_if_missing(draft: &PageDraft, sections: &mut Vec<Section
     );
 }
 
-fn collect_page_citations(draft: &PageDraft) -> Vec<wiki_knowledge::domain::research::SourceCitation> {
+fn collect_page_citations(
+    draft: &PageDraft,
+) -> Vec<wiki_knowledge::domain::research::SourceCitation> {
     dedup_citation_paths(
         &draft
             .sections
@@ -432,7 +434,9 @@ fn preserves_reference_markdown(content: &str) -> bool {
         || normalized.contains("图表来源")
 }
 
-fn render_citation_evidence_block(citations: &[wiki_knowledge::domain::research::SourceCitation]) -> String {
+fn render_citation_evidence_block(
+    citations: &[wiki_knowledge::domain::research::SourceCitation],
+) -> String {
     let citations = dedup_citations(citations);
     if citations.is_empty() {
         return String::new();
@@ -454,7 +458,9 @@ fn render_citation_evidence_block(citations: &[wiki_knowledge::domain::research:
     lines.join("\n")
 }
 
-fn render_section_sources_block(citations: &[wiki_knowledge::domain::research::SourceCitation]) -> String {
+fn render_section_sources_block(
+    citations: &[wiki_knowledge::domain::research::SourceCitation],
+) -> String {
     let citations = dedup_citations(citations);
     if citations.is_empty() {
         return String::new();
@@ -482,7 +488,9 @@ fn collect_all_section_citations(
     )
 }
 
-fn render_appendix_entries_block(citations: &[wiki_knowledge::domain::research::SourceCitation]) -> String {
+fn render_appendix_entries_block(
+    citations: &[wiki_knowledge::domain::research::SourceCitation],
+) -> String {
     let citations = dedup_citations(citations);
     if citations.is_empty() {
         return String::new();
@@ -557,7 +565,9 @@ fn render_diagram_block(diagram: &DiagramDraft) -> String {
     parts.join("\n\n")
 }
 
-fn render_diagram_sources_block(citations: &[wiki_knowledge::domain::research::SourceCitation]) -> String {
+fn render_diagram_sources_block(
+    citations: &[wiki_knowledge::domain::research::SourceCitation],
+) -> String {
     let citations = dedup_citation_paths(citations);
     if citations.is_empty() {
         return String::new();
@@ -992,7 +1002,3 @@ fn assemble_page_from_sections(title: &str, sections: &[SectionDraft]) -> String
 pub fn assemble_page_from_merge(title: &str, merge_plan: &PageMergePlan) -> String {
     render_page_with_markers(title, &merge_plan.blocks)
 }
-
-
-
-

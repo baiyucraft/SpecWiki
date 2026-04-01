@@ -195,6 +195,3 @@ fn current_timestamp_ms() -> u128 {
         .unwrap_or_default()
         .as_millis()
 }
-
-
-

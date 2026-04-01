@@ -42,6 +42,3 @@ fn init_writes_wiki_layout() {
         .any(|item| item.path.ends_with("系统架构.md")));
     assert!(metadata.wiki_items.len() >= 2);
 }
-
-
-

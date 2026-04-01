@@ -381,6 +381,3 @@ fn update_refreshes_importer_edges_when_only_import_target_changes() {
         "unexpected stale CALLS edges after importer fan-out refresh: {edges:#?}"
     );
 }
-
-
-

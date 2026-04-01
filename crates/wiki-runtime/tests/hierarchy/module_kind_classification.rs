@@ -85,6 +85,3 @@ fn agent_directory_not_classified_as_frontend_app() {
         connector.kind
     );
 }
-
-
-

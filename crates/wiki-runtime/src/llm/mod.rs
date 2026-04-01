@@ -20,24 +20,26 @@ use wiki_index::assist::{self as index_assist, FactsAssist};
 
 use crate::debug_trace;
 use crate::domain::context::{
-    PageContext, PageDiagramInput, PageEvidenceGroup, PageResearchSessionState,
-    PageResearchTurn, PageToolArtifactRef, TargetedSnippet,
+    PageContext, PageDiagramInput, PageEvidenceGroup, PageResearchSessionState, PageResearchTurn,
+    PageToolArtifactRef, TargetedSnippet,
 };
 use crate::domain::module_tree::ModuleTree;
-use wiki_knowledge::{ModuleContext, RepoContext};
-use wiki_knowledge::domain::research::{PageResearchResult, ResearchSessionStats, ResearchStopReason};
 use crate::domain::stable_id::stable_id;
 use crate::domain::steering::{
     persist_learned_tools_mode, resolve_learned_tools_mode, LlmCacheMode, LlmConfig,
     LlmProviderConfig, LlmProviderRequestFormat, LlmToolsMode,
 };
-use wiki_knowledge::PlannedPage;
 use crate::generation::sections::{section_key_for_title, section_titles_for_page_type};
+use crate::storage::sqlite_store::{read_llm_cache, write_llm_cache, LlmCacheEntry};
 use wiki_index::fingerprint::fingerprint_bytes;
 use wiki_index::scanner::FilePurpose;
 use wiki_index::symbol_graph::{GraphAnalysisSnapshot, ResolvedGraphSnapshot};
 use wiki_index::symbols::{ParsedSymbolsSnapshot, SymbolNode};
-use crate::storage::sqlite_store::{read_llm_cache, write_llm_cache, LlmCacheEntry};
+use wiki_knowledge::domain::research::{
+    PageResearchResult, ResearchSessionStats, ResearchStopReason,
+};
+use wiki_knowledge::PlannedPage;
+use wiki_knowledge::{ModuleContext, RepoContext};
 
 const FILE_PURPOSE_PROMPT_VERSION: &str = "file-purpose/v1";
 const TOP_LEVEL_PROMOTION_PROMPT_VERSION: &str = "top-level-promotion/v1";
@@ -883,248 +885,246 @@ impl PageResearchSessionResult {
 /// �?research 结果做轻量结构校验，避免污染 deterministic renderer。
 fn sanitize_page_research_result(
     mut result: PageResearchResult,
-        context: &PageContext,
-        allowed_section_slots: &[PageResearchSectionSlot],
-    ) -> Option<PageResearchResult> {
-        result.summary = normalize_sentence(&result.summary);
-        result.page_positioning = normalize_sentence(&result.page_positioning);
-        result.open_questions = dedupe_non_empty(result.open_questions)
+    context: &PageContext,
+    allowed_section_slots: &[PageResearchSectionSlot],
+) -> Option<PageResearchResult> {
+    result.summary = normalize_sentence(&result.summary);
+    result.page_positioning = normalize_sentence(&result.page_positioning);
+    result.open_questions = dedupe_non_empty(result.open_questions)
+        .into_iter()
+        .take(3)
+        .collect();
+
+    let allowed_group_keys = context
+        .evidence_groups
+        .iter()
+        .map(|group| group.group_id.clone())
+        .collect::<BTreeSet<_>>();
+    let allowed_diagrams = context
+        .diagram_inputs
+        .iter()
+        .map(|diagram| diagram.diagram_id.clone())
+        .collect::<BTreeSet<_>>();
+    let allowed_children = context
+        .child_unit_ids
+        .iter()
+        .chain(context.child_page_ids.iter())
+        .chain(context.child_digest_ids.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let allowed_source_paths = context
+        .evidence_groups
+        .iter()
+        .flat_map(|group| group.items.iter().map(|item| item.path.clone()))
+        .collect::<BTreeSet<_>>();
+    let allowed_slots = if allowed_section_slots.is_empty() {
+        section_titles_for_page_type(&context.page_type)
             .into_iter()
-            .take(3)
-            .collect();
+            .map(|title| PageResearchSectionSlot {
+                section_key: section_key_for_title(&context.page_type, title),
+                section_title: title.to_string(),
+            })
+            .collect::<Vec<_>>()
+    } else {
+        allowed_section_slots.to_vec()
+    };
+    let allowed_slot_keys = allowed_slots
+        .iter()
+        .map(|slot| (slot.section_key.clone(), slot.section_title.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let allowed_slot_titles = allowed_slots
+        .iter()
+        .map(|slot| (slot.section_title.clone(), slot.section_key.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let max_section_count = allowed_slots.len();
 
-        let allowed_group_keys = context
-            .evidence_groups
-            .iter()
-            .map(|group| group.group_id.clone())
-            .collect::<BTreeSet<_>>();
-        let allowed_diagrams = context
-            .diagram_inputs
-            .iter()
-            .map(|diagram| diagram.diagram_id.clone())
-            .collect::<BTreeSet<_>>();
-        let allowed_children = context
-            .child_unit_ids
-            .iter()
-            .chain(context.child_page_ids.iter())
-            .chain(context.child_digest_ids.iter())
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let allowed_source_paths = context
-            .evidence_groups
-            .iter()
-            .flat_map(|group| group.items.iter().map(|item| item.path.clone()))
-            .collect::<BTreeSet<_>>();
-        let allowed_slots = if allowed_section_slots.is_empty() {
-            section_titles_for_page_type(&context.page_type)
+    let mut seen_section_keys = BTreeSet::new();
+    result.section_plan = result
+        .section_plan
+        .into_iter()
+        .filter_map(|mut section| {
+            let normalized_key = if section.section_key.trim().is_empty() {
+                allowed_slot_titles
+                    .get(section.section_title.trim())
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        section_key_for_title(&context.page_type, &section.section_title)
+                    })
+            } else {
+                section.section_key.trim().to_string()
+            };
+            let section_title = allowed_slot_keys.get(&normalized_key)?.to_string();
+            if !seen_section_keys.insert(normalized_key.clone()) {
+                return None;
+            }
+            section.section_key = normalized_key;
+            section.section_title = section_title;
+            section.section_summary = normalize_multiline(&section.section_summary);
+            section.evidence_refs = dedupe_non_empty(section.evidence_refs)
                 .into_iter()
-                .map(|title| PageResearchSectionSlot {
-                    section_key: section_key_for_title(&context.page_type, title),
-                    section_title: title.to_string(),
-                })
-                .collect::<Vec<_>>()
-        } else {
-            allowed_section_slots.to_vec()
-        };
-        let allowed_slot_keys = allowed_slots
-            .iter()
-            .map(|slot| (slot.section_key.clone(), slot.section_title.clone()))
-            .collect::<BTreeMap<_, _>>();
-        let allowed_slot_titles = allowed_slots
-            .iter()
-            .map(|slot| (slot.section_title.clone(), slot.section_key.clone()))
-            .collect::<BTreeMap<_, _>>();
-        let max_section_count = allowed_slots.len();
+                .filter(|reference| allowed_group_keys.contains(reference))
+                .take(6)
+                .collect();
+            section.diagram_refs = dedupe_non_empty(section.diagram_refs)
+                .into_iter()
+                .filter(|reference| allowed_diagrams.contains(reference))
+                .take(4)
+                .collect();
+            section.child_refs = dedupe_non_empty(section.child_refs)
+                .into_iter()
+                .filter(|reference| allowed_children.contains(reference))
+                .take(6)
+                .collect();
 
-        let mut seen_section_keys = BTreeSet::new();
-        result.section_plan = result
-            .section_plan
+            (!section.section_summary.is_empty()
+                || !section.evidence_refs.is_empty()
+                || !section.diagram_refs.is_empty()
+                || !section.child_refs.is_empty()
+                || section.child_digest_slot)
+                .then_some(section)
+        })
+        .take(max_section_count)
+        .collect();
+    let allowed_section_keys = result
+        .section_plan
+        .iter()
+        .map(|section| section.section_key.clone())
+        .collect::<BTreeSet<_>>();
+    result.skeleton_profile = result.skeleton_profile.map(|mut profile| {
+        profile.profile_key = profile.profile_key.trim().to_string();
+        profile.seed_sections = profile
+            .seed_sections
             .into_iter()
             .filter_map(|mut section| {
-                let normalized_key = if section.section_key.trim().is_empty() {
-                    allowed_slot_titles
-                        .get(section.section_title.trim())
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            section_key_for_title(&context.page_type, &section.section_title)
-                        })
-                } else {
-                    section.section_key.trim().to_string()
-                };
-                let section_title = allowed_slot_keys.get(&normalized_key)?.to_string();
-                if !seen_section_keys.insert(normalized_key.clone()) {
+                section.section_key = section.section_key.trim().to_string();
+                section.title = section.title.trim().to_string();
+                if section.section_key.is_empty()
+                    || section.title.is_empty()
+                    || !allowed_slot_keys.contains_key(&section.section_key)
+                {
                     return None;
                 }
-                section.section_key = normalized_key;
-                section.section_title = section_title;
-                section.section_summary = normalize_multiline(&section.section_summary);
-                section.evidence_refs = dedupe_non_empty(section.evidence_refs)
-                    .into_iter()
-                    .filter(|reference| allowed_group_keys.contains(reference))
-                    .take(6)
-                    .collect();
-                section.diagram_refs = dedupe_non_empty(section.diagram_refs)
-                    .into_iter()
-                    .filter(|reference| allowed_diagrams.contains(reference))
-                    .take(4)
-                    .collect();
-                section.child_refs = dedupe_non_empty(section.child_refs)
-                    .into_iter()
-                    .filter(|reference| allowed_children.contains(reference))
-                    .take(6)
-                    .collect();
-
-                (!section.section_summary.is_empty()
-                    || !section.evidence_refs.is_empty()
-                    || !section.diagram_refs.is_empty()
-                    || !section.child_refs.is_empty()
-                    || section.child_digest_slot)
-                    .then_some(section)
+                Some(section)
             })
-            .take(max_section_count)
             .collect();
-        let allowed_section_keys = result
-            .section_plan
-            .iter()
-            .map(|section| section.section_key.clone())
-            .collect::<BTreeSet<_>>();
-        result.skeleton_profile = result.skeleton_profile.map(|mut profile| {
-            profile.profile_key = profile.profile_key.trim().to_string();
-            profile.seed_sections = profile
-                .seed_sections
+        profile
+    });
+    result.key_source_clusters = result
+        .key_source_clusters
+        .into_iter()
+        .filter_map(|mut cluster| {
+            cluster.cluster_key = cluster.cluster_key.trim().to_string();
+            cluster.label = cluster.label.trim().to_string();
+            cluster.source_paths = dedupe_non_empty(cluster.source_paths)
                 .into_iter()
-                .filter_map(|mut section| {
-                    section.section_key = section.section_key.trim().to_string();
-                    section.title = section.title.trim().to_string();
-                    if section.section_key.is_empty()
-                        || section.title.is_empty()
-                        || !allowed_slot_keys.contains_key(&section.section_key)
-                    {
-                        return None;
-                    }
-                    Some(section)
-                })
+                .filter(|path| allowed_source_paths.contains(path))
+                .take(6)
                 .collect();
-            profile
-        });
-        result.key_source_clusters = result
-            .key_source_clusters
-            .into_iter()
-            .filter_map(|mut cluster| {
-                cluster.cluster_key = cluster.cluster_key.trim().to_string();
-                cluster.label = cluster.label.trim().to_string();
-                cluster.source_paths = dedupe_non_empty(cluster.source_paths)
-                    .into_iter()
-                    .filter(|path| allowed_source_paths.contains(path))
-                    .take(6)
-                    .collect();
-                cluster.evidence_cluster_keys = dedupe_non_empty(cluster.evidence_cluster_keys)
-                    .into_iter()
-                    .filter(|reference| allowed_group_keys.contains(reference))
-                    .take(6)
-                    .collect();
-                (!cluster.cluster_key.is_empty()
-                    && !cluster.label.is_empty()
-                    && (!cluster.source_paths.is_empty()
-                        || !cluster.evidence_cluster_keys.is_empty()))
-                .then_some(cluster)
-            })
-            .take(8)
-            .collect();
-        let allowed_key_source_clusters = result
-            .key_source_clusters
-            .iter()
-            .map(|cluster| cluster.cluster_key.clone())
-            .collect::<BTreeSet<_>>();
-        result.section_grounding_refs = result
-            .section_grounding_refs
-            .into_iter()
-            .filter_map(|mut grounding| {
-                grounding.section_key = grounding.section_key.trim().to_string();
-                grounding.key_source_cluster_keys =
-                    dedupe_non_empty(grounding.key_source_cluster_keys)
+            cluster.evidence_cluster_keys = dedupe_non_empty(cluster.evidence_cluster_keys)
+                .into_iter()
+                .filter(|reference| allowed_group_keys.contains(reference))
+                .take(6)
+                .collect();
+            (!cluster.cluster_key.is_empty()
+                && !cluster.label.is_empty()
+                && (!cluster.source_paths.is_empty() || !cluster.evidence_cluster_keys.is_empty()))
+            .then_some(cluster)
+        })
+        .take(8)
+        .collect();
+    let allowed_key_source_clusters = result
+        .key_source_clusters
+        .iter()
+        .map(|cluster| cluster.cluster_key.clone())
+        .collect::<BTreeSet<_>>();
+    result.section_grounding_refs = result
+        .section_grounding_refs
+        .into_iter()
+        .filter_map(|mut grounding| {
+            grounding.section_key = grounding.section_key.trim().to_string();
+            grounding.key_source_cluster_keys = dedupe_non_empty(grounding.key_source_cluster_keys)
+                .into_iter()
+                .filter(|reference| allowed_key_source_clusters.contains(reference))
+                .take(6)
+                .collect();
+            grounding.evidence_cluster_keys = dedupe_non_empty(grounding.evidence_cluster_keys)
+                .into_iter()
+                .filter(|reference| allowed_group_keys.contains(reference))
+                .take(6)
+                .collect();
+            grounding.child_digest_refs = dedupe_non_empty(grounding.child_digest_refs)
+                .into_iter()
+                .filter(|reference| context.child_digest_ids.iter().any(|id| id == reference))
+                .take(6)
+                .collect();
+            grounding.diagram_refs = dedupe_non_empty(grounding.diagram_refs)
+                .into_iter()
+                .filter(|reference| allowed_diagrams.contains(reference))
+                .take(4)
+                .collect();
+
+            (!grounding.section_key.is_empty()
+                && allowed_section_keys.contains(&grounding.section_key)
+                && (!grounding.key_source_cluster_keys.is_empty()
+                    || !grounding.evidence_cluster_keys.is_empty()
+                    || !grounding.child_digest_refs.is_empty()
+                    || !grounding.diagram_refs.is_empty()))
+            .then_some(grounding)
+        })
+        .take(max_section_count)
+        .collect();
+
+    result.evidence_rollup = result
+        .evidence_rollup
+        .into_iter()
+        .filter_map(|mut group| {
+            group.group_key = group.group_key.trim().to_string();
+            group.title = group.title.trim().to_string();
+            if !allowed_group_keys.contains(&group.group_key) || group.title.is_empty() {
+                return None;
+            }
+            group.items = group
+                .items
+                .into_iter()
+                .filter_map(|mut item| {
+                    item.path = item.path.trim().to_string();
+                    item.note = normalize_sentence(&item.note);
+                    item.evidence_type = item.evidence_type.trim().to_string();
+                    item.section_refs = dedupe_non_empty(item.section_refs)
                         .into_iter()
-                        .filter(|reference| allowed_key_source_clusters.contains(reference))
-                        .take(6)
+                        .filter(|reference| seen_section_keys.contains(reference))
                         .collect();
-                grounding.evidence_cluster_keys = dedupe_non_empty(grounding.evidence_cluster_keys)
-                    .into_iter()
-                    .filter(|reference| allowed_group_keys.contains(reference))
-                    .take(6)
-                    .collect();
-                grounding.child_digest_refs = dedupe_non_empty(grounding.child_digest_refs)
-                    .into_iter()
-                    .filter(|reference| context.child_digest_ids.iter().any(|id| id == reference))
-                    .take(6)
-                    .collect();
-                grounding.diagram_refs = dedupe_non_empty(grounding.diagram_refs)
-                    .into_iter()
-                    .filter(|reference| allowed_diagrams.contains(reference))
-                    .take(4)
-                    .collect();
+                    (!item.path.is_empty()).then_some(item)
+                })
+                .take(6)
+                .collect();
+            (!group.items.is_empty()).then_some(group)
+        })
+        .take(4)
+        .collect();
+    result.diagram_rollup = result
+        .diagram_rollup
+        .into_iter()
+        .filter_map(|mut diagram| {
+            diagram.diagram_key = diagram.diagram_key.trim().to_string();
+            diagram.title = diagram.title.trim().to_string();
+            diagram.summary = normalize_sentence(&diagram.summary);
+            (allowed_diagrams.contains(&diagram.diagram_key) && !diagram.title.is_empty())
+                .then_some(diagram)
+        })
+        .take(3)
+        .collect();
 
-                (!grounding.section_key.is_empty()
-                    && allowed_section_keys.contains(&grounding.section_key)
-                    && (!grounding.key_source_cluster_keys.is_empty()
-                        || !grounding.evidence_cluster_keys.is_empty()
-                        || !grounding.child_digest_refs.is_empty()
-                        || !grounding.diagram_refs.is_empty()))
-                .then_some(grounding)
-            })
-            .take(max_section_count)
-            .collect();
-
-        result.evidence_rollup = result
-            .evidence_rollup
-            .into_iter()
-            .filter_map(|mut group| {
-                group.group_key = group.group_key.trim().to_string();
-                group.title = group.title.trim().to_string();
-                if !allowed_group_keys.contains(&group.group_key) || group.title.is_empty() {
-                    return None;
-                }
-                group.items = group
-                    .items
-                    .into_iter()
-                    .filter_map(|mut item| {
-                        item.path = item.path.trim().to_string();
-                        item.note = normalize_sentence(&item.note);
-                        item.evidence_type = item.evidence_type.trim().to_string();
-                        item.section_refs = dedupe_non_empty(item.section_refs)
-                            .into_iter()
-                            .filter(|reference| seen_section_keys.contains(reference))
-                            .collect();
-                        (!item.path.is_empty()).then_some(item)
-                    })
-                    .take(6)
-                    .collect();
-                (!group.items.is_empty()).then_some(group)
-            })
-            .take(4)
-            .collect();
-        result.diagram_rollup = result
-            .diagram_rollup
-            .into_iter()
-            .filter_map(|mut diagram| {
-                diagram.diagram_key = diagram.diagram_key.trim().to_string();
-                diagram.title = diagram.title.trim().to_string();
-                diagram.summary = normalize_sentence(&diagram.summary);
-                (allowed_diagrams.contains(&diagram.diagram_key) && !diagram.title.is_empty())
-                    .then_some(diagram)
-            })
-            .take(3)
-            .collect();
-
-        (!result.summary.is_empty()
-            || !result.page_positioning.is_empty()
-            || !result.section_plan.is_empty()
-            || !result.key_source_clusters.is_empty()
-            || !result.section_grounding_refs.is_empty()
-            || !result.evidence_rollup.is_empty()
-            || !result.diagram_rollup.is_empty()
-            || !result.open_questions.is_empty())
-        .then_some(result)
-    }
+    (!result.summary.is_empty()
+        || !result.page_positioning.is_empty()
+        || !result.section_plan.is_empty()
+        || !result.key_source_clusters.is_empty()
+        || !result.section_grounding_refs.is_empty()
+        || !result.evidence_rollup.is_empty()
+        || !result.diagram_rollup.is_empty()
+        || !result.open_questions.is_empty())
+    .then_some(result)
+}
 
 #[derive(Debug, Clone)]
 struct PendingPromptBatch<T> {
@@ -1974,8 +1974,11 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                     ));
                 }
                 if let Ok(parsed) = serde_json::from_str::<PageResearchResult>(&cached.response) {
-                    if let Some(result) = sanitize_page_research_result(parsed, runtime.page_context, runtime.allowed_section_slots)
-                    {
+                    if let Some(result) = sanitize_page_research_result(
+                        parsed,
+                        runtime.page_context,
+                        runtime.allowed_section_slots,
+                    ) {
                         let mut session =
                             input
                                 .session
@@ -2131,7 +2134,11 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         self.record_completion_usage(PromptType::PageResearch, &completion);
         let Some(result) = parse_page_research_output(completion.output, runtime.page_context)
             .and_then(|result| {
-                sanitize_page_research_result(result, runtime.page_context, runtime.allowed_section_slots)
+                sanitize_page_research_result(
+                    result,
+                    runtime.page_context,
+                    runtime.allowed_section_slots,
+                )
             })
         else {
             return Ok(PageResearchSessionResult::invalid_output(
@@ -2354,7 +2361,8 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                     let Some(result) =
                         parse_page_research_output(final_result, runtime.page_context).and_then(
                             |result| {
-                                sanitize_page_research_result(result, 
+                                sanitize_page_research_result(
+                                    result,
                                     runtime.page_context,
                                     runtime.allowed_section_slots,
                                 )
@@ -2417,7 +2425,8 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
                 };
                 let Some(result) = parse_page_research_output(value, runtime.page_context)
                     .and_then(|result| {
-                        sanitize_page_research_result(result, 
+                        sanitize_page_research_result(
+                            result,
                             runtime.page_context,
                             runtime.allowed_section_slots,
                         )
@@ -5058,16 +5067,3 @@ mod tests {
         );
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-

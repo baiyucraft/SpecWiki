@@ -330,7 +330,6 @@ fn section_slots_for_page_type(page_type: &str) -> Vec<SectionContractSlot> {
     }
 }
 
-
 fn slug_key(value: &str) -> String {
     value
         .chars()
@@ -376,5 +375,3 @@ fn normalize_requested_section_title<'a>(page_type: &str, title: &'a str) -> Cow
         .map(Cow::Borrowed)
         .unwrap_or_else(|| Cow::Borrowed(trimmed))
 }
-
-

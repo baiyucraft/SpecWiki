@@ -2,4 +2,3 @@
 //! facts / index 主实现已经迁到 `wiki-index`。
 
 pub mod git;
-

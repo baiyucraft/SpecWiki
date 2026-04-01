@@ -1,6 +1,7 @@
 //! SQLite 存储层集成测试。
 //! 验证完整 init → update → sync → rebuild 生命周期中 DB 的创建、读写和清理行为。
 
+use super::test_support::force_full_runtime;
 use std::fs;
 use std::path::Path;
 
@@ -32,6 +33,7 @@ fn db_exists(repo_root: &Path) -> bool {
 
 #[test]
 fn init_creates_db_and_state() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let repo = make_fixture_repo();
     assert!(!db_exists(repo.path()));
 
@@ -55,6 +57,7 @@ fn init_creates_db_and_state() {
 
 #[test]
 fn update_after_init_preserves_db() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let repo = make_fixture_repo();
     run_init(repo.path()).unwrap();
 
@@ -69,6 +72,7 @@ fn update_after_init_preserves_db() {
 
 #[test]
 fn sync_after_init_preserves_db() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let repo = make_fixture_repo();
     run_init(repo.path()).unwrap();
 
@@ -79,6 +83,7 @@ fn sync_after_init_preserves_db() {
 
 #[test]
 fn rebuild_recreates_db() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let repo = make_fixture_repo();
     run_init(repo.path()).unwrap();
 
@@ -96,6 +101,7 @@ fn rebuild_recreates_db() {
 
 #[test]
 fn full_lifecycle_init_update_sync_rebuild() {
+    let (_env_lock, _index_only) = force_full_runtime();
     let repo = make_fixture_repo();
 
     // 1. init
@@ -129,6 +135,3 @@ fn full_lifecycle_init_update_sync_rebuild() {
     assert!(!final_state.pages.is_empty());
     assert!(final_state.pages.iter().any(|p| p.page_type == "overview"));
 }
-
-
-

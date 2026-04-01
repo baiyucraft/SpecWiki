@@ -1,11 +1,13 @@
 //! index_store 聚合 facts / index 相关的 SQLite 读写入口。
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
 use wiki_index::scanner::ScanReport;
 use wiki_index::store::{
-    CallTraceHit, IndexQueryStore, IndexSnapshotStore, SymbolSearchHit,
+    CallTraceHit, EntrypointRecord, IndexQueryStore, IndexSnapshotStore, ModuleRecord,
+    ModuleSourceLink, SourceRecord, SymbolSearchHit,
 };
 use wiki_index::symbol_graph::{
     CommunityMember, CommunityNode, GraphAnalysisSnapshot, ProcessNode, ProcessStep,
@@ -33,7 +35,8 @@ impl SqliteIndexStore {
 impl IndexSnapshotStore for SqliteIndexStore {
     fn write_scan_report(&self, report: &ScanReport) -> io::Result<()> {
         let conn = sqlite_store::open_db(&self.repo_root)?;
-        let json = serde_json::to_string(report).map_err(|error| io::Error::other(error.to_string()))?;
+        let json =
+            serde_json::to_string(report).map_err(|error| io::Error::other(error.to_string()))?;
         sqlite_store::scan_cache_set(&conn, "repo-scan", &json)
     }
 
@@ -49,7 +52,8 @@ impl IndexSnapshotStore for SqliteIndexStore {
 
     fn write_module_tree(&self, tree: &ModuleTree) -> io::Result<()> {
         let conn = sqlite_store::open_db(&self.repo_root)?;
-        let json = serde_json::to_string(tree).map_err(|error| io::Error::other(error.to_string()))?;
+        let json =
+            serde_json::to_string(tree).map_err(|error| io::Error::other(error.to_string()))?;
         sqlite_store::scan_cache_set(&conn, "module-tree", &json)?;
         sqlite_store::replace_module_tree_snapshot(&conn, tree)
     }
@@ -62,6 +66,68 @@ impl IndexSnapshotStore for SqliteIndexStore {
                 .map_err(|error| io::Error::other(error.to_string())),
             None => Ok(None),
         }
+    }
+
+    fn list_modules(&self) -> io::Result<Vec<ModuleRecord>> {
+        sqlite_store::list_modules_snapshot(&self.repo_root)
+    }
+
+    fn list_module_source_links(&self) -> io::Result<Vec<ModuleSourceLink>> {
+        sqlite_store::list_module_source_links(&self.repo_root)
+    }
+
+    fn list_sources(&self) -> io::Result<Vec<SourceRecord>> {
+        Ok(self
+            .read_scan_report()?
+            .map(|report| {
+                report
+                    .files
+                    .into_iter()
+                    .map(|file| SourceRecord {
+                        source_id: file.id,
+                        path: file.path,
+                        language: file.language,
+                        kind: file.kind,
+                        tags: file.tags,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    fn list_entrypoints(&self) -> io::Result<Vec<EntrypointRecord>> {
+        let Some(report) = self.read_scan_report()? else {
+            return Ok(Vec::new());
+        };
+
+        let source_id_by_path = self
+            .list_sources()?
+            .into_iter()
+            .map(|source| (source.path, source.source_id))
+            .collect::<BTreeMap<_, _>>();
+        let mut module_ids_by_path = BTreeMap::<String, BTreeSet<String>>::new();
+        for module in self.list_modules()? {
+            let module_id = module.module_id;
+            for entry_path in module.entry_points {
+                module_ids_by_path
+                    .entry(entry_path)
+                    .or_default()
+                    .insert(module_id.clone());
+            }
+        }
+
+        Ok(report
+            .entry_points
+            .into_iter()
+            .map(|path| EntrypointRecord {
+                source_id: source_id_by_path.get(&path).cloned(),
+                module_ids: module_ids_by_path
+                    .remove(&path)
+                    .map(|module_ids| module_ids.into_iter().collect())
+                    .unwrap_or_default(),
+                path,
+            })
+            .collect())
     }
 
     fn replace_symbol_graph(
@@ -120,6 +186,8 @@ impl IndexQueryStore for SqliteIndexStore {
                     name: hit.name,
                     label: hit.label,
                     file_path: hit.file_path,
+                    start_line: hit.start_line,
+                    end_line: hit.end_line,
                     language: hit.language,
                     score: hit.score,
                 })
@@ -139,7 +207,11 @@ impl IndexQueryStore for SqliteIndexStore {
         sqlite_store::list_adjacent_symbol_files(&self.repo_root, source_paths)
     }
 
-    fn trace_call_edges(&self, symbol_id: &str, max_depth: usize) -> io::Result<Vec<ResolvedSymbolEdge>> {
+    fn trace_call_edges(
+        &self,
+        symbol_id: &str,
+        max_depth: usize,
+    ) -> io::Result<Vec<ResolvedSymbolEdge>> {
         self.trace_call_edges_from_seeds(&[symbol_id.to_string()], max_depth, 48)
             .map(|hits| {
                 hits.into_iter()
@@ -181,8 +253,12 @@ impl IndexQueryStore for SqliteIndexStore {
     }
 
     fn list_community_members(&self, community_id: &str) -> io::Result<Vec<CommunityMember>> {
-        sqlite_store::list_community_members(&self.repo_root)
-            .map(|members| members.into_iter().filter(|member| member.community_id == community_id).collect())
+        sqlite_store::list_community_members(&self.repo_root).map(|members| {
+            members
+                .into_iter()
+                .filter(|member| member.community_id == community_id)
+                .collect()
+        })
     }
 
     fn list_processes(&self) -> io::Result<Vec<ProcessNode>> {
@@ -190,8 +266,11 @@ impl IndexQueryStore for SqliteIndexStore {
     }
 
     fn list_process_steps(&self, process_id: &str) -> io::Result<Vec<ProcessStep>> {
-        sqlite_store::list_process_steps(&self.repo_root)
-            .map(|steps| steps.into_iter().filter(|step| step.process_id == process_id).collect())
+        sqlite_store::list_process_steps(&self.repo_root).map(|steps| {
+            steps
+                .into_iter()
+                .filter(|step| step.process_id == process_id)
+                .collect()
+        })
     }
 }
-

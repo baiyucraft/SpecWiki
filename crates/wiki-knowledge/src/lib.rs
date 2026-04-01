@@ -21,7 +21,3 @@ pub use store::{KnowledgeArtifactStore, KnowledgeSnapshotStore};
 pub fn workspace_name() -> &'static str {
     "wiki-knowledge"
 }
-
-
-
-

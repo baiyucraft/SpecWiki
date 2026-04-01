@@ -160,6 +160,3 @@ pub fn compute_facts_input_hash(
     }
     fingerprint_bytes(&hasher_input)
 }
-
-
-

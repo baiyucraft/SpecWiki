@@ -50,13 +50,20 @@ impl<'conn> SqliteRuntimeStore<'conn> {
     }
 
     pub fn read_pipeline_checkpoint(&self) -> io::Result<Option<PipelineCheckpoint>> {
-        let Some((checkpoint_id, facts_input_hash, interrupted_stage, interrupted_target_id, error_message)) =
-            sqlite_store::read_pipeline_checkpoint(self.conn)?
+        let Some((
+            checkpoint_id,
+            facts_input_hash,
+            interrupted_stage,
+            interrupted_target_id,
+            error_message,
+        )) = sqlite_store::read_pipeline_checkpoint(self.conn)?
         else {
             return Ok(None);
         };
         let stage = PipelineStage::from_str(&interrupted_stage).ok_or_else(|| {
-            io::Error::other(format!("unknown pipeline stage in checkpoint: {interrupted_stage}"))
+            io::Error::other(format!(
+                "unknown pipeline stage in checkpoint: {interrupted_stage}"
+            ))
         })?;
         Ok(Some(PipelineCheckpoint {
             checkpoint_id,
@@ -71,4 +78,3 @@ impl<'conn> SqliteRuntimeStore<'conn> {
         sqlite_store::clear_pipeline_checkpoint(self.conn)
     }
 }
-

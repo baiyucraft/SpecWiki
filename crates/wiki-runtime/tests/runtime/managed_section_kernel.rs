@@ -15,7 +15,7 @@ fn parse_page_with_managed_markers() {
 <!-- wiki:managed:start id=section-aaa title="简介" version=1 -->
 ## 简介
 
-由 codebuddy-wiki 自动生成的仓库概览。
+由 spec-wiki 自动生成的仓库概览。
 <!-- wiki:managed:end id=section-aaa -->
 
 <!-- wiki:managed:start id=section-bbb title="项目事实" version=1 -->
@@ -447,6 +447,3 @@ fn content_hash_is_stable() {
     let h3 = content_hash("different");
     assert_ne!(h1, h3);
 }
-
-
-

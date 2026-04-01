@@ -1,7 +1,7 @@
 use wiki_knowledge::domain::compose::{ComposeSectionDraft, DiagramDraft, PageDraft};
-use wiki_runtime::domain::context::PageContext;
 use wiki_knowledge::domain::research::SourceCitation;
 use wiki_knowledge::PlannedPage;
+use wiki_runtime::domain::context::PageContext;
 use wiki_runtime::generation::renderer::{render_page_bundle, render_page_draft};
 
 fn planned_page(page_type: &str, title: &str, path: &str) -> PlannedPage {
@@ -54,6 +54,9 @@ fn page_context(page_type: &str) -> PageContext {
         diagram_digest_refs: Vec::new(),
         evidence_groups: Vec::new(),
         diagram_inputs: Vec::new(),
+        has_unit_research_contract: false,
+        unit_research_input_hash: None,
+        missing_child_unit_ids: Vec::new(),
     }
 }
 
@@ -148,7 +151,3 @@ fn render_page_draft_uses_compose_sections_directly() {
         .contains("说明 Repo 与 Provider 之间的运行时依赖。"));
     assert!(rendered.sections.len() >= 4);
 }
-
-
-
-

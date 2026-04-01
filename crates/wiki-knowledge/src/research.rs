@@ -6,21 +6,21 @@ use std::path::Path;
 use regex::Regex;
 
 use crate::domain::context::{ModuleContext, RepoContext};
-use wiki_model::domain::knowledge::{
-    DecompositionProfile, KnowledgeDomain, KnowledgeTree, KnowledgeUnit, PlannerSignalKind,
-    UnitScope, UnitType,
-};
-use wiki_model::domain::module_tree::ModuleTree;
 use crate::domain::research::{
     canonical_reference_outline_title, is_reference_outline_title, DiagramSuggestion,
     DomainResearch, EvidenceCluster, KeySourceCluster, PageDigest, PlannedSection,
     ResearchPageSeed, ResearchProfile, SectionGroundingRef, SkeletonProfile, SkeletonSection,
     SourceCitation, SystemResearch, UnitResearch,
 };
-use wiki_model::domain::stable_id::stable_id;
 use wiki_index::scanner::{FilePurpose, ScanReport, ScannedFile};
 use wiki_index::symbol_graph::{GraphAnalysisSnapshot, GraphSummary, ResolvedGraphSnapshot};
 use wiki_index::symbols::ParsedSymbolsSnapshot;
+use wiki_model::domain::knowledge::{
+    DecompositionProfile, KnowledgeDomain, KnowledgeTree, KnowledgeUnit, PlannerSignalKind,
+    UnitScope, UnitType,
+};
+use wiki_model::domain::module_tree::ModuleTree;
+use wiki_model::domain::stable_id::stable_id;
 
 // ─── ResearchDataSource ─────────────────────────────────────
 
@@ -1018,8 +1018,7 @@ fn structural_selection_policy(
                 topic_focus.and_then(|focus| focus.kind),
                 Some(TopicFocusKind::TypeSystem)
             );
-            let implementation_spine_focus =
-                api_surface_prefers_implementation_spine(topic_focus);
+            let implementation_spine_focus = api_surface_prefers_implementation_spine(topic_focus);
             let (contract_minimum, implementation_minimum) = if type_system_focus {
                 (1, 2)
             } else if implementation_spine_focus {
@@ -1393,7 +1392,10 @@ fn topic_focus_score(topic_focus: Option<&TopicFocusHints>, path: &str, basename
         score += 60;
     }
     if matches!(topic_focus.kind, Some(TopicFocusKind::TypeSystem)) {
-        if path.contains("/preview-api/") || path.contains("/manager-api/") || path.contains("/csf/") {
+        if path.contains("/preview-api/")
+            || path.contains("/manager-api/")
+            || path.contains("/csf/")
+        {
             score += 180;
         }
     }
@@ -3266,19 +3268,19 @@ mod tests {
         ResearchDataSource, ResearchKeySourceCandidate, ResearchKeySourceOrigin, ResearchPageKind,
     };
     use crate::domain::context::{ModuleContext, RepoContext};
+    use crate::domain::research::{
+        KeySourceCluster, PlannedSection, ResearchProfile, SourceCitation,
+    };
+    use std::fs;
+    use tempfile::tempdir;
+    use wiki_index::scanner::{DependencyHint, FilePurpose, ScanReport, ScannedFile};
+    use wiki_index::symbol_graph::{GraphAnalysisSnapshot, GraphSummary, ResolvedGraphSnapshot};
+    use wiki_index::symbols::ParsedSymbolsSnapshot;
     use wiki_model::domain::knowledge::{
         ConfigSurface, DocsAnchor, DomainType, KnowledgeDomain, KnowledgeTree, KnowledgeUnit,
         UnitScope, UnitType,
     };
     use wiki_model::domain::module_tree::ModuleTree;
-    use crate::domain::research::{
-        KeySourceCluster, PlannedSection, ResearchProfile, SourceCitation,
-    };
-    use wiki_index::scanner::{DependencyHint, FilePurpose, ScanReport, ScannedFile};
-    use wiki_index::symbol_graph::{GraphAnalysisSnapshot, GraphSummary, ResolvedGraphSnapshot};
-    use wiki_index::symbols::ParsedSymbolsSnapshot;
-    use std::fs;
-    use tempfile::tempdir;
 
     #[test]
     fn collect_doc_reference_citations_promotes_markdown_file_links() {
@@ -5012,6 +5014,3 @@ Accessibility tests audit the rendered DOM.
         }
     }
 }
-
-
-

@@ -147,6 +147,3 @@ fn sync_skips_unchanged_legacy_page() {
         "no changes should mean no synced pages"
     );
 }
-
-
-

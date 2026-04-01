@@ -11,11 +11,14 @@ use crate::domain::runtime_profile::{
     blocker_hint_from, preflight_for_state,
 };
 use crate::domain::steering::{SteeringLoadMode, load_steering_config_with_mode};
+use crate::storage::cache_store::cache_dir;
+use crate::storage::knowledge_artifacts::restore_runtime_cache_from_artifacts;
 use crate::storage::state_store::facts_snapshot_ready;
 use crate::workflows::page_render::{
     load_runtime_gate_summary_for_repo, load_runtime_summary_for_repo,
 };
 use crate::workflows::release_scope::project_external_runtime_state;
+use wiki_model::domain::update_scope::AffectedKnowledgeScope;
 
 /// `status` 只回答一件事：当前 Repo Wiki 是否仍然可用、是否被阻塞，以及下一步动作。
 #[derive(Debug, Clone, Serialize)]
@@ -26,6 +29,8 @@ pub struct StatusReport {
     pub dirty_sources: Vec<String>,
     /// 本次检测到的受影响页面路径集合。
     pub dirty_pages: Vec<String>,
+    /// 本次 update planning 命中的知识范围摘要。
+    pub affected_knowledge_scope: AffectedKnowledgeScope,
     /// 当状态为 `needs_rebuild` 时，对外返回的原因说明。
     pub needs_rebuild_reason: Option<String>,
     /// 当前仓库是否已经持有可供 query 兜底使用的 facts/runtime snapshot。
@@ -66,7 +71,13 @@ pub fn run_status_with_mode(
     repo_root: &Path,
     steering_mode: SteeringLoadMode,
 ) -> io::Result<StatusReport> {
-    let plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+    let mut plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+    if plan.needs_rebuild_reason.as_deref() == Some("cache_missing")
+        && !cache_dir(repo_root).exists()
+        && restore_runtime_cache_from_artifacts(repo_root)?
+    {
+        plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+    }
     let facts_ready = facts_snapshot_ready(repo_root)?;
     let projected_state = project_external_runtime_state(repo_root, plan.state(), facts_ready);
     let runtime_summary = load_runtime_summary_for_repo(repo_root)
@@ -94,6 +105,7 @@ pub fn run_status_with_mode(
         state: external_state,
         dirty_sources: plan.change_set.dirty_sources(),
         dirty_pages: plan.dirty_page_paths(),
+        affected_knowledge_scope: plan.affected_knowledge_scope,
         needs_rebuild_reason: plan.needs_rebuild_reason,
         facts_ready: preflight.facts_ready,
         query_readiness: preflight.query_readiness,

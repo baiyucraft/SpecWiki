@@ -78,4 +78,3 @@ fn read_head(path: &Path) -> Option<String> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
-

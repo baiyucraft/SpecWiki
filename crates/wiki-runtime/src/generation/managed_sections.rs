@@ -611,6 +611,3 @@ mod tests {
         assert!(block.body.contains("<cite>"));
     }
 }
-
-
-
