@@ -18,19 +18,21 @@ import {
   readdirSync,
   readFileSync,
   statSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
-import { ROOT_DIR, TEST_DIR, removePathWithRetry } from "./testing/helpers.mjs";
+import {
+  ROOT_DIR,
+  TEST_DIR,
+  removePathWithRetry,
+  withTemporaryDevConfig,
+} from "./testing/helpers.mjs";
 
-const __filename = fileURLToPath(import.meta.url);
 const BINARY_NAME = process.platform === "win32" ? "wiki-runtime.exe" : "wiki-runtime";
 const DEBUG_BINARY = path.join(ROOT_DIR, "target", "debug", BINARY_NAME);
 const RELEASE_BINARY = path.join(ROOT_DIR, "target", "release", BINARY_NAME);
-const ROOT_DEV_CONFIG_PATH = path.join(ROOT_DIR, "wiki.dev.yaml");
 const DEFAULT_LOG_ROOT_DIR = path.join(ROOT_DIR, "tmp", "debug-init-traces");
 
 function resolveBinaryPath() {
@@ -184,10 +186,10 @@ function createProgressFilter() {
       if (event.processed != null && event.total != null && event.total > 0) {
         const percent = Math.floor((event.processed / event.total) * 100);
         const lastPercent = countedPercents.get(event.phase) ?? -1;
-        const shouldPrint =
-          event.processed === 0
-          || event.processed === event.total
-          || percent >= lastPercent + 10;
+        const shouldPrint
+          = event.processed === 0
+            || event.processed === event.total
+            || percent >= lastPercent + 10;
         if (shouldPrint) {
           countedPercents.set(event.phase, percent);
         }
@@ -212,27 +214,6 @@ function renderTraceEntry(entry) {
   ].join("\n");
 }
 
-async function withTemporaryDevConfig(repoRoot, callback) {
-  if (!existsSync(ROOT_DEV_CONFIG_PATH)) {
-    throw new Error(`缺少 root wiki.dev.yaml: ${ROOT_DEV_CONFIG_PATH}`);
-  }
-
-  const targetPath = path.join(repoRoot, "wiki.dev.yaml");
-  const rootConfig = readFileSync(ROOT_DEV_CONFIG_PATH, "utf-8");
-  const previous = existsSync(targetPath) ? readFileSync(targetPath, "utf-8") : null;
-
-  writeFileSync(targetPath, rootConfig);
-  try {
-    return await callback();
-  } finally {
-    if (previous === null) {
-      unlinkSync(targetPath);
-    } else {
-      writeFileSync(targetPath, previous);
-    }
-  }
-}
-
 async function runInitTrace(target, logRootDir) {
   const binary = resolveBinaryPath();
   const runDir = path.join(logRootDir, `${target.label}-${timestampSlug()}`);
@@ -245,29 +226,29 @@ async function runInitTrace(target, logRootDir) {
 
   ensureDir(runDir);
   removePathWithRetry(wikiDir);
-  writeFileSync(
-    path.join(runDir, "command.json"),
-    `${JSON.stringify(
-      {
-        binary,
-        args: ["--json", "--debug-trace-dir", runDir],
-        command: {
-          action: "init",
-          repoRoot: target.commandRepoRoot,
-          streamProgress: true,
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
   appendLine(sessionLogPath, `repo=${target.repoRoot}`);
   appendLine(sessionLogPath, `binary=${binary}`);
   appendLine(sessionLogPath, `run_dir=${runDir}`);
   appendLine(sessionLogPath);
   const progressFilter = createProgressFilter();
 
-  const terminal = await withTemporaryDevConfig(target.repoRoot, async () => {
+  const terminal = await withTemporaryDevConfig(target.repoRoot, async (devContext) => {
+    writeFileSync(
+      path.join(runDir, "command.json"),
+      `${JSON.stringify(
+        {
+          binary,
+          args: ["--json", "--debug-trace-dir", runDir],
+          command: devContext.command({
+            action: "init",
+            repoRoot: target.commandRepoRoot,
+            streamProgress: true,
+          }),
+        },
+        null,
+        2,
+      )}\n`,
+    );
     return await new Promise((resolve, reject) => {
       const child = spawn(
         binary,
@@ -309,11 +290,11 @@ async function runInitTrace(target, logRootDir) {
       });
 
       child.stdin.end(
-        `${JSON.stringify({
+        `${JSON.stringify(devContext.command({
           action: "init",
           repoRoot: target.commandRepoRoot,
           streamProgress: true,
-        })}\n`,
+        }))}\n`,
       );
 
       function drainStdout(flushRemainder) {

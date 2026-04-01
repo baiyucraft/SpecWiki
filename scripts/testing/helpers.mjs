@@ -176,12 +176,13 @@ export function isPreserveResumeEligibleInitErrorMessage(message) {
  * @param options.cwd 执行命令时使用的工作目录。
  * @param options.shell 是否通过 shell 启动子进程。
  * @param options.timeoutMs 子进程超时时间。
+ * @param options.killTreeOnTimeout Windows 超时时是否回收整棵进程树。
  * @returns 返回退出码、退出信号、是否超时以及捕获到的标准输出/错误。
  */
 export async function runCommandCapture(
   command,
   args,
-  { cwd = ROOT_DIR, shell = false, timeoutMs } = {},
+  { cwd = ROOT_DIR, shell = false, timeoutMs, killTreeOnTimeout = false } = {},
 ) {
   return await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -201,7 +202,7 @@ export async function runCommandCapture(
             stderr,
             `command timed out after ${timeoutMs}ms`,
           );
-          terminateChildProcess(child, { killTreeOnWindows: false });
+          terminateChildProcess(child, { killTreeOnWindows: killTreeOnTimeout });
         }, timeoutMs)
         : null;
 
@@ -264,7 +265,7 @@ function tryKillProcessTree(pid) {
  * 终止测试脚本拉起的子进程。
  *
  * 对 `wiki-runtime` 这类 leaf 进程，Windows 下需要回收整棵进程树，避免残留句柄继续锁住 `.wiki/.cache`；
- * 对项目级 node worker，默认只杀当前进程，避免破坏其 `finally` 里的临时 dev config 回滚。
+ * 对项目级 node worker，只有在外层已经判定超时失控时才应回收整棵树，否则会留下孤儿 `wiki-runtime`。
  *
  * @param child Node `spawn()` 返回的子进程句柄。
  * @param options 终止选项；`killTreeOnWindows` 仅应在 leaf 进程上启用。
