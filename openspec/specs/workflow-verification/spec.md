@@ -80,6 +80,13 @@
 - **THEN** 对存在代表性 symbol 且 `.wiki` 可直接查询的项目，`steady`、`mutation` 与 `rebuild` 必须验证 exact symbol hit 仍然存在
 - **THEN** 对无 symbols 项目或 real-repo `.wiki` 不位于 `repoRoot` 的项目，脚本 MAY 显式跳过 symbol query，但 MUST 继续验证 workflow 返回成功且 runtime state 保持 `fresh`
 
+#### Scenario: lifecycle harness 把缺失 metadata 提升为可消费诊断态
+- **WHEN** lifecycle harness 观察到底层状态为 `missing`，且磁盘诊断快照表明当前 repo 只是缺少 `wiki.metadata.json` 或等价恢复入口
+- **THEN** harness MUST 把该结果提升为可消费的 diagnostic runtime state
+- **THEN** 提升后的结果 MUST 继续保留 `query_readiness` 与 `recommended_action`
+- **THEN** 系统 MUST NOT 把该结果伪装成 `fresh`、`ready` 或正常可写的 full runtime
+- **THEN** 诊断原因 MUST 继续通过 harness/runtime snapshot 可见，便于调用方判断是否需要 `init`、`update` 或其它恢复动作
+
 #### Scenario: 测试项目集全量 init 分析
 - **WHEN** 迭代 7 的 tasks 设计或测试阶段
 - **THEN** 必须对 `DESIGN-3.0.md § 测试项目集` 的完整项目集执行 `init` 分析
