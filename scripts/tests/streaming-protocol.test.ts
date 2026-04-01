@@ -25,9 +25,9 @@ import {
 } from "../run-test-projects.mjs";
 import {
   buildLifecycleProjectChildArgs,
+  coerceLifecycleStatusResult,
   parseCliArgs as parseLifecycleCliArgs,
 } from "../test-wiki-lifecycle.mjs";
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..", "..");
@@ -148,8 +148,32 @@ test("lifecycle child args 会保留 phase 与 timeout", () => {
   ]);
 });
 
+test("lifecycle 会把磁盘诊断快照提升为可消费的 diagnostic state", () => {
+  const coerced = coerceLifecycleStatusResult(
+    {
+      ok: true,
+      error: null,
+      data: {
+        state: "missing",
+        query_readiness: "needs_init",
+        recommended_action: "init",
+      },
+    },
+    {
+      runtimeState: "runtime_incomplete",
+      runtimeSummary: null,
+      incompleteReason: "缺少 `wiki.metadata.json`",
+    },
+  );
+
+  expect(coerced.data.state).toBe("runtime_incomplete");
+  expect(coerced.data.query_readiness).toBe("needs_init");
+  expect(coerced.data.recommended_action).toBe("init");
+});
 test("瞬态错误识别会覆盖 os error 32", () => {
   expect(isTransientFsErrorMessage("EBUSY: resource busy")).toBe(true);
   expect(isTransientFsErrorMessage("另一个程序正在使用此文件，进程无法访问。 (os error 32)")).toBe(true);
   expect(isTransientFsErrorMessage("provider returned 429")).toBe(false);
 });
+
+
