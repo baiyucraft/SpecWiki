@@ -39,6 +39,7 @@ import {
   ROOT_DIR,
   removePathWithRetry,
   resolveProjectJobs,
+  syncTemporaryDevConfig,
   runCommandCapture,
   runSequentialTasks,
   runTaskPool,
@@ -62,7 +63,6 @@ const WARM_RESTORE_SUPPORTED_STATES = new Set([
   "needs_update",
   "runtime_incomplete",
   "blocker",
-  "index_only",
 ]);
 
 export const LIFECYCLE_PHASES = {
@@ -256,8 +256,8 @@ export function coerceLifecycleStatusResult(statusResult, runtimeSnapshot) {
       data.runtime_summary = runtimeSnapshot.runtimeSummary;
     }
     if (data.runtime_summary) {
-      data.query_readiness = "ready";
-      data.recommended_action = "none";
+      data.query_readiness = "needs_update";
+      data.recommended_action = "update";
     } else {
       data.query_readiness ??= "needs_init";
       data.recommended_action ??= "init";
@@ -390,7 +390,7 @@ function assertDiagnosticRuntimeState(ctx, t, label, statusResult, runtimeSnapsh
 
   if (state === "runtime_incomplete") {
     if (statusResult.data?.runtime_summary) {
-      t.assertContains(`${label} query remains ready`, statusResult.data, "query_readiness", "ready");
+      t.assertContains(`${label} query remains stale-but-usable`, statusResult.data, "query_readiness", "needs_update");
       t.pass(`${label} runtime summary present`);
     } else {
       t.pass(`${label} snapshot-backed runtime incomplete captured`);
@@ -774,7 +774,7 @@ function assertGraphQuery(ctx, t, probe, label) {
       `missing graph hits for ${probe.term}`,
     );
 
-  queryResult.data?.provenance_summary?.includes("扩展")
+  queryResult.data?.provenance_summary?.includes("index_hit")
     ? t.pass(`${label} graph provenance summary recorded`)
     : t.fail(
       `${label} graph provenance summary recorded`,
@@ -960,6 +960,7 @@ async function initProject(ctx, t) {
       if (result.resumedFromCheckpoint) {
         console.log(`  [init/${ctx.runLabel}] resumed with cache_mode=${ctx.cacheMode}`);
       }
+      syncTemporaryDevConfig(resolveProjectConfigRoot(ctx), { cacheMode: ctx.cacheMode });
       return finalizeInitOutcome(ctx, t, result.response, null, result.lastKnownDiagnostic);
     } else {
       const result = await runInitWithResume({
@@ -980,6 +981,7 @@ async function initProject(ctx, t) {
       if (result.resumedFromCheckpoint) {
         console.log(`  [init/${ctx.runLabel}] resumed with cache_mode=${ctx.cacheMode}`);
       }
+      syncTemporaryDevConfig(resolveProjectConfigRoot(ctx), { cacheMode: ctx.cacheMode });
       return finalizeInitOutcome(ctx, t, result.response, null, result.lastKnownDiagnostic);
     }
   } catch (error) {

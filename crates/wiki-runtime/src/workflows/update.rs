@@ -54,7 +54,7 @@ use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
 };
 use crate::workflows::rebuild::run_rebuild_with_progress_and_llm_as_with_mode;
-use crate::workflows::release_scope::{project_external_runtime_state, v0_1_index_only_enabled};
+use crate::workflows::release_scope::project_external_runtime_state;
 use crate::workflows::research_provider::select_runtime_research_provider;
 use wiki_index::fingerprint::fingerprint_bytes;
 use wiki_index::hierarchy::build_module_tree_with_graph_and_assist;
@@ -79,10 +79,8 @@ pub struct UpdateReport {
     /// update 开始前看到的 runtime 状态。
     pub previous_state: String,
     /// update 完成后的 runtime 状态。
-    /// `v0.1.0 index-only` 收敛路径会显式返回 `index_only`。
     pub state: String,
     /// 本次 update 实际触达的页面路径集合。
-    /// `v0.1.0 index-only` 收敛路径不会产出页面。
     pub updated_pages: Vec<String>,
     /// 本次 update 命中的知识范围摘要。
     pub affected_knowledge_scope: AffectedKnowledgeScope,
@@ -170,27 +168,6 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
     }
     let previous_state =
         project_external_runtime_state(repo_root, plan.state(), facts_snapshot_ready(repo_root)?);
-    if v0_1_index_only_enabled(action) {
-        WorkflowReporter::from_started_at(action, progress_sink, started_at).phase(
-            "plan_changes",
-            "v0.1.0 index-only 收敛：回退到 full index refresh",
-        );
-        let init = run_init_with_progress_and_llm_as_with_mode(
-            action,
-            repo_root,
-            progress_sink,
-            llm_service,
-            steering_mode,
-        )?;
-        return Ok(UpdateReport {
-            previous_state,
-            state: init.state,
-            updated_pages: init.generated_pages,
-            affected_knowledge_scope: AffectedKnowledgeScope::default(),
-            runtime_summary: init.runtime_summary,
-            llm_execution_mode: init.llm_execution_mode,
-        });
-    }
 
     match plan.fallback_mode {
         FallbackMode::Init => {

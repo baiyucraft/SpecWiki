@@ -169,7 +169,7 @@ test("invokeCore 逐行消费长流程进度并返回最终结果", async () => 
   expect(spawnMock).toHaveBeenCalledWith("wiki-runtime-test-bin", ["--json"], expect.any(Object));
   expect(spawnMock.mock.calls[0][2]).toMatchObject({
     stdio: ["pipe", "pipe", "pipe"],
-    env: expect.objectContaining({ SPEC_WIKI_V0_1_INDEX_ONLY: "1" }),
+    env: expect.any(Object),
   });
   expect(child.stdin.write).toHaveBeenCalledWith(
     `${JSON.stringify({
@@ -236,7 +236,7 @@ test("invokeCore 在收到 llm_request 时桥接宿主响应", async () => {
       llmBridge: { protocol: "ndjson_session_v1" },
     })}\n`,
   );
-  expect(spawnMock.mock.calls[0][2].env?.SPEC_WIKI_V0_1_INDEX_ONLY).toBe("1");
+  expect(spawnMock.mock.calls[0][2].env?.SPEC_WIKI_V0_1_INDEX_ONLY).toBeUndefined();
   expect(result).toEqual({
     ok: true,
     data: { bridged: true },
@@ -323,3 +323,4 @@ test("invokeCore 对短流程仍按单个最终 JSON 解析", async () => {
     data: { status: "fresh" },
   });
 });
+

@@ -1,3 +1,6 @@
+//! runtime_profile 为宿主暴露稳定的状态、query 与 gate 投影。
+//! 它只收口公开消费语义，不在这里泄漏内部 workflow 细节。
+
 use serde::{Deserialize, Serialize};
 
 use crate::domain::checkpoint::PipelineRuntimeSummary;
@@ -37,6 +40,7 @@ pub enum LlmModeHint {
 #[serde(rename_all = "snake_case")]
 pub enum QueryMode {
     IndexFirst,
+    KnowledgeFirst,
     PageFallback,
     Mixed,
 }
@@ -126,7 +130,7 @@ impl RuntimeSummaryProjection {
 /// 把内部 runtime 状态字符串投影成宿主可消费的 preflight。
 pub fn preflight_for_state(state: &str, facts_ready: bool) -> RuntimePreflight {
     match state {
-        "fresh" | "index_only" => RuntimePreflight {
+        "fresh" => RuntimePreflight {
             facts_ready,
             query_readiness: QueryReadiness::Ready,
             recommended_action: RecommendedAction::None,
@@ -138,8 +142,16 @@ pub fn preflight_for_state(state: &str, facts_ready: bool) -> RuntimePreflight {
         },
         "runtime_incomplete" => RuntimePreflight {
             facts_ready,
-            query_readiness: QueryReadiness::Ready,
-            recommended_action: RecommendedAction::None,
+            query_readiness: if facts_ready {
+                QueryReadiness::NeedsUpdate
+            } else {
+                QueryReadiness::NeedsInit
+            },
+            recommended_action: if facts_ready {
+                RecommendedAction::Update
+            } else {
+                RecommendedAction::Init
+            },
         },
         "missing" => RuntimePreflight {
             facts_ready: false,

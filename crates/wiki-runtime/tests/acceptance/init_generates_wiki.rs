@@ -1,10 +1,12 @@
 use std::fs;
 
 use tempfile::tempdir;
+use wiki_runtime::domain::steering::SteeringLoadMode;
 use wiki_runtime::storage::metadata_store::read_metadata;
 use wiki_runtime::storage::sqlite_store;
 use wiki_runtime::storage::state_store::read_state;
-use wiki_runtime::workflows::init::run_init;
+use wiki_runtime::workflows::init::run_init_with_progress_and_llm_as_with_mode;
+use wiki_runtime::workflows::progress::NoopProgressSink;
 
 #[test]
 fn init_writes_wiki_layout() {
@@ -18,7 +20,15 @@ fn init_writes_wiki_layout() {
     fs::write(repo_root.join("src/utils.ts"), "export function u() {}\n").unwrap();
     fs::write(repo_root.join("src/types.ts"), "export type T = string;\n").unwrap();
 
-    run_init(repo_root).unwrap();
+    let mut sink = NoopProgressSink;
+    run_init_with_progress_and_llm_as_with_mode(
+        "init",
+        repo_root,
+        &mut sink,
+        None,
+        SteeringLoadMode::Development,
+    )
+    .unwrap();
 
     assert!(repo_root.join(".wiki/项目概述.md").exists());
     assert!(repo_root.join(".wiki/系统架构.md").exists());

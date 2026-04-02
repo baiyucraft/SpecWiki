@@ -201,7 +201,7 @@ test("runCli rejects query without a term", async () => {
   expect(stderr.join("")).toContain("wiki query requires --term");
 });
 
-test("runCli rejects wiki sync because v0.1.0 does not expose it publicly", async () => {
+test("runCli rejects wiki sync because v0.2.0 does not expose it publicly", async () => {
   const stderr: string[] = [];
   const { runCli } = await import("./cli.js");
 
@@ -214,10 +214,10 @@ test("runCli rejects wiki sync because v0.1.0 does not expose it publicly", asyn
 
   expect(exitCode).toBe(1);
   expect(stderr.join("")).toContain("unsupported wiki action: sync");
-  expect(stderr.join("")).toContain("v0.1.0 only supports init, status, update, query");
+  expect(stderr.join("")).toContain("v0.2.0 only exposes init, status, update, query");
 });
 
-test("runCli rejects wiki rebuild because v0.1.0 does not expose it publicly", async () => {
+test("runCli rejects wiki rebuild because v0.2.0 does not expose it publicly", async () => {
   const stderr: string[] = [];
   const { runCli } = await import("./cli.js");
 
@@ -230,5 +230,6 @@ test("runCli rejects wiki rebuild because v0.1.0 does not expose it publicly", a
 
   expect(exitCode).toBe(1);
   expect(stderr.join("")).toContain("unsupported wiki action: rebuild");
-  expect(stderr.join("")).toContain("v0.1.0 only supports init, status, update, query");
+  expect(stderr.join("")).toContain("v0.2.0 only exposes init, status, update, query");
 });
+

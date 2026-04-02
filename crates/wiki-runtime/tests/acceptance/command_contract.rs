@@ -2,8 +2,13 @@ use std::fs;
 use std::path::Path;
 
 use tempfile::tempdir;
+use wiki_runtime::domain::steering::SteeringLoadMode;
 use wiki_runtime::transport::dto::{CoreCommand, CoreResponse};
-use wiki_runtime::workflows::{init::run_init, query::run_query};
+use wiki_runtime::workflows::progress::NoopProgressSink;
+use wiki_runtime::workflows::{
+    init::run_init_with_progress_and_llm_as_with_mode,
+    query::run_query,
+};
 
 struct EnvVarGuard {
     key: &'static str,
@@ -84,30 +89,16 @@ fn write_dev_mode_init_repo(repo_root: &Path) {
     );
 }
 
-fn write_provider_blocker_repo(repo_root: &Path) {
-    write_repo_file(
+fn run_init_in_development(repo_root: &Path) {
+    let mut sink = NoopProgressSink;
+    run_init_with_progress_and_llm_as_with_mode(
+        "init",
         repo_root,
-        "package.json",
-        r#"{"name":"provider-blocker-contract-demo"}"#,
-    );
-    write_repo_file(
-        repo_root,
-        "src/main.ts",
-        "export function handleCheckout() { return true; }\n",
-    );
-    write_repo_file(
-        repo_root,
-        ".wiki/config.yaml",
-        concat!(
-            "llm:\n",
-            "  enabled: true\n",
-            "  model: bridge/mock-model\n",
-            "  max_calls: 8\n",
-            "  parallel_requests: 2\n",
-            "  cache_ttl_seconds: 3600\n",
-            "  allow_mermaid: true\n",
-        ),
-    );
+        &mut sink,
+        None,
+        SteeringLoadMode::Development,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -152,7 +143,7 @@ fn query_transport_returns_slim_payload_but_internal_query_stays_rich() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
     write_graph_query_repo(repo_root);
-    run_init(repo_root).unwrap();
+    run_init_in_development(repo_root);
 
     let internal = run_query(repo_root, "handleCheckout").unwrap();
     let internal_json = serde_json::to_value(&internal).unwrap();
@@ -227,7 +218,7 @@ fn query_transport_keeps_page_provenance_inside_compact_page_hits() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
     write_repo_file(repo_root, "package.json", r#"{"name":"demo"}"#);
-    run_init(repo_root).unwrap();
+    run_init_in_development(repo_root);
 
     let response = wiki_runtime::transport::cli::dispatch(CoreCommand {
         action: "query".to_string(),
@@ -249,7 +240,8 @@ fn query_transport_keeps_page_provenance_inside_compact_page_hits() {
 }
 
 #[test]
-fn init_transport_respects_explicit_development_mode_without_env_fallback() {
+fn init_transport_requires_provider_in_production_but_allows_explicit_development_mode() {
+    let _structural_guard = EnvVarGuard::set("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", "0");
     let production_fixture = tempdir().unwrap();
     let production_repo_root = production_fixture.path();
     write_dev_mode_init_repo(production_repo_root);
@@ -262,10 +254,10 @@ fn init_transport_respects_explicit_development_mode_without_env_fallback() {
         stream_progress: false,
         llm_bridge: None,
     });
-    assert!(
-        production_init.ok,
-        "production init should succeed without dev mode: {:?}",
-        production_init.error
+    assert!(!production_init.ok);
+    assert_eq!(
+        production_init.error.as_deref(),
+        Some("provider research unavailable: production workflow requires llm.enabled provider_direct path")
     );
     assert!(
         !production_repo_root
@@ -310,7 +302,7 @@ fn blocker_transport_contract_never_looks_like_success() {
     let _structural_guard = EnvVarGuard::set("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", "0");
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
-    write_provider_blocker_repo(repo_root);
+    write_dev_mode_init_repo(repo_root);
 
     let init_response = wiki_runtime::transport::cli::dispatch(CoreCommand {
         action: "init".to_string(),

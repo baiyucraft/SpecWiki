@@ -1,3 +1,6 @@
+//! query workflow 负责把 term-only 外部输入路由到 index、knowledge 与 page fallback。
+//! 它输出面向宿主的稳定 query route、trust 和 provenance 投影。
+
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -12,12 +15,15 @@ use crate::domain::runtime_profile::{
 use crate::domain::state::{WikiPageState, WikiState};
 use crate::domain::steering::SteeringLoadMode;
 use crate::storage::cache_store::cache_dir;
-use crate::storage::knowledge_artifacts::restore_runtime_cache_from_artifacts;
+use crate::storage::knowledge_artifacts::{
+    load_knowledge_artifacts, restore_runtime_cache_from_artifacts,
+};
 use crate::storage::sqlite::index_store::SqliteIndexStore;
 use crate::storage::state_store::{facts_snapshot_ready, load_or_rebuild_state};
 use crate::storage::wiki_fs::resolve_page_path;
 use crate::workflows::release_scope::project_external_runtime_state;
 use wiki_index::query::{self as index_query, IndexQueryRequest, MatchBasis};
+use wiki_knowledge::plan_pages_from_knowledge_tree;
 
 /// `QueryMatch` 描述一个命中的页面，以及它为什么命中。
 #[derive(Debug, Clone, Serialize)]
@@ -282,19 +288,38 @@ pub fn run_query_with_mode(
         .unwrap_or_default();
     let matched_symbols = project_symbol_matches(&index_result, &page_ids_by_source_path);
     let matched_symbols_by_file = build_symbols_by_file(&matched_symbols);
-    let matches = fallback_state
-        .as_ref()
-        .map(|state| {
-            collect_page_fallback_matches(repo_root, state, &needle, &matched_symbols_by_file)
-        })
-        .unwrap_or_default();
+    let knowledge_matches = collect_knowledge_matches(
+        repo_root,
+        &needle,
+        fallback_state.as_ref(),
+        &matched_symbols_by_file,
+    );
+    let page_fallback_matches = if knowledge_matches.is_empty() {
+        fallback_state
+            .as_ref()
+            .map(|state| {
+                collect_page_fallback_matches(repo_root, state, &needle, &matched_symbols_by_file)
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let has_knowledge_hits = !knowledge_matches.is_empty();
+    let has_page_fallback = !page_fallback_matches.is_empty();
+    let matches = if has_knowledge_hits {
+        knowledge_matches
+    } else {
+        page_fallback_matches
+    };
     let has_index_hits = !index_result.modules.is_empty()
         || !index_result.sources.is_empty()
         || !index_result.symbols.is_empty()
         || !index_result.call_edges.is_empty();
-    let query_mode = match (has_index_hits, !matches.is_empty()) {
-        (true, true) => QueryMode::Mixed,
-        (false, true) => QueryMode::PageFallback,
+    let query_mode = match (has_index_hits, has_knowledge_hits, has_page_fallback) {
+        (_, _, true) if has_index_hits || has_knowledge_hits => QueryMode::Mixed,
+        (false, false, true) => QueryMode::PageFallback,
+        (true, true, false) => QueryMode::Mixed,
+        (false, true, false) => QueryMode::KnowledgeFirst,
         _ => QueryMode::IndexFirst,
     };
     let query_trust = match query_trust_for(&runtime_state, facts_ready) {
@@ -322,7 +347,11 @@ pub fn run_query_with_mode(
         matched_symbol_edges: project_graph_edge_matches(&index_result),
         matched_processes: Vec::new(),
         matched_communities: Vec::new(),
-        provenance_summary: build_index_provenance_summary(&index_result, matches.len()),
+        provenance_summary: build_provenance_summary(
+            has_index_hits,
+            has_knowledge_hits,
+            has_page_fallback,
+        ),
         matches,
     })
 }
@@ -418,7 +447,7 @@ fn project_relation_matches(
             reasons_by_module
                 .entry(module_id.clone())
                 .or_default()
-                .insert("page_fallback".to_string());
+                .insert(match_route_tag(page).to_string());
         }
     }
 
@@ -453,6 +482,116 @@ fn project_relation_matches(
             .then(left.target_id.cmp(&right.target_id))
     });
     relations
+}
+
+fn collect_knowledge_matches(
+    repo_root: &Path,
+    needle: &str,
+    state: Option<&WikiState>,
+    matched_symbols_by_file: &BTreeMap<String, Vec<String>>,
+) -> Vec<QueryMatch> {
+    let Ok(artifacts) = load_knowledge_artifacts(repo_root) else {
+        return Vec::new();
+    };
+    let planned_pages = plan_pages_from_knowledge_tree(&artifacts.knowledge_tree)
+        .into_iter()
+        .map(|page| (page.id.clone(), page))
+        .collect::<BTreeMap<_, _>>();
+    let module_index = state
+        .map(|runtime| {
+            runtime
+                .modules
+                .iter()
+                .map(|module| (module.id.clone(), module))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let page_index = state
+        .map(|runtime| {
+            runtime
+                .pages
+                .iter()
+                .map(|page| (page.page_id.clone(), page))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let mut matches = artifacts
+        .page_digests
+        .iter()
+        .filter_map(|digest| {
+            let planned_page = planned_pages.get(&digest.page_id)?;
+            let runtime_page = page_index.get(&digest.page_id).copied();
+            let mut reasons = Vec::new();
+            let mut provenance = Vec::new();
+
+            if contains_case_insensitive(&digest.title, needle) {
+                reasons.push("知识标题匹配".to_string());
+                provenance.push("knowledge:title".to_string());
+            }
+            if contains_case_insensitive(&digest.summary, needle) {
+                reasons.push("知识摘要匹配".to_string());
+                provenance.push("knowledge:summary".to_string());
+            }
+            if digest
+                .key_topics
+                .iter()
+                .any(|topic| contains_case_insensitive(topic, needle))
+            {
+                reasons.push("知识主题匹配".to_string());
+                provenance.push("knowledge:topic".to_string());
+            }
+            if digest.section_digests.iter().any(|section| {
+                contains_case_insensitive(&section.title, needle)
+                    || contains_case_insensitive(&section.summary, needle)
+            }) {
+                reasons.push("知识章节匹配".to_string());
+                provenance.push("knowledge:section".to_string());
+            }
+
+            let source_files = collect_knowledge_source_files(digest, runtime_page);
+            if source_files
+                .iter()
+                .any(|source_path| contains_case_insensitive(source_path, needle))
+            {
+                reasons.push("知识源码锚点匹配".to_string());
+                provenance.push("knowledge:key_source".to_string());
+            }
+
+            if reasons.is_empty() {
+                return None;
+            }
+
+            Some(QueryMatch {
+                page_id: planned_page.id.clone(),
+                title: planned_page.title.clone(),
+                path: format!(".wiki/{}", planned_page.relative_path),
+                item_type: planned_page.page_type.clone(),
+                module_ids: planned_page.module_ids.clone(),
+                source_files: source_files.clone(),
+                reasons: reasons.clone(),
+                provenance,
+                summary: if digest.summary.trim().is_empty() {
+                    reasons.join("、")
+                } else {
+                    digest.summary.clone()
+                },
+                match_mode: "knowledge_digest".to_string(),
+                context_pack: build_knowledge_context_pack(
+                    planned_page,
+                    state,
+                    &module_index,
+                    matched_symbols_by_file,
+                    source_files,
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.page_id.cmp(&right.page_id))
+    });
+    matches
 }
 
 fn project_symbol_matches(
@@ -573,6 +712,20 @@ fn collect_page_fallback_matches(
     matches
 }
 
+fn collect_knowledge_source_files(
+    digest: &wiki_knowledge::domain::research::PageDigest,
+    runtime_page: Option<&WikiPageState>,
+) -> Vec<String> {
+    let mut source_files = BTreeSet::new();
+    source_files.extend(digest.key_sources.iter().cloned());
+    source_files.extend(digest.planned_key_sources.iter().cloned());
+    source_files.extend(digest.grounded_key_sources.iter().cloned());
+    if let Some(page) = runtime_page {
+        source_files.extend(page.source_paths.iter().cloned());
+    }
+    source_files.into_iter().collect()
+}
+
 fn build_page_ids_by_source_path(state: &WikiState) -> BTreeMap<String, Vec<String>> {
     let mut page_ids_by_source_path = BTreeMap::<String, Vec<String>>::new();
     for page in &state.pages {
@@ -637,6 +790,60 @@ fn build_context_pack(
     }
 }
 
+fn build_knowledge_context_pack(
+    page: &wiki_knowledge::PlannedPage,
+    state: Option<&WikiState>,
+    module_index: &BTreeMap<String, &ModuleNode>,
+    matched_symbols_by_file: &BTreeMap<String, Vec<String>>,
+    source_files: Vec<String>,
+) -> QueryContextPack {
+    let module_summaries = page
+        .module_ids
+        .iter()
+        .filter_map(|mid| module_index.get(mid))
+        .map(|module| {
+            let tags = if module.tags.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", module.tags.join(", "))
+            };
+            format!("{} ({}){}", module.name, module.kind, tags)
+        })
+        .collect();
+    let relation_evidence = state
+        .map(|runtime| {
+            runtime
+                .relations
+                .iter()
+                .filter(|relation| {
+                    page.module_ids.contains(&relation.source_id)
+                        || page.module_ids.contains(&relation.target_id)
+                })
+                .map(|relation| {
+                    format!(
+                        "{} -[{}]-> {}",
+                        relation.source_id, relation.relation_type, relation.target_id
+                    )
+                })
+                .take(10)
+                .collect()
+        })
+        .unwrap_or_default();
+    let symbols = source_files
+        .iter()
+        .filter_map(|source_path| matched_symbols_by_file.get(source_path))
+        .flat_map(|items| items.iter().cloned())
+        .take(12)
+        .collect();
+
+    QueryContextPack {
+        module_summaries,
+        key_source_paths: source_files.into_iter().take(8).collect(),
+        relation_evidence,
+        symbols,
+    }
+}
+
 fn build_symbols_by_file(symbol_matches: &[QuerySymbolMatch]) -> BTreeMap<String, Vec<String>> {
     let mut symbols_by_file = BTreeMap::<String, Vec<String>>::new();
     for symbol in symbol_matches {
@@ -655,27 +862,34 @@ fn build_symbols_by_file(symbol_matches: &[QuerySymbolMatch]) -> BTreeMap<String
     symbols_by_file
 }
 
-fn build_index_provenance_summary(
-    index_result: &index_query::IndexQueryResult,
-    fallback_page_count: usize,
+fn build_provenance_summary(
+    has_index_hits: bool,
+    has_knowledge_hits: bool,
+    has_page_fallback: bool,
 ) -> String {
-    let mut parts = Vec::new();
-    if !index_result.modules.is_empty() {
-        parts.push(format!("命中 {} 模块", index_result.modules.len()));
+    let mut tags = Vec::new();
+    if has_index_hits {
+        tags.push("index_hit");
     }
-    if !index_result.sources.is_empty() {
-        parts.push(format!("命中 {} 源码", index_result.sources.len()));
+    if has_knowledge_hits {
+        tags.push("knowledge_hit");
     }
-    if !index_result.symbols.is_empty() {
-        parts.push(format!("命中 {} 符号", index_result.symbols.len()));
+    if has_page_fallback {
+        tags.push("page_fallback");
     }
-    if !index_result.call_edges.is_empty() {
-        parts.push(format!("扩展 {} 图边", index_result.call_edges.len()));
+    tags.join(",")
+}
+
+fn match_route_tag(query_match: &QueryMatch) -> &'static str {
+    if query_match
+        .provenance
+        .iter()
+        .any(|item| item.starts_with("knowledge:"))
+    {
+        "knowledge_hit"
+    } else {
+        "page_fallback"
     }
-    if fallback_page_count > 0 {
-        parts.push(format!("Markdown 回退命中 {} 页", fallback_page_count));
-    }
-    parts.join("、")
 }
 
 fn match_basis_reason(match_basis: MatchBasis) -> String {

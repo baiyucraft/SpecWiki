@@ -115,7 +115,7 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
       const action = args[1];
       if (!action || !isPublicWikiAction(action)) {
         throw new Error(
-          `unsupported wiki action: ${action ?? "<missing>"}; v0.1.0 only supports ${PUBLIC_WIKI_ACTIONS.join(", ")}`,
+          `unsupported wiki action: ${action ?? "<missing>"}; v0.2.0 only exposes ${PUBLIC_WIKI_ACTIONS.join(", ")}`,
         );
       }
 
@@ -191,3 +191,4 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
     return 1;
   }
 }
+

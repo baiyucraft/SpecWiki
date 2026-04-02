@@ -76,11 +76,15 @@ fn sync_detects_manual_markdown_changes() {
     assert!(query
         .matches
         .iter()
-        .any(|page| page.reasons.iter().any(|reason| reason == "页面标题匹配")));
-    assert!(query
-        .matches
-        .iter()
-        .all(|page| page.match_mode == "fallback_markdown"));
+        .any(|page| page.path.ends_with("项目概述.md")));
+    assert!(
+        query
+            .provenance_summary
+            .contains("knowledge_hit")
+            || query.provenance_summary.contains("page_fallback"),
+        "expected knowledge or page fallback route tag, got {}",
+        query.provenance_summary
+    );
 
     let rebuild = run_rebuild(repo_root).unwrap();
     assert_eq!(rebuild.state, "fresh");
@@ -203,13 +207,13 @@ fn query_merges_fts_and_structural_page_hits() {
         })
         .expect("payments module page should be matched");
 
-    assert_eq!(module_page.match_mode, "fallback_markdown");
+    assert_eq!(module_page.match_mode, "knowledge_digest");
     assert!(
         module_page
             .provenance
             .iter()
-            .any(|item| item.starts_with("page-fallback:")),
-        "expected page fallback provenance, got {:?}",
+            .any(|item| item.starts_with("knowledge:")),
+        "expected knowledge provenance, got {:?}",
         module_page.provenance
     );
 }
@@ -279,7 +283,7 @@ fn query_falls_back_when_fts_index_is_empty() {
         })
         .expect("payments module page should still be matched");
 
-    assert_eq!(module_page.match_mode, "fallback_markdown");
+    assert_eq!(module_page.match_mode, "knowledge_digest");
     assert!(
         !module_page
             .reasons
@@ -325,8 +329,8 @@ fn query_returns_graph_context_for_symbol_hits() {
         query.matched_symbol_edges
     );
     assert!(
-        query.provenance_summary.contains("扩展"),
-        "expected graph expansion in provenance summary, got {}",
+        query.provenance_summary.contains("index_hit"),
+        "expected index route tag in provenance summary, got {}",
         query.provenance_summary
     );
 }
@@ -437,14 +441,18 @@ fn query_stays_available_when_facts_snapshot_outlives_downstream_state() {
     }
 
     let status = run_status(repo_root).unwrap();
-    assert_eq!(status.state, "index_only");
-    assert!(status.facts_ready);
+    assert_eq!(status.state, "missing");
     assert_eq!(
         serde_json::to_value(&status).unwrap()["query_readiness"],
-        "ready"
+        "needs_init"
+    );
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["recommended_action"],
+        "init"
     );
 
     let query = run_query(repo_root, "handleCheckout").unwrap();
+    assert_eq!(query.query_trust, wiki_runtime::domain::runtime_profile::QueryTrust::StaleButQueryable);
     assert!(!query.matched_symbols.is_empty());
     assert!(!query.matched_symbol_edges.is_empty());
 }

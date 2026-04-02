@@ -42,9 +42,6 @@ use crate::workflows::page_render::{
 use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
 };
-use crate::workflows::release_scope::{
-    persist_index_only_release_scope, v0_1_index_only_enabled, INDEX_ONLY_RUNTIME_STATE,
-};
 use crate::workflows::research_provider::select_runtime_research_provider;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -60,10 +57,8 @@ pub struct InitReport {
     /// 当前命令是否真正完成了初始化流程。
     pub initialized: bool,
     /// 初始化结束后的 runtime 状态。
-    /// `v0.1.0 index-only` 收敛路径会显式返回 `index_only`。
     pub state: String,
     /// 本次初始化实际写出的页面路径集合。
-    /// `v0.1.0 index-only` 收敛路径不会产出页面。
     pub generated_pages: Vec<String>,
     /// 当前 workflow 成功结束后的 runtime 摘要。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,16 +142,15 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
     let started_at = Instant::now();
     let mut reporter_sink = SharedProgressSink::new(shared_sink.clone());
     let mut reporter = WorkflowReporter::from_started_at(action, &mut reporter_sink, started_at);
-    let index_only_release = v0_1_index_only_enabled(action);
 
     // 按 deterministic pipeline 的顺序串起整条生成链。
     reporter.phase("user_config", "检查用户配置");
     ensure_default_user_config_file()?;
     check_user_config_file()?;
     let steering = load_steering_config_with_mode(repo_root, steering_mode);
-    let should_preserve_incomplete = !index_only_release
-        && should_preserve_incomplete_init_runtime(action, repo_root, steering.llm.cache_mode)?;
-    if index_only_release || !should_preserve_incomplete {
+    let should_preserve_incomplete =
+        should_preserve_incomplete_init_runtime(action, repo_root, steering.llm.cache_mode)?;
+    if !should_preserve_incomplete {
         remove_runtime_with_cache_mode(repo_root, steering.llm.cache_mode)?;
     }
     debug_trace::begin_session(action, repo_root, &steering.debug)?;
@@ -222,24 +216,6 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
         &resolved_graph,
         &analysis,
     )?;
-    if index_only_release {
-        persist_index_only_release_scope(repo_root)?;
-        reporter.phase(
-            "v0_1_index_only_short_circuit",
-            "v0.1.0 index-only 收敛：跳过 knowledge/page runtime",
-        );
-        return Ok(InitReport {
-            initialized: true,
-            state: INDEX_ONLY_RUNTIME_STATE.to_string(),
-            generated_pages: Vec::new(),
-            runtime_summary: None,
-            llm_execution_mode: match llm_runtime.selected_path() {
-                Some(crate::llm::SelectedLlmPath::ProviderApi) => LlmExecutionMode::ProviderDirect,
-                Some(crate::llm::SelectedLlmPath::AgentBridge) => LlmExecutionMode::AgentBridge,
-                None => LlmExecutionMode::DeterministicOnly,
-            },
-        });
-    }
     reporter.phase("build_contexts", "构建页面上下文");
     let repo_context = build_repo_context_with_graph(&scan_report, &module_tree, &graph_summary);
     let module_contexts =
@@ -724,7 +700,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        build_minimal_page_context, run_init_with_progress_as,
+        build_minimal_page_context, run_init_with_progress_and_llm_as_with_mode,
         should_preserve_incomplete_init_runtime,
     };
     use crate::domain::checkpoint::UnitRuntimeGate;
@@ -734,7 +710,6 @@ mod tests {
     use crate::domain::steering::{spec_wiki_user_config_path, LlmCacheMode};
     use crate::storage::sqlite_store;
     use crate::workflows::progress::NoopProgressSink;
-    use crate::workflows::release_scope::V0_1_INDEX_ONLY_ENV;
     use wiki_knowledge::domain::compose::PageDraft;
     use wiki_knowledge::domain::research::{
         PageDiagramDigest, PageDigest, PageSectionDigest, SourceCitation, UnitResearch,
@@ -1175,7 +1150,7 @@ mod tests {
         let home = tempdir().unwrap();
         let _home_guard = EnvVarGuard::set_path("HOME", home.path());
         let _userprofile_guard = EnvVarGuard::set_path("USERPROFILE", home.path());
-        let _index_only_guard = EnvVarGuard::set_str(V0_1_INDEX_ONLY_ENV, "1");
+        let _structural_guard = EnvVarGuard::set_str("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", "1");
 
         let repo = tempdir().unwrap();
         fs::write(
@@ -1187,7 +1162,14 @@ mod tests {
         fs::write(repo.path().join("src/main.ts"), "export const main = 1;\n").unwrap();
 
         let mut sink = NoopProgressSink;
-        let report = run_init_with_progress_as("init", repo.path(), &mut sink).unwrap();
+        let report = run_init_with_progress_and_llm_as_with_mode(
+            "init",
+            repo.path(),
+            &mut sink,
+            None,
+            crate::domain::steering::SteeringLoadMode::Development,
+        )
+        .unwrap();
         let config_path = spec_wiki_user_config_path().expect("expected user config path");
         let content = fs::read_to_string(&config_path).unwrap();
 
@@ -1203,7 +1185,7 @@ mod tests {
         let home = tempdir().unwrap();
         let _home_guard = EnvVarGuard::set_path("HOME", home.path());
         let _userprofile_guard = EnvVarGuard::set_path("USERPROFILE", home.path());
-        let _index_only_guard = EnvVarGuard::set_str(V0_1_INDEX_ONLY_ENV, "1");
+        let _structural_guard = EnvVarGuard::set_str("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", "1");
 
         let user_dir = home.path().join(".spec-wiki");
         fs::create_dir_all(&user_dir).unwrap();
@@ -1219,7 +1201,13 @@ mod tests {
         fs::write(repo.path().join("src/main.ts"), "export const main = 1;\n").unwrap();
 
         let mut sink = NoopProgressSink;
-        let error = run_init_with_progress_as("init", repo.path(), &mut sink)
+        let error = run_init_with_progress_and_llm_as_with_mode(
+            "init",
+            repo.path(),
+            &mut sink,
+            None,
+            crate::domain::steering::SteeringLoadMode::Development,
+        )
             .expect_err("invalid user config should fail init");
         assert!(error.to_string().contains("failed to parse"));
     }

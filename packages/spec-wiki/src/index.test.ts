@@ -12,7 +12,7 @@ import { createTools } from "./tools.js";
 import { parseEventLine, parseResult } from "./runtime/parseResult.js";
 import { resolveBinary } from "./runtime/resolveBinary.js";
 
-test("public wiki tools only delegate the v0.1.0 actions", async () => {
+test("public wiki tools only delegate the v0.2.0 actions", async () => {
   const received: unknown[] = [];
   const tools = createTools(async (command) => {
     received.push(command);
@@ -231,3 +231,4 @@ test("parseEventLine validates progress events with usage", () => {
     },
   });
 });
+

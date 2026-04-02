@@ -1,4 +1,5 @@
-//! status workflow 负责对外报告当前 runtime 是否 fresh、stale、index_only、missing 或 needs_rebuild。
+//! status workflow 负责对外报告当前 runtime 是否 fresh、needs_update、runtime_incomplete、
+//! blocker、missing 或 needs_rebuild。
 //! 它复用 change planning 内核，不自己维护独立的脏判断规则。
 
 use serde::Serialize;
@@ -23,7 +24,7 @@ use wiki_model::domain::update_scope::AffectedKnowledgeScope;
 /// `status` 只回答一件事：当前 Repo Wiki 是否仍然可用、是否被阻塞，以及下一步动作。
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusReport {
-    /// 当前 runtime 的外部状态，取值为 `fresh / needs_update / runtime_incomplete / blocker / index_only / missing / needs_rebuild`。
+    /// 当前 runtime 的外部状态，取值为 `fresh / needs_update / runtime_incomplete / blocker / missing / needs_rebuild`。
     pub state: String,
     /// 本次检测到的脏源码路径集合。
     pub dirty_sources: Vec<String>,

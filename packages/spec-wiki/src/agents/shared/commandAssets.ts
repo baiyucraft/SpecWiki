@@ -33,11 +33,11 @@ function renderActionDescription(action: WikiAction): string {
     case "init":
       return "Use when the repository has not been bootstrapped for spec-wiki and you need to initialize the wiki runtime.";
     case "update":
-      return "Use when the wiki already exists and you need to refresh the current index-only runtime after source changes.";
+      return "Use when the wiki already exists and you need to refresh the current knowledge runtime after source changes.";
     case "sync":
-      return "Use when the user explicitly asks for wiki sync behavior, but keep in mind this action is not part of the formal v0.1.0 guarantee.";
+      return "Use when the user explicitly asks for wiki sync behavior, but keep in mind this action is not part of the formal v0.2.0 guarantee.";
     case "rebuild":
-      return "Use when the user explicitly asks to rebuild the wiki runtime, but keep in mind this action is not part of the formal v0.1.0 guarantee.";
+      return "Use when the user explicitly asks to rebuild the wiki runtime, but keep in mind this action is not part of the formal v0.2.0 guarantee.";
   }
 }
 
@@ -90,7 +90,7 @@ function renderHostActionPurpose(action: WikiAction): string[] {
     case "init":
       return ["Initialize the wiki runtime for a repository that has not been bootstrapped yet."];
     case "update":
-      return ["Refresh the current index-only runtime after source changes."];
+      return ["Refresh the current knowledge runtime after source changes."];
     case "sync":
       return ["Do not present this as a formal explicit entry point in the current version."];
     case "rebuild":
@@ -110,17 +110,17 @@ function renderHostActionNotes(action: WikiAction, entryName: string): string[] 
   switch (action) {
     case "init":
       return [
-        `\`v0.1.0\` only guarantees an index-only init. Do not confuse \`${entryName}\` with top-level \`spec-wiki init\`.`,
+        `\`v0.2.0\` only guarantees a formal knowledge runtime init. Do not confuse \`${entryName}\` with top-level \`spec-wiki init\`.`,
       ];
     case "status":
       return ["`status` inspects runtime state only. It does not imply full knowledge/page completion."];
     case "update":
-      return ["`v0.1.0` only guarantees index refresh, not a complete knowledge/page update."];
+      return ["`v0.2.0` treats knowledge runtime refresh as the formal update contract."];
     case "query":
-      return ["`v0.1.0` only formally guarantees index-first structured results. Page fallback and knowledge/page projection are not release blockers."];
+      return ["`v0.2.0` keeps the external term-only query contract, but routes results through index -> knowledge -> page fallback."];
     case "sync":
     case "rebuild":
-      return ["This entry point can remain available, but `v0.1.0` does not describe it as a formal guarantee."];
+      return ["This entry point can remain available, but `v0.2.0` does not describe it as a formal guarantee."];
   }
 }
 
@@ -343,3 +343,5 @@ export function listManagedCodeBuddyHookCommands(
 export function getActionSemanticsForRendering(action: WikiAction): WorkflowActionSemantics {
   return getWorkflowActionSemantics(action);
 }
+
+

@@ -2,10 +2,10 @@
 
 `spec-wiki` gives agents a lightweight, local Repo Wiki for a codebase on Windows x64.
 
-In `v0.1.0`, it focuses on two practical jobs:
+In `v0.2.0`, it focuses on two practical jobs:
 
 - bootstrap repo-local integrations for `Codex`, `Claude`, and `CodeBuddy`
-- build an index-first runtime so you can query files, modules, symbols, and call paths before doing deeper code reading
+- build a knowledge runtime so you can query files, modules, symbols, formal knowledge pages, and call paths before doing deeper code reading
 
 ## Why Use It
 
@@ -17,18 +17,18 @@ When an agent jumps straight into a large repo, it usually wastes tokens on blin
 - which files and symbols are related
 - whether the local wiki runtime is ready, stale, or needs refresh
 
-The goal of `v0.1.0` is not full repository documentation yet. The goal is a reliable first-pass repo map.
+The goal of `v0.2.0` is a reliable first-pass repo map backed by a minimal formal knowledge runtime.
 
 ## Current Scope
 
-`v0.1.0` currently guarantees:
+`v0.2.0` currently guarantees:
 
 - Windows x64 runtime support
 - public CLI actions: `init`, `status`, `update`, `query`
-- index-only runtime initialization and refresh
-- index-first query results
+- knowledge runtime initialization and refresh
+- query routing through `index -> knowledge -> page fallback`
 
-`v0.1.0` does not yet treat full knowledge/page generation as a formal release contract.
+The public release contract is now the minimal knowledge runtime, not a facts-only/index-only shortcut.
 
 ## Quick Start
 
@@ -143,15 +143,18 @@ Notes:
 
 The runtime currently writes a local `.wiki/` directory for the repository.
 
-In `v0.1.0`, the main runtime artifact you should rely on is:
+In `v0.2.0`, the runtime artifacts you should rely on are:
 
 ```text
 .wiki/
-└─ .cache/
-   └─ wiki-cache.db
+|- .knowledge/
+|- pages/
+|- wiki.metadata.json
+`- .cache/
+   `- wiki-cache.db
 ```
 
-## Query Contract In v0.1.0
+## Query Contract In v0.2.0
 
 For `query`, the stable fields to rely on are:
 
@@ -160,6 +163,12 @@ For `query`, the stable fields to rely on are:
 - `recommended_action`
 - `matched_pages`
 - `provenance_summary`
+
+`provenance_summary` now carries stable route tags:
+
+- `index_hit`
+- `knowledge_hit`
+- `page_fallback`
 
 Recommended usage:
 
@@ -182,6 +191,5 @@ This project is licensed under `GNU GPL v3.0`.
 
 ## TODO
 
-- formal knowledge/page runtime support
 - richer research and answer assembly
 - broader platform support

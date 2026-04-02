@@ -616,7 +616,7 @@ export function withDevelopmentMode(command, enabled = false) {
   return enabled ? { ...command, developmentMode: true } : command;
 }
 
-function applyCacheModeOverride(content, cacheMode) {
+export function applyCacheModeOverride(content, cacheMode) {
   if (!cacheMode) {
     return content;
   }
@@ -630,6 +630,24 @@ function applyCacheModeOverride(content, cacheMode) {
   }
 
   return content.replace(/(^\s*llm:\s*$)/m, `$1\n  cache_mode: ${cacheMode}`);
+}
+
+/**
+ * 在外层临时 dev config 已经存在时，把 repo 根 `wiki.dev.yaml` 的 cache_mode
+ * 同步到当前 workflow 实际采用的值，避免 resume 后 status 立即把配置文件判脏。
+ *
+ * @param repoRoot 目标仓库根目录。
+ * @param options 可选覆盖；当前支持 `cacheMode`。
+ */
+export function syncTemporaryDevConfig(repoRoot, options = {}) {
+  if (!existsSync(ROOT_DEV_CONFIG_PATH)) {
+    return;
+  }
+
+  const targetPath = path.join(repoRoot, "wiki.dev.yaml");
+  const source = readFileSync(ROOT_DEV_CONFIG_PATH, "utf-8");
+  const next = applyCacheModeOverride(source, options.cacheMode);
+  writeFileWithRetry(targetPath, next);
 }
 
 /**

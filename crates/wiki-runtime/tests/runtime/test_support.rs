@@ -37,9 +37,3 @@ pub fn force_full_runtime() -> (MutexGuard<'static, ()>, EnvVarGuard) {
     let guard = EnvVarGuard::set("SPEC_WIKI_V0_1_INDEX_ONLY", "false");
     (env_lock, guard)
 }
-
-pub fn force_index_only_runtime() -> (MutexGuard<'static, ()>, EnvVarGuard) {
-    let env_lock = lock_index_only_env();
-    let guard = EnvVarGuard::set("SPEC_WIKI_V0_1_INDEX_ONLY", "1");
-    (env_lock, guard)
-}

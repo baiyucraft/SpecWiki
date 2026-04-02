@@ -13,7 +13,7 @@ import type {
  * 组装 Repo Wiki 的公开工具集合。
  *
  * @param invoke 底层 runtime 调用函数；默认使用本地子进程调用。
- * @returns 返回与 `v0.1.0` 公开 action 一一对应的薄封装工具。
+ * @returns 返回与 `v0.2.0` 公开 action 一一对应的薄封装工具。
  */
 export function createTools(
   invoke: ToolInvoker = invokeCore,
@@ -32,3 +32,4 @@ export function createTools(
 
 /** 默认工具集合直接给宿主或测试消费。 */
 export const tools = createTools();
+

@@ -41,7 +41,6 @@ test("warm restore preflight 只在 lifecycle 支持消费的状态下跳过首�
   expect(shouldSkipInitAfterWarmRestore({ data: { state: "needs_update" } })).toBe(true);
   expect(shouldSkipInitAfterWarmRestore({ data: { state: "runtime_incomplete" } })).toBe(true);
   expect(shouldSkipInitAfterWarmRestore({ data: { state: "blocker" } })).toBe(true);
-  expect(shouldSkipInitAfterWarmRestore({ data: { state: "index_only" } })).toBe(true);
   expect(shouldSkipInitAfterWarmRestore({ data: { state: "missing" } })).toBe(false);
   expect(shouldSkipInitAfterWarmRestore({ data: { state: "needs_rebuild" } })).toBe(false);
 });
@@ -51,3 +50,4 @@ test("warm restore status after init 接受 fresh 与 needs_update", () => {
   expect(shouldAcceptStatusAfterWarmRestore({ data: { state: "needs_update" } })).toBe(true);
   expect(shouldAcceptStatusAfterWarmRestore({ data: { state: "runtime_incomplete" } })).toBe(false);
 });
+

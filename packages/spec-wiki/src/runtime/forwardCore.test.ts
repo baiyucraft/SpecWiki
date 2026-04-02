@@ -90,7 +90,7 @@ test("forwardCoreCommand 为长流程透传 NDJSON 并根据 terminal event 决�
   const stdout: string[] = [];
   const child = createChild([
     "{\"type\":\"progress\",\"action\":\"init\",\"phase\":\"scan\",\"message\":\"扫描\",\"elapsed_ms\":1,\"processed\":0,\"total\":1}\n",
-    "{\"type\":\"result\",\"response\":{\"ok\":true,\"data\":{\"state\":\"index_only\"}}}\n",
+    "{\"type\":\"result\",\"response\":{\"ok\":true,\"data\":{\"state\":\"fresh\"}}}\n",
   ]);
   spawnMock.mockReturnValue(child);
 
@@ -110,7 +110,7 @@ test("forwardCoreCommand 为长流程透传 NDJSON 并根据 terminal event 决�
       streamProgress: true,
     })}\n`,
   );
-  expect(spawnMock.mock.calls[0][2].env?.SPEC_WIKI_V0_1_INDEX_ONLY).toBe("1");
+  expect(spawnMock.mock.calls[0][2].env?.SPEC_WIKI_V0_1_INDEX_ONLY).toBeUndefined();
   expect(stdout.join("")).toContain("\"type\":\"progress\"");
   expect(stdout.join("")).toContain("\"type\":\"result\"");
 });
@@ -142,7 +142,7 @@ test("forwardCoreCommand 在 bridge-stdio 模式下打开 llmBridge 并转发 st
     }) as NodeJS.ReadStream["off"],
   } as unknown as NodeJS.ReadStream;
   const child = createChild([
-    "{\"type\":\"result\",\"response\":{\"ok\":true,\"data\":{\"state\":\"index_only\"}}}\n",
+    "{\"type\":\"result\",\"response\":{\"ok\":true,\"data\":{\"state\":\"fresh\"}}}\n",
   ]);
   spawnMock.mockReturnValue(child);
 
@@ -170,6 +170,7 @@ test("forwardCoreCommand 在 bridge-stdio 模式下打开 llmBridge 并转发 st
     })}\n`,
   );
   expect(child.stdin.write).toHaveBeenNthCalledWith(2, Buffer.from("{\"type\":\"llm_response\"}\n"));
-  expect(spawnMock.mock.calls[0][2].env?.SPEC_WIKI_V0_1_INDEX_ONLY).toBe("1");
+  expect(spawnMock.mock.calls[0][2].env?.SPEC_WIKI_V0_1_INDEX_ONLY).toBeUndefined();
   expect(stdin.resume).toHaveBeenCalled();
 });
+

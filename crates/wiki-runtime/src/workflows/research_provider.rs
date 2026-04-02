@@ -1244,7 +1244,9 @@ mod tests {
     };
     use std::cell::RefCell;
     use std::io;
+    use std::ffi::OsString;
     use std::path::Path;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
     use wiki_index::scanner::{ScanReport, ScannedFile};
     use wiki_index::symbol_graph::{GraphAnalysisSnapshot, GraphSummary, ResolvedGraphSnapshot};
     use wiki_index::symbols::ParsedSymbolsSnapshot;
@@ -1257,6 +1259,42 @@ mod tests {
         ResearchDataSource, ResearchProvider, StructuralResearchProvider,
     };
     use wiki_knowledge::RepoContext;
+
+    fn structural_runtime_env_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    struct StructuralRuntimeEnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        previous: Option<OsString>,
+    }
+
+    impl StructuralRuntimeEnvGuard {
+        fn set(value: Option<&str>) -> Self {
+            let lock = structural_runtime_env_lock();
+            let previous = std::env::var_os("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
+            if let Some(value) = value {
+                std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", value);
+            } else {
+                std::env::remove_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
+            }
+            Self {
+                _lock: lock,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for StructuralRuntimeEnvGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", previous);
+            } else {
+                std::env::remove_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
+            }
+        }
+    }
 
     fn provider_enabled_steering() -> crate::domain::steering::SteeringConfig {
         let mut steering = crate::domain::steering::SteeringConfig::default();
@@ -1318,21 +1356,13 @@ mod tests {
     fn provider_selection_blocks_when_llm_disabled_in_production() {
         let steering = crate::domain::steering::SteeringConfig::default();
         let mut runtime = LlmRuntime::new(Path::new("."), &steering.llm, None);
-
-        let previous = std::env::var_os("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
-        std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", "0");
+        let _structural_guard = StructuralRuntimeEnvGuard::set(Some("0"));
 
         let selected = select_runtime_research_provider(
             &steering,
             &mut runtime,
             crate::domain::steering::SteeringLoadMode::Production,
         );
-
-        if let Some(previous) = previous {
-            std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", previous);
-        } else {
-            std::env::remove_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
-        }
 
         assert_eq!(selected.mode, "llm_disabled_blocked");
         assert!(selected.provider.is_none());
@@ -1347,20 +1377,13 @@ mod tests {
         steering.llm.model = "bridge/mock-model".to_string();
         let mut service = CountingLlmService::default();
         let mut runtime = LlmRuntime::new(Path::new("."), &steering.llm, Some(&mut service));
-        let previous = std::env::var_os("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
-        std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", "0");
+        let _structural_guard = StructuralRuntimeEnvGuard::set(Some("0"));
 
         let selected = select_runtime_research_provider(
             &steering,
             &mut runtime,
             crate::domain::steering::SteeringLoadMode::Production,
         );
-
-        if let Some(previous) = previous {
-            std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", previous);
-        } else {
-            std::env::remove_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
-        }
 
         assert_eq!(selected.mode, "agent_bridge_blocked");
         assert!(selected.provider.is_none());
@@ -1406,18 +1429,13 @@ mod tests {
     fn provider_selection_requires_explicit_structural_runtime_flag_outside_development() {
         let steering = crate::domain::steering::SteeringConfig::default();
         let mut runtime = LlmRuntime::new(Path::new("."), &steering.llm, None);
-        let previous = std::env::var_os("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
-        std::env::remove_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
+        let _structural_guard = StructuralRuntimeEnvGuard::set(None);
 
         let selected = select_runtime_research_provider(
             &steering,
             &mut runtime,
             crate::domain::steering::SteeringLoadMode::Production,
         );
-
-        if let Some(previous) = previous {
-            std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", previous);
-        }
 
         assert_eq!(selected.mode, "llm_disabled_blocked");
         assert!(selected.provider.is_none());
@@ -1428,20 +1446,13 @@ mod tests {
     fn provider_selection_allows_structural_runtime_only_with_explicit_flag_in_production() {
         let steering = crate::domain::steering::SteeringConfig::default();
         let mut runtime = LlmRuntime::new(Path::new("."), &steering.llm, None);
-        let previous = std::env::var_os("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
-        std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", "1");
+        let _structural_guard = StructuralRuntimeEnvGuard::set(Some("1"));
 
         let selected = select_runtime_research_provider(
             &steering,
             &mut runtime,
             crate::domain::steering::SteeringLoadMode::Production,
         );
-
-        if let Some(previous) = previous {
-            std::env::set_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME", previous);
-        } else {
-            std::env::remove_var("SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME");
-        }
 
         assert_eq!(selected.mode, "test_fixture_structural_fallback");
         assert!(selected.provider.is_some());

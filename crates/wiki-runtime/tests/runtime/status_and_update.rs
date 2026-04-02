@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-use super::test_support::{EnvVarGuard, force_full_runtime, force_index_only_runtime};
+use super::test_support::{EnvVarGuard, force_full_runtime};
 use tempfile::tempdir;
 use wiki_runtime::domain::change_set::plan_runtime_changes;
 use wiki_runtime::domain::steering::SteeringLoadMode;
@@ -1210,8 +1210,8 @@ fn write_file(path: &Path, content: &str) {
 }
 
 #[test]
-fn index_only_init_reports_index_only_and_keeps_query_ready() {
-    let (_env_lock, _index_only) = force_index_only_runtime();
+fn init_builds_formal_runtime_and_reports_v0_2_ready_state() {
+    let (_env_lock, _full_runtime) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -1219,14 +1219,13 @@ fn index_only_init_reports_index_only_and_keeps_query_ready() {
     fs::write(repo_root.join("src.ts"), "export const version = 1;\n").unwrap();
 
     let init = run_init(repo_root).unwrap();
-    assert_eq!(init.state, "index_only");
-    assert!(init.generated_pages.is_empty());
-    assert!(init.runtime_summary.is_none());
-    assert!(!metadata_exists(repo_root));
-    assert!(!repo_root.join(".wiki/项目概述.md").exists());
+    assert_eq!(init.state, "fresh");
+    assert!(!init.generated_pages.is_empty());
+    assert!(metadata_exists(repo_root));
+    assert!(repo_root.join(".wiki/项目概述.md").exists());
 
     let status = run_status(repo_root).unwrap();
-    assert_eq!(status.state, "index_only");
+    assert_eq!(status.state, "fresh");
     assert!(status.facts_ready);
     assert_eq!(
         serde_json::to_value(&status).unwrap()["query_readiness"],
@@ -1236,16 +1235,22 @@ fn index_only_init_reports_index_only_and_keeps_query_ready() {
         serde_json::to_value(&status).unwrap()["recommended_action"],
         "none"
     );
-    assert!(status.runtime_summary.is_none());
-    assert!(status.gate_summary.is_none());
+    assert!(status.runtime_summary.is_some());
 
     let query = wiki_runtime::workflows::query::run_query(repo_root, "src.ts").unwrap();
-    assert_eq!(
-        serde_json::to_value(&query).unwrap()["query_mode"],
-        "index_first"
+    assert_eq!(query.runtime_state, "fresh");
+    assert!(
+        query.provenance_summary.contains("index_hit"),
+        "expected index route tag, got {}",
+        query.provenance_summary
     );
-    assert!(query.matches.is_empty());
-    assert!(query.matched_pages.is_empty());
+    assert!(
+        query.provenance_summary.contains("knowledge_hit"),
+        "expected knowledge route tag, got {}",
+        query.provenance_summary
+    );
+    assert!(!query.matched_pages.is_empty());
+    assert!(!query.matches.is_empty());
     assert!(
         query
             .matched_symbols
@@ -1259,7 +1264,7 @@ fn index_only_init_reports_index_only_and_keeps_query_ready() {
 }
 
 #[test]
-fn index_only_update_normalizes_existing_full_runtime_to_index_only() {
+fn update_keeps_formal_runtime_ready_after_source_change() {
     let (_env_lock, _full_runtime) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
@@ -1272,16 +1277,19 @@ fn index_only_update_normalizes_existing_full_runtime_to_index_only() {
     assert!(metadata_exists(repo_root));
     assert!(repo_root.join(".wiki/项目概述.md").exists());
 
-    let _index_only = super::test_support::EnvVarGuard::set("SPEC_WIKI_V0_1_INDEX_ONLY", "1");
+    fs::write(repo_root.join("src.ts"), "export const version = 2;\n").unwrap();
     let update = run_update(repo_root).unwrap();
-    assert_eq!(update.previous_state, "fresh");
-    assert_eq!(update.state, "index_only");
-    assert!(update.updated_pages.is_empty());
-    assert!(!metadata_exists(repo_root));
-    assert!(!repo_root.join(".wiki/项目概述.md").exists());
+    assert_eq!(update.previous_state, "stale");
+    assert_eq!(update.state, "fresh");
+    assert!(!update.updated_pages.is_empty());
+    assert!(metadata_exists(repo_root));
+    assert!(repo_root.join(".wiki/项目概述.md").exists());
 
     let status = run_status(repo_root).unwrap();
-    assert_eq!(status.state, "index_only");
+    assert_eq!(status.state, "fresh");
     assert!(status.facts_ready);
-    assert!(status.runtime_summary.is_none());
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["recommended_action"],
+        "none"
+    );
 }

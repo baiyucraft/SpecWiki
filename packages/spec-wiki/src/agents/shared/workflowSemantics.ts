@@ -28,12 +28,12 @@ export type WorkflowActionSemantics = {
 };
 
 const ACTION_DESCRIPTIONS: Record<WikiAction, string> = {
-  init: "Initialize the repository's index-only Repo Wiki runtime.",
+  init: "Initialize the repository's knowledge runtime for this repository.",
   status: "Check the current Repo Wiki runtime state for this repository.",
-  update: "Refresh the repository's index-only Repo Wiki runtime.",
-  query: "Query the repository's index-first Repo Wiki results.",
-  sync: "Keep this entry point available, but do not treat it as a formal v0.1.0 guarantee.",
-  rebuild: "Keep this entry point available, but do not treat it as a formal v0.1.0 guarantee.",
+  update: "Refresh the repository's knowledge runtime after source changes.",
+  query: "Query the repository's index -> knowledge -> page fallback Repo Wiki results.",
+  sync: "Keep this entry point available, but do not treat it as a formal v0.2.0 guarantee.",
+  rebuild: "Keep this entry point available, but do not treat it as a formal v0.2.0 guarantee.",
 };
 
 function renderCliCall(action: WikiAction): string {
@@ -51,14 +51,14 @@ function renderArgumentHint(action: WikiAction): string {
 function renderActionNote(action: WikiAction): string {
   switch (action) {
     case "init":
-      return "`v0.1.0` only guarantees an index-only init. Do not confuse `spec-wiki wiki init` with top-level `spec-wiki init`.";
+      return "`v0.2.0` only guarantees a formal knowledge runtime init. Do not confuse `spec-wiki wiki init` with top-level `spec-wiki init`.";
     case "update":
-      return "`v0.1.0` only guarantees index refresh, not a complete knowledge/page update.";
+      return "`v0.2.0` treats knowledge runtime refresh as the formal update contract.";
     case "query":
-      return "`v0.1.0` only formally guarantees index-first structured results. Page fallback and knowledge/page projection are not release blockers.";
+      return "`v0.2.0` keeps the external term-only query contract, but routes results through index -> knowledge -> page fallback.";
     case "sync":
     case "rebuild":
-      return "This entry point can stay available, but `v0.1.0` does not describe it as a formal guarantee.";
+      return "This entry point can stay available, but `v0.2.0` does not describe it as a formal guarantee.";
     default:
       return "Do not reimplement Wiki business rules in host templates. Let `spec-wiki` and `wiki-runtime` own execution and state interpretation.";
   }
@@ -89,7 +89,7 @@ function createActionOutput(action: WikiAction): string[] {
   switch (action) {
     case "query":
       return [
-        "Prefer index-first structured hits.",
+        "Prefer stable runtime fields that explain readiness and route provenance.",
         "If the result is not enough to answer the question, state the coverage gap explicitly.",
       ];
     case "status":
@@ -145,3 +145,5 @@ export function getWorkflowActionSemantics(action: WikiAction): WorkflowActionSe
 export function listWorkflowActionSemantics(): WorkflowActionSemantics[] {
   return WIKI_ACTIONS.map((action) => ACTION_SEMANTICS[action]);
 }
+
+

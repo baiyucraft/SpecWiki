@@ -6,7 +6,7 @@
 export type QueryReadiness = "ready" | "needs_init" | "needs_update" | "blocked";
 export type RecommendedAction = "none" | "init" | "update" | "rebuild" | "sync";
 export type LlmModeHint = "provider_configured" | "deterministic_default";
-export type QueryMode = "index_first" | "page_fallback" | "mixed";
+export type QueryMode = "index_first" | "knowledge_first" | "page_fallback" | "mixed";
 export type QueryTrust = "ready" | "stale_but_queryable" | "blocked";
 export type LlmExecutionMode = "provider_direct" | "agent_bridge" | "deterministic_only";
 
@@ -77,7 +77,7 @@ export type WikiStatusData = {
 
 export type StatusPreflightData = WikiStatusData;
 
-/** `v0.1.0` 正式只保证 query 的 index-first 稳定字段；其余返回允许继续扩展。 */
+/** `v0.2.0` 正式保证 query route tags 与 mode 字段稳定；其余返回允许继续扩展。 */
 export type WikiQueryData = {
   term: string;
   runtime_state: string;
@@ -314,6 +314,7 @@ function parseGateBlocker(value: unknown): RuntimeGateBlocker {
 
 function parseGateSummary(value: unknown): RuntimeGateSummary {
   const parsed = value as Partial<RuntimeGateSummary>;
+  const blockers = parsed.blockers ?? [];
 
   if (
     !isRecord(parsed)
@@ -322,7 +323,7 @@ function parseGateSummary(value: unknown): RuntimeGateSummary {
     || typeof parsed.composed_units !== "number"
     || typeof parsed.assembled_units !== "number"
     || typeof parsed.blocked_units !== "number"
-    || !Array.isArray(parsed.blockers)
+    || !Array.isArray(blockers)
   ) {
     throw new Error("invalid wiki-runtime gate_summary");
   }
@@ -333,7 +334,7 @@ function parseGateSummary(value: unknown): RuntimeGateSummary {
     composed_units: parsed.composed_units,
     assembled_units: parsed.assembled_units,
     blocked_units: parsed.blocked_units,
-    blockers: parsed.blockers.map(parseGateBlocker),
+    blockers: blockers.map(parseGateBlocker),
   };
 }
 
@@ -409,7 +410,7 @@ function parseQueryData(value: Record<string, unknown>): WikiQueryData {
     runtime_state: value.runtime_state,
     query_mode: parseLiteral(
       value.query_mode,
-      ["index_first", "page_fallback", "mixed"] as const,
+      ["index_first", "knowledge_first", "page_fallback", "mixed"] as const,
       "query_mode",
     ),
     query_trust: parseLiteral(
@@ -575,3 +576,6 @@ export function responseFromTerminalEvent(
 ): CoreResponse {
   return parseCoreResponse(event.response);
 }
+
+
+

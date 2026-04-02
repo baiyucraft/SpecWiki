@@ -1,6 +1,6 @@
 /**
  * 这个文件负责定位 `wiki-runtime` 可执行文件。
- * `v0.1.0` 的正式发布只支持 Windows x64，因此这里必须先收紧平台边界，再解析包内或工作区二进制。
+ * `v0.2.0` 的正式发布只支持 Windows x64，因此这里必须先收紧平台边界，再解析包内或工作区二进制。
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -35,13 +35,13 @@ function assertSupportedRuntime(
 ): void {
   if (!supportedPlatforms.includes(platform)) {
     throw new Error(
-      `spec-wiki v0.1.0 only supports ${supportedPlatforms.join(", ")}; current platform: ${platform}`,
+      `spec-wiki v0.2.0 only supports ${supportedPlatforms.join(", ")}; current platform: ${platform}`,
     );
   }
 
   if (!supportedArchs.includes(arch)) {
     throw new Error(
-      `spec-wiki v0.1.0 only supports ${supportedArchs.join(", ")}; current architecture: ${arch}`,
+      `spec-wiki v0.2.0 only supports ${supportedArchs.join(", ")}; current architecture: ${arch}`,
     );
   }
 }
@@ -93,3 +93,4 @@ export function resolveBinary(options: ResolveBinaryOptions = {}): string {
 
   return existingBinary ?? candidatePaths[1];
 }
+

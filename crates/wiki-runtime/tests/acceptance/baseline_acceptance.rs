@@ -2,15 +2,32 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
+use wiki_runtime::domain::steering::SteeringLoadMode;
 use wiki_runtime::storage::metadata_store::read_metadata;
-use wiki_runtime::workflows::{init::run_init, query::run_query};
+use wiki_runtime::workflows::progress::NoopProgressSink;
+use wiki_runtime::workflows::{
+    init::run_init_with_progress_and_llm_as_with_mode,
+    query::run_query,
+};
+
+fn run_init_in_development(repo_root: &Path) {
+    let mut sink = NoopProgressSink;
+    run_init_with_progress_and_llm_as_with_mode(
+        "init",
+        repo_root,
+        &mut sink,
+        None,
+        SteeringLoadMode::Development,
+    )
+    .unwrap();
+}
 
 #[test]
 fn baseline_fixture_generates_hierarchical_wiki_and_structured_query_results() {
     let fixture = copy_fixture_to_temp("baseline-hierarchy-repo");
     let repo_root = fixture.path();
 
-    run_init(repo_root).unwrap();
+    run_init_in_development(repo_root);
 
     assert!(repo_root.join(".wiki/项目概述.md").exists());
     assert!(repo_root.join(".wiki/系统架构.md").exists());
@@ -56,7 +73,7 @@ fn mixed_local_fixture_filters_low_signal_key_sources_and_exports_relations() {
     let fixture = copy_fixture_to_temp("mixed-local-repo");
     let repo_root = fixture.path();
 
-    run_init(repo_root).unwrap();
+    run_init_in_development(repo_root);
 
     let metadata = read_metadata(repo_root).unwrap();
     assert!(
