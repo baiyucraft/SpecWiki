@@ -2,10 +2,10 @@
 
 `spec-wiki` 用来给代码仓库提供一层轻量、可本地运行的 Repo Wiki，方便 Agent 先拿到结构化地图，再去深入读代码。
 
-在 `v0.1.0` 里，它主要做两件事：
+在 `v0.2.0` 里，它主要做两件事：
 
 - 给 `Codex`、`Claude`、`CodeBuddy` 做 repo 内 bootstrap
-- 构建 index-first 的本地 runtime，用来查询文件、模块、符号和调用路径
+- 构建 `minimal formal knowledge runtime`，让你在深入读代码前先查询文件、模块、符号、formal knowledge pages 和调用路径
 
 ## 为什么用它
 
@@ -17,18 +17,21 @@ Agent 直接进入大仓库时，通常会先盲搜、盲读，token 花得多�
 - 哪些文件和符号彼此相关
 - 当前本地 runtime 是 ready、stale，还是需要重新初始化
 
-`v0.1.0` 的目标不是完整生成整套仓库文档，而是先把“第一层仓库地图”做稳定。
+`v0.2.0` 的目标，是用一套最小但正式的 knowledge runtime，稳定提供第一层仓库地图与可恢复的 runtime 产物。
 
 ## 当前范围
 
-`v0.1.0` 当前正式保证的边界：
+`v0.2.0` 当前正式保证的边界：
 
 - Windows runtime 支持
-- 对外公开 CLI：`init`、`status`、`update`、`query`
-- `init`、`update` 走 index-only
-- `query` 走 index-first
+- 对外公开 CLI：`init`、`status`、`update`、`query`、`sync`、`rebuild`
+- 正式 runtime 产物至少包括 `.wiki/.knowledge/**`、`.wiki/pages/**`、`wiki.metadata.json` 与可恢复的 `.wiki/.cache/**`
+- `init`、`update` 收敛到正式 knowledge runtime
+- `query` 走 `index -> knowledge -> page fallback`
+- `sync` 用于把受管 `.wiki` 页面编辑回写到 runtime state、metadata 与 cache
+- `rebuild` 用于显式触发全量 runtime 重建
 
-完整 knowledge/page 生成目前还不是 `v0.1.0` 的正式合同。
+当前正式发布合同已经是最小 knowledge runtime，不再是 `facts-only` 的过渡口径。
 
 ## 快速开始
 
@@ -46,13 +49,13 @@ spec-wiki init --tool codex --repo-root .
 - `claude`
 - `codebuddy`
 
-### 2. 初始化本地 repo index
+### 2. 初始化本地 knowledge runtime
 
 ```bash
 spec-wiki wiki init --repo-root .
 ```
 
-这个命令会扫描仓库并初始化本地 wiki cache。
+这个命令会扫描仓库并初始化本地 knowledge runtime 与 cache。
 
 ### 3. 查看 runtime 是否可用
 
@@ -79,6 +82,22 @@ spec-wiki wiki query payment flow
 ```bash
 spec-wiki wiki update --repo-root .
 ```
+
+### 6. 同步受管 `.wiki` 页面编辑
+
+```bash
+spec-wiki wiki sync --repo-root .
+```
+
+这个动作只用于把受管 `.wiki` 页面编辑回写到 runtime state、metadata 与 cache，不替代 `update`。
+
+### 7. 需要时显式全量重建
+
+```bash
+spec-wiki wiki rebuild --repo-root . --bridge-stdio
+```
+
+只有在你明确需要全量重建 runtime 时才使用它；它不是普通 `update` 的别名。
 
 ## 两个不同的 `init`
 
@@ -132,26 +151,32 @@ spec-wiki wiki status [--repo-root <path>]
 spec-wiki wiki update [--repo-root <path>] [--bridge-stdio]
 spec-wiki wiki query [--repo-root <path>] --term <text>
 spec-wiki wiki query [--repo-root <path>] <query text>
+spec-wiki wiki sync [--repo-root <path>]
+spec-wiki wiki rebuild [--repo-root <path>] [--bridge-stdio]
 ```
 
 补充：
 
-- `--bridge-stdio` 只适用于 `init`、`update` 这类长流程
+- `--bridge-stdio` 只适用于 `init`、`update`、`rebuild` 这类长流程
 - `query` 必须提供 `--term` 或位置参数查询词
+- `sync` 只把受管 `.wiki` 页面编辑回写到 runtime state，不替代 `update`
 
 ## 会生成什么
 
 runtime 会在仓库里写入本地 `.wiki/` 目录。
 
-对 `v0.1.0`，当前最应该依赖的核心产物是：
+对 `v0.2.0`，当前最应该依赖的正式产物是：
 
 ```text
 .wiki/
+├─ .knowledge/
+├─ pages/
+├─ wiki.metadata.json
 └─ .cache/
    └─ wiki-cache.db
 ```
 
-## `v0.1.0` 里 `query` 的稳定合同
+## `v0.2.0` 里 `query` 的稳定合同
 
 对 `query`，建议只稳定依赖这些字段：
 
@@ -161,6 +186,12 @@ runtime 会在仓库里写入本地 `.wiki/` 目录。
 - `matched_pages`
 - `provenance_summary`
 
+其中 `provenance_summary` 当前稳定区分：
+
+- `index_hit`
+- `knowledge_hit`
+- `page_fallback`
+
 推荐使用方式：
 
 1. 先用 `query` 缩小搜索空间
@@ -168,6 +199,15 @@ runtime 会在仓库里写入本地 `.wiki/` 目录。
 3. 需要精确实现细节时，再直接读代码
 
 `query` 的目标是降低搜索成本，不是替代读代码。
+
+## `v0.2.0` 的 workflow 边界
+
+- `spec-wiki init` 是宿主 bootstrap 入口，负责安装 Codex、Claude、CodeBuddy 等宿主资产
+- `spec-wiki wiki init` 是 runtime 入口，负责构建 repo-local knowledge runtime
+- `status` 用来检查当前 runtime 是否 ready、stale、needs_update 或 blocker，并给出下一步动作
+- `update` 用来在源码变更后刷新 knowledge runtime
+- `sync` 只把受管 `.wiki` 页面编辑同步回 runtime state、metadata 与 cache
+- `rebuild` 是显式全量重建 knowledge runtime 的入口
 
 ## 它适合什么场景
 
@@ -182,6 +222,5 @@ runtime 会在仓库里写入本地 `.wiki/` 目录。
 
 ## TODO
 
-- 正式支持 knowledge/page runtime
 - 增强 research 和结果组装
 - 扩展更多平台支持

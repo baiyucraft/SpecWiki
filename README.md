@@ -5,7 +5,7 @@
 In `v0.2.0`, it focuses on two practical jobs:
 
 - bootstrap repo-local integrations for `Codex`, `Claude`, and `CodeBuddy`
-- build a knowledge runtime so you can query files, modules, symbols, formal knowledge pages, and call paths before doing deeper code reading
+- build a minimal formal knowledge runtime so you can query files, modules, symbols, formal knowledge pages, and call paths before doing deeper code reading
 
 ## Why Use It
 
@@ -24,11 +24,13 @@ The goal of `v0.2.0` is a reliable first-pass repo map backed by a minimal forma
 `v0.2.0` currently guarantees:
 
 - Windows x64 runtime support
-- public CLI actions: `init`, `status`, `update`, `query`
+- public CLI actions: `init`, `status`, `update`, `query`, `sync`, `rebuild`
+- minimal formal knowledge runtime artifacts in `.wiki/.knowledge/**`, `.wiki/pages/**`, `wiki.metadata.json`, and recoverable `.wiki/.cache/**`
 - knowledge runtime initialization and refresh
 - query routing through `index -> knowledge -> page fallback`
+- explicit page-writeback through `sync` and explicit full runtime rebuild through `rebuild`
 
-The public release contract is now the minimal knowledge runtime, not a facts-only/index-only shortcut.
+The public release contract is now the minimal knowledge runtime, not a facts-only shortcut.
 
 ## Quick Start
 
@@ -46,13 +48,13 @@ Supported hosts:
 - `claude`
 - `codebuddy`
 
-### 2. Build the local repo index
+### 2. Build the local knowledge runtime
 
 ```bash
 spec-wiki wiki init --repo-root .
 ```
 
-This scans the repository and creates the local wiki cache.
+This scans the repository and creates the local knowledge runtime and cache.
 
 ### 3. Check whether the runtime is ready
 
@@ -80,6 +82,22 @@ spec-wiki wiki query payment flow
 spec-wiki wiki update --repo-root .
 ```
 
+### 6. Sync managed `.wiki` page edits
+
+```bash
+spec-wiki wiki sync --repo-root .
+```
+
+Use this only after editing managed `.wiki` pages. It syncs page-layer changes back into runtime state, metadata, and cache.
+
+### 7. Force a full rebuild when you need one
+
+```bash
+spec-wiki wiki rebuild --repo-root . --bridge-stdio
+```
+
+Use this only when you explicitly need a full runtime rebuild. It does not replace normal `update`.
+
 ## Two Different `init` Commands
 
 This is the most important CLI distinction.
@@ -96,8 +114,7 @@ It does not build the wiki runtime.
 
 This is the runtime command.
 
-It scans the repository and initializes the local repo wiki cache.
-
+It scans the repository and initializes the local knowledge runtime and cache.
 It does not install host bootstrap assets.
 
 ## Install Or Run From Source
@@ -132,12 +149,15 @@ spec-wiki wiki status [--repo-root <path>]
 spec-wiki wiki update [--repo-root <path>] [--bridge-stdio]
 spec-wiki wiki query [--repo-root <path>] --term <text>
 spec-wiki wiki query [--repo-root <path>] <query text>
+spec-wiki wiki sync [--repo-root <path>]
+spec-wiki wiki rebuild [--repo-root <path>] [--bridge-stdio]
 ```
 
 Notes:
 
-- `--bridge-stdio` only applies to long-running actions such as `init` and `update`
+- `--bridge-stdio` only applies to long-running actions such as `init`, `update`, and `rebuild`
 - `query` requires either `--term` or positional query text
+- `sync` only writes managed `.wiki` page edits back into runtime state; it does not replace `update`
 
 ## What Gets Created
 
@@ -177,6 +197,15 @@ Recommended usage:
 3. read code directly when implementation detail matters
 
 `query` is meant to reduce search cost, not replace code reading.
+
+## Workflow Boundaries In v0.2.0
+
+- `spec-wiki init` bootstraps host assets such as Codex, Claude, and CodeBuddy skills
+- `spec-wiki wiki init` builds the repo-local knowledge runtime
+- `status` reports runtime readiness and recommended next action
+- `update` refreshes the knowledge runtime after source changes
+- `sync` applies managed `.wiki` page edits back into runtime state, metadata, and cache
+- `rebuild` is the explicit full runtime rebuild entry point
 
 ## What It Is Good For
 

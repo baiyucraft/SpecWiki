@@ -1,0 +1,116 @@
+# spec-wiki v0.2.0 版本说明
+
+## 发布定位
+
+`v0.2.0` 是当前阶段的 `minimal formal knowledge runtime` 发布，不再沿用 `facts-only` 的过渡叙事。
+
+这一版正式收口的是：
+
+- 统一的 `spec-wiki` CLI 与宿主 bootstrap
+- 可恢复的 knowledge runtime 正式产物
+- `index -> knowledge -> page fallback` 的正式 query 路由
+- 对外公开的 6 个 workflow：`init`、`status`、`update`、`query`、`sync`、`rebuild`
+
+当前仍以 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md)、[DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md) 和 [DESIGN-AGENTS.md](E:/project/!byAI/spec-wiki/DESIGN-AGENTS.md) 作为长期目标边界；本说明只描述 `v0.2.0` 当前真实发布面。
+
+## 正式支持范围
+
+`v0.2.0` 当前正式保证的是：
+
+- `spec-wiki init`
+- `spec-wiki wiki init`
+- `spec-wiki wiki status`
+- `spec-wiki wiki update`
+- `spec-wiki wiki query`
+- `spec-wiki wiki sync`
+- `spec-wiki wiki rebuild`
+
+这里的“正式保证”含义是：
+
+- `spec-wiki init` 负责 repo-local 宿主 bootstrap，不负责构建 wiki runtime
+- `spec-wiki wiki init / update` 正式提交 knowledge runtime，而不是只停留在 facts/index
+- `spec-wiki wiki status` 负责表达 knowledge runtime 的 readiness 与推荐动作
+- `spec-wiki wiki query` 正式走 `index -> knowledge -> page fallback`
+- `spec-wiki wiki sync` 只回写受管 `.wiki` 页面编辑，不替代 `update`
+- `spec-wiki wiki rebuild` 是显式全量重建入口，不替代普通 `update`
+
+当前正式 runtime 产物至少包括：
+
+- `.wiki/.knowledge/**`
+- `.wiki/pages/**`
+- `wiki.metadata.json`
+- 可恢复的 `.wiki/.cache/**`
+
+## `query` 的稳定合同
+
+当前宿主与调用方可稳定依赖的 `query` 字段仍然只有：
+
+- `term`
+- `runtime_state`
+- `query_mode`
+- `query_trust`
+- `recommended_action`
+- `matched_pages`
+- `provenance_summary`
+
+其中 `provenance_summary` 当前稳定区分：
+
+- `index_hit`
+- `knowledge_hit`
+- `page_fallback`
+
+说明：
+
+- 其他实现可见字段 MAY 出现，但不构成当前正式稳定合同
+- 宿主可以做面向人的薄转述，但不得基于非稳定字段建立新的宿主状态机、业务分支或固定协议
+- 当前版本的目标是降低搜索成本，而不是替代直接读代码
+
+## 宿主公开入口
+
+当前公开 CLI 与三类宿主都暴露同一套 6 个 runtime 入口：
+
+- `init`
+- `status`
+- `update`
+- `query`
+- `sync`
+- `rebuild`
+
+其中：
+
+- Claude 暴露 `.claude/skills/wiki-init/SKILL.md`、`wiki-status/SKILL.md`、`wiki-update/SKILL.md`、`wiki-query/SKILL.md`、`wiki-sync/SKILL.md`、`wiki-rebuild/SKILL.md`
+- Codex 暴露 `.codex/skills/wiki-init/SKILL.md`、`wiki-status/SKILL.md`、`wiki-update/SKILL.md`、`wiki-query/SKILL.md`、`wiki-sync/SKILL.md`、`wiki-rebuild/SKILL.md`
+- CodeBuddy 暴露 `wiki-init`、`wiki-status`、`wiki-update`、`wiki-query`、`wiki-sync`、`wiki-rebuild` 六个 action skills
+
+宿主统一边界：
+
+- 宿主只负责参数收集、CLI 调用、结果转述与必要上下文
+- 宿主不得重建 Wiki 状态机、页面语义或 knowledge/page projection
+- 宿主应薄消费 `status` 与 `query` 的稳定字段，而不是扩写新的业务协议
+
+## 当前平台与交付形态
+
+`v0.2.0` 当前只提供 Windows x64 runtime 分发。
+
+当前正式源码与产物位置：
+
+- 源码包：[packages/spec-wiki](E:/project/!byAI/spec-wiki/packages/spec-wiki)
+- 发布 staging 目录：[dist/spec-wiki](E:/project/!byAI/spec-wiki/dist/spec-wiki)
+- Windows x64 runtime binary：[dist/spec-wiki/lib/x64-win32/wiki-runtime.exe](E:/project/!byAI/spec-wiki/dist/spec-wiki/lib/x64-win32/wiki-runtime.exe)
+
+## 本轮边界
+
+本轮 release 说明只做 `release drift closure`，不新增 runtime capability。
+
+不属于本轮说明范围的内容：
+
+- `publish dry-run`
+- staged package smoke
+- “当前 staged package 已经完成可发布证据闭环”的证明叙事
+- `0.3.0` 级别的 declared knowledge / knowledge governance 目标
+
+这些内容属于后续 `iteration-12-7` 的发布证据收口，而不是本轮 release note 的职责。
+
+## 一句话总结
+
+`spec-wiki v0.2.0` 当前是一个以 `minimal formal knowledge runtime` 为正式合同、公开暴露 `init/status/update/query/sync/rebuild` 六个 workflow，并要求宿主薄消费 runtime 稳定结果的收口版发布。

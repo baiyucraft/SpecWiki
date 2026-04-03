@@ -1,9 +1,9 @@
 {
   "name": "spec-wiki",
   "type": "module",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": false,
-  "description": "Global CLI for Repo Wiki bootstrap and wiki-runtime forwarding.",
+  "description": "Global CLI for Repo Wiki bootstrap and minimal formal knowledge runtime forwarding.",
   "license": "GPL-3.0-or-later",
   "exports": {
     ".": "./dist/index.js"
@@ -34,4 +34,3 @@
     "x64"
   ]
 }
-

@@ -1,7 +1,7 @@
 # adapter-distribution Specification
 
 ## Purpose
-定义 `spec-wiki v0.1.0` 当前真实发布的单包分发合同。这个规范只描述当前 Windows x64 单包 staging/publish 形态，不再沿用旧的 optionalDependencies 平台包方案。
+定义 `spec-wiki v0.2.0` 当前真实发布的单包分发合同。这个规范只描述当前 Windows x64 单包 staging/publish 形态，不再沿用旧的 optionalDependencies 平台包方案。
 
 ## Requirements
 ### Requirement: 主包清单必须从真实全局 CLI 包元数据生成
@@ -11,8 +11,8 @@
 - **WHEN** 开发者执行 staging 流程
 - **THEN** `dist/spec-wiki/package.json` MUST 使用 `packages/spec-wiki/package.json` 中的名称、版本和 `bin` 配置生成
 
-### Requirement: `v0.1.0` staging 必须收敛为单个 Windows x64 主包并内置 runtime
-系统 MUST 将 `v0.1.0` 的 staging 产物收敛为单个 `spec-wiki` 主包，并在主包内直接携带 Windows x64 runtime 二进制。staged manifest MUST 显式声明 `os=["win32"]` 与 `cpu=["x64"]`，而不是继续依赖 optionalDependencies 平台包分发。
+### Requirement: 当前正式 staging 必须收敛为单个 Windows x64 主包并内置 runtime
+系统 MUST 将当前正式发布的 staging 产物收敛为单个 `spec-wiki` 主包，并在主包内直接携带 Windows x64 runtime 二进制。staged manifest MUST 显式声明 `os=["win32"]` 与 `cpu=["x64"]`，而不是继续依赖 optionalDependencies 平台包分发。当前 staged README、release 说明与主包版本信息 MUST 与这一单包分发形态保持一致，不得继续残留旧版本合同或旧 runtime 叙述。
 
 #### Scenario: 生成当前版本 staging 产物
 - **WHEN** 开发者执行当前版本 staging 流程
@@ -24,3 +24,8 @@
 - **WHEN** staging 流程完成
 - **THEN** `dist/spec-wiki/package.json` MUST NOT 继续包含平台包 `optionalDependencies`
 - **THEN** 当前发布说明 MUST 与这一单包分发形态保持一致
+
+#### Scenario: staged README 与版本叙事保持一致
+- **WHEN** 开发者完成当前版本 staging
+- **THEN** `dist/spec-wiki/README.md` MUST 与当前正式 release 口径一致
+- **THEN** staged README MUST NOT 继续描述旧版本的公开动作或旧 runtime contract

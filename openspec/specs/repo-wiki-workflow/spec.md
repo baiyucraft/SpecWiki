@@ -1,7 +1,7 @@
 # repo-wiki-workflow Specification
 
 ## Purpose
-定义 `spec-wiki v0.1.0` 当前真实公开支持的 workflow 合同。这个规范只描述打包版 CLI 与宿主可依赖的发布面，不把长期的 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble` 完整目标直接当作本版正式承诺。
+定义 `spec-wiki v0.2.0` 当前真实公开支持的 workflow 合同。这个规范只描述打包版 CLI 与宿主可依赖的发布面，不把长期的 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble` 完整目标直接当作本版正式承诺。
 ## Requirements
 ### Requirement: `init` 与 `update` 的长流程协议必须保持可流式消费
 系统 MUST 让 `init`、`update` 与 `rebuild` 保留可流式消费的事件协议，以便 CLI passthrough 与宿主桥接在不重写业务语义的前提下消费 `progress / result / error`。`status`、`query` 与 `sync` 继续作为短流程 JSON 调用即可。
@@ -11,21 +11,34 @@
 - **THEN** 系统 MUST 允许调用方消费 `progress / result / error` 事件流
 - **THEN** 调用方不得为了当前版本另建一套 workflow 事件语义
 
-### Requirement: `v0.2.0` 的公开 workflow surface 必须继续收敛为 `init`、`status`、`update`、`query`
+### Requirement: 当前正式公开 workflow surface 必须收敛为 `init`、`status`、`update`、`query`、`sync`、`rebuild`
 系统 MUST 把当前版本的公开 CLI workflow 收敛为 `init`、`status`、`update`、`query`、`sync`、`rebuild` 六个入口。README、release 说明、宿主技能、主包帮助文本与公开 action skills MUST 对这六个入口保持一致，不得继续把 `sync` 或 `rebuild` 描述成 internal-only 能力。
 
-#### Scenario: 用户查看 `v0.2.0` 的公开 CLI 入口
+#### Scenario: 用户查看当前正式公开 CLI 入口
 - **WHEN** 用户阅读 README、release 说明、宿主技能或主包帮助文本
 - **THEN** 公开 workflow 入口 MUST 包含 `sync` 与 `rebuild`
 - **THEN** 文档 MUST NOT 再把两者描述成“未来迭代再开放”或“仅内部使用”
 
-#### Scenario: 宿主生成 `v0.2.0` 的显式技能入口
+#### Scenario: 宿主生成当前版本的显式技能入口
 - **WHEN** 宿主 bootstrap 为当前版本生成显式 Wiki action skills
 - **THEN** 公开暴露的显式入口 MUST 覆盖 `wiki-init`、`wiki-status`、`wiki-update`、`wiki-query`、`wiki-sync`、`wiki-rebuild`
 - **THEN** 宿主不得继续省略 `wiki-sync` 或 `wiki-rebuild`
 
+### Requirement: 当前正式 release truth sources 必须对齐到同一 workflow 合同
+系统 MUST 让 `README.md`、`README-CN.md`、release note、主包帮助文本、staged README 与主包版本号共同对齐到同一套正式 workflow 合同。当前版本一旦正式采用 `v0.2.0 minimal formal knowledge runtime` 与 6 个公开 workflow，系统 MUST NOT 再允许其中任一 truth source 继续描述旧版 workflow 入口或旧版 runtime contract。
+
+#### Scenario: 用户读取任一正式 release 文档
+- **WHEN** 用户查看 `README.md`、`README-CN.md`、release note 或 staged README
+- **THEN** 文档 MUST 一致描述当前正式 runtime contract，而不是混用旧版 facts-only 叙事与 `v0.2.0` knowledge runtime
+- **THEN** 文档 MUST 一致列出当前正式公开的 workflow 入口
+
+#### Scenario: 主包版本号切到正式 release 口径
+- **WHEN** 当前发布被命名为 `v0.2.0`
+- **THEN** `packages/spec-wiki/package.json` 的版本号与 release 文档 MUST 使用同一版本口径
+- **THEN** 系统 MUST NOT 继续保留与当前 release 叙事冲突的旧版本说明
+
 ### Requirement: `init` 与 `update` 的正式承诺必须收敛到 knowledge runtime
-系统 MUST 把 `init` 与 `update` 的正式发布承诺收敛到 knowledge runtime，而不是继续停留在 index-only runtime。执行成功后，系统 MUST 至少保证 `.wiki/.knowledge/**`、`.wiki/pages/**`、`wiki.metadata.json` 与可重建 `.wiki/.cache/**` 的正式 snapshot 成立；仅有 facts/index snapshot 可查而缺失正式 knowledge/runtime 提交时，系统 MUST NOT 将该结果表述为 `v0.2.0` 的 workflow 成功。
+系统 MUST 把 `init` 与 `update` 的正式发布承诺收敛到 knowledge runtime，而不是继续停留在 facts-only runtime。执行成功后，系统 MUST 至少保证 `.wiki/.knowledge/**`、`.wiki/pages/**`、`wiki.metadata.json` 与可重建 `.wiki/.cache/**` 的正式 snapshot 成立；仅有 facts/index snapshot 可查而缺失正式 knowledge/runtime 提交时，系统 MUST NOT 将该结果表述为 `v0.2.0` 的 workflow 成功。
 
 #### Scenario: `init` 成功建立 knowledge runtime
 - **WHEN** 用户在有效本地仓库上执行 `spec-wiki wiki init`
@@ -73,4 +86,3 @@
 - **WHEN** 用户或宿主明确调用 `spec-wiki wiki rebuild`
 - **THEN** 系统 MUST 执行正式 runtime 的全量重建
 - **THEN** 系统 MUST NOT 把该动作表述成普通 `update` 的别名或隐式 fallback 文案
-
