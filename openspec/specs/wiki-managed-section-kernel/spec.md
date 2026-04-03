@@ -1,4 +1,9 @@
-## ADDED Requirements
+# wiki-managed-section-kernel Specification
+
+## Purpose
+定义受管 section 的写入、识别、合并与迁移边界，说明 Wiki 页面中的 managed 区段与 user 区段应如何稳定协作。
+
+## Requirements
 
 ### Requirement: Managed section 必须以稳定 marker 写入 Wiki 页面
 系统 MUST 为每个 runtime 托管 section 写入稳定的 Markdown marker。marker MUST 至少包含稳定 `section_id` 和格式版本，并且不得破坏页面的正常 Markdown 渲染。

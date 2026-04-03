@@ -1,4 +1,9 @@
-## ADDED Requirements
+# scanner-noise-filter Specification
+
+## Purpose
+定义 Scanner 在仓库扫描阶段的噪声过滤边界，说明嵌套仓库、fixture、产物目录与测试路径应如何排除或降权。
+
+## Requirements
 
 ### Requirement: Scanner 必须排除嵌套仓库目录
 系统 MUST 在目录遍历阶段检测嵌套仓库（子目录包含 `.git` 目录，或同时包含 manifest 文件与源码目录的组合），并将其整体排除在模块发现之外。嵌套仓库内的文件不得出现在 `RepoFacts.files` 中，也不得参与模块树构建。

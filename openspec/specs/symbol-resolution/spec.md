@@ -1,4 +1,9 @@
-## ADDED Requirements
+# symbol-resolution Specification
+
+## Purpose
+定义 raw symbol captures 到稳定关系边的解析合同，说明导入解析、调用解析与增量 edge 刷新的边界和结果约束。
+
+## Requirements
 
 ### Requirement: 系统必须把 raw symbol captures 解析为稳定的符号关系边
 系统 MUST 在 `parse_symbols` 之后执行独立的 symbol resolution 阶段，把 raw `import / call / heritage` captures 解析为稳定的 `IMPORTS`、`CALLS`、`EXTENDS` 和 `IMPLEMENTS` edges。每条 edge MUST 至少包含稳定 `id`、`source_id`、`target_id`、`edge_type`、`confidence` 和 `reason`，并写入 SQLite 的 `edges` 表。对于无法确定目标的 raw capture，系统 MUST 保留 diagnostics 或 unresolved 状态，但不得写入伪造的目标边。

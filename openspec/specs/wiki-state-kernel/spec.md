@@ -1,4 +1,9 @@
-## MODIFIED Requirements
+# wiki-state-kernel Specification
+
+## Purpose
+定义 WikiState 作为 runtime 内部事实主模型的正式边界，说明状态持久化、恢复与 workflow 消费应遵循的基础约束。
+
+## Requirements
 
 ### Requirement: WikiState 必须作为所有 workflow 的内部事实主模型
 系统 MUST 继续维护 `WikiState` 作为内部状态的唯一事实主模型，承载页面状态、section 状态、源码状态、模块列表、关系列表、脏状态和构建状态。所有 workflow（init / status / update / query / sync / rebuild）MUST 围绕 `WikiState` 工作，而不是直接操作 `WikiMetadata`。与迭代 6 不同的是，`WikiState` 的持久化和恢复 MUST 基于关系型状态表组装，而不是单条 JSON blob。为了驱动 editable runtime，`WikiState` 还 MUST 为每个页面维护稳定的 `section_anchors` 聚合字段，并保持 `source -> module -> page -> section` 映射可重建。

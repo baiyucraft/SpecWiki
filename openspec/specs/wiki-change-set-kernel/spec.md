@@ -1,4 +1,9 @@
-## MODIFIED Requirements
+# wiki-change-set-kernel Specification
+
+## Purpose
+定义 Wiki runtime 中 ChangeSet 计算与受影响范围映射的正式边界，说明局部变化、结构变化与回退条件应如何被稳定判定。
+
+## Requirements
 
 ### Requirement: 系统必须从当前仓库快照和最近一次 runtime 计算稳定 ChangeSet
 系统 MUST 基于当前仓库快照、最近一次 SQLite 扫描缓存、关系型 `WikiState` 状态表、页面落盘状态，以及上一轮 formal knowledge identity snapshot 计算稳定的 `ChangeSet`。`ChangeSet` MUST 至少区分新增、修改、删除和结构性变化的源码集合，并保留能够回溯到源码路径、状态表缺失位置、formal identity 缺失位置或页面锚点变化的证据。

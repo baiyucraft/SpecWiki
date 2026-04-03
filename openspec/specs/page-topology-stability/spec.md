@@ -1,4 +1,9 @@
-## ADDED Requirements
+# page-topology-stability Specification
+
+## Purpose
+定义 Repo Wiki 页面拓扑稳定性的正式约束，说明页面标识、路径、父子关系与模块合并策略应如何保持可预测和可重建。
+
+## Requirements
 
 ### Requirement: page_id 必须锚定到模块 root_path 而不是模块名或发现顺序
 系统 MUST 为 module 类型页面生成锚定到模块 `root_paths[0]`（归一化后的相对路径）的稳定 `page_id`。overview 和 architecture 页面的 `page_id` MUST 使用固定种子。`page_id` 不得依赖模块名、模块发现顺序或模块 kind 分类结果。

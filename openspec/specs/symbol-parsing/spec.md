@@ -1,7 +1,7 @@
 # symbol-parsing Specification
 
 ## Purpose
-定义源码符号解析阶段的语言覆盖、fail-soft 语义，以及热路径优化后的确定性约束。
+定义源码符号解析阶段的正式能力边界，说明多语言 parser 覆盖、fail-soft 行为、raw captures 产出与热路径优化后的确定性约束应如何成立。
 
 ## Requirements
 ### Requirement: 系统必须在扫描后执行独立的 tree-sitter 符号解析阶段

@@ -1,4 +1,9 @@
-## MODIFIED Requirements
+# repo-hierarchy-model Specification
+
+## Purpose
+定义 Repo Wiki 仓库层级模型与页面规划输入的正式边界，说明模块树、页面合并拆分、workflow 线索与专题线索如何稳定产出。
+
+## Requirements
 
 ### Requirement: 系统必须生成稳定的模块树
 系统 MUST 基于归一化后的仓库扫描结果生成稳定的递归 `ModuleTree`，用于表达模块边界、父子层级、模块类型和模块包含的关键源码集合，而不是只生成根模块与一层子模块。系统 MUST 在模块提升阶段抑制单文件模块，不允许只含单个文件且无子模块的候选节点被提升为独立模块。系统 MUST 在模块提升评分中对 test / fixture 路径下的文件施加降权，避免测试产物主导模块发现。系统 MUST 为每个模块计算"页面权重"评分，基于源码文件数量、是否有子模块、是否是 workspace 成员、是否有入口文件等因素，供 planner 的合并策略消费。
@@ -67,8 +72,6 @@
 - **THEN** architecture 页面 MUST 包含架构概览、模块结构、跨模块关系、架构提示等 section
 - **THEN** module 页面 MUST 包含模块说明、关键源码、依赖关系、模块事实等 section
 - **THEN** workflow 页面 MUST 包含工作流概述、构建流程、CI/CD 配置等 section
-
-## ADDED Requirements
 
 ### Requirement: 模块关系推断必须消费 symbol graph 摘要
 系统 MUST 在保持目录结构和 steering 规则主导模块发现的前提下，消费 symbol graph 聚合后的高层信号增强模块关系推断。`ModuleTree.cross_module_edges` MUST 结合现有文件级 `DependencyHint` 与由 `IMPORTS / CALLS` 聚合得到的模块级依赖证据；低置信度或噪声边不得主导模块关系。模块级关系的 evidence MUST 能回溯到具体源码文件或 symbol edge 来源。

@@ -1,4 +1,9 @@
-## MODIFIED Requirements
+# wiki-bm25-query Specification
+
+## Purpose
+定义 Wiki 查询面中的 BM25 与全文检索能力边界，说明页面索引、符号索引、结构化结果合并与 graph context 扩展应如何稳定工作。
+
+## Requirements
 
 ### Requirement: 系统必须在 SQLite 中维护页面全文检索索引
 系统 MUST 在 `.wiki/.cache/wiki-cache.db` 中为 Wiki 页面建立 `wiki_pages_fts` FTS5 虚拟表，并把页面标题、路径以及用于检索的文本字段同步到索引中。系统同时 MUST 为定义类符号维护 `symbols` 与 `symbols_fts`：`symbols_fts` MUST 同步索引至少 `name`、`file_path` 和可用于检索的符号文本字段；符号被新增、修改或删除时，系统 MUST 在同一轮 workflow 中刷新对应的 symbol 索引项。
@@ -46,8 +51,6 @@
 - **WHEN** `wiki_pages_fts` 或 `symbols_fts` 尚未建立有效数据
 - **THEN** `query` MUST 回退到现有的结构化匹配逻辑
 - **THEN** 系统不得因为某一类 FTS 无结果而报错或返回空响应
-
-## ADDED Requirements
 
 ### Requirement: query 必须把 symbol 命中扩展为 graph context
 系统 MUST 在保留页面与 symbol BM25 的基础上，把高置信度 symbol 命中扩展为 graph context。对于命中的 symbol，query MUST 能回填其直接相关的 `IMPORTS / CALLS / EXTENDS / IMPLEMENTS` edges，以及该 symbol 所属或经过的 processes / communities。query 的结构化输出 MUST 把这些 graph 结果作为 first-class 数据返回，而不是只折叠为页面或源码。

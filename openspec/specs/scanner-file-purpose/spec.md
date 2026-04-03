@@ -1,4 +1,9 @@
-## ADDED Requirements
+# scanner-file-purpose Specification
+
+## Purpose
+定义 Scanner 对源码与非源码文件职责的分类边界，说明 FilePurpose 如何稳定产出并被后续规划与关键源码选择消费。
+
+## Requirements
 
 ### Requirement: Scanner 必须为每个已分析文件产出稳定的 FilePurpose
 系统 MUST 为每个进入 `ScanReport.files` 的文件产出稳定的 `FilePurpose`，替代当前粗粒度的 `kind` 字符串。`FilePurpose` MUST 至少覆盖以下角色：`Entry`、`Router`、`Controller`、`Handler`、`Service`、`Model`、`Repository`、`Domain`、`Agent`、`Library`、`Middleware`、`Plugin`、`Utility`、`Helper`、`Constant`、`Type`、`Page`、`Component`、`Widget`、`Layout`、`Config`、`Migration`、`Test`、`Docs`。分类 MUST 先走 deterministic 的路径/文件名规则；本迭代不得依赖 LLM 才能完成基础分类。

@@ -1,7 +1,7 @@
 # topic-page-planner Specification
 
 ## Purpose
-定义 Repo Wiki 在正式页面规划阶段发现、去重和稳定落盘专题页的约束。
+定义 Repo Wiki 在正式页面规划阶段发现、去重并稳定落盘专题页的职责边界，说明 topic 页面与 family 页面之间的分工、稳定性目标和去重规则。
 ## Requirements
 ### Requirement: planner 必须支持基于高信号主题的专题页发现
 系统 MUST 在现有 `overview / architecture / module / workflow` 页面之外，支持基于高信号主题发现专题页。专题候选 MUST 至少覆盖三类现有来源：根级核心机制文件簇、模块内能力簇、以及由 detected processes 归纳出的流程主题；9.3 还 MUST 按仓库 archetype 扩展稳定专题页族，例如路由/入口链路页、配置与运行时页、协议/数据模型页、命令树页和部署流程页。专题页的发现 MUST 由 deterministic 规则和现有 graph/module/context 输入驱动，而不是让 LLM 直接决定页面集合。

@@ -1,4 +1,9 @@
-## ADDED Requirements
+# symbol-graph-analysis Specification
+
+## Purpose
+定义符号图分析阶段的正式边界，说明 communities、processes 与调用拓扑提示应如何从 symbol graph 中稳定推导出来。
+
+## Requirements
 
 ### Requirement: 系统必须基于 symbol graph 检测代码 communities
 系统 MUST 基于解析后的 `CALLS`、`EXTENDS` 和 `IMPLEMENTS` edges 检测代码 communities，并把结果写入 `communities` 与 `community_members` 表。community 检测 MUST 对大型图提供降噪策略，至少允许过滤低置信度边与高度孤立节点；当首选算法不可用或超时，系统 MUST 回退到 deterministic 的近似聚类结果，而不是让整轮 workflow 失败。
