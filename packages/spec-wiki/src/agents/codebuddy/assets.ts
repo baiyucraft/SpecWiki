@@ -38,8 +38,6 @@ export function resolveLegacyCodeBuddySharedSkillDir(repoRoot: string): string {
 export function listObsoleteCodeBuddySkillDirs(repoRoot: string): string[] {
   return [
     resolveLegacyCodeBuddySharedSkillDir(repoRoot),
-    path.join(repoRoot, ".codebuddy", "skills", "wiki-sync"),
-    path.join(repoRoot, ".codebuddy", "skills", "wiki-rebuild"),
   ];
 }
 
@@ -93,3 +91,4 @@ export function renderCodeBuddySettingsAsset(
 ): string {
   return renderMergedCodeBuddySettings(filePath, patch);
 }
+

@@ -31,7 +31,7 @@ function renderUsage(): string {
     "",
     "Supported hosts: codex, claude, codebuddy",
     `Supported actions: ${PUBLIC_WIKI_ACTIONS.join(", ")}`,
-    "  --bridge-stdio only applies to long-running wiki actions such as init and update",
+    "  --bridge-stdio only applies to long-running wiki actions such as init, update, and rebuild",
     "",
   ].join("\n");
 }
@@ -115,7 +115,7 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
       const action = args[1];
       if (!action || !isPublicWikiAction(action)) {
         throw new Error(
-          `unsupported wiki action: ${action ?? "<missing>"}; v0.2.0 only exposes ${PUBLIC_WIKI_ACTIONS.join(", ")}`,
+          `unsupported wiki action: ${action ?? "<missing>"}; current version only exposes ${PUBLIC_WIKI_ACTIONS.join(", ")}`,
         );
       }
 
@@ -191,4 +191,6 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
     return 1;
   }
 }
+
+
 

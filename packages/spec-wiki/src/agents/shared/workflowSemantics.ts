@@ -32,8 +32,8 @@ const ACTION_DESCRIPTIONS: Record<WikiAction, string> = {
   status: "Check the current Repo Wiki runtime state for this repository.",
   update: "Refresh the repository's knowledge runtime after source changes.",
   query: "Query the repository's index -> knowledge -> page fallback Repo Wiki results.",
-  sync: "Keep this entry point available, but do not treat it as a formal v0.2.0 guarantee.",
-  rebuild: "Keep this entry point available, but do not treat it as a formal v0.2.0 guarantee.",
+  sync: "Sync managed wiki page edits back into the runtime state for this repository.",
+  rebuild: "Force a full rebuild of the wiki runtime.",
 };
 
 function renderCliCall(action: WikiAction): string {
@@ -57,8 +57,9 @@ function renderActionNote(action: WikiAction): string {
     case "query":
       return "`v0.2.0` keeps the external term-only query contract, but routes results through index -> knowledge -> page fallback.";
     case "sync":
+      return "`sync` only applies `.wiki` page edits back into runtime state, metadata, and cache. It does not replace `update`.";
     case "rebuild":
-      return "This entry point can stay available, but `v0.2.0` does not describe it as a formal guarantee.";
+      return "`rebuild` is the explicit full runtime rebuild entry point. It does not replace `update`.";
     default:
       return "Do not reimplement Wiki business rules in host templates. Let `spec-wiki` and `wiki-runtime` own execution and state interpretation.";
   }
@@ -145,5 +146,4 @@ export function getWorkflowActionSemantics(action: WikiAction): WorkflowActionSe
 export function listWorkflowActionSemantics(): WorkflowActionSemantics[] {
   return WIKI_ACTIONS.map((action) => ACTION_SEMANTICS[action]);
 }
-
 

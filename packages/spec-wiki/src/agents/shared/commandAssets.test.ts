@@ -46,3 +46,18 @@ test("共享 host skill 与 CodeBuddy skill 共享同一动作骨架", () => {
   expect(codeBuddySkill).toContain("## Interpret");
   expect(codeBuddySkill).toContain("## Guardrails");
 });
+
+test("sync 与 rebuild skill 使用正式公开入口文案", () => {
+  const syncSkill = renderHostActionSkill("sync");
+  const rebuildSkill = renderCodeBuddyActionSkill("rebuild");
+
+  expect(syncSkill).toContain("name: wiki-sync");
+  expect(syncSkill).toContain("Sync managed `.wiki` page edits back into runtime state, metadata, and cache.");
+  expect(syncSkill).toContain("`sync` only applies `.wiki` page edits back into runtime state. It does not replace `update`.");
+  expect(syncSkill).not.toContain("formal guarantee");
+  expect(rebuildSkill).toContain("name: wiki-rebuild");
+  expect(rebuildSkill).toContain("Use when you need to force a full rebuild of the wiki runtime.");
+  expect(rebuildSkill).toContain("`rebuild` is the explicit full runtime rebuild entry point. It does not replace `update`.");
+  expect(rebuildSkill).not.toContain("formal guarantee");
+});
+

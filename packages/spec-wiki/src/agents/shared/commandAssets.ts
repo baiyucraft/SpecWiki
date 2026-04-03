@@ -35,9 +35,9 @@ function renderActionDescription(action: WikiAction): string {
     case "update":
       return "Use when the wiki already exists and you need to refresh the current knowledge runtime after source changes.";
     case "sync":
-      return "Use when the user explicitly asks for wiki sync behavior, but keep in mind this action is not part of the formal v0.2.0 guarantee.";
+      return "Use when you need to sync managed `.wiki` page edits back into the runtime state.";
     case "rebuild":
-      return "Use when the user explicitly asks to rebuild the wiki runtime, but keep in mind this action is not part of the formal v0.2.0 guarantee.";
+      return "Use when you need to force a full rebuild of the wiki runtime.";
   }
 }
 
@@ -92,9 +92,9 @@ function renderHostActionPurpose(action: WikiAction): string[] {
     case "update":
       return ["Refresh the current knowledge runtime after source changes."];
     case "sync":
-      return ["Do not present this as a formal explicit entry point in the current version."];
+      return ["Sync managed `.wiki` page edits back into runtime state, metadata, and cache."];
     case "rebuild":
-      return ["Do not present this as a formal explicit entry point in the current version."];
+      return ["Force a full rebuild of the wiki runtime when the user explicitly asks for it."];
   }
 }
 
@@ -119,8 +119,9 @@ function renderHostActionNotes(action: WikiAction, entryName: string): string[] 
     case "query":
       return ["`v0.2.0` keeps the external term-only query contract, but routes results through index -> knowledge -> page fallback."];
     case "sync":
+      return ["`sync` only applies `.wiki` page edits back into runtime state. It does not replace `update`."];
     case "rebuild":
-      return ["This entry point can remain available, but `v0.2.0` does not describe it as a formal guarantee."];
+      return ["`rebuild` is the explicit full runtime rebuild entry point. It does not replace `update`."];
   }
 }
 
@@ -343,5 +344,7 @@ export function listManagedCodeBuddyHookCommands(
 export function getActionSemanticsForRendering(action: WikiAction): WorkflowActionSemantics {
   return getWorkflowActionSemantics(action);
 }
+
+
 
 

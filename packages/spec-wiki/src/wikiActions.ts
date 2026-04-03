@@ -3,7 +3,7 @@
  * 宿主资产模板、CLI 参数解析和测试都依赖这份单一真相来源。
  */
 
-/** `wiki-runtime` 当前仍可识别的内部 action 集合。 */
+/** `wiki-runtime` 当前可识别的 action 集合。 */
 export const WIKI_ACTIONS = [
   "init",
   "status",
@@ -13,15 +13,10 @@ export const WIKI_ACTIONS = [
   "rebuild",
 ] as const;
 
-/** `v0.2.0` 当前对外正式支持的 CLI / 宿主显式动作集合。 */
-export const PUBLIC_WIKI_ACTIONS = [
-  "init",
-  "status",
-  "update",
-  "query",
-] as const;
+/** 当前版本对外正式支持的 CLI / 宿主显式动作集合。 */
+export const PUBLIC_WIKI_ACTIONS = WIKI_ACTIONS;
 
-/** `v0.2.0` 当前建议在宿主显式暴露的 action 集合。 */
+/** 当前版本建议在宿主显式暴露的 action 集合。 */
 export const HOST_EXPOSED_ACTIONS = PUBLIC_WIKI_ACTIONS;
 
 /** 单个 action 的字面量类型。 */
@@ -44,7 +39,7 @@ export function isWikiAction(action: string): action is WikiAction {
 }
 
 /**
- * 判断一个字符串是否是 `v0.2.0` 对外支持的 CLI action。
+ * 判断一个字符串是否是当前版本对外支持的 CLI action。
  *
  * @param action 待校验的 action 名称。
  * @returns 当 action 在当前公开命令面内时返回 `true`。
@@ -52,4 +47,3 @@ export function isWikiAction(action: string): action is WikiAction {
 export function isPublicWikiAction(action: string): action is PublicWikiAction {
   return (PUBLIC_WIKI_ACTIONS as readonly string[]).includes(action);
 }
-

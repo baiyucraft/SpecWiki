@@ -1,8 +1,5 @@
-# repo-wiki-workflow Specification
+## MODIFIED Requirements
 
-## Purpose
-定义 `spec-wiki v0.1.0` 当前真实公开支持的 workflow 合同。这个规范只描述打包版 CLI 与宿主可依赖的发布面，不把长期的 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble` 完整目标直接当作本版正式承诺。
-## Requirements
 ### Requirement: `init` 与 `update` 的长流程协议必须保持可流式消费
 系统 MUST 让 `init`、`update` 与 `rebuild` 保留可流式消费的事件协议，以便 CLI passthrough 与宿主桥接在不重写业务语义的前提下消费 `progress / result / error`。`status`、`query` 与 `sync` 继续作为短流程 JSON 调用即可。
 
@@ -24,19 +21,6 @@
 - **THEN** 公开暴露的显式入口 MUST 覆盖 `wiki-init`、`wiki-status`、`wiki-update`、`wiki-query`、`wiki-sync`、`wiki-rebuild`
 - **THEN** 宿主不得继续省略 `wiki-sync` 或 `wiki-rebuild`
 
-### Requirement: `init` 与 `update` 的正式承诺必须收敛到 knowledge runtime
-系统 MUST 把 `init` 与 `update` 的正式发布承诺收敛到 knowledge runtime，而不是继续停留在 index-only runtime。执行成功后，系统 MUST 至少保证 `.wiki/.knowledge/**`、`.wiki/pages/**`、`wiki.metadata.json` 与可重建 `.wiki/.cache/**` 的正式 snapshot 成立；仅有 facts/index snapshot 可查而缺失正式 knowledge/runtime 提交时，系统 MUST NOT 将该结果表述为 `v0.2.0` 的 workflow 成功。
-
-#### Scenario: `init` 成功建立 knowledge runtime
-- **WHEN** 用户在有效本地仓库上执行 `spec-wiki wiki init`
-- **THEN** 系统 MUST 建立可供后续 `status`、`query` 与恢复链消费的正式 knowledge runtime snapshot
-- **THEN** 系统 MUST NOT 仅凭 facts/index 可查就把缺失 `.knowledge / pages / metadata` 的结果表述为 `v0.2.0` init 成功
-
-#### Scenario: `update` 以 knowledge-first refresh 提交成功
-- **WHEN** 用户在已有 runtime 的仓库上执行 `spec-wiki wiki update`
-- **THEN** 系统 MUST 以 knowledge-first refresh 更新正式 `.knowledge / pages / metadata / cache` snapshot
-- **THEN** 系统 MUST NOT 继续把“只刷新 facts/index”表述为 `v0.2.0` update 的正式成功语义
-
 ### Requirement: `status` 必须表达 knowledge runtime readiness 与恢复态推荐动作
 系统 MUST 把 `status` 作为 knowledge runtime 检查入口，稳定表达当前仓库是否处于 `ready`、`stale`、`needs_update` 或 `blocker`，并返回调用方可直接执行的单值 `recommended_action`。当前版本正式支持的推荐动作 MUST 至少包括 `none`、`init`、`update`、`sync`、`rebuild`。
 
@@ -45,18 +29,7 @@
 - **THEN** 响应 MUST 返回 `recommended_action = sync` 或 `recommended_action = rebuild`
 - **THEN** 宿主 MUST 能直接消费这些推荐动作，而不需要自行重建一套 host-side 状态机
 
-### Requirement: `query` 必须以 `index -> knowledge -> page fallback` 结果为正式稳定合同
-系统 MUST 将 `query` 的正式稳定合同收敛到外部 `term-only`、内部 `index -> knowledge -> page fallback` 的结果路由。宿主与用户当前版本可稳定依赖的字段 MUST 继续以 `query_mode`、`query_trust`、`recommended_action`、`matched_pages` 和 `provenance_summary` 为主；其中 `provenance_summary` MUST 至少能稳定区分 `index_hit`、`knowledge_hit` 与 `page_fallback` 三类 route tags。其他实现可见字段 MAY 出现，但 MUST NOT 脱离该 route 语义漂移成新的公开 payload。
-
-#### Scenario: `query` 优先返回 index 与 knowledge 命中
-- **WHEN** 用户执行 `spec-wiki wiki query`，且当前 query 同时存在 facts/index 或 formal knowledge 命中
-- **THEN** 响应 MUST 优先体现 `index` 与 `knowledge` 层结果
-- **THEN** 调用方 MUST 能从 `provenance_summary` 看出当前命中属于 `index_hit` 或 `knowledge_hit`，而不是 page fallback 伪装
-
-#### Scenario: 只有页面兜底时显式保留 fallback 语义
-- **WHEN** 当前 query 没有足够的 index 或 knowledge 命中，只能依赖页面内容兜底
-- **THEN** `query` MUST 继续返回可消费结果
-- **THEN** 调用方 MUST 能稳定读取到 `page_fallback` provenance 与后续推荐动作
+## ADDED Requirements
 
 ### Requirement: `sync` 必须作为正式公开 workflow 同步页面回写
 系统 MUST 将 `sync` 作为正式公开 workflow，用于把 `.wiki` 受管页面的人工编辑、managed drift 与 section 结构变化同步回 runtime state、metadata 与本地 cache。`sync` 只处理页面层 contract，不得被表述成源码扫描、knowledge refresh 或普通增量更新的替代物。
@@ -73,4 +46,3 @@
 - **WHEN** 用户或宿主明确调用 `spec-wiki wiki rebuild`
 - **THEN** 系统 MUST 执行正式 runtime 的全量重建
 - **THEN** 系统 MUST NOT 把该动作表述成普通 `update` 的别名或隐式 fallback 文案
-

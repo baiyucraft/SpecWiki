@@ -66,6 +66,8 @@ test("runBootstrapInit writes Claude skills and removes legacy command assets", 
 
   const statusSkillPath = path.join(repoRoot, ".claude", "skills", "wiki-status", "SKILL.md");
   const querySkillPath = path.join(repoRoot, ".claude", "skills", "wiki-query", "SKILL.md");
+  const syncSkillPath = path.join(repoRoot, ".claude", "skills", "wiki-sync", "SKILL.md");
+  const rebuildSkillPath = path.join(repoRoot, ".claude", "skills", "wiki-rebuild", "SKILL.md");
 
   expect(readFileSync(statusSkillPath, "utf8")).toContain(
     "description: \"Use when you need to know whether the wiki is ready, stale, blocked, or needs refresh.\"",
@@ -75,6 +77,8 @@ test("runBootstrapInit writes Claude skills and removes legacy command assets", 
   expect(readFileSync(querySkillPath, "utf8")).toContain("`query_mode`");
   expect(readFileSync(querySkillPath, "utf8")).toContain("## How To Work");
   expect(readFileSync(querySkillPath, "utf8")).toContain("Do not rebuild a new Wiki state machine or page semantic layer from query results");
+  expect(readFileSync(syncSkillPath, "utf8")).toContain("name: wiki-sync");
+  expect(readFileSync(rebuildSkillPath, "utf8")).toContain("name: wiki-rebuild");
   expect(existsSync(legacySyncPath)).toBe(false);
   expect(existsSync(legacyRebuildPath)).toBe(false);
   expect(existsSync(legacyStatusPath)).toBe(false);
@@ -115,6 +119,8 @@ test("runBootstrapInit supports explicit Codex bootstrap as repo skills without 
 
   const querySkillPath = path.join(repoRoot, ".codex", "skills", "wiki-query", "SKILL.md");
   const statusSkillPath = path.join(repoRoot, ".codex", "skills", "wiki-status", "SKILL.md");
+  const syncSkillPath = path.join(repoRoot, ".codex", "skills", "wiki-sync", "SKILL.md");
+  const rebuildSkillPath = path.join(repoRoot, ".codex", "skills", "wiki-rebuild", "SKILL.md");
 
   expect(readFileSync(statusSkillPath, "utf8")).toContain(
     "description: \"Use when you need to know whether the wiki is ready, stale, blocked, or needs refresh.\"",
@@ -124,6 +130,8 @@ test("runBootstrapInit supports explicit Codex bootstrap as repo skills without 
   expect(readFileSync(querySkillPath, "utf8")).toContain("`query_mode`");
   expect(readFileSync(querySkillPath, "utf8")).toContain("## After This");
   expect(readFileSync(querySkillPath, "utf8")).toContain("Do not rebuild a new Wiki state machine or page semantic layer from query results");
+  expect(readFileSync(syncSkillPath, "utf8")).toContain("name: wiki-sync");
+  expect(readFileSync(rebuildSkillPath, "utf8")).toContain("name: wiki-rebuild");
   expect(readFileSync(legacyInitPromptPath, "utf8")).toBe("legacy init prompt");
   expect(readFileSync(legacyStatusPromptPath, "utf8")).toBe("legacy status prompt");
   expect(readFileSync(legacyQueryPromptPath, "utf8")).toBe("legacy query prompt");
@@ -212,10 +220,10 @@ test("runBootstrapInit writes CodeBuddy skills, hooks, and settings without crea
   expect(userPromptHook).toContain("shared rules live in hooks and action skill guardrails");
   expect(existsSync(path.join(repoRoot, ".codebuddy", "commands", "wiki", "init.md"))).toBe(false);
   expect(existsSync(legacySharedSkillPath)).toBe(false);
-  expect(existsSync(legacySyncSkillPath)).toBe(false);
-  expect(existsSync(legacyRebuildSkillPath)).toBe(false);
-  expect(existsSync(path.join(repoRoot, ".codebuddy", "skills", "wiki-sync", "SKILL.md"))).toBe(false);
-  expect(existsSync(path.join(repoRoot, ".codebuddy", "skills", "wiki-rebuild", "SKILL.md"))).toBe(false);
+  expect(readFileSync(legacySyncSkillPath, "utf8")).toContain("name: wiki-sync");
+  expect(readFileSync(legacyRebuildSkillPath, "utf8")).toContain("name: wiki-rebuild");
+  expect(readFileSync(path.join(repoRoot, ".codebuddy", "skills", "wiki-sync", "SKILL.md"), "utf8")).toContain("name: wiki-sync");
+  expect(readFileSync(path.join(repoRoot, ".codebuddy", "skills", "wiki-rebuild", "SKILL.md"), "utf8")).toContain("name: wiki-rebuild");
 
   const mergedSettings = JSON.parse(readFileSync(settingsPath, "utf8"));
   expect(mergedSettings.userPreference).toEqual({ hookOutputCollapsed: false });
@@ -258,3 +266,6 @@ test("runBootstrapInit no longer depends on Codex global prompt directory", asyn
   expect(result.hosts.map((host) => host.host)).toEqual(["codex"]);
   expect(existsSync(path.join(repoRoot, ".codex", "skills", "wiki-status", "SKILL.md"))).toBe(true);
 });
+
+
+

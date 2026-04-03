@@ -12,7 +12,7 @@ import { createTools } from "./tools.js";
 import { parseEventLine, parseResult } from "./runtime/parseResult.js";
 import { resolveBinary } from "./runtime/resolveBinary.js";
 
-test("public wiki tools only delegate the v0.2.0 actions", async () => {
+test("public wiki tools delegate all current public actions", async () => {
   const received: unknown[] = [];
   const tools = createTools(async (command) => {
     received.push(command);
@@ -24,6 +24,8 @@ test("public wiki tools only delegate the v0.2.0 actions", async () => {
     tools.wikiStatus({ repoRoot: "demo-repo" }),
     tools.wikiUpdate({ repoRoot: "demo-repo" }),
     tools.wikiQuery({ repoRoot: "demo-repo", term: "overview" }),
+    tools.wikiSync({ repoRoot: "demo-repo" }),
+    tools.wikiRebuild({ repoRoot: "demo-repo" }),
   ]);
 
   expect(received).toEqual([
@@ -31,15 +33,19 @@ test("public wiki tools only delegate the v0.2.0 actions", async () => {
     { action: "status", repoRoot: "demo-repo" },
     { action: "update", repoRoot: "demo-repo" },
     { action: "query", repoRoot: "demo-repo", term: "overview" },
+    { action: "sync", repoRoot: "demo-repo" },
+    { action: "rebuild", repoRoot: "demo-repo" },
   ]);
   expect(results.map((result) => result.data)).toEqual([
     { action: "init" },
     { action: "status" },
     { action: "update" },
     { action: "query" },
+    { action: "sync" },
+    { action: "rebuild" },
   ]);
-  expect("wikiSync" in tools).toBe(false);
-  expect("wikiRebuild" in tools).toBe(false);
+  expect("wikiSync" in tools).toBe(true);
+  expect("wikiRebuild" in tools).toBe(true);
 });
 
 test("resolveBinary prefers SPEC_WIKI_RUNTIME_BIN on supported Windows x64 runtime", () => {
@@ -231,4 +237,6 @@ test("parseEventLine validates progress events with usage", () => {
     },
   });
 });
+
+
 

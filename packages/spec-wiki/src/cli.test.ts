@@ -134,6 +134,56 @@ test("runCli dispatches wiki query with positional terms", async () => {
   );
 });
 
+test("runCli dispatches wiki sync as a public short-running action", async () => {
+  forwardCoreCommandMock.mockResolvedValue(0);
+  const { runCli } = await import("./cli.js");
+
+  const exitCode = await runCli(["wiki", "sync", "--repo-root", "/repo"], {
+    cwd: "/cwd",
+    env: process.env,
+    stdout: vi.fn(),
+    stderr: vi.fn(),
+  });
+
+  expect(exitCode).toBe(0);
+  expect(forwardCoreCommandMock).toHaveBeenCalledWith(
+    {
+      action: "sync",
+      repoRoot: "/repo",
+    },
+    expect.objectContaining({
+      bridgeStdio: false,
+      cwd: "/cwd",
+      env: process.env,
+    }),
+  );
+});
+
+test("runCli dispatches wiki rebuild as a public streaming action", async () => {
+  forwardCoreCommandMock.mockResolvedValue(0);
+  const { runCli } = await import("./cli.js");
+
+  const exitCode = await runCli(["wiki", "rebuild", "--bridge-stdio"], {
+    cwd: "/repo",
+    env: process.env,
+    stdout: vi.fn(),
+    stderr: vi.fn(),
+  });
+
+  expect(exitCode).toBe(0);
+  expect(forwardCoreCommandMock).toHaveBeenCalledWith(
+    {
+      action: "rebuild",
+      repoRoot: "/repo",
+    },
+    expect.objectContaining({
+      bridgeStdio: true,
+      cwd: "/repo",
+      env: process.env,
+    }),
+  );
+});
+
 test("runCli rejects bridge-stdio for non-streaming wiki actions", async () => {
   const stderr: string[] = [];
   const { runCli } = await import("./cli.js");
@@ -181,9 +231,8 @@ test("runCli prints usage for --help", async () => {
   expect(exitCode).toBe(0);
   expect(stdout.join("")).toContain("Usage:");
   expect(stdout.join("")).toContain("--no-interactive");
-  expect(stdout.join("")).toContain("Supported actions: init, status, update, query");
-  expect(stdout.join("")).toContain("--bridge-stdio only applies to long-running wiki actions");
-  expect(stdout.join("")).not.toContain("sync, rebuild");
+  expect(stdout.join("")).toContain("Supported actions: init, status, update, query, sync, rebuild");
+  expect(stdout.join("")).toContain("--bridge-stdio only applies to long-running wiki actions such as init, update, and rebuild");
 });
 
 test("runCli rejects query without a term", async () => {
@@ -200,36 +249,3 @@ test("runCli rejects query without a term", async () => {
   expect(exitCode).toBe(1);
   expect(stderr.join("")).toContain("wiki query requires --term");
 });
-
-test("runCli rejects wiki sync because v0.2.0 does not expose it publicly", async () => {
-  const stderr: string[] = [];
-  const { runCli } = await import("./cli.js");
-
-  const exitCode = await runCli(["wiki", "sync"], {
-    cwd: "/repo",
-    env: process.env,
-    stdout: vi.fn(),
-    stderr: (text) => stderr.push(text),
-  });
-
-  expect(exitCode).toBe(1);
-  expect(stderr.join("")).toContain("unsupported wiki action: sync");
-  expect(stderr.join("")).toContain("v0.2.0 only exposes init, status, update, query");
-});
-
-test("runCli rejects wiki rebuild because v0.2.0 does not expose it publicly", async () => {
-  const stderr: string[] = [];
-  const { runCli } = await import("./cli.js");
-
-  const exitCode = await runCli(["wiki", "rebuild"], {
-    cwd: "/repo",
-    env: process.env,
-    stdout: vi.fn(),
-    stderr: (text) => stderr.push(text),
-  });
-
-  expect(exitCode).toBe(1);
-  expect(stderr.join("")).toContain("unsupported wiki action: rebuild");
-  expect(stderr.join("")).toContain("v0.2.0 only exposes init, status, update, query");
-});
-

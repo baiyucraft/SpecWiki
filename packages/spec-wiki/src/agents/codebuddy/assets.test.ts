@@ -20,10 +20,10 @@ test("codeBuddy hooks 承载共享边界，不再生成 shared skill", () => {
   expect(userPromptHook?.content).toContain("shared rules live in hooks and action skill guardrails");
   expect(
     assets.some((asset) => asset.kind === "skill" && asset.filePath.endsWith("\\wiki-sync\\SKILL.md")),
-  ).toBe(false);
+  ).toBe(true);
   expect(
     assets.some((asset) => asset.kind === "skill" && asset.filePath.endsWith("\\wiki-rebuild\\SKILL.md")),
-  ).toBe(false);
+  ).toBe(true);
 });
 
 test("codeBuddy wiki-query skill 只引导宿主薄消费稳定 query 字段", () => {

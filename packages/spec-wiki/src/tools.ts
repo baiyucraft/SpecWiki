@@ -13,7 +13,7 @@ import type {
  * 组装 Repo Wiki 的公开工具集合。
  *
  * @param invoke 底层 runtime 调用函数；默认使用本地子进程调用。
- * @returns 返回与 `v0.2.0` 公开 action 一一对应的薄封装工具。
+ * @returns 返回与当前公开 action 一一对应的薄封装工具。
  */
 export function createTools(
   invoke: ToolInvoker = invokeCore,
@@ -27,9 +27,12 @@ export function createTools(
       invoke({ action: "update", repoRoot }) as Promise<{ ok: boolean; data?: WorkflowTerminalData }>,
     wikiQuery: ({ repoRoot, term }: { repoRoot: string; term: string }) =>
       invoke({ action: "query", repoRoot, term }) as Promise<{ ok: boolean; data?: QueryProfileData }>,
+    wikiSync: ({ repoRoot }: { repoRoot: string }) =>
+      invoke({ action: "sync", repoRoot }) as Promise<{ ok: boolean; data?: WorkflowTerminalData }>,
+    wikiRebuild: ({ repoRoot }: { repoRoot: string }) =>
+      invoke({ action: "rebuild", repoRoot }) as Promise<{ ok: boolean; data?: WorkflowTerminalData }>,
   };
 }
 
 /** 默认工具集合直接给宿主或测试消费。 */
 export const tools = createTools();
-
