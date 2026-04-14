@@ -34,7 +34,7 @@
 | --- | --- | --- | --- |
 | `deepwiki-rs` | `wiki-knowledge` 的 `research / compose orchestration` | [tmp/upstream/deepwiki-rs/src/generator/workflow.rs](E:/project/!byAI/spec-wiki/tmp/upstream/deepwiki-rs/src/generator/workflow.rs) `76-107` 明确分成 `preprocess -> research -> compose` 三段；[tmp/upstream/deepwiki-rs/src/generator/step_forward_agent.rs](E:/project/!byAI/spec-wiki/tmp/upstream/deepwiki-rs/src/generator/step_forward_agent.rs) `34-77` 定义 `DataSource` 与 `AgentDataConfig`；[tmp/upstream/deepwiki-rs/src/generator/compose/agents/overview_editor.rs](E:/project/!byAI/spec-wiki/tmp/upstream/deepwiki-rs/src/generator/compose/agents/overview_editor.rs) `26-35` 直接声明 compose 依赖 research result | 可以参考“先 research，再由 compose 消费 research 产物”的编排方式，也可以参考按 agent 声明输入依赖的 contract 设计 |
 | `CodeWiki` | `wiki-knowledge` 的 `leaf-first assembly` | [tmp/upstream/codewiki/codewiki/src/be/documentation_generator.py](E:/project/!byAI/spec-wiki/tmp/upstream/codewiki/codewiki/src/be/documentation_generator.py) `74-85` 先递归处理 children 再处理 parent；同文件 `99-123` 在父级 overview 生成前装入一层子文档；同文件 `201-223` 明确 parent doc 基于 children docs 生成 | 可以参考“叶子先产出，父级再消费子级结果”的装配顺序，适合知识单元投影和稳定 page 的逐层汇总 |
-| `GitNexus` | `wiki-index` 的 `index / symbol / graph / resolution substrate` | [tmp/upstream/GitNexus/gitnexus/src/core/ingestion/symbol-table.ts](E:/project/!byAI/spec-wiki/tmp/upstream/GitNexus/gitnexus/src/core/ingestion/symbol-table.ts) `90-174` 有 `fileIndex / globalIndex / callableIndex / fieldByOwner`；[tmp/upstream/GitNexus/gitnexus/src/core/ingestion/pipeline.ts](E:/project/!byAI/spec-wiki/tmp/upstream/GitNexus/gitnexus/src/core/ingestion/pipeline.ts) `97-99` 定义 `20MB` chunk budget，`479-488` 明确 parse / import / call / heritage 分阶段 loop，`254-281` 有跨文件绑定传播，`672-678` 在 call resolution 前做 wildcard import synthesis 与 type seeding | 可以参考“厚索引底座”的思路，让 `provider / agent` 先命中 file-symbol-edge 图事实，再做更高层 query；尤其适合方法定位、调用关系、跨文件解析和 impact analysis |
+| `GitNexus` | `wiki-index` 的 `index / symbol / graph / resolution substrate` | [tmp/upstream/GitNexus/gitnexus/src/core/ingestion/symbol-table.ts](E:/project/!byAI/spec-wiki/tmp/upstream/GitNexus/gitnexus/src/core/ingestion/symbol-table.ts) `90-174` 有 `fileIndex / globalIndex / callableIndex / fieldByOwner`；[tmp/upstream/GitNexus/gitnexus/src/core/ingestion/pipeline.ts](E:/project/!byAI/spec-wiki/tmp/upstream/GitNexus/gitnexus/src/core/ingestion/pipeline.ts) `97-99` 定义 `20MB` chunk budget，`479-488` 明确 parse / import / call / heritage 分阶段 loop，`254-281` 有跨文件绑定传播，`672-678` 在 call resolution 前做 wildcard import synthesis 与 type seeding；[tmp/upstream/GitNexus/ARCHITECTURE.md](E:/project/!byAI/spec-wiki/tmp/upstream/GitNexus/ARCHITECTURE.md) `19` 明确 ingestion pipeline 是 phase DAG，`66-67` 给出 `scan -> structure -> parse -> crossFile -> mro -> communities -> processes`，`82-85` 说明关键阶段的依赖与职责 | 可以从三层参考它：一是“厚索引底座”，让 `provider / agent` 先命中 file-symbol-edge 图事实，再做更高层 query；二是 `query / impact / graph consumption` 侧的工具化组织，尤其适合方法定位、调用关系、跨文件解析和 impact analysis；三是 `wiki-index` 内部的 phase DAG 编排与阶段拆层，用于提升索引构建的可演进性与可诊断性，但这不构成 knowledge 主链模板 |
 | `deepwiki-open` | `wiki-runtime` 或 query 面的 `session / RAG / consumption layer` | [tmp/upstream/deepwiki-open/api/data_pipeline.py](E:/project/!byAI/spec-wiki/tmp/upstream/deepwiki-open/api/data_pipeline.py) `153-180` 递归读文档，`382-446` 建 `splitter + embedder` pipeline，`831-912` 优先复用本地 DB；[tmp/upstream/deepwiki-open/api/websocket_wiki.py](E:/project/!byAI/spec-wiki/tmp/upstream/deepwiki-open/api/websocket_wiki.py) `88-115` 准备 retriever，`189-242` 以 query 拉取上下文，`268-313` 明确它是面向 query 的多轮研究流程 | 可以参考 query/session 侧如何组织检索上下文、如何复用本地检索库、如何围绕用户问题做消费层编排，但它不是 core 生成主链模板 |
 
 ## 运行时总架构
@@ -111,6 +111,13 @@ symbol -> graph -> declared knowledge -> derived knowledge -> page
 
 - 生成链负责把代码事实组织成知识并落成正式产物
 - 查询链负责让人和 Agent 先命中最有效的答案层，而不是默认先翻 page
+
+当前 `v0.2.0` 对这两条主链的公开承诺，已经收稳为 `minimal formal knowledge runtime`：
+
+- 已正式承诺最小 `KnowledgeUnit / declared record / research summary / projection digest / health signal` 合同
+- 已正式承诺 `status / query / sync / update / rebuild` 的最小运行语义
+- 未承诺完整 knowledge system
+- 未承诺 provider-backed 大仓库样本已稳定完成 full compose
 
 ## 包边界与依赖合同
 
@@ -422,6 +429,7 @@ GitNexus 对当前系统的 query 演进有明确参考价值，但参考面主�
 - `wiki-index` 的厚索引底座
 - symbol / graph / process / community 的 facts-owned query substrate
 - impact analysis、context drilling 和 process trace 的查询消费组织
+- `wiki-index` 内部 ingestion pipeline 的 phase DAG 编排
 - hybrid ranking、provenance 和结果分组策略
 
 不应把它直接当成：
@@ -433,8 +441,15 @@ GitNexus 对当前系统的 query 演进有明确参考价值，但参考面主�
 换句话说：
 
 - GitNexus 更适合作为 `query / impact / graph consumption` 侧参考
+- 它也可作为 `wiki-index` 内部 phase DAG 编排的工程参考
 - 它不直接定义当前系统的 `KnowledgeUnit` 主线
 - 它也不直接定义当前系统的 knowledge/page projection 结构
+
+补充说明：
+
+- “厚索引底座”与 `query / impact / graph consumption` 参考不是新增判断，只是对既有表述的进一步收紧
+- 这次新增强调的参考点，是 GitNexus 把 `scan -> structure -> parse -> crossFile -> mro -> communities -> processes` 拆成显式 phase DAG，并用清晰的阶段输入输出约束提升索引构建的可演进性与可诊断性
+- 这条参考只适用于 `wiki-index` 内部的构建编排与阶段拆层，不构成 `spec-wiki` 的知识主链模板
 
 ### query 演进原则
 

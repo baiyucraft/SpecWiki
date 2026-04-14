@@ -78,9 +78,7 @@ fn sync_detects_manual_markdown_changes() {
         .iter()
         .any(|page| page.path.ends_with("项目概述.md")));
     assert!(
-        query
-            .provenance_summary
-            .contains("knowledge_hit")
+        query.provenance_summary.contains("knowledge_hit")
             || query.provenance_summary.contains("page_fallback"),
         "expected knowledge or page fallback route tag, got {}",
         query.provenance_summary
@@ -452,7 +450,10 @@ fn query_stays_available_when_facts_snapshot_outlives_downstream_state() {
     );
 
     let query = run_query(repo_root, "handleCheckout").unwrap();
-    assert_eq!(query.query_trust, wiki_runtime::domain::runtime_profile::QueryTrust::StaleButQueryable);
+    assert_eq!(
+        query.query_trust,
+        wiki_runtime::domain::runtime_profile::QueryTrust::StaleButQueryable
+    );
     assert!(!query.matched_symbols.is_empty());
     assert!(!query.matched_symbol_edges.is_empty());
 }

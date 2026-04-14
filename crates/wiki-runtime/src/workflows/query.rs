@@ -10,13 +10,14 @@ use std::path::Path;
 use crate::domain::change_set::plan_runtime_changes_with_mode;
 use crate::domain::module_tree::ModuleNode;
 use crate::domain::runtime_profile::{
-    preflight_for_state, query_trust_for, QueryMode, QueryTrust, RecommendedAction,
+    merge_recommended_action, preflight_for_state, query_trust_for, summarize_health_signals,
+    QueryMode, QueryTrust, RecommendedAction,
 };
 use crate::domain::state::{WikiPageState, WikiState};
 use crate::domain::steering::SteeringLoadMode;
 use crate::storage::cache_store::cache_dir;
 use crate::storage::knowledge_artifacts::{
-    load_knowledge_artifacts, restore_runtime_cache_from_artifacts,
+    load_health_signals, load_knowledge_artifacts, restore_runtime_cache_from_artifacts,
 };
 use crate::storage::sqlite::index_store::SqliteIndexStore;
 use crate::storage::state_store::{facts_snapshot_ready, load_or_rebuild_state};
@@ -252,20 +253,21 @@ pub fn run_query_with_mode(
         plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
         facts_ready = facts_snapshot_ready(repo_root)?;
     }
-    let runtime_state = project_external_runtime_state(
-        repo_root,
-        plan.state(),
-        facts_ready,
-    );
+    let runtime_state = project_external_runtime_state(repo_root, plan.state(), facts_ready);
     let preflight = preflight_for_state(&runtime_state, facts_ready);
+    let health_summary = load_health_signals(repo_root)
+        .ok()
+        .and_then(|signals| summarize_health_signals(&signals));
+    let recommended_action =
+        merge_recommended_action(preflight.recommended_action, health_summary.as_ref());
     let needle = term.trim().to_lowercase();
 
     if needle.is_empty() {
         return Ok(empty_query_report(
             term,
             &runtime_state,
-            preflight.recommended_action,
-            query_trust_for(&runtime_state, facts_ready),
+            recommended_action,
+            effective_query_trust(&runtime_state, facts_ready, recommended_action, false),
         ));
     }
 
@@ -326,6 +328,12 @@ pub fn run_query_with_mode(
         QueryTrust::Blocked if has_index_hits || !matches.is_empty() => {
             QueryTrust::StaleButQueryable
         }
+        QueryTrust::Ready
+            if recommended_action != RecommendedAction::None
+                && (has_index_hits || !matches.is_empty()) =>
+        {
+            QueryTrust::StaleButQueryable
+        }
         trust => trust,
     };
     let matched_relations = fallback_state
@@ -338,7 +346,7 @@ pub fn run_query_with_mode(
         runtime_state: runtime_state.clone(),
         query_mode,
         query_trust,
-        recommended_action: preflight.recommended_action,
+        recommended_action,
         matched_pages: matches.iter().map(|page| page.path.clone()).collect(),
         matched_modules: project_module_matches(&index_result),
         matched_sources: project_source_matches(&index_result),
@@ -378,6 +386,20 @@ fn empty_query_report(
         matched_communities: Vec::new(),
         matches: Vec::new(),
         provenance_summary: String::new(),
+    }
+}
+
+fn effective_query_trust(
+    runtime_state: &str,
+    facts_ready: bool,
+    recommended_action: RecommendedAction,
+    has_hits: bool,
+) -> QueryTrust {
+    match query_trust_for(runtime_state, facts_ready) {
+        QueryTrust::Ready if recommended_action != RecommendedAction::None && has_hits => {
+            QueryTrust::StaleButQueryable
+        }
+        trust => trust,
     }
 }
 

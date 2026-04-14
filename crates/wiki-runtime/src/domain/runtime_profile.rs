@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::checkpoint::PipelineRuntimeSummary;
 use crate::domain::checkpoint::UnitRuntimeGate;
+use wiki_model::domain::knowledge_artifact::{
+    KnowledgeHealthRecommendedAction, KnowledgeHealthSeverity, KnowledgeHealthSignal,
+    KnowledgeHealthSummary,
+};
 
 /// 宿主侧查询当前阶段 runtime 是否可以直接进入 query。
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -250,4 +254,99 @@ pub fn blocker_hint_from(
         })
         .unwrap_or_default();
     (!blockers.is_empty()).then(|| blockers.join("; "))
+}
+
+/// 把 formal health signals 聚合成宿主可消费的最小摘要。
+pub fn summarize_health_signals(
+    signals: &[KnowledgeHealthSignal],
+) -> Option<KnowledgeHealthSummary> {
+    if signals.is_empty() {
+        return None;
+    }
+
+    let mut counts_by_kind = std::collections::BTreeMap::new();
+    let mut counts_by_severity = std::collections::BTreeMap::new();
+    let mut highest_severity = KnowledgeHealthSeverity::Info;
+    let mut recommended_action = KnowledgeHealthRecommendedAction::None;
+
+    for signal in signals {
+        *counts_by_kind
+            .entry(signal.signal_kind.as_str().to_string())
+            .or_insert(0) += 1;
+        *counts_by_severity
+            .entry(signal.severity.as_str().to_string())
+            .or_insert(0) += 1;
+
+        if health_severity_rank(signal.severity) > health_severity_rank(highest_severity) {
+            highest_severity = signal.severity;
+        }
+        if health_action_rank(signal.recommended_action) > health_action_rank(recommended_action) {
+            recommended_action = signal.recommended_action;
+        }
+    }
+
+    Some(KnowledgeHealthSummary {
+        total_signals: signals.len(),
+        degraded: true,
+        counts_by_kind,
+        counts_by_severity,
+        highest_severity: Some(highest_severity),
+        recommended_action,
+    })
+}
+
+/// 合并 readiness 驱动与 health 驱动的推荐动作。
+pub fn merge_recommended_action(
+    current: RecommendedAction,
+    health_summary: Option<&KnowledgeHealthSummary>,
+) -> RecommendedAction {
+    let Some(health_summary) = health_summary else {
+        return current;
+    };
+    if current == RecommendedAction::Init {
+        return current;
+    }
+
+    let promoted = match health_summary.recommended_action {
+        KnowledgeHealthRecommendedAction::None => current,
+        KnowledgeHealthRecommendedAction::Sync => {
+            if current == RecommendedAction::None {
+                RecommendedAction::Sync
+            } else {
+                current
+            }
+        }
+        KnowledgeHealthRecommendedAction::Update => match current {
+            RecommendedAction::None | RecommendedAction::Sync => RecommendedAction::Update,
+            _ => current,
+        },
+        KnowledgeHealthRecommendedAction::Rebuild => RecommendedAction::Rebuild,
+        KnowledgeHealthRecommendedAction::Review => {
+            if current == RecommendedAction::None {
+                RecommendedAction::Sync
+            } else {
+                current
+            }
+        }
+    };
+
+    promoted
+}
+
+fn health_severity_rank(severity: KnowledgeHealthSeverity) -> u8 {
+    match severity {
+        KnowledgeHealthSeverity::Info => 0,
+        KnowledgeHealthSeverity::Warning => 1,
+        KnowledgeHealthSeverity::Error => 2,
+    }
+}
+
+fn health_action_rank(action: KnowledgeHealthRecommendedAction) -> u8 {
+    match action {
+        KnowledgeHealthRecommendedAction::None => 0,
+        KnowledgeHealthRecommendedAction::Review => 1,
+        KnowledgeHealthRecommendedAction::Sync => 2,
+        KnowledgeHealthRecommendedAction::Update => 3,
+        KnowledgeHealthRecommendedAction::Rebuild => 4,
+    }
 }

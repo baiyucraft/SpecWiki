@@ -34,7 +34,7 @@ import {
   runSequentialTasks,
   runTaskPool,
 } from "./testing/helpers.mjs";
-import { runInitWithResume } from "./testing/init-resume.mjs";
+import { MAX_INIT_RESUME_ATTEMPTS, runInitWithResume } from "./testing/init-resume.mjs";
 import { inspectWikiRuntime } from "./testing/wiki-runtime-inspection.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -448,6 +448,11 @@ export function buildRunTestProjectChildArgs(proj, options = {}) {
 }
 
 async function runProjectInChild(proj, options = {}) {
+  const perAttemptTimeoutMs = options.timeoutMs ?? DEFAULT_INIT_TIMEOUT_MS;
+  const childTimeoutMs
+    = perAttemptTimeoutMs * MAX_INIT_RESUME_ATTEMPTS
+      + COMMAND_TIMEOUT_GRACE_MS
+      + (MAX_INIT_RESUME_ATTEMPTS - 1) * 30_000;
   for (let attempt = 0; attempt < 3; attempt++) {
     const child = await runCommandCapture(
       process.execPath,
@@ -455,7 +460,7 @@ async function runProjectInChild(proj, options = {}) {
       {
         cwd: ROOT_DIR,
         killTreeOnTimeout: true,
-        timeoutMs: (options.timeoutMs ?? DEFAULT_INIT_TIMEOUT_MS) + COMMAND_TIMEOUT_GRACE_MS,
+        timeoutMs: childTimeoutMs,
       },
     );
 

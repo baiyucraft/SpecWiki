@@ -1,5 +1,5 @@
-pub mod knowledge_artifact;
 pub mod knowledge;
+pub mod knowledge_artifact;
 pub mod metadata;
 pub mod module_tree;
 pub mod relation;

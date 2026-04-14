@@ -30,9 +30,8 @@ use crate::storage::cache_store::{
     PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::knowledge_artifacts::{
-    load_knowledge_artifacts, persist_knowledge_artifacts,
-    restore_runtime_cache_from_artifacts, KnowledgeArtifactSnapshot,
-    PersistKnowledgeArtifactsInput,
+    load_knowledge_artifacts, persist_knowledge_artifacts, restore_runtime_cache_from_artifacts,
+    KnowledgeArtifactSnapshot, PersistKnowledgeArtifactsInput,
 };
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite::{index_store::SqliteIndexStore, runtime_store::SqliteRuntimeStore};
@@ -42,8 +41,8 @@ use crate::storage::state_store::{
 };
 use crate::storage::wiki_fs::{resolve_page_path, write_page};
 use crate::workflows::init::{
-    ancestor_ids_for_page, build_minimal_page_context, current_timestamp,
-    page_provenance, run_init_with_progress_and_llm_as_with_mode, source_paths_for_page,
+    ancestor_ids_for_page, build_minimal_page_context, current_timestamp, page_provenance,
+    run_init_with_progress_and_llm_as_with_mode, source_paths_for_page,
 };
 use crate::workflows::page_render::{
     finalize_pipeline_runtime, load_runtime_summary_for_repo, persist_runtime_blocker_for_repo,
@@ -211,7 +210,7 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
         FallbackMode::None => {}
     }
 
-    if plan.change_set.is_empty() {
+    if plan.change_set.is_empty() && plan.affected_knowledge_scope.is_empty() {
         return Ok(UpdateReport {
             previous_state,
             state: "fresh".to_string(),
@@ -263,7 +262,11 @@ fn merge_page_digests_for_update(
                 .collect::<BTreeMap<_, _>>()
         })
         .unwrap_or_default();
-    let current_unit_ids = knowledge_tree.units.keys().cloned().collect::<BTreeSet<_>>();
+    let current_unit_ids = knowledge_tree
+        .units
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
     merged.retain(|unit_id, _| current_unit_ids.contains(unit_id));
     merged.extend(
         fresh_digests
@@ -287,7 +290,11 @@ fn merge_research_summaries_for_update(
                 .collect::<BTreeMap<_, _>>()
         })
         .unwrap_or_default();
-    let current_unit_ids = knowledge_tree.units.keys().cloned().collect::<BTreeSet<_>>();
+    let current_unit_ids = knowledge_tree
+        .units
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
     merged.retain(|unit_id, _| current_unit_ids.contains(unit_id));
     for unit in knowledge_tree.units.values() {
         if let Some(research) = fresh_unit_researches.get(&unit.id) {
@@ -295,6 +302,34 @@ fn merge_research_summaries_for_update(
         }
     }
     merged.into_values().collect()
+}
+
+fn merge_declared_records_for_update(
+    knowledge_tree: &crate::domain::knowledge::KnowledgeTree,
+    previous_artifacts: Option<&KnowledgeArtifactSnapshot>,
+) -> Vec<wiki_model::domain::knowledge_artifact::DeclaredKnowledgeRecord> {
+    let current_unit_ids = knowledge_tree
+        .units
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    previous_artifacts
+        .map(|artifacts| {
+            artifacts
+                .declared_records
+                .iter()
+                .filter(|record| {
+                    record.unit_refs.is_empty()
+                        || record
+                            .unit_refs
+                            .iter()
+                            .any(|unit_id| current_unit_ids.contains(unit_id))
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 fn apply_incremental_update<'a>(
@@ -551,7 +586,10 @@ fn apply_incremental_update<'a>(
             research_provider_impl.as_ref(),
         )?
     } else {
-        reporter.phase("compose", "formal artifacts 缺失，回退到全量 knowledge pipeline");
+        reporter.phase(
+            "compose",
+            "formal artifacts 缺失，回退到全量 knowledge pipeline",
+        );
         run_compose_pipeline_with_action(
             action,
             repo_root,
@@ -581,6 +619,8 @@ fn apply_incremental_update<'a>(
         previous_artifacts.as_ref(),
         &unit_researches,
     );
+    let declared_records =
+        merge_declared_records_for_update(&knowledge_tree, previous_artifacts.as_ref());
     let drafts_by_page_id = page_drafts
         .iter()
         .map(|draft| (draft.page_id.clone(), draft))
@@ -640,12 +680,15 @@ fn apply_incremental_update<'a>(
             }
         }
 
-        let draft = drafts_by_page_id.get(&planned_page.id).copied().ok_or_else(|| {
-            io::Error::other(format!(
-                "missing scoped draft for affected page {}",
-                planned_page.id
-            ))
-        })?;
+        let draft = drafts_by_page_id
+            .get(&planned_page.id)
+            .copied()
+            .ok_or_else(|| {
+                io::Error::other(format!(
+                    "missing scoped draft for affected page {}",
+                    planned_page.id
+                ))
+            })?;
         let rendered = render_page_draft(draft);
         let page_context = build_minimal_page_context(
             draft,
@@ -769,6 +812,7 @@ fn apply_incremental_update<'a>(
     let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
     let page_digests = digests.values().cloned().collect::<Vec<_>>();
     let runtime_gates = runtime_store.read_unit_runtime_gates()?;
+    let health_signals = Vec::new();
     persist_knowledge_artifacts(PersistKnowledgeArtifactsInput {
         repo_root,
         workflow_action: action,
@@ -776,9 +820,11 @@ fn apply_incremental_update<'a>(
         facts_input_hash: &facts_input_hash,
         metadata: &metadata,
         knowledge_tree: &knowledge_tree,
+        declared_records: &declared_records,
         research_summaries: &research_summaries,
         page_digests: &page_digests,
         runtime_gates: &runtime_gates,
+        health_signals: &health_signals,
     })?;
     runtime_store.clear_pipeline_checkpoint()?;
 

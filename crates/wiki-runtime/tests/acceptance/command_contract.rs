@@ -6,8 +6,7 @@ use wiki_runtime::domain::steering::SteeringLoadMode;
 use wiki_runtime::transport::dto::{CoreCommand, CoreResponse};
 use wiki_runtime::workflows::progress::NoopProgressSink;
 use wiki_runtime::workflows::{
-    init::run_init_with_progress_and_llm_as_with_mode,
-    query::run_query,
+    init::run_init_with_progress_and_llm_as_with_mode, query::run_query,
 };
 
 struct EnvVarGuard {
@@ -147,26 +146,18 @@ fn query_transport_returns_slim_payload_but_internal_query_stays_rich() {
 
     let internal = run_query(repo_root, "handleCheckout").unwrap();
     let internal_json = serde_json::to_value(&internal).unwrap();
-    assert!(
-        internal_json["matched_symbols"][0]
-            .get("symbol_id")
-            .is_some()
-    );
-    assert!(
-        internal_json["matched_symbol_edges"][0]
-            .get("edge_id")
-            .is_some()
-    );
-    assert!(
-        internal_json["matched_symbol_edges"][0]
-            .get("confidence")
-            .is_some()
-    );
-    assert!(
-        internal_json["matched_symbol_edges"][0]
-            .get("hop_distance")
-            .is_some()
-    );
+    assert!(internal_json["matched_symbols"][0]
+        .get("symbol_id")
+        .is_some());
+    assert!(internal_json["matched_symbol_edges"][0]
+        .get("edge_id")
+        .is_some());
+    assert!(internal_json["matched_symbol_edges"][0]
+        .get("confidence")
+        .is_some());
+    assert!(internal_json["matched_symbol_edges"][0]
+        .get("hop_distance")
+        .is_some());
 
     let response = wiki_runtime::transport::cli::dispatch(CoreCommand {
         action: "query".to_string(),
@@ -259,13 +250,11 @@ fn init_transport_requires_provider_in_production_but_allows_explicit_developmen
         production_init.error.as_deref(),
         Some("provider research unavailable: production workflow requires llm.enabled provider_direct path")
     );
-    assert!(
-        !production_repo_root
-            .join(".debug")
-            .join("dev-mode")
-            .join("trace.ndjson")
-            .exists()
-    );
+    assert!(!production_repo_root
+        .join(".debug")
+        .join("dev-mode")
+        .join("trace.ndjson")
+        .exists());
 
     let development_fixture = tempdir().unwrap();
     let development_repo_root = development_fixture.path();
@@ -288,13 +277,11 @@ fn init_transport_requires_provider_in_production_but_allows_explicit_developmen
         .data
         .expect("development init should include payload");
     assert_eq!(development_payload["state"], "fresh");
-    assert!(
-        development_repo_root
-            .join(".debug")
-            .join("dev-mode")
-            .join("trace.ndjson")
-            .exists()
-    );
+    assert!(development_repo_root
+        .join(".debug")
+        .join("dev-mode")
+        .join("trace.ndjson")
+        .exists());
 }
 
 #[test]

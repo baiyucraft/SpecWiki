@@ -5,6 +5,7 @@
 use std::fs;
 
 use tempfile::tempdir;
+use wiki_runtime::storage::knowledge_artifacts::load_knowledge_artifacts;
 use wiki_runtime::storage::state_store::read_state;
 use wiki_runtime::workflows::{
     init::run_init, rebuild::run_rebuild, sync::run_sync, update::run_update,
@@ -28,6 +29,47 @@ fn insert_user_section_after_init(repo_root: &std::path::Path) -> String {
 
     fs::write(&overview_path, &new_content).unwrap();
     new_content
+}
+
+/// 辅助：在第一个 managed section 结束前插入合法 declared block。
+fn insert_declared_block_into_first_managed_section(repo_root: &std::path::Path) {
+    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let content = fs::read_to_string(&overview_path).unwrap();
+    let marker = "<!-- wiki:managed:end";
+    let pos = content
+        .find(marker)
+        .expect("should have managed end marker");
+
+    let declared_block = concat!(
+        "\n<!-- wiki:declared kind=policy scope=repo status=active source=manual -->\n",
+        "当前仓库必须先写 formal artifact，再谈 query。\n",
+        "<!-- wiki:declared:end -->\n"
+    );
+    let mut new_content = content[..pos].to_string();
+    new_content.push_str(declared_block);
+    new_content.push_str(&content[pos..]);
+    fs::write(&overview_path, &new_content).unwrap();
+}
+
+/// 辅助：同时注入合法 declared block 和非法 managed 正文漂移。
+fn inject_declared_block_and_managed_drift(repo_root: &std::path::Path) {
+    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let content = fs::read_to_string(&overview_path).unwrap();
+    let marker = "<!-- wiki:managed:end";
+    let pos = content
+        .find(marker)
+        .expect("should have managed end marker");
+
+    let injected = concat!(
+        "\n这是不允许直接改写的 managed 正文。\n",
+        "\n<!-- wiki:declared kind=policy scope=repo status=active source=manual -->\n",
+        "当前仓库必须先写 formal artifact，再谈 query。\n",
+        "<!-- wiki:declared:end -->\n"
+    );
+    let mut new_content = content[..pos].to_string();
+    new_content.push_str(injected);
+    new_content.push_str(&content[pos..]);
+    fs::write(&overview_path, &new_content).unwrap();
 }
 
 /// 场景：init → 手工插入 → sync → 验证 user section 被识别。
@@ -185,8 +227,85 @@ fn sync_detects_managed_drift() {
         sync_result
             .warnings
             .iter()
-            .any(|w| w.contains("managed drift")),
+            .any(|w| w.contains("managed drift") || w.contains("正文漂移")),
         "sync should warn about managed drift, got: {:?}",
         sync_result.warnings
     );
+}
+
+#[test]
+fn sync_classifies_valid_declared_block_as_declared_writeback() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    insert_declared_block_into_first_managed_section(repo_root);
+
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"],
+        "declared_writeback"
+    );
+    assert_eq!(
+        sync_json["page_outcomes"][0]["recommended_action"],
+        "update"
+    );
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(artifacts.declared_records.len(), 1);
+    assert!(artifacts.health_signals.iter().any(|signal| {
+        signal.signal_kind
+            == wiki_model::domain::knowledge_artifact::KnowledgeHealthSignalKind::DeclaredDerivedDivergence
+    }));
+}
+
+#[test]
+fn sync_classifies_user_only_edit_as_metadata_only() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    insert_user_section_after_init(repo_root);
+
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"],
+        "metadata_only"
+    );
+    assert_eq!(sync_json["page_outcomes"][0]["recommended_action"], "none");
+}
+
+#[test]
+fn sync_prioritizes_illegal_drift_over_declared_writeback() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    inject_declared_block_and_managed_drift(repo_root);
+
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"],
+        "illegal_drift"
+    );
+    assert_eq!(
+        sync_json["page_outcomes"][0]["recommended_action"],
+        "rebuild"
+    );
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert!(artifacts.declared_records.is_empty());
+    assert!(artifacts.health_signals.iter().any(|signal| {
+        signal.signal_kind
+            == wiki_model::domain::knowledge_artifact::KnowledgeHealthSignalKind::IllegalDrift
+    }));
 }

@@ -1243,8 +1243,8 @@ mod tests {
         PageResearchSectionSlot,
     };
     use std::cell::RefCell;
-    use std::io;
     use std::ffi::OsString;
+    use std::io;
     use std::path::Path;
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use wiki_index::scanner::{ScanReport, ScannedFile};

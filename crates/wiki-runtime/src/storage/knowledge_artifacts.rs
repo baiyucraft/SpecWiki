@@ -25,11 +25,16 @@ use wiki_index::scanner::{FilePurpose, ScanReport, ScannedFile};
 use wiki_knowledge::domain::compose::PageDraft;
 use wiki_knowledge::domain::research::{PageDigest, UnitResearch};
 use wiki_knowledge::plan_pages_from_knowledge_tree;
-use wiki_model::domain::knowledge::{KnowledgeDomain, KnowledgeTree, KnowledgeUnit};
+use wiki_model::domain::knowledge::{
+    KnowledgeDomain, KnowledgeTree, KnowledgeUnit, KnowledgeUnitStatus,
+};
 use wiki_model::domain::knowledge_artifact::{
-    KnowledgeRecoveryManifest, KnowledgeResearchSummary, KnowledgeRuntimeGateRecord,
+    DeclaredKnowledgeRecord, KnowledgeHealthRecommendedAction, KnowledgeHealthSeverity,
+    KnowledgeHealthSignal, KnowledgeRecoveryManifest, KnowledgeResearchSummary,
+    KnowledgeRuntimeGateRecord,
 };
 use wiki_model::domain::module_tree::ModuleTree;
+use wiki_model::domain::source_citation::SourceCitation;
 
 const ARTIFACT_SCHEMA_VERSION: &str = "1";
 
@@ -38,9 +43,11 @@ pub struct KnowledgeArtifactSnapshot {
     pub domains: Vec<KnowledgeDomain>,
     pub units: Vec<KnowledgeUnit>,
     pub knowledge_tree: KnowledgeTree,
+    pub declared_records: Vec<DeclaredKnowledgeRecord>,
     pub research_summaries: Vec<KnowledgeResearchSummary>,
     pub page_digests: Vec<PageDigest>,
     pub runtime_gates: Vec<KnowledgeRuntimeGateRecord>,
+    pub health_signals: Vec<KnowledgeHealthSignal>,
     pub recovery_manifest: KnowledgeRecoveryManifest,
 }
 
@@ -51,9 +58,11 @@ pub struct PersistKnowledgeArtifactsInput<'a> {
     pub facts_input_hash: &'a str,
     pub metadata: &'a WikiMetadata,
     pub knowledge_tree: &'a KnowledgeTree,
+    pub declared_records: &'a [DeclaredKnowledgeRecord],
     pub research_summaries: &'a [KnowledgeResearchSummary],
     pub page_digests: &'a [PageDigest],
     pub runtime_gates: &'a [UnitRuntimeGate],
+    pub health_signals: &'a [KnowledgeHealthSignal],
 }
 
 pub fn knowledge_root(repo_root: &Path) -> PathBuf {
@@ -88,12 +97,20 @@ fn research_summaries_path(repo_root: &Path) -> PathBuf {
     derived_root(repo_root).join("research-summaries.jsonl")
 }
 
+fn declared_records_path(repo_root: &Path) -> PathBuf {
+    declared_root(repo_root).join("records.jsonl")
+}
+
 fn page_digests_path(repo_root: &Path) -> PathBuf {
     runtime_root(repo_root).join("page-digests.jsonl")
 }
 
 fn runtime_gates_path(repo_root: &Path) -> PathBuf {
     runtime_root(repo_root).join("runtime-gates.jsonl")
+}
+
+fn health_signals_path(repo_root: &Path) -> PathBuf {
+    runtime_root(repo_root).join("health-signals.jsonl")
 }
 
 fn recovery_manifest_path(repo_root: &Path) -> PathBuf {
@@ -104,9 +121,11 @@ pub fn knowledge_artifacts_exist(repo_root: &Path) -> bool {
     knowledge_domains_path(repo_root).exists()
         && knowledge_units_path(repo_root).exists()
         && knowledge_tree_path(repo_root).exists()
+        && declared_records_path(repo_root).exists()
         && research_summaries_path(repo_root).exists()
         && page_digests_path(repo_root).exists()
         && runtime_gates_path(repo_root).exists()
+        && health_signals_path(repo_root).exists()
         && recovery_manifest_path(repo_root).exists()
 }
 
@@ -141,17 +160,30 @@ pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) ->
         .values()
         .cloned()
         .collect::<Vec<_>>();
-    let units = input
-        .knowledge_tree
-        .units
-        .values()
-        .cloned()
-        .collect::<Vec<_>>();
-    let snapshot_seed = serde_json::to_vec(&(
-        &input.knowledge_tree,
+    let units = materialize_unit_contracts(
+        input.knowledge_tree,
+        input.declared_records,
         input.research_summaries,
         input.page_digests,
         &runtime_gates,
+        input.generated_at,
+    );
+    let mut health_signals = build_minimal_health_signals(&domains, &units);
+    let mut health_by_id = health_signals
+        .drain(..)
+        .map(|signal| (signal.signal_id.clone(), signal))
+        .collect::<BTreeMap<_, _>>();
+    for signal in input.health_signals {
+        health_by_id.insert(signal.signal_id.clone(), signal.clone());
+    }
+    let health_signals = health_by_id.into_values().collect::<Vec<_>>();
+    let snapshot_seed = serde_json::to_vec(&(
+        &input.knowledge_tree,
+        input.declared_records,
+        input.research_summaries,
+        input.page_digests,
+        &runtime_gates,
+        &health_signals,
         input.facts_input_hash,
     ))
     .map_err(|error| io::Error::other(format!("serialize knowledge snapshot: {error}")))?;
@@ -171,9 +203,17 @@ pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) ->
     write_json(&knowledge_domains_path(input.repo_root), &domains)?;
     write_json_lines(&knowledge_units_path(input.repo_root), &units)?;
     write_json(&knowledge_tree_path(input.repo_root), input.knowledge_tree)?;
-    write_json_lines(&research_summaries_path(input.repo_root), input.research_summaries)?;
+    write_json_lines(
+        &declared_records_path(input.repo_root),
+        input.declared_records,
+    )?;
+    write_json_lines(
+        &research_summaries_path(input.repo_root),
+        input.research_summaries,
+    )?;
     write_json_lines(&page_digests_path(input.repo_root), input.page_digests)?;
     write_json_lines(&runtime_gates_path(input.repo_root), &runtime_gates)?;
+    write_json_lines(&health_signals_path(input.repo_root), &health_signals)?;
     write_json(&recovery_manifest_path(input.repo_root), &manifest)
 }
 
@@ -182,11 +222,21 @@ pub fn load_knowledge_artifacts(repo_root: &Path) -> io::Result<KnowledgeArtifac
         domains: read_json(&knowledge_domains_path(repo_root))?,
         units: read_json_lines(&knowledge_units_path(repo_root))?,
         knowledge_tree: read_json(&knowledge_tree_path(repo_root))?,
+        declared_records: read_json_lines(&declared_records_path(repo_root))?,
         research_summaries: read_json_lines(&research_summaries_path(repo_root))?,
         page_digests: read_json_lines(&page_digests_path(repo_root))?,
         runtime_gates: read_json_lines(&runtime_gates_path(repo_root))?,
+        health_signals: read_json_lines(&health_signals_path(repo_root))?,
         recovery_manifest: read_json(&recovery_manifest_path(repo_root))?,
     })
+}
+
+pub fn load_declared_records(repo_root: &Path) -> io::Result<Vec<DeclaredKnowledgeRecord>> {
+    read_json_lines(&declared_records_path(repo_root))
+}
+
+pub fn load_health_signals(repo_root: &Path) -> io::Result<Vec<KnowledgeHealthSignal>> {
+    read_json_lines(&health_signals_path(repo_root))
 }
 
 pub fn restore_runtime_cache_from_artifacts(repo_root: &Path) -> io::Result<bool> {
@@ -224,9 +274,10 @@ pub fn restore_runtime_cache_from_artifacts(repo_root: &Path) -> io::Result<bool
     sqlite_store::clear_page_digests(&conn)?;
     conn.execute("DELETE FROM knowledge_units", [])
         .map_err(|error| io::Error::other(format!("clear knowledge_units for restore: {error}")))?;
-    conn.execute("DELETE FROM knowledge_domains", []).map_err(|error| {
-        io::Error::other(format!("clear knowledge_domains for restore: {error}"))
-    })?;
+    conn.execute("DELETE FROM knowledge_domains", [])
+        .map_err(|error| {
+            io::Error::other(format!("clear knowledge_domains for restore: {error}"))
+        })?;
 
     sqlite_store::write_knowledge_domains(&conn, &artifacts.domains)?;
     sqlite_store::write_knowledge_units(&conn, &artifacts.units)?;
@@ -323,6 +374,288 @@ fn rebuild_runtime_summary(artifacts: &KnowledgeArtifactSnapshot) -> PipelineRun
         current_research_started_at: None,
         last_researched_unit_id: None,
         last_research_elapsed_ms: None,
+    }
+}
+
+fn materialize_unit_contracts(
+    knowledge_tree: &KnowledgeTree,
+    declared_records: &[DeclaredKnowledgeRecord],
+    research_summaries: &[KnowledgeResearchSummary],
+    page_digests: &[PageDigest],
+    runtime_gates: &[KnowledgeRuntimeGateRecord],
+    generated_at: &str,
+) -> Vec<KnowledgeUnit> {
+    let research_by_unit = research_summaries
+        .iter()
+        .map(|summary| (summary.unit_id.clone(), summary))
+        .collect::<BTreeMap<_, _>>();
+    let digest_by_unit = page_digests
+        .iter()
+        .map(|digest| (digest.unit_id.clone(), digest))
+        .collect::<BTreeMap<_, _>>();
+    let gate_by_unit = runtime_gates
+        .iter()
+        .map(|gate| (gate.unit_id.clone(), gate))
+        .collect::<BTreeMap<_, _>>();
+    let mut declared_refs_by_unit = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut projection_refs_by_unit = BTreeMap::<String, BTreeSet<String>>::new();
+
+    for record in declared_records {
+        for unit_id in &record.unit_refs {
+            declared_refs_by_unit
+                .entry(unit_id.clone())
+                .or_default()
+                .insert(record.record_id.clone());
+            projection_refs_by_unit
+                .entry(unit_id.clone())
+                .or_default()
+                .extend(record.projection_refs.iter().cloned());
+        }
+    }
+
+    knowledge_tree
+        .units
+        .values()
+        .cloned()
+        .map(|mut unit| {
+            let digest = digest_by_unit.get(&unit.id).copied();
+            let research = research_by_unit.get(&unit.id).copied();
+            let gate = gate_by_unit.get(&unit.id).copied();
+            let mut projection_refs = projection_refs_by_unit.remove(&unit.id).unwrap_or_default();
+            if let Some(digest) = digest {
+                projection_refs.insert(format!("page:{}", digest.page_id));
+            }
+
+            unit.declared_record_refs = declared_refs_by_unit
+                .remove(&unit.id)
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            unit.derived_research_ref =
+                research.map(|summary| format!("research-summary:{}", summary.unit_id));
+            unit.projection_refs = projection_refs.into_iter().collect();
+            unit.source_refs = materialize_source_refs(&unit, digest);
+            unit.citation_refs = materialize_citation_refs(digest);
+            unit.updated_at = generated_at.to_string();
+
+            let (status, invalidation_reason) =
+                derive_unit_status(research.is_some(), digest.is_some(), gate);
+            unit.status = status;
+            unit.invalidation_reason = invalidation_reason;
+            unit
+        })
+        .collect()
+}
+
+fn materialize_source_refs(unit: &KnowledgeUnit, digest: Option<&PageDigest>) -> Vec<String> {
+    if !unit.scope.source_ids.is_empty() {
+        return unit
+            .scope
+            .source_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+    }
+
+    digest
+        .map(|digest| {
+            digest
+                .key_sources
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn materialize_citation_refs(digest: Option<&PageDigest>) -> Vec<String> {
+    let mut refs = BTreeSet::new();
+    let Some(digest) = digest else {
+        return Vec::new();
+    };
+
+    for citation in &digest.citations {
+        refs.insert(citation_ref(citation));
+    }
+    for section in &digest.section_digests {
+        for citation in &section.citations {
+            refs.insert(citation_ref(citation));
+        }
+    }
+    refs.into_iter().collect()
+}
+
+fn citation_ref(citation: &SourceCitation) -> String {
+    citation.source_id.clone().unwrap_or_else(|| {
+        format!(
+            "{}:{}-{}",
+            citation.path, citation.start_line, citation.end_line
+        )
+    })
+}
+
+fn derive_unit_status(
+    has_research_summary: bool,
+    has_page_digest: bool,
+    gate: Option<&KnowledgeRuntimeGateRecord>,
+) -> (KnowledgeUnitStatus, Option<String>) {
+    if let Some(gate) = gate {
+        if gate.blocked_reason.is_some() || !gate.missing_dependencies.is_empty() {
+            return (
+                KnowledgeUnitStatus::Blocked,
+                gate.blocked_reason.clone().or_else(|| {
+                    (!gate.missing_dependencies.is_empty())
+                        .then(|| "missing_dependencies".to_string())
+                }),
+            );
+        }
+    }
+
+    if !has_research_summary {
+        return (
+            KnowledgeUnitStatus::Stale,
+            Some("missing_research_summary".to_string()),
+        );
+    }
+    if !has_page_digest {
+        return (
+            KnowledgeUnitStatus::Stale,
+            Some("missing_projection_digest".to_string()),
+        );
+    }
+
+    (KnowledgeUnitStatus::Active, None)
+}
+
+fn build_minimal_health_signals(
+    domains: &[KnowledgeDomain],
+    units: &[KnowledgeUnit],
+) -> Vec<KnowledgeHealthSignal> {
+    let domain_ids = domains
+        .iter()
+        .map(|domain| domain.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut signals = Vec::new();
+
+    for unit in units {
+        let target_ref = format!("unit:{}", unit.id);
+        let domain_missing = !matches!(
+            unit.unit_type,
+            wiki_model::domain::knowledge::UnitType::Overview
+                | wiki_model::domain::knowledge::UnitType::Architecture
+        ) && (unit.domain_id.trim().is_empty()
+            || !domain_ids.contains(&unit.domain_id));
+        let source_missing = unit.source_refs.is_empty();
+        let projection_missing = unit.projection_refs.is_empty();
+
+        if domain_missing || (source_missing && projection_missing) {
+            let severity = KnowledgeHealthSeverity::Error;
+            let action = if domain_missing {
+                KnowledgeHealthRecommendedAction::Rebuild
+            } else {
+                KnowledgeHealthRecommendedAction::Update
+            };
+            let reason = if domain_missing {
+                "unit missing valid domain binding".to_string()
+            } else {
+                "unit missing source and projection binding".to_string()
+            };
+            signals.push(build_health_signal(
+                "orphan",
+                wiki_model::domain::knowledge_artifact::KnowledgeHealthSignalKind::OrphanUnit,
+                severity,
+                &target_ref,
+                action,
+                &reason,
+            ));
+        }
+
+        if source_missing || unit.citation_refs.is_empty() {
+            let reason = if source_missing {
+                "unit missing source refs".to_string()
+            } else {
+                "unit missing citation refs".to_string()
+            };
+            signals.push(build_health_signal(
+                "provenance",
+                wiki_model::domain::knowledge_artifact::KnowledgeHealthSignalKind::MissingProvenance,
+                KnowledgeHealthSeverity::Warning,
+                &target_ref,
+                KnowledgeHealthRecommendedAction::Review,
+                &reason,
+            ));
+        }
+
+        if unit.status == KnowledgeUnitStatus::Stale
+            && unit.invalidation_reason.as_deref() == Some("missing_research_summary")
+        {
+            signals.push(build_health_signal(
+                "derived",
+                wiki_model::domain::knowledge_artifact::KnowledgeHealthSignalKind::DerivedStale,
+                KnowledgeHealthSeverity::Warning,
+                &target_ref,
+                KnowledgeHealthRecommendedAction::Update,
+                "unit research summary is stale or missing",
+            ));
+        }
+
+        if unit.status == KnowledgeUnitStatus::Stale
+            && unit.invalidation_reason.as_deref() == Some("missing_projection_digest")
+        {
+            signals.push(build_health_signal(
+                "projection",
+                wiki_model::domain::knowledge_artifact::KnowledgeHealthSignalKind::ProjectionStale,
+                KnowledgeHealthSeverity::Warning,
+                &target_ref,
+                KnowledgeHealthRecommendedAction::Update,
+                "unit projection digest is stale or missing",
+            ));
+        }
+
+        if !unit.declared_record_refs.is_empty() && unit.derived_research_ref.is_none() {
+            signals.push(build_health_signal(
+                "declared-derived",
+                wiki_model::domain::knowledge_artifact::KnowledgeHealthSignalKind::DeclaredDerivedDivergence,
+                KnowledgeHealthSeverity::Warning,
+                &target_ref,
+                KnowledgeHealthRecommendedAction::Update,
+                "declared records exist without a matching derived research summary",
+            ));
+        }
+    }
+
+    signals
+}
+
+fn build_health_signal(
+    namespace: &str,
+    signal_kind: wiki_model::domain::knowledge_artifact::KnowledgeHealthSignalKind,
+    severity: KnowledgeHealthSeverity,
+    target_ref: &str,
+    recommended_action: KnowledgeHealthRecommendedAction,
+    reason: &str,
+) -> KnowledgeHealthSignal {
+    let signal_id = fingerprint_bytes(
+        format!(
+            "{namespace}:{}:{}:{}:{}",
+            signal_kind.as_str(),
+            severity.as_str(),
+            target_ref,
+            reason
+        )
+        .as_bytes(),
+    );
+    KnowledgeHealthSignal {
+        signal_id,
+        signal_kind,
+        severity,
+        target_ref: target_ref.to_string(),
+        recommended_action,
+        reason: reason.to_string(),
     }
 }
 
@@ -453,7 +786,11 @@ fn build_restored_page_context(
     ctx.missing_child_unit_ids = unit
         .child_unit_ids
         .iter()
-        .filter(|child_id| !ctx.child_unit_ids.iter().any(|existing| existing == *child_id))
+        .filter(|child_id| {
+            !ctx.child_unit_ids
+                .iter()
+                .any(|existing| existing == *child_id)
+        })
         .cloned()
         .collect();
     ctx.readiness_status = if ctx.missing_child_unit_ids.is_empty() {
@@ -728,11 +1065,9 @@ fn write_json_lines<T: Serialize>(path: &Path, values: &[T]) -> io::Result<()> {
     }
     let mut output = String::new();
     for value in values {
-        output.push_str(
-            &serde_json::to_string(value).map_err(|error| {
-                io::Error::other(format!("serialize jsonl {}: {error}", path.display()))
-            })?,
-        );
+        output.push_str(&serde_json::to_string(value).map_err(|error| {
+            io::Error::other(format!("serialize jsonl {}: {error}", path.display()))
+        })?);
         output.push('\n');
     }
     fs::write(path, output)

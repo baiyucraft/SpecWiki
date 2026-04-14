@@ -8,17 +8,20 @@ use std::path::Path;
 
 use crate::domain::change_set::plan_runtime_changes_with_mode;
 use crate::domain::runtime_profile::{
+    blocker_hint_from, merge_recommended_action, preflight_for_state, summarize_health_signals,
     LlmModeHint, QueryReadiness, RecommendedAction, RuntimeGateSummary, RuntimeSummaryProjection,
-    blocker_hint_from, preflight_for_state,
 };
-use crate::domain::steering::{SteeringLoadMode, load_steering_config_with_mode};
+use crate::domain::steering::{load_steering_config_with_mode, SteeringLoadMode};
 use crate::storage::cache_store::cache_dir;
-use crate::storage::knowledge_artifacts::restore_runtime_cache_from_artifacts;
+use crate::storage::knowledge_artifacts::{
+    load_health_signals, restore_runtime_cache_from_artifacts,
+};
 use crate::storage::state_store::facts_snapshot_ready;
 use crate::workflows::page_render::{
     load_runtime_gate_summary_for_repo, load_runtime_summary_for_repo,
 };
 use crate::workflows::release_scope::project_external_runtime_state;
+use wiki_model::domain::knowledge_artifact::KnowledgeHealthSummary;
 use wiki_model::domain::update_scope::AffectedKnowledgeScope;
 
 /// `status` 只回答一件事：当前 Repo Wiki 是否仍然可用、是否被阻塞，以及下一步动作。
@@ -42,6 +45,9 @@ pub struct StatusReport {
     pub recommended_action: RecommendedAction,
     /// 当前阶段仅允许输出预判型 LLM 模式提示。
     pub llm_mode_hint: LlmModeHint,
+    /// formal health signals 的最小聚合摘要。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_summary: Option<KnowledgeHealthSummary>,
     /// 已持久化时回传 workflow runtime 摘要。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_summary: Option<RuntimeSummaryProjection>,
@@ -86,12 +92,17 @@ pub fn run_status_with_mode(
         .flatten()
         .map(RuntimeSummaryProjection::from_summary);
     let gate_summary = load_runtime_gate_summary_for_repo(repo_root).ok().flatten();
+    let health_summary = load_health_signals(repo_root)
+        .ok()
+        .and_then(|signals| summarize_health_signals(&signals));
     let external_state = derive_runtime_state(
         &projected_state,
         runtime_summary.as_ref(),
         gate_summary.as_ref(),
     );
     let preflight = preflight_for_state(&external_state, facts_ready);
+    let recommended_action =
+        merge_recommended_action(preflight.recommended_action, health_summary.as_ref());
     let blocker_hint = blocker_hint_from(runtime_summary.as_ref(), gate_summary.as_ref());
     let llm_mode_hint = if load_steering_config_with_mode(repo_root, steering_mode)
         .llm
@@ -110,8 +121,9 @@ pub fn run_status_with_mode(
         needs_rebuild_reason: plan.needs_rebuild_reason,
         facts_ready: preflight.facts_ready,
         query_readiness: preflight.query_readiness,
-        recommended_action: preflight.recommended_action,
+        recommended_action,
         llm_mode_hint,
+        health_summary,
         runtime_summary,
         gate_summary,
         blocker_hint,

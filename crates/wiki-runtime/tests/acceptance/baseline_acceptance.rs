@@ -6,8 +6,7 @@ use wiki_runtime::domain::steering::SteeringLoadMode;
 use wiki_runtime::storage::metadata_store::read_metadata;
 use wiki_runtime::workflows::progress::NoopProgressSink;
 use wiki_runtime::workflows::{
-    init::run_init_with_progress_and_llm_as_with_mode,
-    query::run_query,
+    init::run_init_with_progress_and_llm_as_with_mode, query::run_query,
 };
 
 fn run_init_in_development(repo_root: &Path) {

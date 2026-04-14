@@ -25,7 +25,6 @@ use crate::storage::sqlite::{
     knowledge_store::SqliteKnowledgeStore, runtime_store::SqliteRuntimeStore,
 };
 use crate::storage::sqlite_store;
-use wiki_model::domain::update_scope::AffectedKnowledgeScope;
 use wiki_index::fingerprint::fingerprint_bytes;
 use wiki_index::scanner::ScanReport;
 use wiki_index::symbol_graph::{GraphAnalysisSnapshot, GraphSummary, ResolvedGraphSnapshot};
@@ -41,6 +40,7 @@ use wiki_knowledge::planning::{
 use wiki_knowledge::research::{ResearchDataSource, ResearchProvider};
 use wiki_knowledge::{plan_pages_from_knowledge_tree, PlannedPage};
 use wiki_knowledge::{KnowledgeArtifactStore, KnowledgeSnapshotStore, ModuleContext, RepoContext};
+use wiki_model::domain::update_scope::AffectedKnowledgeScope;
 
 /// 新 compose pipeline 的统一输出。
 pub struct ComposePipelineOutput {
@@ -411,8 +411,11 @@ pub fn run_scoped_compose_pipeline_for_update(
         }
     }
 
-    let persisted_digests =
-        load_scoped_update_cached_digests(knowledge_tree, persisted_page_digests, &scoped_unit_ids)?;
+    let persisted_digests = load_scoped_update_cached_digests(
+        knowledge_tree,
+        persisted_page_digests,
+        &scoped_unit_ids,
+    )?;
     let domains = knowledge_tree.domains.values().cloned().collect::<Vec<_>>();
     let units = knowledge_tree.units.values().cloned().collect::<Vec<_>>();
     sqlite_store::replace_knowledge_snapshot(&conn, &domains, &units)?;
@@ -456,7 +459,8 @@ pub fn run_scoped_compose_pipeline_for_update(
             .unwrap_or(false)
     });
     let system_research = if needs_system_research {
-        let system_input_hash = compute_system_input_hash(&facts_input_hash, &research_ds, steering);
+        let system_input_hash =
+            compute_system_input_hash(&facts_input_hash, &research_ds, steering);
         load_or_compute_research(
             &conn,
             "system",
@@ -601,7 +605,8 @@ pub fn run_scoped_compose_pipeline_for_update(
             continue;
         };
 
-        let child_digests = collect_compose_input_digests(unit, knowledge_tree, &compose_input_digests);
+        let child_digests =
+            collect_compose_input_digests(unit, knowledge_tree, &compose_input_digests);
         if let Err(issue) = validate_compose_contract_inputs(unit, &child_digests, &unit_researches)
         {
             persist_compose_contract_block(
@@ -693,7 +698,10 @@ fn load_scoped_update_cached_digests(
     Ok(digests)
 }
 
-fn clear_removed_compose_artifacts(conn: &Connection, removed_unit_ids: &[String]) -> io::Result<()> {
+fn clear_removed_compose_artifacts(
+    conn: &Connection,
+    removed_unit_ids: &[String],
+) -> io::Result<()> {
     for unit_id in removed_unit_ids {
         sqlite_store::remove_page_draft(conn, unit_id)?;
         sqlite_store::remove_page_digest(conn, unit_id)?;
@@ -2336,12 +2344,10 @@ mod tests {
             .unwrap()
             .expect("checkpoint should exist");
         assert_eq!(checkpoint.interrupted_stage, PipelineStage::ResearchSystem);
-        assert!(
-            checkpoint
-                .interrupted_target_id
-                .as_ref()
-                .is_some_and(|target| target == &overview.id || target == &module.id)
-        );
+        assert!(checkpoint
+            .interrupted_target_id
+            .as_ref()
+            .is_some_and(|target| target == &overview.id || target == &module.id));
 
         let gates = runtime_store.read_unit_runtime_gates().unwrap();
         assert_eq!(gates.len(), 2);

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-use super::test_support::{EnvVarGuard, force_full_runtime};
+use super::test_support::{force_full_runtime, EnvVarGuard};
 use tempfile::tempdir;
 use wiki_runtime::domain::change_set::plan_runtime_changes;
 use wiki_runtime::domain::steering::SteeringLoadMode;
@@ -19,6 +19,7 @@ use wiki_runtime::workflows::{
     init::{run_init, run_init_with_progress_and_llm_as_with_mode},
     rebuild::run_rebuild_with_progress_and_llm_as_with_mode,
     status::{run_status, run_status_with_mode},
+    sync::run_sync,
     update::{run_update, run_update_with_progress_and_llm_as_with_mode},
 };
 
@@ -137,7 +138,10 @@ fn status_keeps_restore_failure_explicit_when_recovery_manifest_is_stale() {
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "needs_rebuild");
     assert!(!status.facts_ready);
-    assert_eq!(status.needs_rebuild_reason.as_deref(), Some("cache_missing"));
+    assert_eq!(
+        status.needs_rebuild_reason.as_deref(),
+        Some("cache_missing")
+    );
     assert_eq!(
         serde_json::to_value(&status).unwrap()["query_readiness"],
         "blocked"
@@ -377,7 +381,10 @@ fn update_reclaims_removed_units_pages_and_caches_after_structural_delete() {
 
     for page_id in removed_page_ids {
         assert!(
-            updated_state.pages.iter().all(|page| page.page_id != page_id),
+            updated_state
+                .pages
+                .iter()
+                .all(|page| page.page_id != page_id),
             "removed page should disappear from runtime state"
         );
         assert!(
@@ -414,13 +421,123 @@ fn init_persists_minimal_knowledge_artifacts() {
     run_init(repo_root).unwrap();
 
     let knowledge_root = repo_root.join(".wiki/.knowledge");
-    assert!(knowledge_root.join("derived/knowledge-domains.json").exists());
-    assert!(knowledge_root.join("derived/knowledge-units.jsonl").exists());
+    assert!(knowledge_root
+        .join("derived/knowledge-domains.json")
+        .exists());
+    assert!(knowledge_root
+        .join("derived/knowledge-units.jsonl")
+        .exists());
     assert!(knowledge_root.join("derived/knowledge-tree.json").exists());
-    assert!(knowledge_root.join("derived/research-summaries.jsonl").exists());
+    assert!(knowledge_root
+        .join("derived/research-summaries.jsonl")
+        .exists());
     assert!(knowledge_root.join("runtime/page-digests.jsonl").exists());
     assert!(knowledge_root.join("runtime/runtime-gates.jsonl").exists());
-    assert!(knowledge_root.join("runtime/recovery-manifest.json").exists());
+    assert!(knowledge_root.join("runtime/health-signals.jsonl").exists());
+    assert!(knowledge_root.join("declared/records.jsonl").exists());
+    assert!(knowledge_root
+        .join("runtime/recovery-manifest.json")
+        .exists());
+}
+
+#[test]
+fn status_keeps_readiness_ready_but_exposes_health_degradation_after_declared_writeback() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"status-health-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const runtime = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+    insert_declared_block_for_status(repo_root);
+    let sync = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync).unwrap();
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"],
+        "declared_writeback"
+    );
+
+    let status = run_status(repo_root).unwrap();
+    let status_json = serde_json::to_value(&status).unwrap();
+
+    assert_eq!(status.state, "fresh", "status = {}", status_json);
+    assert_eq!(status_json["query_readiness"], "ready");
+    assert_eq!(status_json["recommended_action"], "update");
+    assert_eq!(
+        status_json["health_summary"]["counts_by_kind"]["declared_derived_divergence"],
+        1
+    );
+}
+
+/// 场景：declared writeback 后，即使没有源码脏文件，update 也必须消费 health scope 刷新 derived/projection。
+#[test]
+fn update_consumes_declared_health_scope_without_source_dirty_set() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"declared-update-scope-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const runtime = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+    insert_declared_block_for_status(repo_root);
+    let sync = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync).unwrap();
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"],
+        "declared_writeback"
+    );
+
+    let plan = plan_runtime_changes(repo_root).unwrap();
+    assert!(
+        plan.change_set.is_empty(),
+        "declared writeback 不应伪装成源码 dirty set"
+    );
+    assert!(
+        !plan.affected_knowledge_scope.stale_unit_ids.is_empty(),
+        "declared health 应显式命中 stale units"
+    );
+    assert!(
+        !plan.affected_knowledge_scope.declared_record_ids.is_empty(),
+        "declared health 应保留 declared record refs"
+    );
+    assert!(
+        !plan
+            .affected_knowledge_scope
+            .stale_projection_ids
+            .is_empty(),
+        "declared health 应继续传播到 projection stale"
+    );
+    assert!(
+        !plan
+            .affected_knowledge_scope
+            .health_signal_targets
+            .is_empty(),
+        "declared health 应暴露 signal target refs"
+    );
+
+    let update = run_update(repo_root).unwrap();
+    assert_eq!(update.previous_state, "fresh");
+    assert_eq!(update.state, "fresh");
+    assert!(!update.updated_pages.is_empty());
+
+    let refreshed_status = run_status(repo_root).unwrap();
+    let refreshed_status_json = serde_json::to_value(&refreshed_status).unwrap();
+    assert_eq!(refreshed_status.state, "fresh");
+    assert_eq!(refreshed_status_json["recommended_action"], "none");
+    assert!(
+        refreshed_status_json["health_summary"].is_null()
+            || refreshed_status_json["health_summary"]["total_signals"] == 0
+    );
 }
 
 /// 场景：普通源码变更后，update 必须把 runtime 从 `stale` 刷回 `fresh`。
@@ -444,10 +561,7 @@ fn update_refreshes_stale_runtime_to_fresh() {
         "local_refresh"
     );
     assert!(
-        !status
-            .affected_knowledge_scope
-            .direct_unit_ids
-            .is_empty(),
+        !status.affected_knowledge_scope.direct_unit_ids.is_empty(),
         "status should expose direct knowledge scope for stale sources"
     );
     assert_eq!(
@@ -1092,10 +1206,7 @@ fn update_marks_storybook_family_parent_pages_dirty_when_family_child_sources_ch
         "at least one page should be dirty"
     );
     assert!(
-        !status
-            .affected_knowledge_scope
-            .direct_unit_ids
-            .is_empty(),
+        !status.affected_knowledge_scope.direct_unit_ids.is_empty(),
         "family child change should first resolve to direct knowledge scope"
     );
 
@@ -1207,6 +1318,25 @@ fn write_file(path: &Path, content: &str) {
     }
 
     fs::write(path, content).unwrap();
+}
+
+fn insert_declared_block_for_status(repo_root: &Path) {
+    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let content = fs::read_to_string(&overview_path).unwrap();
+    let marker = "<!-- wiki:managed:end";
+    let pos = content
+        .find(marker)
+        .expect("should have managed end marker");
+
+    let declared_block = concat!(
+        "\n<!-- wiki:declared kind=policy scope=repo status=active source=manual -->\n",
+        "当前仓库必须先写 formal artifact，再谈 query。\n",
+        "<!-- wiki:declared:end -->\n"
+    );
+    let mut new_content = content[..pos].to_string();
+    new_content.push_str(declared_block);
+    new_content.push_str(&content[pos..]);
+    fs::write(&overview_path, &new_content).unwrap();
 }
 
 #[test]

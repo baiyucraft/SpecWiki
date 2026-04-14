@@ -9,6 +9,8 @@ fn init_runtime_suite_env() {
 // runtime、SQLite、query/update/rebuild 和 markdown merge 相关测试统一走 runtime suite。
 #[path = "runtime/editable_runtime.rs"]
 mod editable_runtime;
+#[path = "runtime/knowledge_artifacts_roundtrip.rs"]
+mod knowledge_artifacts_roundtrip;
 #[path = "runtime/legacy_page_migration.rs"]
 mod legacy_page_migration;
 #[path = "runtime/managed_section_kernel.rs"]

@@ -2768,8 +2768,11 @@ pub fn remove_page_digest(conn: &Connection, unit_id: &str) -> io::Result<()> {
     if !table_exists(conn, "page_digests")? {
         return Ok(());
     }
-    conn.execute("DELETE FROM page_digests WHERE unit_id = ?1", params![unit_id])
-        .map_err(|e| io::Error::other(format!("remove_page_digest({unit_id}): {e}")))?;
+    conn.execute(
+        "DELETE FROM page_digests WHERE unit_id = ?1",
+        params![unit_id],
+    )
+    .map_err(|e| io::Error::other(format!("remove_page_digest({unit_id}): {e}")))?;
     Ok(())
 }
 
@@ -2815,8 +2818,11 @@ pub fn remove_page_draft(conn: &Connection, unit_id: &str) -> io::Result<()> {
     if !table_exists(conn, "page_drafts")? {
         return Ok(());
     }
-    conn.execute("DELETE FROM page_drafts WHERE unit_id = ?1", params![unit_id])
-        .map_err(|e| io::Error::other(format!("remove_page_draft({unit_id}): {e}")))?;
+    conn.execute(
+        "DELETE FROM page_drafts WHERE unit_id = ?1",
+        params![unit_id],
+    )
+    .map_err(|e| io::Error::other(format!("remove_page_draft({unit_id}): {e}")))?;
     Ok(())
 }
 

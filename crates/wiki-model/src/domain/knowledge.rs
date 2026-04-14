@@ -262,6 +262,18 @@ pub struct UnitScope {
 
 // ─── KnowledgeUnit ──────────────────────────────────────────
 
+/// `KnowledgeUnitStatus` 表示 knowledge runtime 视角下该单元的最小正式状态。
+/// 它不等价于页面渲染状态，也不直接表达索引状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeUnitStatus {
+    #[default]
+    Active,
+    Stale,
+    Blocked,
+    Removed,
+}
+
 /// 一个知识单元对应一个最终的 Wiki 页面。
 /// KnowledgeUnit 是 compose 层的输入单位，统一取代旧的 topic / family / module 三套页面语义。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -282,6 +294,22 @@ pub struct KnowledgeUnit {
     pub scope: UnitScope,
     pub relative_path: String,
     pub priority: f32,
+    #[serde(default)]
+    pub declared_record_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived_research_ref: Option<String>,
+    #[serde(default)]
+    pub projection_refs: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub citation_refs: Vec<String>,
+    #[serde(default)]
+    pub status: KnowledgeUnitStatus,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invalidation_reason: Option<String>,
 }
 
 impl KnowledgeUnit {
@@ -311,6 +339,14 @@ impl KnowledgeUnit {
             scope: UnitScope::default(),
             relative_path,
             priority: 1.0,
+            declared_record_refs: Vec::new(),
+            derived_research_ref: None,
+            projection_refs: Vec::new(),
+            source_refs: Vec::new(),
+            citation_refs: Vec::new(),
+            status: KnowledgeUnitStatus::Active,
+            updated_at: String::new(),
+            invalidation_reason: None,
         }
     }
 

@@ -452,7 +452,11 @@ fn change_plan_detects_modified_and_structural_sources() {
         .any(|path| path == "src/util.ts"));
     assert!(!modified_plan.change_set.requires_replan);
     assert_eq!(
-        modified_plan.affected_knowledge_scope.escalation.level.as_str(),
+        modified_plan
+            .affected_knowledge_scope
+            .escalation
+            .level
+            .as_str(),
         "local_refresh"
     );
     assert!(
@@ -491,7 +495,11 @@ fn change_plan_detects_modified_and_structural_sources() {
     assert!(!structural_plan.affected_set.affected_page_ids.is_empty());
     assert!(
         matches!(
-            structural_plan.affected_knowledge_scope.escalation.level.as_str(),
+            structural_plan
+                .affected_knowledge_scope
+                .escalation
+                .level
+                .as_str(),
             "subtree_replan" | "repo_replan"
         ),
         "structural change should escalate beyond local_refresh"
@@ -556,7 +564,9 @@ fn child_contract_change_propagates_parent_units() {
         .iter()
         .filter(|page| projection_target_page_ids.contains(&page.id))
         .filter_map(|page| page.unit_id.as_ref())
-        .filter(|unit_id| propagated_unit_ids.contains(*unit_id) && !direct_unit_ids.contains(*unit_id))
+        .filter(|unit_id| {
+            propagated_unit_ids.contains(*unit_id) && !direct_unit_ids.contains(*unit_id)
+        })
         .count();
 
     assert!(

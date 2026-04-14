@@ -28,7 +28,9 @@ use crate::storage::cache_store::{
     ensure_cache_dir, ensure_page_cache_dirs, write_page_context_cache,
     write_page_generation_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
-use crate::storage::knowledge_artifacts::{persist_knowledge_artifacts, PersistKnowledgeArtifactsInput};
+use crate::storage::knowledge_artifacts::{
+    persist_knowledge_artifacts, PersistKnowledgeArtifactsInput,
+};
 use crate::storage::metadata_store::metadata_exists;
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite::runtime_store::SqliteRuntimeStore;
@@ -394,6 +396,8 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
                 .map(|research| research.to_artifact_summary(unit))
         })
         .collect::<Vec<_>>();
+    let declared_records = Vec::new();
+    let health_signals = Vec::new();
     let page_digests = _digests.values().cloned().collect::<Vec<_>>();
     let runtime_gates = runtime_store.read_unit_runtime_gates()?;
     persist_knowledge_artifacts(PersistKnowledgeArtifactsInput {
@@ -403,9 +407,11 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
         facts_input_hash: &facts_input_hash,
         metadata: &metadata,
         knowledge_tree: &knowledge_tree,
+        declared_records: &declared_records,
         research_summaries: &research_summaries,
         page_digests: &page_digests,
         runtime_gates: &runtime_gates,
+        health_signals: &health_signals,
     })?;
     let runtime_summary =
         load_runtime_summary_for_repo(repo_root)?.map(RuntimeSummaryProjection::from_summary);
@@ -1041,12 +1047,10 @@ mod tests {
         .unwrap();
 
         fs::write(wiki_root.join("运行时.md"), "# runtime\n").unwrap();
-        assert!(should_preserve_incomplete_init_runtime(
-            "init",
-            repo_root,
-            LlmCacheMode::Preserve
-        )
-        .unwrap());
+        assert!(
+            should_preserve_incomplete_init_runtime("init", repo_root, LlmCacheMode::Preserve)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -1208,7 +1212,7 @@ mod tests {
             None,
             crate::domain::steering::SteeringLoadMode::Development,
         )
-            .expect_err("invalid user config should fail init");
+        .expect_err("invalid user config should fail init");
         assert!(error.to_string().contains("failed to parse"));
     }
 }

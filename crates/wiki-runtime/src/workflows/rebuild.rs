@@ -28,7 +28,7 @@ use crate::storage::cache_store::{
     write_page_generation_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::knowledge_artifacts::{
-    persist_knowledge_artifacts, PersistKnowledgeArtifactsInput,
+    load_knowledge_artifacts, persist_knowledge_artifacts, PersistKnowledgeArtifactsInput,
 };
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite::runtime_store::SqliteRuntimeStore;
@@ -135,6 +135,7 @@ pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
 
     // 在清理前，读取旧页面的磁盘内容用于 user section 恢复
     let old_page_contents = read_old_page_contents(repo_root);
+    let previous_artifacts = load_knowledge_artifacts(repo_root).ok();
 
     // 清理旧 runtime
     reporter.phase("clear_runtime", "清理旧运行时");
@@ -392,6 +393,29 @@ pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
                 .map(|research| research.to_artifact_summary(unit))
         })
         .collect::<Vec<_>>();
+    let current_unit_ids = knowledge_tree
+        .units
+        .keys()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let declared_records = previous_artifacts
+        .as_ref()
+        .map(|artifacts| {
+            artifacts
+                .declared_records
+                .iter()
+                .filter(|record| {
+                    record.unit_refs.is_empty()
+                        || record
+                            .unit_refs
+                            .iter()
+                            .any(|unit_id| current_unit_ids.contains(unit_id))
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let health_signals = Vec::new();
     let page_digests = digests.values().cloned().collect::<Vec<_>>();
     let runtime_gates = runtime_store.read_unit_runtime_gates()?;
     persist_knowledge_artifacts(PersistKnowledgeArtifactsInput {
@@ -401,9 +425,11 @@ pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
         facts_input_hash: &facts_input_hash,
         metadata: &metadata,
         knowledge_tree: &knowledge_tree,
+        declared_records: &declared_records,
         research_summaries: &research_summaries,
         page_digests: &page_digests,
         runtime_gates: &runtime_gates,
+        health_signals: &health_signals,
     })?;
     let runtime_summary =
         load_runtime_summary_for_repo(repo_root)?.map(RuntimeSummaryProjection::from_summary);

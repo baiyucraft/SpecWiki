@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use wiki_model::domain::knowledge::{DecompositionProfile, KnowledgeUnit};
@@ -368,6 +370,36 @@ impl UnitResearch {
 
     /// 把 unit research 收敛成 `.wiki/.knowledge/**` 可共享的最小摘要。
     pub fn to_artifact_summary(&self, unit: &KnowledgeUnit) -> KnowledgeResearchSummary {
+        let source_refs = self
+            .key_sources
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let citation_refs = self
+            .evidence_clusters
+            .iter()
+            .flat_map(|cluster| cluster.citations.iter())
+            .map(citation_ref_for_summary)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let summary_status = if matches!(
+            self.provider_stop_reason,
+            Some(ResearchStopReason::ProviderError)
+                | Some(ResearchStopReason::InvalidOutput)
+                | Some(ResearchStopReason::CallBudgetRejected)
+        ) {
+            "blocked".to_string()
+        } else if source_refs.is_empty()
+            || citation_refs.is_empty()
+            || self.summary.trim().is_empty()
+        {
+            "degraded".to_string()
+        } else {
+            "ready".to_string()
+        };
         KnowledgeResearchSummary {
             unit_id: unit.id.clone(),
             unit_type: unit.unit_type.as_str().to_string(),
@@ -376,12 +408,24 @@ impl UnitResearch {
             positioning: self.positioning.clone(),
             input_hash: self.input_hash.clone(),
             key_sources: self.key_sources.clone(),
+            source_refs,
+            citation_refs,
+            summary_status,
             provider_stop_reason: self
                 .provider_stop_reason
                 .as_ref()
                 .map(|reason| reason.as_str().to_string()),
         }
     }
+}
+
+fn citation_ref_for_summary(citation: &SourceCitation) -> String {
+    citation.source_id.clone().unwrap_or_else(|| {
+        format!(
+            "{}:{}-{}",
+            citation.path, citation.start_line, citation.end_line
+        )
+    })
 }
 
 // ─── PlannedSection ─────────────────────────────────────────
@@ -504,4 +548,47 @@ pub struct PageDigest {
     pub diagram_digests: Vec<PageDiagramDigest>,
     #[serde(default)]
     pub readiness_stage: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiki_model::domain::knowledge::{KnowledgeUnit, UnitType};
+
+    #[test]
+    fn artifact_summary_carries_provenance_and_status() {
+        let unit = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "运行时",
+            "domain-runtime",
+            "核心模块/运行时.md",
+        );
+        let research = UnitResearch {
+            unit_id: unit.id.clone(),
+            summary: "负责核心运行时调度。".to_string(),
+            positioning: "解释运行时主入口与阶段职责。".to_string(),
+            key_sources: vec!["src/runtime.rs".to_string(), "src/runtime.rs".to_string()],
+            evidence_clusters: vec![EvidenceCluster {
+                cluster_key: "runtime".to_string(),
+                label: "运行时".to_string(),
+                citations: vec![SourceCitation {
+                    path: "src/runtime.rs".to_string(),
+                    start_line: 10,
+                    end_line: 24,
+                    source_id: Some("source-runtime".to_string()),
+                    symbol_id: None,
+                    note: "主入口".to_string(),
+                }],
+            }],
+            input_hash: "research-hash".to_string(),
+            ..UnitResearch::default()
+        };
+
+        let summary = research.to_artifact_summary(&unit);
+
+        assert_eq!(summary.unit_id, unit.id);
+        assert_eq!(summary.source_refs, vec!["src/runtime.rs".to_string()]);
+        assert_eq!(summary.citation_refs, vec!["source-runtime".to_string()]);
+        assert_eq!(summary.summary_status, "ready");
+    }
 }

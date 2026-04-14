@@ -88,6 +88,12 @@ project knowledge runtime + auditable long-term memory
 - 旧设计文档中遗留的参考映射，如果不再适配 3.0 当前思想，可以直接推翻
 - 参考仓库只提供“实现灵感”和“工程做法”，不直接决定本项目的产品边界和目录结构
 
+补充边界：
+
+Karpathy 的 `LLM Wiki` 可作为本项目的理念侧参考：二者都反对把知识系统退化为一次性 query 结果的临时拼接，而强调通过持续 ingest、增量修订与长期维护，让知识沉淀为能够随时间复利的正式资产。这个参考主要帮助说明“为什么需要长期知识层”，不直接决定当前系统的对象模型、包边界或 `.wiki/` 结构。
+
+但 `spec-wiki` 并不是 page-first 的 `LLM Wiki` 变体。当前系统仍以 `facts / index` 为底座，以 `KnowledgeUnit` 为一等抽象，沿 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble` 主链生成正式知识产物，并显式区分 `declared knowledge`、`derived knowledge`、`page projection` 与 `runtime cache`。因此，`LLM Wiki` 只能作为产品哲学与知识工作流灵感参考，不能作为 core 架构模板或页面语义设计依据。
+
 ## 四包架构
 
 ```text
