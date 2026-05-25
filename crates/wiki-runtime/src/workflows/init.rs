@@ -718,7 +718,8 @@ mod tests {
     use crate::workflows::progress::NoopProgressSink;
     use wiki_knowledge::domain::compose::PageDraft;
     use wiki_knowledge::domain::research::{
-        PageDiagramDigest, PageDigest, PageSectionDigest, SourceCitation, UnitResearch,
+        PageDiagramDigest, PageDigest, PageSectionDigest, ProjectionDigestStatus, SourceCitation,
+        UnitResearch,
     };
     use wiki_knowledge::plan_pages_from_knowledge_tree;
 
@@ -819,6 +820,8 @@ mod tests {
                 title: "运行时流".to_string(),
                 summary: "阶段关系".to_string(),
             }],
+            projection_status: ProjectionDigestStatus::Ready,
+            status_reasons: Vec::new(),
             readiness_stage: "compose_ready".to_string(),
             ..PageDigest::default()
         };

@@ -7,10 +7,20 @@ use std::path::Path;
 
 use super::test_support::{force_full_runtime, EnvVarGuard};
 use tempfile::tempdir;
+use wiki_knowledge::domain::research::{
+    ProjectionDigestStatus, ProjectionDigestStatusReason, ProjectionDigestStatusReasonKind,
+};
+use wiki_model::domain::knowledge::KnowledgeUnitStatus;
+use wiki_model::domain::knowledge_artifact::{
+    KnowledgeHealthSeverity, KnowledgeResearchStatusReason, KnowledgeResearchStatusReasonKind,
+    KnowledgeResearchSummaryStatus,
+};
 use wiki_runtime::domain::change_set::plan_runtime_changes;
 use wiki_runtime::domain::steering::SteeringLoadMode;
 use wiki_runtime::llm::{LlmCompletion, LlmPromptRequest, LlmService};
-use wiki_runtime::storage::knowledge_artifacts::load_knowledge_artifacts;
+use wiki_runtime::storage::knowledge_artifacts::{
+    load_knowledge_artifacts, persist_knowledge_artifacts, PersistKnowledgeArtifactsInput,
+};
 use wiki_runtime::storage::metadata_store::{metadata_exists, read_metadata};
 use wiki_runtime::storage::sqlite_store;
 use wiki_runtime::storage::state_store::read_state;
@@ -22,6 +32,18 @@ use wiki_runtime::workflows::{
     sync::run_sync,
     update::{run_update, run_update_with_progress_and_llm_as_with_mode},
 };
+
+const DECLARED_RUNTIME_BLOCK: &str = concat!(
+    "\n<!-- wiki:declared id=repo-runtime-contract kind=policy scope=repo status=active source=manual -->\n",
+    "当前仓库必须先写 formal artifact，再谈 query。\n",
+    "<!-- wiki:declared:end -->\n"
+);
+
+const DECLARED_RUNTIME_CONFLICT_BLOCK: &str = concat!(
+    "\n<!-- wiki:declared id=repo-runtime-contract-v2 kind=policy scope=repo status=active source=manual -->\n",
+    "当前仓库必须先写 formal artifact，且由另一条并行 policy 再次声明。\n",
+    "<!-- wiki:declared:end -->\n"
+);
 
 struct StatusStabilityLlmService;
 
@@ -474,6 +496,360 @@ fn status_keeps_readiness_ready_but_exposes_health_degradation_after_declared_wr
     );
 }
 
+#[test]
+fn status_projects_governance_conflict_into_review_signal() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"status-governance-conflict-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const runtime = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+    set_declared_blocks_for_status(
+        repo_root,
+        &format!("{DECLARED_RUNTIME_BLOCK}{DECLARED_RUNTIME_CONFLICT_BLOCK}"),
+    );
+    let sync = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync).unwrap();
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"],
+        "declared_writeback"
+    );
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(artifacts.conflict_records.len(), 1);
+    assert!(artifacts.health_signals.iter().any(|signal| {
+        signal.signal_kind
+            == wiki_model::domain::knowledge_artifact::KnowledgeHealthSignalKind::GovernanceConflict
+    }));
+
+    let status = run_status(repo_root).unwrap();
+    let status_json = serde_json::to_value(&status).unwrap();
+    assert_eq!(status.state, "fresh", "status = {}", status_json);
+    assert_eq!(status_json["query_readiness"], "ready");
+    assert_eq!(status_json["recommended_action"], "review");
+    assert_eq!(
+        status_json["health_summary"]["counts_by_kind"]["governance_conflict"],
+        1
+    );
+}
+
+#[test]
+fn status_projects_degraded_research_summary_into_unit_and_health() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"status-degraded-research-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const runtime = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+
+    let before = load_knowledge_artifacts(repo_root).unwrap();
+    let metadata = read_metadata(repo_root).unwrap();
+    let conn = sqlite_store::open_db(repo_root).unwrap();
+    let runtime_gates = sqlite_store::read_unit_runtime_gates(&conn).unwrap();
+    let target_unit_id = before.research_summaries[0].unit_id.clone();
+    let mut degraded_summaries = before.research_summaries.clone();
+    let target_summary = degraded_summaries
+        .iter_mut()
+        .find(|summary| summary.unit_id == target_unit_id)
+        .expect("target summary should exist");
+    target_summary.summary_status = KnowledgeResearchSummaryStatus::Degraded;
+    target_summary.status_reasons = vec![KnowledgeResearchStatusReason {
+        reason_kind: Some(KnowledgeResearchStatusReasonKind::MissingSummary),
+        reason_message: "research summary 为空".to_string(),
+        upstream_ref: None,
+    }];
+    target_summary.summary.clear();
+
+    persist_knowledge_artifacts(PersistKnowledgeArtifactsInput {
+        repo_root,
+        workflow_action: "update",
+        generated_at: "2026-04-15T12:00:00Z",
+        facts_input_hash: &before.recovery_manifest.facts_input_hash,
+        metadata: &metadata,
+        knowledge_tree: &before.knowledge_tree,
+        declared_records: &before.declared_records,
+        research_summaries: &degraded_summaries,
+        page_digests: &before.page_digests,
+        runtime_gates: &runtime_gates,
+        health_signals: &[],
+    })
+    .unwrap();
+
+    let after = load_knowledge_artifacts(repo_root).unwrap();
+    let target_unit = after
+        .units
+        .iter()
+        .find(|unit| unit.id == target_unit_id)
+        .expect("target unit should exist");
+    assert_eq!(target_unit.status, KnowledgeUnitStatus::Stale);
+    assert_eq!(
+        target_unit.invalidation_reason.as_deref(),
+        Some("research_degraded:missing_summary")
+    );
+    assert!(after.health_signals.iter().any(|signal| {
+        signal.target_ref == format!("unit:{target_unit_id}")
+            && signal.severity == KnowledgeHealthSeverity::Warning
+            && signal.reason.contains("research summary degraded")
+    }));
+
+    let status = run_status(repo_root).unwrap();
+    let status_json = serde_json::to_value(&status).unwrap();
+    assert_eq!(status.state, "fresh");
+    assert_eq!(status_json["recommended_action"], "update");
+    assert!(
+        status_json["health_summary"]["counts_by_kind"]["derived_stale"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 1
+    );
+}
+
+#[test]
+fn status_projects_blocked_research_summary_into_unit_and_health() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"status-blocked-research-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const runtime = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+
+    let before = load_knowledge_artifacts(repo_root).unwrap();
+    let metadata = read_metadata(repo_root).unwrap();
+    let conn = sqlite_store::open_db(repo_root).unwrap();
+    let runtime_gates = sqlite_store::read_unit_runtime_gates(&conn).unwrap();
+    let target_unit_id = before.research_summaries[0].unit_id.clone();
+    let mut blocked_summaries = before.research_summaries.clone();
+    let target_summary = blocked_summaries
+        .iter_mut()
+        .find(|summary| summary.unit_id == target_unit_id)
+        .expect("target summary should exist");
+    target_summary.summary_status = KnowledgeResearchSummaryStatus::Blocked;
+    target_summary.status_reasons = vec![KnowledgeResearchStatusReason {
+        reason_kind: Some(KnowledgeResearchStatusReasonKind::ProviderError),
+        reason_message: "provider-backed research stop reason: provider_error".to_string(),
+        upstream_ref: Some("provider_stop_reason:provider_error".to_string()),
+    }];
+
+    persist_knowledge_artifacts(PersistKnowledgeArtifactsInput {
+        repo_root,
+        workflow_action: "update",
+        generated_at: "2026-04-15T12:30:00Z",
+        facts_input_hash: &before.recovery_manifest.facts_input_hash,
+        metadata: &metadata,
+        knowledge_tree: &before.knowledge_tree,
+        declared_records: &before.declared_records,
+        research_summaries: &blocked_summaries,
+        page_digests: &before.page_digests,
+        runtime_gates: &runtime_gates,
+        health_signals: &[],
+    })
+    .unwrap();
+
+    let after = load_knowledge_artifacts(repo_root).unwrap();
+    let target_unit = after
+        .units
+        .iter()
+        .find(|unit| unit.id == target_unit_id)
+        .expect("target unit should exist");
+    assert_eq!(target_unit.status, KnowledgeUnitStatus::Blocked);
+    assert_eq!(
+        target_unit.invalidation_reason.as_deref(),
+        Some("research_blocked:provider_error")
+    );
+    assert!(after.health_signals.iter().any(|signal| {
+        signal.target_ref == format!("unit:{target_unit_id}")
+            && signal.severity == KnowledgeHealthSeverity::Error
+            && signal.reason.contains("research summary blocked")
+    }));
+
+    let status = run_status(repo_root).unwrap();
+    let status_json = serde_json::to_value(&status).unwrap();
+    assert_eq!(status.state, "fresh");
+    assert!(
+        status_json["health_summary"]["counts_by_severity"]["error"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 1
+    );
+    assert_eq!(status_json["recommended_action"], "update");
+}
+
+#[test]
+fn status_projects_stale_projection_digest_into_unit_and_health() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"status-stale-projection-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const runtime = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+
+    let before = load_knowledge_artifacts(repo_root).unwrap();
+    let metadata = read_metadata(repo_root).unwrap();
+    let conn = sqlite_store::open_db(repo_root).unwrap();
+    let runtime_gates = sqlite_store::read_unit_runtime_gates(&conn).unwrap();
+    let target_unit_id = before.page_digests[0].unit_id.clone();
+    let mut stale_digests = before.page_digests.clone();
+    let target_digest = stale_digests
+        .iter_mut()
+        .find(|digest| digest.unit_id == target_unit_id)
+        .expect("target digest should exist");
+    target_digest.projection_status = ProjectionDigestStatus::Stale;
+    target_digest.status_reasons = vec![ProjectionDigestStatusReason {
+        reason_kind: Some(ProjectionDigestStatusReasonKind::DeclaredOrDerivedChanged),
+        reason_message: "declared 或 derived contract 已变化，projection 需要刷新".to_string(),
+        upstream_ref: Some(format!("unit:{}", target_unit_id)),
+    }];
+
+    persist_knowledge_artifacts(PersistKnowledgeArtifactsInput {
+        repo_root,
+        workflow_action: "update",
+        generated_at: "2026-04-15T13:00:00Z",
+        facts_input_hash: &before.recovery_manifest.facts_input_hash,
+        metadata: &metadata,
+        knowledge_tree: &before.knowledge_tree,
+        declared_records: &before.declared_records,
+        research_summaries: &before.research_summaries,
+        page_digests: &stale_digests,
+        runtime_gates: &runtime_gates,
+        health_signals: &[],
+    })
+    .unwrap();
+
+    let after = load_knowledge_artifacts(repo_root).unwrap();
+    let target_unit = after
+        .units
+        .iter()
+        .find(|unit| unit.id == target_unit_id)
+        .expect("target unit should exist");
+    assert_eq!(target_unit.status, KnowledgeUnitStatus::Stale);
+    assert_eq!(
+        target_unit.invalidation_reason.as_deref(),
+        Some("projection_stale:declared_or_derived_changed")
+    );
+    assert!(after.health_signals.iter().any(|signal| {
+        signal.target_ref == format!("unit:{target_unit_id}")
+            && signal.severity == KnowledgeHealthSeverity::Warning
+            && signal.reason.contains("projection digest is stale")
+    }));
+
+    let status = run_status(repo_root).unwrap();
+    let status_json = serde_json::to_value(&status).unwrap();
+    assert_eq!(status.state, "fresh");
+    assert_eq!(status_json["recommended_action"], "update");
+    assert!(
+        status_json["health_summary"]["counts_by_kind"]["projection_stale"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 1
+    );
+}
+
+#[test]
+fn status_projects_blocked_projection_digest_into_unit_and_health() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"status-blocked-projection-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const runtime = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+
+    let before = load_knowledge_artifacts(repo_root).unwrap();
+    let metadata = read_metadata(repo_root).unwrap();
+    let conn = sqlite_store::open_db(repo_root).unwrap();
+    let runtime_gates = sqlite_store::read_unit_runtime_gates(&conn).unwrap();
+    let target_unit_id = before.page_digests[0].unit_id.clone();
+    let mut blocked_digests = before.page_digests.clone();
+    let target_digest = blocked_digests
+        .iter_mut()
+        .find(|digest| digest.unit_id == target_unit_id)
+        .expect("target digest should exist");
+    target_digest.projection_status = ProjectionDigestStatus::Blocked;
+    target_digest.status_reasons = vec![ProjectionDigestStatusReason {
+        reason_kind: Some(ProjectionDigestStatusReasonKind::BlockedByResearch),
+        reason_message: "projection 被 research 阶段阻塞，尚未形成正式页面输出".to_string(),
+        upstream_ref: Some("provider_stop_reason:provider_error".to_string()),
+    }];
+
+    persist_knowledge_artifacts(PersistKnowledgeArtifactsInput {
+        repo_root,
+        workflow_action: "update",
+        generated_at: "2026-04-15T13:30:00Z",
+        facts_input_hash: &before.recovery_manifest.facts_input_hash,
+        metadata: &metadata,
+        knowledge_tree: &before.knowledge_tree,
+        declared_records: &before.declared_records,
+        research_summaries: &before.research_summaries,
+        page_digests: &blocked_digests,
+        runtime_gates: &runtime_gates,
+        health_signals: &[],
+    })
+    .unwrap();
+
+    let after = load_knowledge_artifacts(repo_root).unwrap();
+    let target_unit = after
+        .units
+        .iter()
+        .find(|unit| unit.id == target_unit_id)
+        .expect("target unit should exist");
+    assert_eq!(target_unit.status, KnowledgeUnitStatus::Blocked);
+    assert_eq!(
+        target_unit.invalidation_reason.as_deref(),
+        Some("projection_blocked:blocked_by_research")
+    );
+    assert!(after.health_signals.iter().any(|signal| {
+        signal.target_ref == format!("unit:{target_unit_id}")
+            && signal.severity == KnowledgeHealthSeverity::Error
+            && signal.reason.contains("projection digest is blocked")
+    }));
+
+    let status = run_status(repo_root).unwrap();
+    let status_json = serde_json::to_value(&status).unwrap();
+    assert_eq!(status.state, "fresh");
+    assert_eq!(status_json["recommended_action"], "update");
+    assert!(
+        status_json["health_summary"]["counts_by_kind"]["projection_stale"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 1
+    );
+    assert!(
+        status_json["health_summary"]["counts_by_severity"]["error"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 1
+    );
+}
+
 /// 场景：declared writeback 后，即使没有源码脏文件，update 也必须消费 health scope 刷新 derived/projection。
 #[test]
 fn update_consumes_declared_health_scope_without_source_dirty_set() {
@@ -523,6 +899,77 @@ fn update_consumes_declared_health_scope_without_source_dirty_set() {
             .health_signal_targets
             .is_empty(),
         "declared health 应暴露 signal target refs"
+    );
+
+    let update = run_update(repo_root).unwrap();
+    assert_eq!(update.previous_state, "fresh");
+    assert_eq!(update.state, "fresh");
+    assert!(!update.updated_pages.is_empty());
+
+    let refreshed_status = run_status(repo_root).unwrap();
+    let refreshed_status_json = serde_json::to_value(&refreshed_status).unwrap();
+    assert_eq!(refreshed_status.state, "fresh");
+    assert_eq!(refreshed_status_json["recommended_action"], "none");
+    assert!(
+        refreshed_status_json["health_summary"].is_null()
+            || refreshed_status_json["health_summary"]["total_signals"] == 0
+    );
+}
+
+#[test]
+fn update_consumes_removed_declared_health_scope_without_source_dirty_set() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"declared-delete-update-scope-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const runtime = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+    insert_declared_block_for_status(repo_root);
+    run_sync(repo_root).unwrap();
+
+    clear_declared_blocks_for_status(repo_root);
+    let delete_sync = run_sync(repo_root).unwrap();
+    let delete_sync_json = serde_json::to_value(&delete_sync).unwrap();
+    assert_eq!(
+        delete_sync_json["page_outcomes"][0]["result_kind"], "declared_writeback",
+        "warnings = {:?}, sync = {:?}",
+        delete_sync.warnings, delete_sync_json
+    );
+
+    let artifacts_after_delete = load_knowledge_artifacts(repo_root).unwrap();
+    assert!(
+        artifacts_after_delete.declared_records.is_empty(),
+        "declared delete should prune formal records"
+    );
+
+    let plan = plan_runtime_changes(repo_root).unwrap();
+    assert!(
+        plan.change_set.is_empty(),
+        "declared deletion 不应伪装成源码 dirty set"
+    );
+    assert!(
+        !plan.affected_knowledge_scope.stale_unit_ids.is_empty(),
+        "declared deletion 应显式命中 stale units"
+    );
+    assert!(
+        !plan
+            .affected_knowledge_scope
+            .stale_projection_ids
+            .is_empty(),
+        "declared deletion 应继续传播到 projection stale"
+    );
+    assert!(
+        !plan
+            .affected_knowledge_scope
+            .health_signal_targets
+            .is_empty(),
+        "declared deletion 应暴露 signal target refs"
     );
 
     let update = run_update(repo_root).unwrap();
@@ -1321,6 +1768,14 @@ fn write_file(path: &Path, content: &str) {
 }
 
 fn insert_declared_block_for_status(repo_root: &Path) {
+    set_declared_blocks_for_status(repo_root, DECLARED_RUNTIME_BLOCK);
+}
+
+fn clear_declared_blocks_for_status(repo_root: &Path) {
+    set_declared_blocks_for_status(repo_root, "");
+}
+
+fn set_declared_blocks_for_status(repo_root: &Path, declared_blocks: &str) {
     let overview_path = repo_root.join(".wiki/项目概述.md");
     let content = fs::read_to_string(&overview_path).unwrap();
     let marker = "<!-- wiki:managed:end";
@@ -1328,13 +1783,8 @@ fn insert_declared_block_for_status(repo_root: &Path) {
         .find(marker)
         .expect("should have managed end marker");
 
-    let declared_block = concat!(
-        "\n<!-- wiki:declared kind=policy scope=repo status=active source=manual -->\n",
-        "当前仓库必须先写 formal artifact，再谈 query。\n",
-        "<!-- wiki:declared:end -->\n"
-    );
-    let mut new_content = content[..pos].to_string();
-    new_content.push_str(declared_block);
+    let mut new_content = content[..pos].replace(DECLARED_RUNTIME_BLOCK, "");
+    new_content.push_str(declared_blocks);
     new_content.push_str(&content[pos..]);
     fs::write(&overview_path, &new_content).unwrap();
 }

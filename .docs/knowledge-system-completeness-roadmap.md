@@ -34,94 +34,17 @@
 - query / sync / update / rebuild 语义清晰
 - 冲突与治理可承接
 
-## 完整系统的最小判定
+## 当前 authoritative program
 
-一个“形式完整、工程上也算完善”的 knowledge system，至少要同时满足下面 8 组条件。
+当前 authoritative 路线图不再用“8 组条件 + 4 phase”做主框架，而是直接使用 `iteration-12-9` umbrella 已冻结的 7 个 capability。原因很简单：
 
-### 1. 真相分层完整
+- capability 更适合作为 OpenSpec child change 的实施颗粒度
+- capability 能直接绑定 formal object、truth source、workflow 与 artifact layer
+- capability 比“phase 愿景”更容易验收和归档
 
-必须稳定区分：
+因此，这份文档以下内容都以 7 capability program 为准。
 
-- `facts / index`
-- `declared knowledge`
-- `derived knowledge`
-- `projection`
-- `cache`
-
-并明确每层回答什么问题、谁可编辑、谁只能生成、谁可删除恢复。
-
-### 2. 对象模型完整
-
-至少要有一组正式对象，而不是只有 `KnowledgeUnit`：
-
-- `KnowledgeUnit`
-- `DeclaredRecord`
-- `ResearchSummary`
-- `ProjectionDigest`
-- `HealthSignal`
-- `ConflictRecord`
-- `SupersedeRecord`
-- `GovernanceDecision`
-
-### 3. 生命周期完整
-
-至少要把下面这些状态和传播关系正式化：
-
-- `facts_changed`
-- `declared_changed`
-- `research_stale`
-- `compose_stale`
-- `projection_stale`
-- `cache_stale`
-- `blocked`
-- `rebuild_recommended`
-
-### 4. 阶段合同完整
-
-每个阶段都必须回答：
-
-- 输入是什么
-- 输出是什么
-- 最小必填字段是什么
-- degraded / blocked 条件是什么
-- 下游依赖什么字段
-
-### 5. authoring / writeback 合同完整
-
-必须明确：
-
-- 哪些编辑可回写 declared
-- 哪些编辑只影响 metadata
-- 哪些编辑是 illegal drift
-- 删除 / 废弃 / 替代怎么表达
-
-### 6. query / answer assembly 合同完整
-
-必须明确：
-
-- query 优先命中哪一层
-- provenance 怎么返回
-- answer assembly 消费哪些 formal object
-- degraded 状态下如何回答
-
-### 7. 诊断与治理完整
-
-不能只停留在 health summary，至少要能承接：
-
-- declared 与 derived 冲突
-- knowledge 过期
-- provenance 缺失
-- 替代关系
-- 人工裁决与恢复动作
-
-### 8. 恢复与审计完整
-
-必须保证：
-
-- `.wiki` 可恢复
-- cache 可重建
-- snapshot 可审计
-- 多次 `sync / update / rebuild` 后语义不漂移
+这份 `.docs` 文档只承担阅读镜像角色；program-level authoritative source 仍然是 `openspec/changes/iteration-12-9-knowledge-system-completeness/**`。
 
 ## 当前状态映射
 
@@ -139,159 +62,96 @@
 - provider-backed 大仓库 full compose 稳定性
 - 全局质量评价与治理闭环
 
-## 总体演进图
+## Capability Program
 
 ```mermaid
 flowchart TD
-    A[当前: minimal formal knowledge runtime] --> B[Phase 1: Formal Completeness]
-    B --> C[Phase 2: Governance Completeness]
-    C --> D[Phase 3: Query / Answer Completeness]
-    D --> E[Phase 4: Engineering Hardening]
-    E --> F[完整 knowledge system]
+    A[Capability 1\nDeclared Lifecycle Completeness]
+    B[Capability 2\nDerived Research Contract Completeness]
+    C[Capability 3\nProjection / Readiness / Recovery Completeness]
+    D[Capability 4\nGovernance Conflict Artifacts]
+    E[Capability 5\nQuery Route Completeness]
+    F[Capability 6\nAnswer Assembly Contract]
+    G[Capability 7\nEngineering Hardening / Quality Gates]
+
+    A --> B
+    A --> C
+    B --> E
+    C --> E
+    A --> D
+    B --> D
+    C --> D
+    D --> E
+    E --> F
+    A --> G
+    B --> G
+    C --> G
+    D --> G
+    E --> G
+    F --> G
 ```
 
-## Phase 1：Formal Completeness
+## Capability Freeze
 
-目标：先把对象和生命周期补完整，不先追求“大而全智能能力”。
+### 7 个 capability
 
-### 需要完成
+| Capability | Formal Object / Contract | Owner Crate | Child Change |
+| --- | --- | --- | --- |
+| Declared Lifecycle Completeness | declared lifecycle、page-scoped snapshot diff、declared writeback legality | `wiki-model` + `wiki-runtime` | `iteration-12-9-1-declared-lifecycle-completeness` |
+| Derived Research Contract Completeness | `KnowledgeResearchSummary` status / reason / validation | `wiki-knowledge` + `wiki-runtime` | `iteration-12-9-2-derived-research-status-contract` |
+| Projection / Readiness / Recovery Completeness | projection digest、readiness、restore / rebuild contract | `wiki-runtime` + `wiki-model` | `iteration-12-9-3-formalize-projection-readiness-contract` |
+| Governance Conflict Artifacts | conflict artifact、conflict health、review-required formal object | `wiki-model` + `wiki-runtime` | `iteration-12-9-4-formalize-declared-conflict-artifacts` |
+| Query Route Completeness | query route、provenance、query trust、page fallback 边界 | `wiki-runtime` + `wiki-index` | `iteration-12-9-5-formalize-knowledge-query-routing-contract` |
+| Answer Assembly Contract | `AnswerEnvelope`、supporting refs、degraded answer policy | `wiki-runtime` + `wiki-knowledge` | `iteration-12-9-6-formalize-answer-assembly-contract` |
+| Engineering Hardening / Quality Gates | primary gate / baseline guard、gate summary、quality gates | `wiki-runtime` + scripts | `iteration-12-9-7-formalize-quality-gates-and-acceptance-contract` |
 
-1. declared object 扩展
-   - 支持 `replaced_by / supersedes / deprecated` 等关系
-   - 支持更明确的 scope object，而不是只有字符串 scope
+### 非目标冻结
 
-2. research contract 扩展
-   - 明确 `summary_status`
-   - 明确 source / citation / evidence 的必填规则
-   - 明确 blocked / degraded 条件
+- 不回到 page-first
+- 不把治理平台空话写成 capability
+- 不做多 repo 编排
+- 不做宿主 UI 扩张
+- 不把 engineering hardening 和 formal contract change 混成一个实施包
 
-3. projection contract 扩展
-   - `ProjectionDigest` 明确 readiness、render reason、projection provenance
-   - 页面写盘只是 digest 的结果，不再反向承担主真相
+## Spec Impact Matrix
 
-4. lifecycle state machine 固化
-   - 将 `declared_changed -> research_stale -> projection_stale` 等链路完全写进正式对象与 workflow
+| Capability | Existing Specs Modified | New Specs Required |
+| --- | --- | --- |
+| Declared Lifecycle Completeness | `declared-knowledge-lifecycle`、`knowledge-runtime-artifacts`、`knowledge-runtime-health-signals`、`knowledge-first-update`、`repo-wiki-workflow` | 无 |
+| Derived Research Contract Completeness | `research-driven-page-composition`、`knowledge-runtime-artifacts`、`knowledge-runtime-health-signals` | `derived-research-status-contract` |
+| Projection / Readiness / Recovery Completeness | `research-driven-page-composition`、`knowledge-runtime-artifacts`、`knowledge-runtime-health-signals`、`knowledge-first-update` | `projection-readiness-contract` |
+| Governance Conflict Artifacts | `knowledge-runtime-artifacts`、`knowledge-runtime-health-signals`、`knowledge-first-update` | `declared-conflict-artifacts` |
+| Query Route Completeness | `repo-wiki-workflow` | `knowledge-query-routing` |
+| Answer Assembly Contract | `research-driven-page-composition` | `answer-assembly-contract`、`degraded-answer-policy`、`host-knowledge-answer-surface` |
+| Engineering Hardening / Quality Gates | `workflow-verification`、`reference-fidelity-reporting` | `knowledge-quality-gates` |
 
-### 完成标准
-
-- 每个 formal object 都有稳定 schema
-- 每条主链状态传播都能在 artifact 中被恢复
-- 不再靠 runtime cache 暗示核心语义
-
-## Phase 2：Governance Completeness
-
-目标：让系统不只会“生成知识”，还会“治理知识”。
-
-### 需要完成
-
-1. conflict record
-   - 表达 declared 与 derived 冲突
-   - 表达 declared 与现实代码不一致
-
-2. supersede / deprecate 机制
-   - 旧规则怎么被替换
-   - query 如何优先命中新规则
-
-3. governance decision artifact
-   - 人工裁决结果进入正式层
-   - 保留审计链
-
-4. status / query / sync 的治理语义
-   - 不只返回 `update / rebuild`
-   - 还能返回 `review / resolve_conflict / accept_override`
-
-### 完成标准
-
-- 知识冲突不再只表现为警告
-- 系统能承接替代、废弃、裁决三类长期治理动作
-
-## Phase 3：Query / Answer Completeness
-
-目标：让 query 和 answer assembly 真正建立在 formal knowledge 上，而不是继续依赖 page fallback。
-
-### 需要完成
-
-1. answer assembly contract
-   - 明确 answer 消费的 formal inputs
-   - 明确如何拼 provenance
-
-2. route policy 强化
-   - symbol / graph / declared / derived / page 的优先级与降级策略完全固定
-
-3. degraded answer policy
-   - 没有完整 compose 时是否允许回答
-   - 允许回答时必须暴露哪些置信与 provenance
-
-4. host-facing output contract
-   - 面向 Agent 的知识回答格式稳定，不让宿主继续自己拼状态机
-
-### 完成标准
-
-- answer assembly 不再是隐式实现细节
-- page fallback 成为补充层，而不是隐藏主链缺口
-
-## Phase 4：Engineering Hardening
-
-目标：把“形式完整”推进成“真实可用”。
-
-### 需要完成
-
-1. 样本仓库稳定性
-   - `storybook / dagger` 不再长期停在 `runtime_incomplete`
-   - provider-backed 长尾仓库有稳定完成率
-
-2. 全量项目广覆盖
-   - `19` 项目定期跑批
-   - 不允许样本专用逻辑渗入 core
-
-3. 长流程稳定性
-   - `init -> status -> sync -> update -> query -> rebuild` 长流程稳定
-   - 多轮反复执行后语义不漂移
-
-4. 质量指标
-   - query 命中率
-   - provenance 完整率
-   - stale 恢复成功率
-   - sync 分类准确率
-   - rebuild 恢复率
-
-### 完成标准
-
-- “完整知识系统”不再只是 schema 意义成立
-- 在真实大仓库和多仓库样本上也稳定可用
-
-## 建议的迭代顺序
+## Acceptance Matrix
 
 ```mermaid
 flowchart LR
-    A[Formal object hardening] --> B[Lifecycle hardening]
-    B --> C[Governance artifacts]
-    C --> D[Answer assembly contract]
-    D --> E[Large-repo stability]
-    E --> F[Global quality gates]
+    A[Formal Object / Schema] --> B[Workflow Consumption]
+    B --> C[Artifact / Recovery]
+    C --> D[storybook + dagger]
+    D --> E[19 Projects Batch]
 ```
 
-建议顺序：
+| Capability | Formal Object / Schema | Workflow Consumption | Artifact / Recovery | `storybook + dagger` | `19` Projects Batch | Required Now / Later Stage |
+| --- | --- | --- | --- | --- | --- | --- |
+| Declared Lifecycle Completeness | declared schema、page snapshot diff | `sync/status/update` | declared snapshot prune、stale propagation | 验证 declared authoring 不退化为样本特化 | batch init 只做 baseline 观察 | `formal/schema + workflow + artifact/recovery` required now；`storybook + dagger` required now；`19 projects` later-stage baseline |
+| Derived Research Contract Completeness | `summary_status`、reason contract | `KnowledgeUnit`、`status`、health | roundtrip / restore validation | 观察 derived status 在样本仓库中稳定 | batch init + lifecycle 维持 baseline | `formal/schema + workflow + artifact/recovery` required now；`storybook + dagger` required now；`19 projects` later-stage baseline |
+| Projection / Readiness / Recovery Completeness | readiness、projection digest、recovery manifest | `status/query/update/rebuild` | cold restore、cache rebuild、metadata consistency | 验证 restore / rebuild / readiness | lifecycle phases 覆盖恢复链 | `formal/schema + workflow + artifact/recovery` required now；`storybook + dagger` required now；`19 projects` later-stage baseline |
+| Governance Conflict Artifacts | conflict artifact、review-required state | `sync/status/update` | conflict persist / cleanup | 样本仓库验证 conflict 进入 formal artifact | baseline guard 只做补充观察 | `formal/schema + workflow + artifact/recovery` required now；`storybook + dagger` required now；`19 projects` deferred until governance path stabilizes |
+| Query Route Completeness | query mode / trust / provenance | `query`、transport、host query surface | restore 后 route 不漂移 | 样本仓库验证 route 不回退 page-first | lifecycle + batch init 保持 query baseline | `formal/schema + workflow + artifact/recovery` required now；`storybook + dagger` required now；`19 projects` inherited from baseline guard / later-stage quality gate |
+| Answer Assembly Contract | `AnswerEnvelope`、supporting refs | query transport / host answer surface | answer substrate 在 restore 后仍可消费 | 样本仓库验证 formal inputs 主导 | batch/lifecycle 只保 route baseline | `formal/schema + workflow + artifact/recovery` required now；`storybook + dagger` required now；`19 projects` inherited from baseline guard / later-stage quality gate |
+| Engineering Hardening / Quality Gates | gate summary、formal gates、matrix | scripts / reports / closeout consumption | report snapshot、summary reuse | `collect-reference-project-reports.mjs storybook dagger` 是 primary gate | `run-test-projects.mjs` + `test-wiki-lifecycle.mjs` 是 baseline guard | primary gate + baseline guard required now；`19 projects` becomes current gate only in this capability |
 
-1. 先补 formal object 与 lifecycle
-2. 再补治理对象
-3. 再补 query / answer assembly contract
-4. 最后做大样本和全量工程硬化
+## 当前最值得做的 program-level动作
 
-不建议反过来先追求：
+如果只看收口顺序，当前最关键的是：
 
-- 更多 page 类型
-- 更花哨的 LLM orchestration
-- 更复杂的 UI 展示
-
-## 当前最值得做的下一步
-
-如果只选最关键的 4 个方向，建议是：
-
-1. declared authoring / supersede / deprecate contract
-2. conflict / governance artifact
-3. answer assembly formal contract
-4. `storybook / dagger` provider-backed 长流程稳定性
+1. 先把 7 个 child changes 全部实现并保持与 umbrella 矩阵一致
+2. 再按 primary gate / baseline guard 收 release evidence
+3. 最后归档 umbrella，而不是反过来先追逐新的 page 语义或 UI 形态
 
 ## 非目标
 

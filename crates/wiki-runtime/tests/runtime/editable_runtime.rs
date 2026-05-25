@@ -5,11 +5,31 @@
 use std::fs;
 
 use tempfile::tempdir;
-use wiki_runtime::storage::knowledge_artifacts::load_knowledge_artifacts;
+use wiki_runtime::storage::knowledge_artifacts::{
+    load_conflict_records, load_knowledge_artifacts,
+};
 use wiki_runtime::storage::state_store::read_state;
 use wiki_runtime::workflows::{
     init::run_init, rebuild::run_rebuild, sync::run_sync, update::run_update,
 };
+
+const DECLARED_RUNTIME_BLOCK: &str = concat!(
+    "\n<!-- wiki:declared id=repo-runtime-contract kind=policy scope=repo status=active source=manual -->\n",
+    "当前仓库必须先写 formal artifact，再谈 query。\n",
+    "<!-- wiki:declared:end -->\n"
+);
+
+const DECLARED_QUERY_BLOCK: &str = concat!(
+    "\n<!-- wiki:declared id=repo-query-contract kind=convention scope=repo status=active source=manual -->\n",
+    "query 必须先命中 knowledge，再考虑 page fallback。\n",
+    "<!-- wiki:declared:end -->\n"
+);
+
+const DECLARED_RUNTIME_CONFLICT_BLOCK: &str = concat!(
+    "\n<!-- wiki:declared id=repo-runtime-contract-v2 kind=policy scope=repo status=active source=manual -->\n",
+    "当前仓库必须先写 formal artifact，且由另一条并行 policy 再次声明。\n",
+    "<!-- wiki:declared:end -->\n"
+);
 
 /// 辅助：在 init 后的页面中插入 user section。
 fn insert_user_section_after_init(repo_root: &std::path::Path) -> String {
@@ -33,6 +53,44 @@ fn insert_user_section_after_init(repo_root: &std::path::Path) -> String {
 
 /// 辅助：在第一个 managed section 结束前插入合法 declared block。
 fn insert_declared_block_into_first_managed_section(repo_root: &std::path::Path) {
+    set_declared_blocks_in_first_managed_section(repo_root, DECLARED_RUNTIME_BLOCK);
+}
+
+fn insert_two_declared_blocks_into_first_managed_section(repo_root: &std::path::Path) {
+    set_declared_blocks_in_first_managed_section(
+        repo_root,
+        &format!("{DECLARED_RUNTIME_BLOCK}{DECLARED_QUERY_BLOCK}"),
+    );
+}
+
+fn insert_conflicting_declared_blocks_into_first_managed_section(repo_root: &std::path::Path) {
+    set_declared_blocks_in_first_managed_section(
+        repo_root,
+        &format!("{DECLARED_RUNTIME_BLOCK}{DECLARED_RUNTIME_CONFLICT_BLOCK}"),
+    );
+}
+
+fn keep_only_second_declared_block(repo_root: &std::path::Path) {
+    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let content = fs::read_to_string(&overview_path).unwrap();
+    let new_content = content.replace(DECLARED_RUNTIME_BLOCK, "");
+    fs::write(&overview_path, &new_content).unwrap();
+}
+
+fn remove_all_declared_blocks_from_first_managed_section(repo_root: &std::path::Path) {
+    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let content = fs::read_to_string(&overview_path).unwrap();
+    let new_content = content
+        .replace(DECLARED_RUNTIME_BLOCK, "")
+        .replace(DECLARED_RUNTIME_CONFLICT_BLOCK, "")
+        .replace(DECLARED_QUERY_BLOCK, "");
+    fs::write(&overview_path, &new_content).unwrap();
+}
+
+fn set_declared_blocks_in_first_managed_section(
+    repo_root: &std::path::Path,
+    declared_blocks: &str,
+) {
     let overview_path = repo_root.join(".wiki/项目概述.md");
     let content = fs::read_to_string(&overview_path).unwrap();
     let marker = "<!-- wiki:managed:end";
@@ -40,13 +98,11 @@ fn insert_declared_block_into_first_managed_section(repo_root: &std::path::Path)
         .find(marker)
         .expect("should have managed end marker");
 
-    let declared_block = concat!(
-        "\n<!-- wiki:declared kind=policy scope=repo status=active source=manual -->\n",
-        "当前仓库必须先写 formal artifact，再谈 query。\n",
-        "<!-- wiki:declared:end -->\n"
-    );
-    let mut new_content = content[..pos].to_string();
-    new_content.push_str(declared_block);
+    let mut new_content = content[..pos]
+        .replace(DECLARED_RUNTIME_BLOCK, "")
+        .replace(DECLARED_RUNTIME_CONFLICT_BLOCK, "")
+        .replace(DECLARED_QUERY_BLOCK, "");
+    new_content.push_str(declared_blocks);
     new_content.push_str(&content[pos..]);
     fs::write(&overview_path, &new_content).unwrap();
 }
@@ -62,12 +118,27 @@ fn inject_declared_block_and_managed_drift(repo_root: &std::path::Path) {
 
     let injected = concat!(
         "\n这是不允许直接改写的 managed 正文。\n",
-        "\n<!-- wiki:declared kind=policy scope=repo status=active source=manual -->\n",
+        "\n<!-- wiki:declared id=repo-runtime-contract kind=policy scope=repo status=active source=manual -->\n",
         "当前仓库必须先写 formal artifact，再谈 query。\n",
         "<!-- wiki:declared:end -->\n"
     );
     let mut new_content = content[..pos].to_string();
     new_content.push_str(injected);
+    new_content.push_str(&content[pos..]);
+    fs::write(&overview_path, &new_content).unwrap();
+}
+
+fn remove_declared_blocks_and_inject_managed_drift(repo_root: &std::path::Path) {
+    remove_all_declared_blocks_from_first_managed_section(repo_root);
+    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let content = fs::read_to_string(&overview_path).unwrap();
+    let marker = "<!-- wiki:managed:end";
+    let pos = content
+        .find(marker)
+        .expect("should have managed end marker");
+
+    let mut new_content = content[..pos].to_string();
+    new_content.push_str("\n这是不允许直接改写的 managed 正文。\n");
     new_content.push_str(&content[pos..]);
     fs::write(&overview_path, &new_content).unwrap();
 }
@@ -253,12 +324,60 @@ fn sync_classifies_valid_declared_block_as_declared_writeback() {
         sync_json["page_outcomes"][0]["recommended_action"],
         "update"
     );
+    assert_eq!(
+        sync_json["page_outcomes"][0]["stale_unit_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        sync_json["page_outcomes"][0]["stale_projection_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 
     let artifacts = load_knowledge_artifacts(repo_root).unwrap();
     assert_eq!(artifacts.declared_records.len(), 1);
+    assert_eq!(
+        artifacts.declared_records[0].authoring_id,
+        "marker:repo-runtime-contract"
+    );
     assert!(artifacts.health_signals.iter().any(|signal| {
         signal.signal_kind
             == wiki_model::domain::knowledge_artifact::KnowledgeHealthSignalKind::DeclaredDerivedDivergence
+    }));
+}
+
+#[test]
+fn sync_generates_conflict_artifact_for_parallel_active_declared() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    insert_conflicting_declared_blocks_into_first_managed_section(repo_root);
+
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"],
+        "declared_writeback"
+    );
+
+    let conflicts = load_conflict_records(repo_root).unwrap();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(
+        conflicts[0].conflict_kind.as_str(),
+        "parallel_active_declared"
+    );
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert!(artifacts.health_signals.iter().any(|signal| {
+        signal.signal_kind
+            == wiki_model::domain::knowledge_artifact::KnowledgeHealthSignalKind::GovernanceConflict
     }));
 }
 
@@ -275,10 +394,50 @@ fn sync_classifies_user_only_edit_as_metadata_only() {
     let sync_json = serde_json::to_value(&sync_result).unwrap();
 
     assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"], "metadata_only",
+        "warnings = {:?}, sync = {:?}",
+        sync_result.warnings, sync_json
+    );
+    assert_eq!(sync_json["page_outcomes"][0]["recommended_action"], "none");
+}
+
+#[test]
+fn sync_keeps_user_only_edit_as_metadata_only_when_declared_snapshot_unchanged() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    insert_declared_block_into_first_managed_section(repo_root);
+    let initial_sync = run_sync(repo_root).unwrap();
+    assert_eq!(
+        serde_json::to_value(&initial_sync).unwrap()["page_outcomes"][0]["result_kind"],
+        "declared_writeback"
+    );
+
+    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let before_user_edit = fs::read_to_string(&overview_path).unwrap();
+    insert_user_section_after_init(repo_root);
+    let after_user_edit = fs::read_to_string(&overview_path).unwrap();
+    let marker = "<!-- wiki:managed:end";
+    let before_prefix = &before_user_edit[..before_user_edit.find(marker).unwrap()];
+    let after_prefix = &after_user_edit[..after_user_edit.find(marker).unwrap()];
+    assert_eq!(
+        before_prefix, after_prefix,
+        "user-only edit should not touch managed prefix"
+    );
+
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+
+    assert_eq!(
         sync_json["page_outcomes"][0]["result_kind"],
         "metadata_only"
     );
     assert_eq!(sync_json["page_outcomes"][0]["recommended_action"], "none");
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(artifacts.declared_records.len(), 1);
 }
 
 #[test]
@@ -308,4 +467,206 @@ fn sync_prioritizes_illegal_drift_over_declared_writeback() {
         signal.signal_kind
             == wiki_model::domain::knowledge_artifact::KnowledgeHealthSignalKind::IllegalDrift
     }));
+}
+
+#[test]
+fn sync_keeps_previous_conflict_snapshot_when_illegal_drift_happens_after_conflict() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    insert_conflicting_declared_blocks_into_first_managed_section(repo_root);
+    run_sync(repo_root).unwrap();
+    assert_eq!(load_conflict_records(repo_root).unwrap().len(), 1);
+
+    inject_declared_block_and_managed_drift(repo_root);
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"],
+        "illegal_drift"
+    );
+    assert_eq!(load_conflict_records(repo_root).unwrap().len(), 1);
+}
+
+#[test]
+fn sync_clears_conflict_artifact_when_conflicting_declared_removed() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    insert_conflicting_declared_blocks_into_first_managed_section(repo_root);
+    run_sync(repo_root).unwrap();
+    assert_eq!(load_conflict_records(repo_root).unwrap().len(), 1);
+
+    insert_declared_block_into_first_managed_section(repo_root);
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"],
+        "declared_writeback"
+    );
+    assert!(load_conflict_records(repo_root).unwrap().is_empty());
+}
+
+#[test]
+fn sync_prunes_removed_declared_records_after_full_delete() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    let original_overview = fs::read_to_string(repo_root.join(".wiki/项目概述.md")).unwrap();
+    insert_declared_block_into_first_managed_section(repo_root);
+    run_sync(repo_root).unwrap();
+
+    remove_all_declared_blocks_from_first_managed_section(repo_root);
+    let removed_overview = fs::read_to_string(repo_root.join(".wiki/项目概述.md")).unwrap();
+    assert_eq!(
+        removed_overview, original_overview,
+        "removing declared blocks should restore original page content"
+    );
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"], "declared_writeback",
+        "warnings = {:?}, sync = {:?}",
+        sync_result.warnings, sync_json
+    );
+    assert_eq!(
+        sync_json["page_outcomes"][0]["recommended_action"],
+        "update"
+    );
+    assert_eq!(
+        sync_json["page_outcomes"][0]["declared_record_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert!(artifacts.declared_records.is_empty());
+}
+
+#[test]
+fn sync_prunes_removed_declared_records_after_partial_delete() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    insert_two_declared_blocks_into_first_managed_section(repo_root);
+    run_sync(repo_root).unwrap();
+
+    keep_only_second_declared_block(repo_root);
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"], "declared_writeback",
+        "warnings = {:?}, sync = {:?}",
+        sync_result.warnings, sync_json
+    );
+    assert_eq!(
+        sync_json["page_outcomes"][0]["declared_record_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(artifacts.declared_records.len(), 1);
+    assert_eq!(
+        artifacts.declared_records[0].authoring_id,
+        "marker:repo-query-contract"
+    );
+}
+
+#[test]
+fn sync_keeps_previous_declared_snapshot_when_delete_is_illegal_drift() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    insert_declared_block_into_first_managed_section(repo_root);
+    run_sync(repo_root).unwrap();
+
+    remove_declared_blocks_and_inject_managed_drift(repo_root);
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"],
+        "illegal_drift"
+    );
+    assert!(sync_json["page_outcomes"][0]["declared_record_ids"]
+        .as_array()
+        .map(|items| items.is_empty())
+        .unwrap_or(true));
+    assert!(sync_json["page_outcomes"][0]["stale_unit_ids"]
+        .as_array()
+        .map(|items| items.is_empty())
+        .unwrap_or(true));
+    assert!(sync_json["page_outcomes"][0]["stale_projection_ids"]
+        .as_array()
+        .map(|items| items.is_empty())
+        .unwrap_or(true));
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(artifacts.declared_records.len(), 1);
+    assert_eq!(
+        artifacts.declared_records[0].authoring_id,
+        "marker:repo-runtime-contract"
+    );
+}
+
+#[test]
+fn sync_rejects_same_scope_duplicate_records_without_explicit_ids() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+
+    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let content = fs::read_to_string(&overview_path).unwrap();
+    let marker = "<!-- wiki:managed:end";
+    let pos = content
+        .find(marker)
+        .expect("should have managed end marker");
+
+    let duplicate_blocks = concat!(
+        "\n<!-- wiki:declared kind=policy scope=repo status=active source=manual -->\n",
+        "第一条规则。\n",
+        "<!-- wiki:declared:end -->\n",
+        "\n<!-- wiki:declared kind=policy scope=repo status=active source=manual -->\n",
+        "第二条规则。\n",
+        "<!-- wiki:declared:end -->\n"
+    );
+    let mut new_content = content[..pos].to_string();
+    new_content.push_str(duplicate_blocks);
+    new_content.push_str(&content[pos..]);
+    fs::write(&overview_path, &new_content).unwrap();
+
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"],
+        "illegal_drift"
+    );
+    assert!(sync_result
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("authoring identity 冲突")));
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert!(artifacts.declared_records.is_empty());
 }

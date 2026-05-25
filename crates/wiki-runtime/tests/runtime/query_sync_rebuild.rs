@@ -13,6 +13,18 @@ use wiki_runtime::workflows::{
     update::run_update,
 };
 
+const DECLARED_RUNTIME_BLOCK: &str = concat!(
+    "\n<!-- wiki:declared id=repo-runtime-contract kind=policy scope=repo status=active source=manual -->\n",
+    "当前仓库必须先写 formal artifact，再谈 query。\n",
+    "<!-- wiki:declared:end -->\n"
+);
+
+const DECLARED_RUNTIME_CONFLICT_BLOCK: &str = concat!(
+    "\n<!-- wiki:declared id=repo-runtime-contract-v2 kind=policy scope=repo status=active source=manual -->\n",
+    "当前仓库必须先写 formal artifact，且由另一条并行 policy 再次声明。\n",
+    "<!-- wiki:declared:end -->\n"
+);
+
 fn write_repo_file(repo_root: &Path, relative_path: &str, content: &str) {
     let path = repo_root.join(relative_path);
     if let Some(parent) = path.parent() {
@@ -48,6 +60,22 @@ fn write_graph_query_repo(repo_root: &Path) {
             "}\n",
         ),
     );
+}
+
+fn set_declared_blocks_for_query(repo_root: &Path, declared_blocks: &str) {
+    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let content = fs::read_to_string(&overview_path).unwrap();
+    let marker = "<!-- wiki:managed:end";
+    let pos = content
+        .find(marker)
+        .expect("should have managed end marker");
+
+    let mut new_content = content[..pos]
+        .replace(DECLARED_RUNTIME_BLOCK, "")
+        .replace(DECLARED_RUNTIME_CONFLICT_BLOCK, "");
+    new_content.push_str(declared_blocks);
+    new_content.push_str(&content[pos..]);
+    fs::write(&overview_path, &new_content).unwrap();
 }
 
 /// 场景：人工改页后，sync 必须更新状态层；随后 query 和 rebuild 仍应可用。
@@ -118,9 +146,22 @@ fn query_falls_back_to_markdown_and_returns_empty_result() {
         serde_json::to_value(&markdown_query).unwrap()["recommended_action"],
         "rebuild"
     );
+    assert_eq!(
+        serde_json::to_value(&markdown_query).unwrap()["answer"]["answer_mode"],
+        "degraded"
+    );
+    assert_eq!(
+        serde_json::to_value(&markdown_query).unwrap()["answer"]["answer_trust"],
+        "constrained"
+    );
     assert!(markdown_query.matches[0]
         .summary
         .contains("Markdown 内容匹配"));
+    assert!(markdown_query
+        .answer
+        .provenance
+        .iter()
+        .any(|item| item == "page_fallback"));
 
     let empty_query = run_query(repo_root, "definitely-no-query-hit").unwrap();
     assert!(empty_query.matches.is_empty());
@@ -128,6 +169,45 @@ fn query_falls_back_to_markdown_and_returns_empty_result() {
     assert!(empty_query.matched_modules.is_empty());
     assert!(empty_query.matched_sources.is_empty());
     assert!(empty_query.matched_relations.is_empty());
+    assert_eq!(
+        empty_query.answer.answer_mode,
+        wiki_runtime::domain::runtime_profile::AnswerMode::Refuse
+    );
+    assert_eq!(
+        empty_query.answer.answer_trust,
+        wiki_runtime::domain::runtime_profile::AnswerTrust::Unsupported
+    );
+    assert!(empty_query.answer.supporting_refs.is_empty());
+}
+
+#[test]
+fn query_keeps_textual_page_fallback_degraded_even_with_graph_hits() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    write_graph_query_repo(repo_root);
+
+    run_init(repo_root).unwrap();
+
+    let overview = repo_root.join(".wiki/项目概述.md");
+    let existing = fs::read_to_string(&overview).unwrap();
+    fs::write(&overview, format!("{existing}\nhandleCheckout textual fallback\n")).unwrap();
+    run_sync(repo_root).unwrap();
+
+    let query = run_query(repo_root, "handleCheckout").unwrap();
+    assert!(
+        query.provenance_summary.contains("page_fallback"),
+        "expected textual fallback route tag, got {}",
+        query.provenance_summary
+    );
+    assert_eq!(
+        query.answer.answer_mode,
+        wiki_runtime::domain::runtime_profile::AnswerMode::Degraded
+    );
+    assert!(query
+        .answer
+        .provenance
+        .iter()
+        .any(|item| item == "page_fallback"));
 }
 
 /// 场景：显式 rebuild 必须能补回缺失的 page-level cache。
@@ -235,6 +315,8 @@ fn query_marks_stale_runtime_as_queryable_but_recommends_update() {
     assert_eq!(payload["runtime_state"], "stale");
     assert_eq!(payload["query_trust"], "stale_but_queryable");
     assert_eq!(payload["recommended_action"], "update");
+    assert_eq!(payload["answer"]["answer_mode"], "degraded");
+    assert_eq!(payload["answer"]["answer_trust"], "constrained");
 }
 
 /// 场景：FTS 索引为空时，query 仍应回退到结构化命中。
@@ -331,6 +413,27 @@ fn query_returns_graph_context_for_symbol_hits() {
         "expected index route tag in provenance summary, got {}",
         query.provenance_summary
     );
+    assert!(
+        !query.provenance_summary.contains("page_fallback"),
+        "symbol-backed page projection must not be treated as markdown fallback: {}",
+        query.provenance_summary
+    );
+    assert_eq!(
+        query.answer.answer_mode,
+        wiki_runtime::domain::runtime_profile::AnswerMode::Direct
+    );
+    assert_eq!(
+        query.answer.answer_trust,
+        wiki_runtime::domain::runtime_profile::AnswerTrust::Grounded
+    );
+    assert!(query.answer.supporting_refs.iter().any(|supporting_ref| {
+        supporting_ref.ref_kind == "symbol" || supporting_ref.ref_kind == "graph_edge"
+    }));
+    assert!(!query
+        .answer
+        .provenance
+        .iter()
+        .any(|item| item == "page_fallback"));
 }
 
 #[test]
@@ -493,4 +596,43 @@ fn query_restores_runtime_cache_from_formal_artifacts() {
     assert!(facts_snapshot_ready(repo_root).unwrap());
     assert!(!query.matches.is_empty());
     assert_eq!(query.runtime_state, "fresh");
+}
+
+#[test]
+fn query_marks_governance_conflict_answer_as_degraded() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"query-governance-answer-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const runtime = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+    set_declared_blocks_for_query(
+        repo_root,
+        &format!("{DECLARED_RUNTIME_BLOCK}{DECLARED_RUNTIME_CONFLICT_BLOCK}"),
+    );
+    run_sync(repo_root).unwrap();
+
+    let query = run_query(repo_root, "formal artifact").unwrap();
+    let payload = serde_json::to_value(&query).unwrap();
+
+    assert_eq!(payload["answer"]["answer_mode"], "degraded");
+    assert_eq!(payload["answer"]["answer_trust"], "constrained");
+    assert_eq!(payload["answer"]["recommended_action"], "review");
+    assert!(query
+        .answer
+        .provenance
+        .iter()
+        .any(|item| item == "governance_conflict"));
+    assert!(query.answer.supporting_refs.iter().any(|supporting_ref| {
+        supporting_ref.ref_kind == "health_signal"
+            && supporting_ref
+                .provenance
+                .iter()
+                .any(|item| item == "health:governance_conflict")
+    }));
 }

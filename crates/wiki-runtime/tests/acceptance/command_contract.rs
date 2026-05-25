@@ -175,9 +175,12 @@ fn query_transport_returns_slim_payload_but_internal_query_stays_rich() {
     assert!(payload.get("query_trust").is_some());
     assert!(payload.get("recommended_action").is_some());
     assert!(payload.get("provenance_summary").is_some());
+    assert!(payload.get("answer").is_some());
     assert!(payload.get("summary").is_some());
     assert!(payload.get("hits").is_some());
     assert!(payload["matched_pages"].is_array());
+    assert!(internal_json["answer"]["answer_mode"].is_string());
+    assert!(internal_json["answer"]["supporting_refs"].is_array());
 
     assert!(payload.get("matched_symbols").is_none());
     assert!(payload.get("matched_sources").is_none());
@@ -188,6 +191,11 @@ fn query_transport_returns_slim_payload_but_internal_query_stays_rich() {
     let hits = payload["hits"]
         .as_array()
         .expect("query transport should expose compact hits");
+    assert_eq!(payload["answer"]["answer_mode"], "direct");
+    assert_eq!(payload["answer"]["answer_trust"], "grounded");
+    assert!(payload["answer"]["supporting_refs"]
+        .as_array()
+        .is_some_and(|refs| !refs.is_empty()));
     assert!(hits.iter().any(|hit| {
         hit["hit_type"] == "symbol"
             && hit["title"] == "handleCheckout"

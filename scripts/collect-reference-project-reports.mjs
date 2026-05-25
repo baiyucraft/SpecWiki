@@ -39,6 +39,11 @@ import {
   withTemporaryDevConfig,
 } from "./testing/helpers.mjs";
 import {
+  buildAcceptanceHarnessSummary,
+  createFormalGateResults,
+  FORMAL_QUALITY_GATES,
+} from "./testing/quality-gates.mjs";
+import {
   analyzeReferenceFidelity,
   readMarkdownPages,
 } from "./testing/reference-fidelity.mjs";
@@ -1289,7 +1294,7 @@ function formatRatio(value) {
 function gateDecision(result) {
   if (result.status !== "ready") {
     return {
-      label: "fail-hard",
+      decision: "blocker",
       reason: `runtime_state=${result.runtime_metrics.runtime_state}`,
     };
   }
@@ -1301,7 +1306,7 @@ function gateDecision(result) {
       && (result.fidelity_metrics?.median_key_source_coverage ?? 0) >= 0.7
       && (result.stability?.stable ?? true);
   return {
-    label: pass ? "pass-candidate" : "not-pass",
+    decision: pass ? "pass" : "blocker",
     reason: [
       `overall=${formatPercent(result.fidelity_metrics?.overall_match_rate ?? null)}`,
       `reuse_overage=${result.fidelity_metrics?.reuse_overage ?? "N/A"}`,
@@ -1310,6 +1315,67 @@ function gateDecision(result) {
       `warm_stable=${result.stability?.stable ?? "n/a"}`,
     ].join(" / "),
   };
+}
+
+export function buildPrimaryGateSummary(results, options = {}) {
+  const projectResults = results.map((result) => {
+    const gate = gateDecision(result);
+    return {
+      project: result.project,
+      status: result.status,
+      gate_label: gate.decision,
+      gate_reason: gate.reason,
+      runtime_state: result.runtime_metrics.runtime_state,
+    };
+  });
+  const blockingProjects = projectResults.filter((project) => project.gate_label !== "pass");
+  const decision = blockingProjects.length > 0 ? "blocker" : "pass";
+
+  return buildAcceptanceHarnessSummary({
+    gateLevel: "primary_gate",
+    gateScope: "reference_fidelity",
+    command: "node scripts/collect-reference-project-reports.mjs storybook dagger",
+    decision,
+    totals: {
+      totalProjects: results.length,
+      passedProjects: results.length - blockingProjects.length,
+      failedProjects: blockingProjects.length,
+    },
+    projectResults,
+    formalGates: createFormalGateResults({
+      artifact_validity: {
+        decision,
+        blocking: decision === "blocker",
+        evidence_refs: ["wiki metadata/runtime snapshot", "reference project runtime state"],
+      },
+      restore_validity: {
+        decision: "not_covered",
+        blocking: false,
+        evidence_refs: ["must be checked by lifecycle baseline"],
+      },
+      query_route_contract: {
+        decision: "not_covered",
+        blocking: false,
+        evidence_refs: ["must be checked by lifecycle baseline"],
+      },
+      status_recommended_action_stability: {
+        decision: "not_covered",
+        blocking: false,
+        evidence_refs: ["must be checked by lifecycle baseline"],
+      },
+    }),
+    notes: [
+      "reference fidelity 报告是 primary gate 输入，不取代 formal artifact / restore / query route / status gates。",
+    ],
+    relevantCapabilities: [
+      "query_route_completeness",
+      "answer_assembly_contract",
+      "knowledge_quality_gates",
+    ],
+    samples: options.samples ?? [],
+    requiredCompanionGates: [...FORMAL_QUALITY_GATES],
+    fidelityInputOnly: true,
+  });
 }
 
 function summarizeStabilitySeries(values) {
@@ -1474,7 +1540,7 @@ function renderProjectReport(result) {
   const gate = gateDecision(result);
   lines.push("## Fidelity Gate");
   lines.push("");
-  lines.push(`- decision：${gate.label}`);
+  lines.push(`- decision：${gate.decision}`);
   lines.push(`- reason：${gate.reason}`);
   lines.push(`- overall_match_rate：${formatPercent(result.fidelity_metrics.overall_match_rate)}`);
   lines.push(`- reuse_overage：${result.fidelity_metrics.reuse_overage}`);
@@ -1614,7 +1680,7 @@ function renderSummary(results, meta = {}) {
   lines.push("");
   for (const result of results) {
     const gate = gateDecision(result);
-    lines.push(`- ${result.project}：${gate.label}，${gate.reason}`);
+    lines.push(`- ${result.project}：${gate.decision}，${gate.reason}`);
   }
 
   lines.push("");
@@ -1739,6 +1805,7 @@ function writeReports(results, reportDir, summaryPath, optimizationNotesPath, sn
     projects: meta.projects,
     source_roots: meta.sourceRoots,
     stability: meta.stability ?? null,
+    primary_gate_summary: meta.primaryGateSummary ?? null,
     results,
   }, null, 2)}\n`);
   for (const result of results) {
@@ -1861,6 +1928,7 @@ async function main(argv) {
   }
 
   const generatedAt = new Date().toISOString();
+  const primaryGateSummary = buildPrimaryGateSummary(results, { samples: projects });
   writeReports(
     results,
     reportDir,
@@ -1871,6 +1939,7 @@ async function main(argv) {
       generatedAt,
       change: argv.change,
       projects,
+      primaryGateSummary,
       runMode: argv.runMode,
       skipInit: argv.skipInit,
       stability,
@@ -1886,6 +1955,7 @@ async function main(argv) {
     summaryPath,
     optimizationNotesPath,
     snapshotPath,
+    primaryGateSummary,
     jobs,
     initTimeoutMs: argv.initTimeoutMs,
     runMode: argv.runMode,

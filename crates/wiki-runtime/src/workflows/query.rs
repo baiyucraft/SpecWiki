@@ -10,6 +10,7 @@ use std::path::Path;
 use crate::domain::change_set::plan_runtime_changes_with_mode;
 use crate::domain::module_tree::ModuleNode;
 use crate::domain::runtime_profile::{
+    AnswerEnvelope, AnswerMode, AnswerSupportingRef, AnswerTrust,
     merge_recommended_action, preflight_for_state, query_trust_for, summarize_health_signals,
     QueryMode, QueryTrust, RecommendedAction,
 };
@@ -25,6 +26,9 @@ use crate::storage::wiki_fs::resolve_page_path;
 use crate::workflows::release_scope::project_external_runtime_state;
 use wiki_index::query::{self as index_query, IndexQueryRequest, MatchBasis};
 use wiki_knowledge::plan_pages_from_knowledge_tree;
+use wiki_model::domain::knowledge_artifact::KnowledgeHealthSignal;
+
+const ANSWER_SUPPORTING_REF_LIMIT: usize = 8;
 
 /// `QueryMatch` 描述一个命中的页面，以及它为什么命中。
 #[derive(Debug, Clone, Serialize)]
@@ -227,6 +231,8 @@ pub struct QueryReport {
     /// provenance 汇总文本，方便测试和日志检查。
     #[serde(default)]
     pub provenance_summary: String,
+    /// 当前 query 可直接附带的最小 answer contract。
+    pub answer: AnswerEnvelope,
 }
 
 /// 执行关键词查询。
@@ -255,9 +261,8 @@ pub fn run_query_with_mode(
     }
     let runtime_state = project_external_runtime_state(repo_root, plan.state(), facts_ready);
     let preflight = preflight_for_state(&runtime_state, facts_ready);
-    let health_summary = load_health_signals(repo_root)
-        .ok()
-        .and_then(|signals| summarize_health_signals(&signals));
+    let health_signals = load_health_signals(repo_root).unwrap_or_default();
+    let health_summary = summarize_health_signals(&health_signals);
     let recommended_action =
         merge_recommended_action(preflight.recommended_action, health_summary.as_ref());
     let needle = term.trim().to_lowercase();
@@ -307,7 +312,9 @@ pub fn run_query_with_mode(
         Vec::new()
     };
     let has_knowledge_hits = !knowledge_matches.is_empty();
-    let has_page_fallback = !page_fallback_matches.is_empty();
+    let has_page_fallback = page_fallback_matches
+        .iter()
+        .any(is_textual_page_fallback_match);
     let matches = if has_knowledge_hits {
         knowledge_matches
     } else {
@@ -336,10 +343,27 @@ pub fn run_query_with_mode(
         }
         trust => trust,
     };
+    let matched_modules = project_module_matches(&index_result);
+    let matched_sources = project_source_matches(&index_result);
+    let matched_symbol_edges = project_graph_edge_matches(&index_result);
     let matched_relations = fallback_state
         .as_ref()
         .map(|state| project_relation_matches(state, &index_result, &matched_symbols, &matches))
         .unwrap_or_default();
+    let provenance_summary =
+        build_provenance_summary(has_index_hits, has_knowledge_hits, has_page_fallback);
+    let answer = build_answer_envelope(
+        term,
+        query_trust,
+        recommended_action,
+        &provenance_summary,
+        &matches,
+        &matched_modules,
+        &matched_sources,
+        &matched_symbols,
+        &matched_symbol_edges,
+        &health_signals,
+    );
 
     Ok(QueryReport {
         term: term.to_string(),
@@ -348,18 +372,15 @@ pub fn run_query_with_mode(
         query_trust,
         recommended_action,
         matched_pages: matches.iter().map(|page| page.path.clone()).collect(),
-        matched_modules: project_module_matches(&index_result),
-        matched_sources: project_source_matches(&index_result),
+        matched_modules,
+        matched_sources,
         matched_relations,
         matched_symbols,
-        matched_symbol_edges: project_graph_edge_matches(&index_result),
+        matched_symbol_edges,
         matched_processes: Vec::new(),
         matched_communities: Vec::new(),
-        provenance_summary: build_provenance_summary(
-            has_index_hits,
-            has_knowledge_hits,
-            has_page_fallback,
-        ),
+        provenance_summary,
+        answer,
         matches,
     })
 }
@@ -370,6 +391,19 @@ fn empty_query_report(
     recommended_action: RecommendedAction,
     query_trust: QueryTrust,
 ) -> QueryReport {
+    let provenance_summary = String::new();
+    let answer = build_answer_envelope(
+        term,
+        query_trust,
+        recommended_action,
+        &provenance_summary,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    );
     QueryReport {
         term: term.to_string(),
         runtime_state: runtime_state.to_string(),
@@ -385,7 +419,8 @@ fn empty_query_report(
         matched_processes: Vec::new(),
         matched_communities: Vec::new(),
         matches: Vec::new(),
-        provenance_summary: String::new(),
+        provenance_summary,
+        answer,
     }
 }
 
@@ -684,6 +719,7 @@ fn collect_page_fallback_matches(
             let content = fs::read_to_string(&page_path).unwrap_or_default();
             let mut reasons = Vec::new();
             let mut provenance = Vec::new();
+            let mut has_textual_fallback = false;
             let has_symbol_match = page
                 .source_paths
                 .iter()
@@ -692,10 +728,12 @@ fn collect_page_fallback_matches(
             if contains_case_insensitive(&page.title, needle) {
                 reasons.push("页面标题匹配".to_string());
                 provenance.push("page-fallback:title".to_string());
+                has_textual_fallback = true;
             }
             if contains_case_insensitive(&content, needle) {
                 reasons.push("Markdown 内容匹配".to_string());
                 provenance.push("page-fallback:markdown".to_string());
+                has_textual_fallback = true;
             }
             if has_symbol_match {
                 reasons.push("关联符号匹配".to_string());
@@ -716,7 +754,11 @@ fn collect_page_fallback_matches(
                 summary: reasons.join("、"),
                 reasons,
                 provenance,
-                match_mode: "fallback_markdown".to_string(),
+                match_mode: if has_textual_fallback {
+                    "fallback_markdown".to_string()
+                } else {
+                    "index_projection".to_string()
+                },
                 context_pack: build_context_pack(
                     page,
                     state,
@@ -902,6 +944,305 @@ fn build_provenance_summary(
     tags.join(",")
 }
 
+fn is_textual_page_fallback_match(query_match: &QueryMatch) -> bool {
+    query_match.match_mode == "fallback_markdown"
+        || query_match
+            .provenance
+            .iter()
+            .any(|item| item.starts_with("page-fallback:"))
+}
+
+fn build_answer_envelope(
+    term: &str,
+    query_trust: QueryTrust,
+    recommended_action: RecommendedAction,
+    provenance_summary: &str,
+    matches: &[QueryMatch],
+    matched_modules: &[QueryModuleMatch],
+    matched_sources: &[QuerySourceMatch],
+    matched_symbols: &[QuerySymbolMatch],
+    matched_symbol_edges: &[QueryGraphEdgeMatch],
+    health_signals: &[KnowledgeHealthSignal],
+) -> AnswerEnvelope {
+    let base_supporting_refs = collect_answer_supporting_refs(
+        matches,
+        matched_modules,
+        matched_sources,
+        matched_symbols,
+        matched_symbol_edges,
+        &[],
+    );
+    let provenance = collect_answer_provenance(
+        provenance_summary,
+        query_trust,
+        recommended_action,
+        matched_symbols,
+        matched_symbol_edges,
+        health_signals,
+    );
+    let has_page_fallback = provenance.iter().any(|tag| tag == "page_fallback");
+    let answer_mode = if base_supporting_refs.is_empty() {
+        AnswerMode::Refuse
+    } else if query_trust != QueryTrust::Ready
+        || recommended_action != RecommendedAction::None
+        || has_page_fallback
+    {
+        AnswerMode::Degraded
+    } else {
+        AnswerMode::Direct
+    };
+    let answer_trust = match answer_mode {
+        AnswerMode::Direct => AnswerTrust::Grounded,
+        AnswerMode::Degraded => AnswerTrust::Constrained,
+        AnswerMode::Refuse => AnswerTrust::Unsupported,
+    };
+    let supporting_refs = match answer_mode {
+        AnswerMode::Direct => base_supporting_refs,
+        AnswerMode::Degraded => collect_answer_supporting_refs(
+            matches,
+            matched_modules,
+            matched_sources,
+            matched_symbols,
+            matched_symbol_edges,
+            health_signals,
+        ),
+        AnswerMode::Refuse => Vec::new(),
+    };
+
+    AnswerEnvelope {
+        text: build_answer_text(
+            term,
+            answer_mode,
+            recommended_action,
+            &provenance,
+            supporting_refs.len(),
+        ),
+        answer_mode,
+        answer_trust,
+        recommended_action,
+        provenance,
+        supporting_refs,
+    }
+}
+
+fn collect_answer_supporting_refs(
+    matches: &[QueryMatch],
+    matched_modules: &[QueryModuleMatch],
+    matched_sources: &[QuerySourceMatch],
+    matched_symbols: &[QuerySymbolMatch],
+    matched_symbol_edges: &[QueryGraphEdgeMatch],
+    health_signals: &[KnowledgeHealthSignal],
+) -> Vec<AnswerSupportingRef> {
+    let mut refs = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for symbol in matched_symbols {
+        push_answer_supporting_ref(
+            &mut refs,
+            &mut seen,
+            AnswerSupportingRef {
+                ref_kind: "symbol".to_string(),
+                ref_id: symbol.symbol_id.clone(),
+                label: format!("{} {}", symbol.label, symbol.name),
+                provenance: vec!["index_hit".to_string()],
+            },
+        );
+    }
+
+    for edge in matched_symbol_edges {
+        push_answer_supporting_ref(
+            &mut refs,
+            &mut seen,
+            AnswerSupportingRef {
+                ref_kind: "graph_edge".to_string(),
+                ref_id: edge.edge_id.clone(),
+                label: format!("{} -> {}", edge.source_symbol, edge.target_symbol),
+                provenance: if edge.provenance.is_empty() {
+                    vec!["graph_hit".to_string()]
+                } else {
+                    edge.provenance.clone()
+                },
+            },
+        );
+    }
+
+    for page in matches {
+        push_answer_supporting_ref(
+            &mut refs,
+            &mut seen,
+            AnswerSupportingRef {
+                ref_kind: if page.match_mode == "knowledge_digest" {
+                    "projection_ref".to_string()
+                } else {
+                    "page_ref".to_string()
+                },
+                ref_id: page.page_id.clone(),
+                label: page.title.clone(),
+                provenance: if page.provenance.is_empty() {
+                    vec![match_route_tag(page).to_string()]
+                } else {
+                    page.provenance.clone()
+                },
+            },
+        );
+    }
+
+    for source in matched_sources {
+        push_answer_supporting_ref(
+            &mut refs,
+            &mut seen,
+            AnswerSupportingRef {
+                ref_kind: "source".to_string(),
+                ref_id: source.source_id.clone(),
+                label: source.path.clone(),
+                provenance: vec!["index_hit".to_string()],
+            },
+        );
+    }
+
+    for module in matched_modules {
+        push_answer_supporting_ref(
+            &mut refs,
+            &mut seen,
+            AnswerSupportingRef {
+                ref_kind: "module".to_string(),
+                ref_id: module.module_id.clone(),
+                label: module.name.clone(),
+                provenance: vec!["index_hit".to_string()],
+            },
+        );
+    }
+
+    for signal in health_signals {
+        push_answer_supporting_ref(
+            &mut refs,
+            &mut seen,
+            AnswerSupportingRef {
+                ref_kind: "health_signal".to_string(),
+                ref_id: signal.signal_id.clone(),
+                label: signal.reason.clone(),
+                provenance: vec![format!("health:{}", signal.signal_kind.as_str())],
+            },
+        );
+    }
+
+    refs
+}
+
+fn push_answer_supporting_ref(
+    refs: &mut Vec<AnswerSupportingRef>,
+    seen: &mut BTreeSet<String>,
+    supporting_ref: AnswerSupportingRef,
+) {
+    if refs.len() >= ANSWER_SUPPORTING_REF_LIMIT {
+        return;
+    }
+    let key = format!(
+        "{}|{}|{}",
+        supporting_ref.ref_kind, supporting_ref.ref_id, supporting_ref.label
+    );
+    if seen.insert(key) {
+        refs.push(supporting_ref);
+    }
+}
+
+fn collect_answer_provenance(
+    provenance_summary: &str,
+    query_trust: QueryTrust,
+    recommended_action: RecommendedAction,
+    matched_symbols: &[QuerySymbolMatch],
+    matched_symbol_edges: &[QueryGraphEdgeMatch],
+    health_signals: &[KnowledgeHealthSignal],
+) -> Vec<String> {
+    let mut provenance = provenance_summary
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+
+    if !matched_symbols.is_empty() {
+        provenance.insert("index_hit".to_string());
+    }
+    if !matched_symbol_edges.is_empty() {
+        provenance.insert("graph_hit".to_string());
+    }
+    if query_trust != QueryTrust::Ready || recommended_action != RecommendedAction::None {
+        provenance.insert("health_degraded".to_string());
+    }
+    if (query_trust != QueryTrust::Ready || recommended_action == RecommendedAction::Review)
+        && health_signals.iter().any(|signal| {
+        signal.signal_kind.as_str() == "governance_conflict"
+            || signal.recommended_action == wiki_model::domain::knowledge_artifact::KnowledgeHealthRecommendedAction::Review
+    }) {
+        provenance.insert("governance_conflict".to_string());
+    }
+
+    provenance.into_iter().collect()
+}
+
+fn build_answer_text(
+    term: &str,
+    answer_mode: AnswerMode,
+    recommended_action: RecommendedAction,
+    provenance: &[String],
+    supporting_ref_count: usize,
+) -> String {
+    let route_text = if provenance.is_empty() {
+        "无正式来源".to_string()
+    } else {
+        provenance
+            .iter()
+            .map(|tag| match tag.as_str() {
+                "index_hit" => "索引命中",
+                "graph_hit" => "图上下文",
+                "knowledge_hit" => "knowledge 命中",
+                "page_fallback" => "页面兜底",
+                "health_degraded" => "health 降级",
+                "governance_conflict" => "治理冲突",
+                _ => tag,
+            })
+            .collect::<Vec<_>>()
+            .join(" / ")
+    };
+    let action_text = match recommended_action {
+        RecommendedAction::None => String::new(),
+        _ => format!("建议下一步执行 {}。", recommended_action_label(recommended_action)),
+    };
+
+    match answer_mode {
+        AnswerMode::Direct => format!(
+            "当前可基于 formal query/knowledge 命中直接回答“{}”。支持依据 {} 条，来源：{}。",
+            term, supporting_ref_count, route_text
+        ),
+        AnswerMode::Degraded => format!(
+            "当前只能基于受限的 formal 依据回答“{}”。支持依据 {} 条，来源：{}。{}",
+            term, supporting_ref_count, route_text, action_text
+        ),
+        AnswerMode::Refuse => {
+            if action_text.is_empty() {
+                format!("当前没有足够的 formal 依据稳定回答“{}”。", term)
+            } else {
+                format!(
+                    "当前没有足够的 formal 依据稳定回答“{}”。{}",
+                    term, action_text
+                )
+            }
+        }
+    }
+}
+
+fn recommended_action_label(action: RecommendedAction) -> &'static str {
+    match action {
+        RecommendedAction::None => "none",
+        RecommendedAction::Init => "init",
+        RecommendedAction::Review => "review",
+        RecommendedAction::Update => "update",
+        RecommendedAction::Rebuild => "rebuild",
+        RecommendedAction::Sync => "sync",
+    }
+}
+
 fn match_route_tag(query_match: &QueryMatch) -> &'static str {
     if query_match
         .provenance
@@ -909,8 +1250,10 @@ fn match_route_tag(query_match: &QueryMatch) -> &'static str {
         .any(|item| item.starts_with("knowledge:"))
     {
         "knowledge_hit"
-    } else {
+    } else if is_textual_page_fallback_match(query_match) {
         "page_fallback"
+    } else {
+        "index_hit"
     }
 }
 

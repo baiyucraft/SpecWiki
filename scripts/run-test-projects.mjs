@@ -35,6 +35,10 @@ import {
   runTaskPool,
 } from "./testing/helpers.mjs";
 import { MAX_INIT_RESUME_ATTEMPTS, runInitWithResume } from "./testing/init-resume.mjs";
+import {
+  buildAcceptanceHarnessSummary,
+  createFormalGateResults,
+} from "./testing/quality-gates.mjs";
 import { inspectWikiRuntime } from "./testing/wiki-runtime-inspection.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -489,7 +493,81 @@ async function runProjectInChild(proj, options = {}) {
   throw new Error(`child worker for ${proj} exhausted retry budget`);
 }
 
-export async function runTestProjects(names, options = {}) {
+export function buildRunTestProjectsSummary(results, options = {}) {
+  let passed = 0;
+  let failed = 0;
+  let skipped = 0;
+  let diagnosticProjects = 0;
+
+  const projectResults = results.map((result) => {
+    const diagnosticStates = (result.runs ?? [])
+      .map((run) => run.diagnosticState)
+      .filter(Boolean);
+    if (result.skipped) {
+      skipped += 1;
+    } else if (result.ok) {
+      passed += 1;
+    } else {
+      failed += 1;
+    }
+    if (diagnosticStates.length > 0) {
+      diagnosticProjects += 1;
+    }
+    return {
+      project: result.proj,
+      ok: result.ok,
+      skipped: result.skipped,
+      diagnostic_states: diagnosticStates,
+      error: result.error ?? null,
+    };
+  });
+
+  const decision = failed > 0
+    ? "blocker"
+    : diagnosticProjects > 0
+      ? "diagnostic"
+      : "pass";
+  const notes = [
+    "`run-test-projects.mjs` 只作为 baseline guard，不等同于 19 项目全量质量达标承诺。",
+  ];
+  if (diagnosticProjects > 0) {
+    notes.push("存在 diagnostic runtime 观察结果；它们保留在 baseline guard 内，但不单独冒充 primary gate。");
+  }
+
+  return buildAcceptanceHarnessSummary({
+    gateLevel: "baseline_guard",
+    gateScope: "batch_init",
+    command: "node scripts/run-test-projects.mjs",
+    decision,
+    totals: {
+      totalProjects: results.length,
+      passedProjects: passed,
+      failedProjects: failed,
+      skippedProjects: skipped,
+      diagnosticProjects,
+    },
+    projectResults,
+    formalGates: createFormalGateResults({
+      artifact_validity: {
+        decision,
+        blocking: failed > 0,
+        evidence_refs: [
+          "node scripts/run-test-projects.mjs",
+          "batch init project results",
+        ],
+      },
+    }),
+    notes,
+    relevantCapabilities: [
+      "declared_lifecycle_completeness",
+      "projection_readiness_recovery",
+      "knowledge_quality_gates",
+    ],
+    samples: options.samples ?? [],
+  });
+}
+
+export async function runTestProjectsWithSummary(names, options = {}) {
   const projects = names && names.length > 0 ? names : discoverProjects();
   ensureBinary({ fresh: options.ensureFresh ?? true });
 
@@ -531,7 +609,18 @@ export async function runTestProjects(names, options = {}) {
   }
 
   console.log(`\nDone. ${passed} passed, ${failed} failed, ${total} total. jobs=${jobs}`);
-  return failed === 0;
+  return {
+    ok: failed === 0,
+    results,
+    summary: buildRunTestProjectsSummary(results, {
+      samples: projects.filter((project) => ["storybook", "dagger"].includes(project)),
+    }),
+  };
+}
+
+export async function runTestProjects(names, options = {}) {
+  const result = await runTestProjectsWithSummary(names, options);
+  return result.ok;
 }
 
 export function parseCliArgs(argv) {
@@ -539,6 +628,7 @@ export function parseCliArgs(argv) {
   let jobs;
   let childMode = false;
   let ensureFresh = true;
+  let jsonSummary = false;
   let runMode = "cold";
   let timeoutMs;
 
@@ -557,6 +647,10 @@ export function parseCliArgs(argv) {
       ensureFresh = false;
       continue;
     }
+    if (arg === "--json-summary") {
+      jsonSummary = true;
+      continue;
+    }
     if (arg === "--run-mode") {
       runMode = argv[index + 1] || runMode;
       index++;
@@ -573,7 +667,7 @@ export function parseCliArgs(argv) {
     names.push(arg);
   }
 
-  return { childMode, ensureFresh, jobs, names, runMode, timeoutMs };
+  return { childMode, ensureFresh, jobs, jsonSummary, names, runMode, timeoutMs };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -587,12 +681,15 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     process.exit(0);
   }
 
-  const ok = await runTestProjects(args.names.length > 0 ? args.names : undefined, {
+  const result = await runTestProjectsWithSummary(args.names.length > 0 ? args.names : undefined, {
     ensureFresh: args.ensureFresh,
     jobs: args.jobs,
     runMode: args.runMode,
     timeoutMs: args.timeoutMs,
   });
-  if (!ok)
+  if (args.jsonSummary) {
+    process.stdout.write(`${JSON.stringify(result.summary, null, 2)}\n`);
+  }
+  if (!result.ok)
 process.exit(1);
 }

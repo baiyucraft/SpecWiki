@@ -100,6 +100,7 @@ test("runCommandCapture 在超时时返回统一结果契约", async () => {
 test("run-test-projects 会解析并透传 timeout 参数", () => {
   const parsed = parseRunTestCliArgs([
     "--child-json",
+    "--json-summary",
     "--timeout-minutes",
     "90",
     "--run-mode",
@@ -108,6 +109,7 @@ test("run-test-projects 会解析并透传 timeout 参数", () => {
   ]);
 
   expect(parsed.childMode).toBe(true);
+  expect(parsed.jsonSummary).toBe(true);
   expect(parsed.runMode).toBe("warm");
   expect(parsed.timeoutMs).toBe(90 * 60_000);
   expect(buildRunTestProjectChildArgs("storybook", parsed)).toEqual([
@@ -126,6 +128,7 @@ test("lifecycle child args 会保留 phase 与 timeout", () => {
   const parsed = parseLifecycleCliArgs([
     "--phase",
     "steady",
+    "--json-summary",
     "--timeout-minutes",
     "120",
     "--child-json",
@@ -133,6 +136,7 @@ test("lifecycle child args 会保留 phase 与 timeout", () => {
   ]);
 
   expect(parsed.phase).toBe("steady");
+  expect(parsed.jsonSummary).toBe(true);
   expect(parsed.timeoutMs).toBe(120 * 60_000);
   expect(buildLifecycleProjectChildArgs("dagger", parsed)).toEqual([
     expect.stringContaining("test-wiki-lifecycle.mjs"),

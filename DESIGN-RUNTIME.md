@@ -271,6 +271,32 @@ wiki-runtime    <- 依赖 wiki-model + wiki-index + wiki-knowledge
 - `runtime/`
   - 需要上库的轻量运行时状态，例如投影绑定、知识版本、恢复锚点
 
+### declared artifact contract
+
+当前 `declared/**` 不再只是最小 writeback 占位，而是正式 truth layer。
+
+最小约束：
+
+- declared record 必须具备稳定 `record_id` 与 `authoring_id`
+- scope 必须是 typed scope object，而不是松散字符串
+- lifecycle 关系最小只承诺 `deprecated / replaced_by / supersedes`
+- page 只是 authoring surface；正式 declared truth 以 `.wiki/.knowledge/declared/**` 为准
+
+恢复前提也要一起成立：
+
+- `wiki.metadata.json` hash 一致
+- `.wiki/.knowledge/declared/**` snapshot 一致
+- `.wiki/pages/**` 当前内容仍与 metadata 记录的 content hash 一致
+
+```mermaid
+flowchart LR
+    A[page declared block] -->|sync validate| B[declared artifact]
+    B --> C[update/status/query]
+    B --> D[recovery manifest]
+    D --> E[restore cache/runtime]
+    A -.不是 truth source.-> E
+```
+
 ### `.wiki/pages/`
 
 这是正式 page 投影层。
@@ -600,6 +626,12 @@ declare convention/policy
 - 标记为 deprecated / replaced
 - 记录替代关系
 - 刷新投影与查询结果
+
+当前 authoring 约束也要写死：
+
+- 若同一 section 内需要并存多条同 `kind + scope` 的 declared record，必须显式提供不同 `id`
+- `deprecated`、`replaced_by`、`supersedes` 不能随意混用，必须能唯一推导 lifecycle status
+- relation target 必须存在于 merged declared snapshot，且保持同 kind、同 canonical scope、无环
 
 ### bug 经验升级
 

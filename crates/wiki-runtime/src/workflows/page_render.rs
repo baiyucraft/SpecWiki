@@ -32,7 +32,9 @@ use wiki_index::symbols::ParsedSymbolsSnapshot;
 use wiki_knowledge::compose::compose_contract_page_for_unit;
 use wiki_knowledge::domain::compose::PageDraft;
 use wiki_knowledge::domain::research::{
-    DomainResearch, PageDiagramDigest, PageDigest, PageSectionDigest, SystemResearch, UnitResearch,
+    DomainResearch, PageDiagramDigest, PageDigest, PageSectionDigest, ProjectionDigestStatus,
+    ProjectionDigestStatusReason, ProjectionDigestStatusReasonKind, ResearchStopReason,
+    SystemResearch, UnitResearch,
 };
 use wiki_knowledge::planning::{
     build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
@@ -1054,6 +1056,35 @@ where
 }
 
 fn build_research_digest(unit: &KnowledgeUnit, research: &UnitResearch) -> PageDigest {
+    let (projection_status, status_reasons) = match research.provider_stop_reason.as_ref() {
+        Some(
+            ResearchStopReason::ProviderError
+            | ResearchStopReason::InvalidOutput
+            | ResearchStopReason::CallBudgetRejected,
+        ) => (
+            ProjectionDigestStatus::Blocked,
+            vec![ProjectionDigestStatusReason {
+                reason_kind: Some(ProjectionDigestStatusReasonKind::BlockedByResearch),
+                reason_message: "projection 被 research 阶段阻塞，尚未形成正式页面输出".to_string(),
+                upstream_ref: Some(format!(
+                    "provider_stop_reason:{}",
+                    research
+                        .provider_stop_reason
+                        .as_ref()
+                        .map(|reason| reason.as_str())
+                        .unwrap_or_default()
+                )),
+            }],
+        ),
+        _ => (
+            ProjectionDigestStatus::Stale,
+            vec![ProjectionDigestStatusReason {
+                reason_kind: Some(ProjectionDigestStatusReasonKind::MissingPageOutput),
+                reason_message: "projection 尚未形成正式页面输出".to_string(),
+                upstream_ref: None,
+            }],
+        ),
+    };
     PageDigest {
         digest_id: crate::domain::stable_id::stable_id("digest", &unit.id),
         unit_id: unit.id.clone(),
@@ -1092,6 +1123,8 @@ fn build_research_digest(unit: &KnowledgeUnit, research: &UnitResearch) -> PageD
             }),
         section_digests: build_section_digests_from_research(research),
         diagram_digests: build_diagram_digests_from_research(research),
+        projection_status,
+        status_reasons,
         readiness_stage: "research_ready".to_string(),
     }
 }
@@ -1276,6 +1309,8 @@ fn compose_unit_page(
     digest.digest_id = crate::domain::stable_id::stable_id("digest", &unit.id);
     digest.section_digests = build_section_digests_from_draft(&draft);
     digest.diagram_digests = build_diagram_digests_from_draft(&draft);
+    digest.projection_status = ProjectionDigestStatus::Ready;
+    digest.status_reasons.clear();
     digest.readiness_stage = "compose_ready".to_string();
     let stage = stage_for_compose_error(unit);
     Ok((draft, digest, stage))
@@ -1854,8 +1889,8 @@ mod tests {
     use wiki_index::symbols::parse_symbols;
     use wiki_knowledge::domain::compose::PageDraft;
     use wiki_knowledge::domain::research::{
-        DomainResearch, PageDigest, ResearchSessionStats, ResearchStopReason, SystemResearch,
-        UnitResearch,
+        DomainResearch, PageDigest, ProjectionDigestStatus, ResearchSessionStats,
+        ResearchStopReason, SystemResearch, UnitResearch,
     };
     use wiki_knowledge::research::{
         ResearchDataSource, ResearchProvider, StructuralResearchProvider,
@@ -1915,6 +1950,8 @@ mod tests {
             citations: Vec::new(),
             section_digests: Vec::new(),
             diagram_digests: Vec::new(),
+            projection_status: ProjectionDigestStatus::Ready,
+            status_reasons: Vec::new(),
             readiness_stage: "compose_ready".to_string(),
         };
         sqlite_store::write_page_draft(
@@ -3069,6 +3106,8 @@ mod tests {
                 citations: Vec::new(),
                 section_digests: Vec::new(),
                 diagram_digests: Vec::new(),
+                projection_status: ProjectionDigestStatus::Ready,
+                status_reasons: Vec::new(),
                 readiness_stage: "compose_ready".to_string(),
             },
         );
@@ -3284,6 +3323,8 @@ mod tests {
             citations: Vec::new(),
             section_digests: Vec::new(),
             diagram_digests: Vec::new(),
+            projection_status: ProjectionDigestStatus::Ready,
+            status_reasons: Vec::new(),
             readiness_stage: "compose_ready".to_string(),
         }];
 

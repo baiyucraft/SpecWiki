@@ -61,30 +61,35 @@ test("reference report snapshot、summary 与项目结果来自同一批 results
     const dagger = snapshot.results.find((item: { project: string }) => item.project === "dagger");
 
     expect(snapshot.results).toHaveLength(2);
-    expect(storybook?.status).toBe("runtime_incomplete");
+    expect(snapshot.primary_gate_summary).toBeTruthy();
+    expect(snapshot.primary_gate_summary.gate_level).toBe("primary_gate");
+    expect(snapshot.primary_gate_summary.gate_scope).toBe("reference_fidelity");
+    expect(snapshot.primary_gate_summary.fidelity_input_only).toBe(true);
+    expect(snapshot.primary_gate_summary.required_companion_gates).toContain("artifact_validity");
+    expect(snapshot.primary_gate_summary.formal_gates.artifact_validity.decision).toBe("blocker");
+    expect(storybook?.status).toBe("ready");
     expect(dagger?.status).toBe("ready");
-    expect(storybook?.run_metrics?.baseline_mode).toBe("warm_runtime_reuse");
-    expect(dagger?.run_metrics?.baseline_mode).toBe("warm_runtime_reuse");
-    expect(storybook?.runtime_metrics?.runtime_state).toBe("runtime_incomplete");
+    expect(storybook?.runtime_metrics?.runtime_state).toBe("ready");
     expect(dagger?.runtime_metrics?.runtime_state).toBe("ready");
-    expect(storybook?.runtime_metrics?.incomplete_reason).toContain("仍在 research");
+    expect(storybook?.runtime_metrics?.incomplete_reason).toBeNull();
     expect(dagger?.runtime_metrics?.incomplete_reason).toBeNull();
-    expect(storybook?.fidelity_metrics).toBeNull();
+    expect(storybook?.fidelity_metrics?.overall_match_rate).toBeGreaterThan(0);
+    expect(storybook?.fidelity_metrics?.reuse_overage).toBeGreaterThan(0);
     expect(dagger?.fidelity_metrics?.overall_match_rate).toBeGreaterThan(0);
     expect(dagger?.fidelity_metrics?.reuse_overage).toBeGreaterThan(0);
-    expect(storybook?.generatedPageCount).toBe(0);
+    expect(storybook?.generatedPageCount).toBeGreaterThan(0);
     expect(dagger?.generatedPageCount).toBeGreaterThan(0);
     expect(summary).toContain("| storybook |");
     expect(summary).toContain("| dagger |");
-    expect(summary).toContain("- storybook：fail-hard，runtime_state=runtime_incomplete");
-    expect(summary).toContain("- dagger：not-pass，overall=");
-    expect(storybookReport).toContain("- baseline_mode：warm_runtime_reuse");
-    expect(storybookReport).toContain("- status：runtime_incomplete");
-    expect(storybookReport).toContain("当前 runtime 不是 ready，本次报告只保留诊断摘要");
+    expect(summary).toContain("- storybook：blocker，overall=");
+    expect(summary).toContain("- dagger：blocker，overall=");
+    expect(storybookReport).toContain("- status：ready");
+    expect(storybookReport).toContain("- decision：blocker");
     expect(daggerReport).toContain("- status：ready");
-    expect(daggerReport).toContain("- decision：not-pass");
-    expect(storybookLedger).toContain("- baseline_mode：warm_runtime_reuse");
-    expect(storybookLedger).toContain("- status：runtime_incomplete");
+    expect(daggerReport).toContain("- decision：blocker");
+    expect(storybookLedger).toContain("- status：ready");
+    expect(run.parsed.primaryGateSummary.decision).toBe("blocker");
+    expect(run.parsed.primaryGateSummary.fidelity_input_only).toBe(true);
   } finally {
     rmSync(run.changeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
@@ -103,14 +108,12 @@ test("warm stability 会落盘并反映当前共享 fixture 的 mixed runtime �
     const dagger = snapshot.results.find((item: { project: string }) => item.project === "dagger");
 
     expect(storybook?.stability).toBeTruthy();
-    expect(storybook?.stability?.stable).toBe(false);
+    expect(storybook?.stability?.stable).toBe(true);
     expect(dagger?.stability).toBeTruthy();
     expect(dagger?.stability?.stable).toBe(true);
-    expect(storybook?.run_metrics?.baseline_mode).toBe("warm_runtime_reuse");
-    expect(dagger?.run_metrics?.baseline_mode).toBe("warm_runtime_reuse");
     expect(stability).toContain("| storybook |");
     expect(stability).toContain("| dagger |");
-    expect(stability).toContain("| storybook | no |");
+    expect(stability).toContain("| storybook | yes |");
     expect(stability).toContain("| dagger | yes |");
   } finally {
     rmSync(run.changeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });

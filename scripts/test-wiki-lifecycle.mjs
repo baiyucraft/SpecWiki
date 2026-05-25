@@ -49,6 +49,10 @@ import {
   withTemporaryDevConfig,
 } from "./testing/helpers.mjs";
 import { runInitWithResume } from "./testing/init-resume.mjs";
+import {
+  buildAcceptanceHarnessSummary,
+  createFormalGateResults,
+} from "./testing/quality-gates.mjs";
 import { inspectWikiRuntime } from "./testing/wiki-runtime-inspection.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -1364,7 +1368,84 @@ async function runLifecycleProjectInChild(proj, phase, runMode, timeoutMs) {
   throw new Error(`child worker for ${proj} exhausted retry budget`);
 }
 
-export async function runLifecycleTests(names, options = {}) {
+export function buildLifecycleSummary(results, options = {}) {
+  let totalAssertions = 0;
+  let failedAssertions = 0;
+  let skipped = 0;
+  let failedProjects = 0;
+  let passedProjects = 0;
+
+  const projectResults = results.map((result) => {
+    totalAssertions += result.total ?? 0;
+    failedAssertions += result.failed ?? 0;
+    if (result.skipped) {
+      skipped += 1;
+    } else if ((result.failed ?? 0) > 0 || result.ok === false) {
+      failedProjects += 1;
+    } else {
+      passedProjects += 1;
+    }
+    return {
+      project: result.proj,
+      ok: result.ok,
+      skipped: result.skipped,
+      total_assertions: result.total ?? 0,
+      failed_assertions: result.failed ?? 0,
+      run_labels: (result.runs ?? []).map((run) => run.label),
+    };
+  });
+
+  return buildAcceptanceHarnessSummary({
+    gateLevel: "baseline_guard",
+    gateScope: "lifecycle",
+    command: "node scripts/test-wiki-lifecycle.mjs",
+    decision: failedAssertions > 0 ? "blocker" : "pass",
+    phase: options.phase ?? "full",
+    totals: {
+      totalProjects: results.length,
+      passedProjects,
+      failedProjects,
+      skippedProjects: skipped,
+      totalAssertions,
+      failedAssertions,
+    },
+    projectResults,
+    formalGates: createFormalGateResults({
+      artifact_validity: {
+        decision: failedAssertions > 0 ? "blocker" : "pass",
+        blocking: failedAssertions > 0,
+        evidence_refs: ["init", "status after init"],
+      },
+      restore_validity: {
+        decision: failedAssertions > 0 ? "blocker" : "pass",
+        blocking: failedAssertions > 0,
+        evidence_refs: ["warm restore preflight", "rebuild", "status after rebuild"],
+      },
+      query_route_contract: {
+        decision: failedAssertions > 0 ? "blocker" : "pass",
+        blocking: failedAssertions > 0,
+        evidence_refs: ["query", "graph query", "symbol query"],
+      },
+      status_recommended_action_stability: {
+        decision: failedAssertions > 0 ? "blocker" : "pass",
+        blocking: failedAssertions > 0,
+        evidence_refs: ["status after init", "status after touch", "status after rebuild"],
+      },
+    }),
+    notes: [
+      "`test-wiki-lifecycle.mjs` 是 baseline guard，用来验证 lifecycle 与 formal gate consumption，不替代 primary gate 样本。",
+    ],
+    relevantCapabilities: [
+      "projection_readiness_recovery",
+      "query_route_completeness",
+      "answer_assembly_contract",
+      "knowledge_quality_gates",
+    ],
+    samples: options.samples ?? [],
+  });
+}
+
+export async function runLifecycleTestsWithSummary(names, options = {}) {
   const phase = options.phase || "full";
   if (!(phase in LIFECYCLE_PHASES)) {
     throw new Error(`unknown lifecycle phase: ${phase}`);
@@ -1417,7 +1498,19 @@ export async function runLifecycleTests(names, options = {}) {
   console.log(
     `Total: ${assertionTotal}  \x1B[32mPassed: ${passed}\x1B[0m  \x1B[31mFailed: ${failed}\x1B[0m  jobs=${jobs}`,
   );
-  return failed === 0;
+  return {
+    ok: failed === 0,
+    results,
+    summary: buildLifecycleSummary(results, {
+      phase,
+      samples: projects.filter((project) => ["storybook", "dagger"].includes(project)),
+    }),
+  };
+}
+
+export async function runLifecycleTests(names, options = {}) {
+  const result = await runLifecycleTestsWithSummary(names, options);
+  return result.ok;
 }
 
 function printPhaseList() {
@@ -1434,6 +1527,7 @@ export function parseCliArgs(argv) {
   let jobs;
   let childMode = false;
   let ensureFresh = true;
+  let jsonSummary = false;
   let runMode = "cold";
   let timeoutMs;
 
@@ -1470,6 +1564,10 @@ export function parseCliArgs(argv) {
       childMode = true;
       continue;
     }
+    if (arg === "--json-summary") {
+      jsonSummary = true;
+      continue;
+    }
     if (arg === "--no-build") {
       ensureFresh = false;
       continue;
@@ -1477,7 +1575,7 @@ export function parseCliArgs(argv) {
     names.push(arg);
   }
 
-  return { childMode, ensureFresh, jobs, listPhases, names, phase, runMode, timeoutMs };
+  return { childMode, ensureFresh, jobs, jsonSummary, listPhases, names, phase, runMode, timeoutMs };
 }
 
 /**
@@ -1525,14 +1623,17 @@ if (entryHref && import.meta.url === entryHref) {
     process.exit(0);
   }
 
-  const ok = await runLifecycleTests(args.names.length > 0 ? args.names : undefined, {
+  const result = await runLifecycleTestsWithSummary(args.names.length > 0 ? args.names : undefined, {
     ensureFresh: args.ensureFresh,
     jobs: args.jobs,
     phase: args.phase,
     runMode: args.runMode,
     timeoutMs: args.timeoutMs,
   });
-  if (!ok)
+  if (args.jsonSummary) {
+    process.stdout.write(`${JSON.stringify(result.summary, null, 2)}\n`);
+  }
+  if (!result.ok)
 process.exit(1);
 }
 

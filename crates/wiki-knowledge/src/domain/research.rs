@@ -3,7 +3,10 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use wiki_model::domain::knowledge::{DecompositionProfile, KnowledgeUnit};
-use wiki_model::domain::knowledge_artifact::KnowledgeResearchSummary;
+use wiki_model::domain::knowledge_artifact::{
+    KnowledgeResearchStatusReason, KnowledgeResearchStatusReasonKind, KnowledgeResearchSummary,
+    KnowledgeResearchSummaryStatus,
+};
 
 // ─── ResearchProfile ───────────────────────────────────────
 
@@ -385,22 +388,69 @@ impl UnitResearch {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let summary_status = if matches!(
-            self.provider_stop_reason,
-            Some(ResearchStopReason::ProviderError)
-                | Some(ResearchStopReason::InvalidOutput)
-                | Some(ResearchStopReason::CallBudgetRejected)
-        ) {
-            "blocked".to_string()
-        } else if source_refs.is_empty()
-            || citation_refs.is_empty()
-            || self.summary.trim().is_empty()
-        {
-            "degraded".to_string()
+        let mut status_reasons = Vec::new();
+        if let Some(stop_reason) = self.provider_stop_reason.as_ref() {
+            let reason_kind = match stop_reason {
+                ResearchStopReason::ProviderError => {
+                    Some(KnowledgeResearchStatusReasonKind::ProviderError)
+                }
+                ResearchStopReason::InvalidOutput => {
+                    Some(KnowledgeResearchStatusReasonKind::InvalidOutput)
+                }
+                ResearchStopReason::CallBudgetRejected => {
+                    Some(KnowledgeResearchStatusReasonKind::CallBudgetRejected)
+                }
+                _ => None,
+            };
+            if let Some(reason_kind) = reason_kind {
+                status_reasons.push(KnowledgeResearchStatusReason {
+                    reason_kind: Some(reason_kind),
+                    reason_message: format!(
+                        "provider-backed research stop reason: {}",
+                        stop_reason.as_str()
+                    ),
+                    upstream_ref: Some(format!("provider_stop_reason:{}", stop_reason.as_str())),
+                });
+            }
+        }
+        if status_reasons.is_empty() && self.summary.trim().is_empty() {
+            status_reasons.push(KnowledgeResearchStatusReason {
+                reason_kind: Some(KnowledgeResearchStatusReasonKind::MissingSummary),
+                reason_message: "research summary 为空".to_string(),
+                upstream_ref: None,
+            });
+        }
+        if status_reasons.is_empty() && source_refs.is_empty() {
+            status_reasons.push(KnowledgeResearchStatusReason {
+                reason_kind: Some(KnowledgeResearchStatusReasonKind::MissingSourceRefs),
+                reason_message: "research summary 缺少 source refs".to_string(),
+                upstream_ref: None,
+            });
+        }
+        if status_reasons.is_empty() && citation_refs.is_empty() {
+            status_reasons.push(KnowledgeResearchStatusReason {
+                reason_kind: Some(KnowledgeResearchStatusReasonKind::MissingCitationRefs),
+                reason_message: "research summary 缺少 citation refs".to_string(),
+                upstream_ref: None,
+            });
+        }
+        let summary_status = if status_reasons.iter().any(|reason| {
+            matches!(
+                reason.reason_kind,
+                Some(
+                    KnowledgeResearchStatusReasonKind::ProviderError
+                        | KnowledgeResearchStatusReasonKind::InvalidOutput
+                        | KnowledgeResearchStatusReasonKind::CallBudgetRejected
+                )
+            )
+        }) {
+            KnowledgeResearchSummaryStatus::Blocked
+        } else if status_reasons.is_empty() {
+            KnowledgeResearchSummaryStatus::Ready
         } else {
-            "ready".to_string()
+            KnowledgeResearchSummaryStatus::Degraded
         };
-        KnowledgeResearchSummary {
+        let mut summary = KnowledgeResearchSummary {
             unit_id: unit.id.clone(),
             unit_type: unit.unit_type.as_str().to_string(),
             title: unit.title.clone(),
@@ -411,11 +461,10 @@ impl UnitResearch {
             source_refs,
             citation_refs,
             summary_status,
-            provider_stop_reason: self
-                .provider_stop_reason
-                .as_ref()
-                .map(|reason| reason.as_str().to_string()),
-        }
+            status_reasons,
+        };
+        summary.canonicalize();
+        summary
     }
 }
 
@@ -516,6 +565,77 @@ pub struct PageDiagramDigest {
     pub summary: String,
 }
 
+/// `ProjectionDigestStatus` 是 PageDigest 当前可被 formal runtime 消费的投影状态。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionDigestStatus {
+    #[default]
+    Ready,
+    Stale,
+    Blocked,
+}
+
+impl ProjectionDigestStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Stale => "stale",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+/// `ProjectionDigestStatusReasonKind` 收敛当前 formal projection 允许暴露的最小原因集合。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionDigestStatusReasonKind {
+    MissingPageOutput,
+    PageSnapshotMismatch,
+    DeclaredOrDerivedChanged,
+    BlockedByResearch,
+}
+
+impl ProjectionDigestStatusReasonKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::MissingPageOutput => "missing_page_output",
+            Self::PageSnapshotMismatch => "page_snapshot_mismatch",
+            Self::DeclaredOrDerivedChanged => "declared_or_derived_changed",
+            Self::BlockedByResearch => "blocked_by_research",
+        }
+    }
+
+    pub fn expected_status(self) -> ProjectionDigestStatus {
+        match self {
+            Self::MissingPageOutput
+            | Self::PageSnapshotMismatch
+            | Self::DeclaredOrDerivedChanged => ProjectionDigestStatus::Stale,
+            Self::BlockedByResearch => ProjectionDigestStatus::Blocked,
+        }
+    }
+}
+
+/// `ProjectionDigestStatusReason` 是 projection digest 的最小 machine-readable 原因对象。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectionDigestStatusReason {
+    pub reason_kind: Option<ProjectionDigestStatusReasonKind>,
+    #[serde(default)]
+    pub reason_message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_ref: Option<String>,
+}
+
+impl ProjectionDigestStatusReason {
+    pub fn canonicalize(&mut self) {
+        self.reason_message = self.reason_message.trim().to_string();
+        self.upstream_ref = self
+            .upstream_ref
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+    }
+}
+
 /// 页面摘要——子页 compose 完成后产出的精简摘要，供父页消费。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PageDigest {
@@ -547,13 +667,166 @@ pub struct PageDigest {
     #[serde(default)]
     pub diagram_digests: Vec<PageDiagramDigest>,
     #[serde(default)]
+    pub projection_status: ProjectionDigestStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub status_reasons: Vec<ProjectionDigestStatusReason>,
+    #[serde(default)]
     pub readiness_stage: String,
+}
+
+impl PageDigest {
+    pub fn canonicalize(&mut self) {
+        self.digest_id = self.digest_id.trim().to_string();
+        self.unit_id = self.unit_id.trim().to_string();
+        self.page_id = self.page_id.trim().to_string();
+        self.title = self.title.trim().to_string();
+        self.summary = self.summary.trim().to_string();
+        self.key_topics = self
+            .key_topics
+            .iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        self.key_sources = sorted_unique_strings(&self.key_sources);
+        self.planned_key_sources = sorted_unique_strings(&self.planned_key_sources);
+        self.grounded_key_sources = sorted_unique_strings(&self.grounded_key_sources);
+        self.readiness_stage = self.readiness_stage.trim().to_string();
+        for reason in &mut self.status_reasons {
+            reason.canonicalize();
+        }
+        self.status_reasons.sort_by(|left, right| {
+            (
+                left.reason_kind
+                    .map(|value| value.as_str())
+                    .unwrap_or_default(),
+                left.reason_message.as_str(),
+                left.upstream_ref.as_deref().unwrap_or_default(),
+            )
+                .cmp(&(
+                    right
+                        .reason_kind
+                        .map(|value| value.as_str())
+                        .unwrap_or_default(),
+                    right.reason_message.as_str(),
+                    right.upstream_ref.as_deref().unwrap_or_default(),
+                ))
+        });
+        self.status_reasons.dedup_by(|left, right| left == right);
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.digest_id.is_empty() {
+            return Err("page digest 缺少 digest_id".to_string());
+        }
+        if self.unit_id.is_empty() {
+            return Err(format!("page digest '{}' 缺少 unit_id", self.digest_id));
+        }
+        if self.page_id.is_empty() {
+            return Err(format!("page digest '{}' 缺少 page_id", self.digest_id));
+        }
+        if self.title.is_empty() {
+            return Err(format!("page digest '{}' 缺少 title", self.digest_id));
+        }
+
+        match self.projection_status {
+            ProjectionDigestStatus::Ready => {
+                if !self.status_reasons.is_empty() {
+                    return Err(format!(
+                        "page digest '{}' 为 ready 时不允许携带 status_reasons",
+                        self.digest_id
+                    ));
+                }
+            }
+            ProjectionDigestStatus::Stale | ProjectionDigestStatus::Blocked => {
+                if self.status_reasons.is_empty() {
+                    return Err(format!(
+                        "page digest '{}' 为 {} 时必须携带至少一条 status_reason",
+                        self.digest_id,
+                        self.projection_status.as_str()
+                    ));
+                }
+            }
+        }
+
+        for reason in &self.status_reasons {
+            let Some(reason_kind) = reason.reason_kind else {
+                return Err(format!(
+                    "page digest '{}' 的 status_reason 缺少 reason_kind",
+                    self.digest_id
+                ));
+            };
+            if reason.reason_message.is_empty() {
+                return Err(format!(
+                    "page digest '{}' 的 status_reason '{}' 缺少 reason_message",
+                    self.digest_id,
+                    reason_kind.as_str()
+                ));
+            }
+            if reason_kind.expected_status() != self.projection_status {
+                return Err(format!(
+                    "page digest '{}' 的 status_reason '{}' 与 projection_status '{}' 不一致",
+                    self.digest_id,
+                    reason_kind.as_str(),
+                    self.projection_status.as_str()
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub fn validate_page_digest_snapshot(digests: &[PageDigest]) -> Result<(), String> {
+    let mut seen_digest_ids = BTreeSet::new();
+    let mut seen_unit_ids = BTreeSet::new();
+    let mut seen_page_ids = BTreeSet::new();
+
+    for digest in digests {
+        let mut normalized = digest.clone();
+        normalized.canonicalize();
+        normalized.validate()?;
+        if !seen_digest_ids.insert(normalized.digest_id.clone()) {
+            return Err(format!(
+                "page digest digest_id 冲突: '{}'",
+                normalized.digest_id
+            ));
+        }
+        if !seen_unit_ids.insert(normalized.unit_id.clone()) {
+            return Err(format!(
+                "page digest unit_id 冲突: '{}'",
+                normalized.unit_id
+            ));
+        }
+        if !seen_page_ids.insert(normalized.page_id.clone()) {
+            return Err(format!(
+                "page digest page_id 冲突: '{}'",
+                normalized.page_id
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn sorted_unique_strings(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use wiki_model::domain::knowledge::{KnowledgeUnit, UnitType};
+    use wiki_model::domain::knowledge_artifact::{
+        KnowledgeResearchStatusReasonKind, KnowledgeResearchSummaryStatus,
+    };
 
     #[test]
     fn artifact_summary_carries_provenance_and_status() {
@@ -589,6 +862,117 @@ mod tests {
         assert_eq!(summary.unit_id, unit.id);
         assert_eq!(summary.source_refs, vec!["src/runtime.rs".to_string()]);
         assert_eq!(summary.citation_refs, vec!["source-runtime".to_string()]);
-        assert_eq!(summary.summary_status, "ready");
+        assert_eq!(
+            summary.summary_status,
+            KnowledgeResearchSummaryStatus::Ready
+        );
+        assert!(summary.status_reasons.is_empty());
+    }
+
+    #[test]
+    fn artifact_summary_marks_missing_summary_as_degraded() {
+        let unit = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "运行时",
+            "domain-runtime",
+            "核心模块/运行时.md",
+        );
+        let research = UnitResearch {
+            unit_id: unit.id.clone(),
+            key_sources: vec!["src/runtime.rs".to_string()],
+            evidence_clusters: vec![EvidenceCluster {
+                cluster_key: "runtime".to_string(),
+                label: "运行时".to_string(),
+                citations: vec![SourceCitation {
+                    path: "src/runtime.rs".to_string(),
+                    start_line: 10,
+                    end_line: 24,
+                    source_id: Some("source-runtime".to_string()),
+                    symbol_id: None,
+                    note: "主入口".to_string(),
+                }],
+            }],
+            ..UnitResearch::default()
+        };
+
+        let summary = research.to_artifact_summary(&unit);
+
+        assert_eq!(
+            summary.summary_status,
+            KnowledgeResearchSummaryStatus::Degraded
+        );
+        assert_eq!(
+            summary.status_reasons[0].reason_kind,
+            Some(KnowledgeResearchStatusReasonKind::MissingSummary)
+        );
+    }
+
+    #[test]
+    fn artifact_summary_marks_provider_error_as_blocked() {
+        let unit = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "运行时",
+            "domain-runtime",
+            "核心模块/运行时.md",
+        );
+        let research = UnitResearch {
+            unit_id: unit.id.clone(),
+            summary: "provider 失败".to_string(),
+            key_sources: vec!["src/runtime.rs".to_string()],
+            provider_stop_reason: Some(ResearchStopReason::ProviderError),
+            ..UnitResearch::default()
+        };
+
+        let summary = research.to_artifact_summary(&unit);
+
+        assert_eq!(
+            summary.summary_status,
+            KnowledgeResearchSummaryStatus::Blocked
+        );
+        assert_eq!(
+            summary.status_reasons[0].reason_kind,
+            Some(KnowledgeResearchStatusReasonKind::ProviderError)
+        );
+    }
+
+    #[test]
+    fn page_digest_ready_disallows_status_reasons() {
+        let mut digest = PageDigest {
+            digest_id: "digest-runtime".to_string(),
+            unit_id: "unit-runtime".to_string(),
+            page_id: "page-runtime".to_string(),
+            title: "运行时".to_string(),
+            projection_status: ProjectionDigestStatus::Ready,
+            status_reasons: vec![ProjectionDigestStatusReason {
+                reason_kind: Some(ProjectionDigestStatusReasonKind::MissingPageOutput),
+                reason_message: "页面还没写出".to_string(),
+                upstream_ref: None,
+            }],
+            ..PageDigest::default()
+        };
+
+        digest.canonicalize();
+
+        assert!(digest.validate().is_err());
+    }
+
+    #[test]
+    fn page_digest_snapshot_requires_unique_unit_ids() {
+        let digest = PageDigest {
+            digest_id: "digest-runtime".to_string(),
+            unit_id: "unit-runtime".to_string(),
+            page_id: "page-runtime".to_string(),
+            title: "运行时".to_string(),
+            projection_status: ProjectionDigestStatus::Stale,
+            status_reasons: vec![ProjectionDigestStatusReason {
+                reason_kind: Some(ProjectionDigestStatusReasonKind::MissingPageOutput),
+                reason_message: "页面还没写出".to_string(),
+                upstream_ref: None,
+            }],
+            readiness_stage: "research_ready".to_string(),
+            ..PageDigest::default()
+        };
+
+        assert!(validate_page_digest_snapshot(&[digest.clone(), digest]).is_err());
     }
 }

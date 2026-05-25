@@ -7,7 +7,7 @@ use crate::domain::checkpoint::PipelineRuntimeSummary;
 use crate::domain::checkpoint::UnitRuntimeGate;
 use wiki_model::domain::knowledge_artifact::{
     KnowledgeHealthRecommendedAction, KnowledgeHealthSeverity, KnowledgeHealthSignal,
-    KnowledgeHealthSummary,
+    KnowledgeHealthSignalKind, KnowledgeHealthSummary,
 };
 
 /// 宿主侧查询当前阶段 runtime 是否可以直接进入 query。
@@ -26,6 +26,7 @@ pub enum QueryReadiness {
 pub enum RecommendedAction {
     None,
     Init,
+    Review,
     Update,
     Rebuild,
     Sync,
@@ -56,6 +57,47 @@ pub enum QueryTrust {
     Ready,
     StaleButQueryable,
     Blocked,
+}
+
+/// `AnswerMode` 表示当前 answer assembly 的正式装配模式。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerMode {
+    Direct,
+    Degraded,
+    Refuse,
+}
+
+/// `AnswerTrust` 为宿主暴露最小 answer 可信度分层。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerTrust {
+    Grounded,
+    Constrained,
+    Unsupported,
+}
+
+/// `AnswerSupportingRef` 是宿主可直接消费的最小 supporting reference。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AnswerSupportingRef {
+    pub ref_kind: String,
+    pub ref_id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance: Vec<String>,
+}
+
+/// `AnswerEnvelope` 是当前 query/answer surface 共用的最小正式 answer 壳。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AnswerEnvelope {
+    pub text: String,
+    pub answer_mode: AnswerMode,
+    pub answer_trust: AnswerTrust,
+    pub recommended_action: RecommendedAction,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supporting_refs: Vec<AnswerSupportingRef>,
 }
 
 /// 实际长流程执行结束后回传给宿主的真实执行路径。
@@ -268,6 +310,7 @@ pub fn summarize_health_signals(
     let mut counts_by_severity = std::collections::BTreeMap::new();
     let mut highest_severity = KnowledgeHealthSeverity::Info;
     let mut recommended_action = KnowledgeHealthRecommendedAction::None;
+    let mut has_governance_conflict_review = false;
 
     for signal in signals {
         *counts_by_kind
@@ -283,6 +326,17 @@ pub fn summarize_health_signals(
         if health_action_rank(signal.recommended_action) > health_action_rank(recommended_action) {
             recommended_action = signal.recommended_action;
         }
+        if signal.signal_kind == KnowledgeHealthSignalKind::GovernanceConflict
+            && signal.recommended_action == KnowledgeHealthRecommendedAction::Review
+        {
+            has_governance_conflict_review = true;
+        }
+    }
+
+    if has_governance_conflict_review
+        && recommended_action != KnowledgeHealthRecommendedAction::Rebuild
+    {
+        recommended_action = KnowledgeHealthRecommendedAction::Review;
     }
 
     Some(KnowledgeHealthSummary {
@@ -306,6 +360,9 @@ pub fn merge_recommended_action(
     if current == RecommendedAction::Init {
         return current;
     }
+    if current == RecommendedAction::Rebuild {
+        return current;
+    }
 
     let promoted = match health_summary.recommended_action {
         KnowledgeHealthRecommendedAction::None => current,
@@ -323,7 +380,7 @@ pub fn merge_recommended_action(
         KnowledgeHealthRecommendedAction::Rebuild => RecommendedAction::Rebuild,
         KnowledgeHealthRecommendedAction::Review => {
             if current == RecommendedAction::None {
-                RecommendedAction::Sync
+                RecommendedAction::Review
             } else {
                 current
             }
@@ -348,5 +405,70 @@ fn health_action_rank(action: KnowledgeHealthRecommendedAction) -> u8 {
         KnowledgeHealthRecommendedAction::Sync => 2,
         KnowledgeHealthRecommendedAction::Update => 3,
         KnowledgeHealthRecommendedAction::Rebuild => 4,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize_health_signals;
+    use wiki_model::domain::knowledge_artifact::{
+        KnowledgeHealthRecommendedAction, KnowledgeHealthSeverity, KnowledgeHealthSignal,
+        KnowledgeHealthSignalKind,
+    };
+
+    #[test]
+    fn governance_conflict_promotes_health_summary_to_review() {
+        let summary = summarize_health_signals(&[
+            KnowledgeHealthSignal {
+                signal_id: "signal:derived".to_string(),
+                signal_kind: KnowledgeHealthSignalKind::DeclaredDerivedDivergence,
+                severity: KnowledgeHealthSeverity::Warning,
+                target_ref: "unit:repo".to_string(),
+                recommended_action: KnowledgeHealthRecommendedAction::Update,
+                reason: "declared and derived drift".to_string(),
+            },
+            KnowledgeHealthSignal {
+                signal_id: "signal:conflict".to_string(),
+                signal_kind: KnowledgeHealthSignalKind::GovernanceConflict,
+                severity: KnowledgeHealthSeverity::Warning,
+                target_ref: "conflict:repo".to_string(),
+                recommended_action: KnowledgeHealthRecommendedAction::Review,
+                reason: "parallel active declared conflict".to_string(),
+            },
+        ])
+        .expect("signals should produce summary");
+
+        assert_eq!(
+            summary.recommended_action,
+            KnowledgeHealthRecommendedAction::Review
+        );
+    }
+
+    #[test]
+    fn governance_conflict_does_not_hide_rebuild_health_action() {
+        let summary = summarize_health_signals(&[
+            KnowledgeHealthSignal {
+                signal_id: "signal:orphan".to_string(),
+                signal_kind: KnowledgeHealthSignalKind::OrphanUnit,
+                severity: KnowledgeHealthSeverity::Error,
+                target_ref: "unit:repo".to_string(),
+                recommended_action: KnowledgeHealthRecommendedAction::Rebuild,
+                reason: "unit missing valid domain binding".to_string(),
+            },
+            KnowledgeHealthSignal {
+                signal_id: "signal:conflict".to_string(),
+                signal_kind: KnowledgeHealthSignalKind::GovernanceConflict,
+                severity: KnowledgeHealthSeverity::Warning,
+                target_ref: "conflict:repo".to_string(),
+                recommended_action: KnowledgeHealthRecommendedAction::Review,
+                reason: "parallel active declared conflict".to_string(),
+            },
+        ])
+        .expect("signals should produce summary");
+
+        assert_eq!(
+            summary.recommended_action,
+            KnowledgeHealthRecommendedAction::Rebuild
+        );
     }
 }

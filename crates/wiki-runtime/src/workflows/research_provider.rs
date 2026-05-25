@@ -1252,8 +1252,8 @@ mod tests {
     use wiki_index::symbols::ParsedSymbolsSnapshot;
     use wiki_knowledge::domain::research::{
         PageDigest, PageResearchDiagramRollup, PageResearchEvidenceGroup, PageResearchEvidenceItem,
-        PageResearchResult, PageResearchSectionPlan, PlannedSection, ResearchProfile,
-        ResearchStopReason, UnitResearch,
+        PageResearchResult, PageResearchSectionPlan, PlannedSection, ProjectionDigestStatus,
+        ResearchProfile, ResearchStopReason, UnitResearch,
     };
     use wiki_knowledge::research::{
         ResearchDataSource, ResearchProvider, StructuralResearchProvider,
@@ -1579,6 +1579,8 @@ mod tests {
                 citations: Vec::new(),
                 section_digests: Vec::new(),
                 diagram_digests: Vec::new(),
+                projection_status: ProjectionDigestStatus::Ready,
+                status_reasons: Vec::new(),
                 readiness_stage: "compose_ready".to_string(),
             }],
             &wiki_index::scanner::ScanReport {
@@ -2147,6 +2149,8 @@ mod tests {
             citations: Vec::new(),
             section_digests: Vec::new(),
             diagram_digests: Vec::new(),
+            projection_status: ProjectionDigestStatus::Ready,
+            status_reasons: Vec::new(),
             readiness_stage: "compose_ready".to_string(),
         }];
 

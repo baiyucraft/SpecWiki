@@ -4,6 +4,7 @@ use crate::domain::compose::{ComposeSectionDraft, DiagramDraft, PageDraft};
 use crate::domain::research::{
     canonical_reference_outline_title, DiagramSuggestion, DomainResearch, EvidenceCluster,
     KeySourceCluster, PageDiagramDigest, PageDigest, PageSectionDigest, PlannedSection,
+    ProjectionDigestStatus, ProjectionDigestStatusReason, ProjectionDigestStatusReasonKind,
     ResearchPageSeed, ResearchProfile, SectionGroundingRef, SkeletonProfile, SourceCitation,
     SystemResearch, UnitResearch,
 };
@@ -238,6 +239,8 @@ pub fn compose_page_from_contract(contract: &ComposePageContract) -> (PageDraft,
         citations: contract_digest_citations(contract),
         section_digests: Vec::new(),
         diagram_digests: Vec::new(),
+        projection_status: contract_projection_status(contract),
+        status_reasons: contract_projection_status_reasons(contract),
         readiness_stage: contract_digest_readiness(contract),
     };
 
@@ -1206,6 +1209,35 @@ fn contract_digest_readiness(contract: &ComposePageContract) -> String {
     }
 }
 
+fn contract_projection_status(contract: &ComposePageContract) -> ProjectionDigestStatus {
+    if contract_digest_readiness(contract) == "compose_ready" {
+        ProjectionDigestStatus::Ready
+    } else {
+        ProjectionDigestStatus::Stale
+    }
+}
+
+fn contract_projection_status_reasons(
+    contract: &ComposePageContract,
+) -> Vec<ProjectionDigestStatusReason> {
+    if contract_digest_readiness(contract) == "compose_ready" {
+        return Vec::new();
+    }
+    let upstream_ref = if contract.missing_child_unit_ids.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "missing_child_units:{}",
+            contract.missing_child_unit_ids.join(",")
+        ))
+    };
+    vec![ProjectionDigestStatusReason {
+        reason_kind: Some(ProjectionDigestStatusReasonKind::DeclaredOrDerivedChanged),
+        reason_message: "compose contract 依赖的 child projection 尚未全部就绪".to_string(),
+        upstream_ref,
+    }]
+}
+
 fn collect_child_digest_citations(
     child_digests: &[PageDigest],
     limit: usize,
@@ -1495,6 +1527,8 @@ mod tests {
             }],
             section_digests: Vec::new(),
             diagram_digests: Vec::new(),
+            projection_status: ProjectionDigestStatus::Ready,
+            status_reasons: Vec::new(),
             readiness_stage: "compose_ready".to_string(),
         }];
 
@@ -1677,6 +1711,8 @@ mod tests {
                 title: "domain-graph".to_string(),
                 summary: "子页关系图".to_string(),
             }],
+            projection_status: ProjectionDigestStatus::Ready,
+            status_reasons: Vec::new(),
             readiness_stage: "compose_ready".to_string(),
         }];
 
@@ -1823,6 +1859,8 @@ mod tests {
                 title: "runtime-child-graph".to_string(),
                 summary: "运行时子图".to_string(),
             }],
+            projection_status: ProjectionDigestStatus::Ready,
+            status_reasons: Vec::new(),
             readiness_stage: "compose_ready".to_string(),
         }];
 

@@ -2,7 +2,9 @@ use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use crate::domain::runtime_profile::{QueryMode, QueryTrust, RecommendedAction};
+use crate::domain::runtime_profile::{
+    AnswerEnvelope, QueryMode, QueryTrust, RecommendedAction,
+};
 use crate::workflows::query::QueryReport;
 
 const PAGE_HIT_LIMIT: usize = 4;
@@ -22,6 +24,7 @@ pub struct ExternalQueryReport {
     pub recommended_action: RecommendedAction,
     pub matched_pages: Vec<String>,
     pub provenance_summary: String,
+    pub answer: AnswerEnvelope,
     pub summary: ExternalQuerySummary,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hits: Vec<ExternalQueryHit>,
@@ -72,6 +75,7 @@ pub fn map_query_report(report: QueryReport) -> ExternalQueryReport {
         recommended_action: report.recommended_action,
         matched_pages: report.matched_pages,
         provenance_summary: report.provenance_summary,
+        answer: report.answer,
         summary,
         hits,
     }
