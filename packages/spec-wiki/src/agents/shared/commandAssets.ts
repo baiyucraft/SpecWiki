@@ -344,7 +344,3 @@ export function listManagedCodeBuddyHookCommands(
 export function getActionSemanticsForRendering(action: WikiAction): WorkflowActionSemantics {
   return getWorkflowActionSemantics(action);
 }
-
-
-
-

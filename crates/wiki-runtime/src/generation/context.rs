@@ -468,7 +468,7 @@ fn is_low_signal_key_source(path: &str, file: &wiki_index::scanner::ScannedFile)
         return true;
     }
 
-    if path.contains("/openspec/") {
+    if path.contains("/.spec/") {
         return true;
     }
 

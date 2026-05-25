@@ -91,4 +91,3 @@ export function renderCodeBuddySettingsAsset(
 ): string {
   return renderMergedCodeBuddySettings(filePath, patch);
 }
-

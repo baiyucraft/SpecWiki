@@ -108,12 +108,12 @@ function resolveLogRootDir(args) {
   }
 
   if (args.changeName) {
-    const activeDir = path.join(ROOT_DIR, "openspec", "changes", args.changeName);
+    const activeDir = path.join(ROOT_DIR, ".spec", "changes", args.changeName);
     if (existsSync(activeDir)) {
       return path.join(activeDir, "debug-init-traces");
     }
 
-    const archiveRoot = path.join(ROOT_DIR, "openspec", "changes", "archive");
+    const archiveRoot = path.join(ROOT_DIR, ".spec", "archive");
     const archivedMatches = existsSync(archiveRoot)
       ? readdirEntries(archiveRoot).filter((name) =>
           name.endsWith(`-${args.changeName}`),

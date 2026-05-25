@@ -1,6 +1,6 @@
 /**
  * 这个文件覆盖 spec-wiki init 的宿主选择策略。
- * 它保护 openspec 风格的“显式参数优先、交互多选、非交互兜底”流程。
+ * 它保护 UniSpec 风格的“显式参数优先、交互多选、非交互兜底”流程。
  */
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";

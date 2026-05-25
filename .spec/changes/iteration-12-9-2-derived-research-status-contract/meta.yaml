@@ -1,0 +1,15 @@
+id: iteration-12-9-2-derived-research-status-contract
+stage: tasks
+deliveryShape: single-change
+artifacts:
+  proposal:
+    status: present
+  design:
+    status: present
+  cases:
+    status: present
+  tasks:
+    status: present
+  metadata:
+    status: present
+

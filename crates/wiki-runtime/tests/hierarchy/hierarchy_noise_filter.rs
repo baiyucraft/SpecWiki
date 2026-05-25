@@ -43,8 +43,8 @@ fn noise_filtered_directories_do_not_become_modules() {
         .collect();
 
     assert!(
-        !module_names.contains(&"openspec"),
-        "openspec should not be a module, got: {module_names:?}"
+        !module_names.contains(&".spec"),
+        ".spec should not be a module, got: {module_names:?}"
     );
     assert!(
         !module_names.contains(&"nested-repo"),

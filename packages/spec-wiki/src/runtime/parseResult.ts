@@ -576,6 +576,3 @@ export function responseFromTerminalEvent(
 ): CoreResponse {
   return parseCoreResponse(event.response);
 }
-
-
-

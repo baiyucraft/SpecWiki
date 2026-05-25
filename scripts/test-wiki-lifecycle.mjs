@@ -1636,4 +1636,3 @@ if (entryHref && import.meta.url === entryHref) {
   if (!result.ok)
 process.exit(1);
 }
-

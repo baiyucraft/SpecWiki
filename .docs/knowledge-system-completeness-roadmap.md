@@ -38,13 +38,13 @@
 
 当前 authoritative 路线图不再用“8 组条件 + 4 phase”做主框架，而是直接使用 `iteration-12-9` umbrella 已冻结的 7 个 capability。原因很简单：
 
-- capability 更适合作为 OpenSpec child change 的实施颗粒度
+- capability 更适合作为 UniSpec child change 的实施颗粒度
 - capability 能直接绑定 formal object、truth source、workflow 与 artifact layer
 - capability 比“phase 愿景”更容易验收和归档
 
 因此，这份文档以下内容都以 7 capability program 为准。
 
-这份 `.docs` 文档只承担阅读镜像角色；program-level authoritative source 仍然是 `openspec/changes/iteration-12-9-knowledge-system-completeness/**`。
+这份 `.docs` 文档只承担阅读镜像角色；program-level authoritative source 仍然是 `.spec/changes/iteration-12-9-knowledge-system-completeness/**`。
 
 ## 当前状态映射
 

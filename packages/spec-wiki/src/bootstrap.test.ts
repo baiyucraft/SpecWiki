@@ -266,6 +266,3 @@ test("runBootstrapInit no longer depends on Codex global prompt directory", asyn
   expect(result.hosts.map((host) => host.host)).toEqual(["codex"]);
   expect(existsSync(path.join(repoRoot, ".codex", "skills", "wiki-status", "SKILL.md"))).toBe(true);
 });
-
-
-

@@ -146,4 +146,3 @@ export function getWorkflowActionSemantics(action: WikiAction): WorkflowActionSe
 export function listWorkflowActionSemantics(): WorkflowActionSemantics[] {
   return WIKI_ACTIONS.map((action) => ACTION_SEMANTICS[action]);
 }
-

@@ -1,0 +1,13 @@
+{
+  "binary": "E:\\project\\!byAI\\spec-wiki\\target\\release\\wiki-core.exe",
+  "args": [
+    "--json",
+    "--debug-trace-dir",
+    "E:\\project\\!byAI\\spec-wiki\\.spec\\changes\\iteration-9-7-parent-contract-and-runtime-gate\\debug-init-traces\\dagger-20260319-212807"
+  ],
+  "command": {
+    "action": "init",
+    "repoRoot": "tmp/test/dagger",
+    "streamProgress": true
+  }
+}

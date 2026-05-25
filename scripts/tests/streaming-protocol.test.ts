@@ -28,6 +28,7 @@ import {
   coerceLifecycleStatusResult,
   parseCliArgs as parseLifecycleCliArgs,
 } from "../test-wiki-lifecycle.mjs";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..", "..");
@@ -44,6 +45,7 @@ test("built wiki-runtime streams NDJSON progress for init", async () => {
     const binaryPath = resolveBuiltBinary(rootDir, { targetDir: e2eTargetDir });
     const command = JSON.stringify({
       action: "init",
+      developmentMode: true,
       repoRoot,
     });
 
@@ -179,5 +181,3 @@ test("瞬态错误识别会覆盖 os error 32", () => {
   expect(isTransientFsErrorMessage("另一个程序正在使用此文件，进程无法访问。 (os error 32)")).toBe(true);
   expect(isTransientFsErrorMessage("provider returned 429")).toBe(false);
 });
-
-

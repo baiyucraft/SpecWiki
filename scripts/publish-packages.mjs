@@ -36,6 +36,8 @@ async function runCommand(command, args, { cwd = DEFAULT_ROOT_DIR } = {}) {
  * 构建 staged package、执行一致性校验，并在目标目录运行 publish/dry-run。
  *
  * @param options 发布根目录与 dry-run 开关。
+ * @param options.rootDir 仓库根目录。
+ * @param options.dryRun 是否只执行 npm publish dry-run。
  * @returns 返回 staged package 结果与对应的 evidence 检查摘要。
  */
 export async function publishPackages({
@@ -61,4 +63,3 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   console.log(`${process.argv.includes("--dry-run") ? "Dry-run checked" : "Published"} package from ${built.package.packageDir}`);
   console.log(`Evidence checks: ${Object.keys(built.evidence.checks).length}`);
 }
-

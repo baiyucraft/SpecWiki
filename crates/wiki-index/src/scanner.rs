@@ -645,7 +645,7 @@ fn should_ignore_dir(path: &Path) -> bool {
     // 非代码产物目录排除
     if matches!(
         dir_name,
-        "openspec" | ".github" | ".gitlab" | ".circleci" | ".husky" | "coverage" | ".nyc_output"
+        ".spec" | ".github" | ".gitlab" | ".circleci" | ".husky" | "coverage" | ".nyc_output"
     ) {
         return true;
     }

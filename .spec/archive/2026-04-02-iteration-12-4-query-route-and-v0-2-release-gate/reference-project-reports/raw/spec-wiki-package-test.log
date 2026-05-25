@@ -1,0 +1,26 @@
+
+> spec-wiki@0.1.1 test E:\project\!byAI\spec-wiki\packages\spec-wiki
+> vitest run
+
+
+[1m[46m RUN [49m[22m [36mv3.2.4 [39m[90mE:/project/!byAI/spec-wiki/packages/spec-wiki[39m
+
+ [32m✓[39m src/agents/prompts/searchableMultiSelect.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/bin.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 126[2mms[22m[39m
+ [32m✓[39m src/selectHosts.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/agents/shared/commandAssets.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/runtime/invokeCore.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 568[2mms[22m[39m
+   [33m[2m✓[22m[39m invokeCore 逐行消费长流程进度并返回最终结果 [33m 561[2mms[22m[39m
+ [32m✓[39m src/runtime/forwardCore.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 568[2mms[22m[39m
+   [33m[2m✓[22m[39m forwardCoreCommand 透传短流程 JSON 输出 [33m 561[2mms[22m[39m
+ [32m✓[39m src/agents/codebuddy/assets.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 917[2mms[22m[39m
+   [33m[2m✓[22m[39m runCli dispatches init with explicit tool and repo root [33m 902[2mms[22m[39m
+ [32m✓[39m src/index.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 55[2mms[22m[39m
+ [32m✓[39m src/bootstrap.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 718[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m10 passed[39m[22m[90m (10)[39m
+[2m      Tests [22m [1m[32m45 passed[39m[22m[90m (45)[39m
+[2m   Start at [22m 00:34:18
+[2m   Duration [22m 4.79s[2m (transform 6.10s, setup 0ms, collect 6.94s, tests 3.01s, environment 5ms, prepare 8.13s)[22m
+

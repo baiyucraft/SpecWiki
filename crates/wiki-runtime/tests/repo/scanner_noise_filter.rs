@@ -38,8 +38,8 @@ fn scanner_excludes_fixture_directories() {
 fn scanner_excludes_non_code_artifact_directories() {
     let report = scan_repo(&fixture_path(), &[]).unwrap();
     assert!(
-        !report.files.iter().any(|f| f.path.starts_with("openspec/")),
-        "files from openspec/ should be excluded"
+        !report.files.iter().any(|f| f.path.starts_with(".spec/")),
+        "files from .spec/ should be excluded"
     );
     assert!(
         !report.files.iter().any(|f| f.path.starts_with(".github/")),

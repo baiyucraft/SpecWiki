@@ -1,0 +1,15 @@
+id: iteration-12-9-1-declared-lifecycle-completeness
+stage: tasks
+deliveryShape: single-change
+artifacts:
+  proposal:
+    status: present
+  design:
+    status: present
+  cases:
+    status: present
+  tasks:
+    status: present
+  metadata:
+    status: present
+

@@ -2,12 +2,12 @@
 /**
  * 针对带 reference 的测试项目，批量执行带 provider 的 init，
  * 并把 generated `.wiki/*.md` 与 reference content 目录下的 Markdown 文件
- * 做逐项目、逐文件的结构化对比，输出到当前 OpenSpec change 目录。
+ * 做逐项目、逐文件的结构化对比，输出到当前 UniSpec change 目录。
  *
  * 默认输出：
- * - openspec/changes/<change>/reference-project-reports/*.md
- * - openspec/changes/<change>/reference-project-reports/_summary.md
- * - openspec/changes/<change>/reference-project-reports/_optimization-notes.md
+ * - .spec/changes/<change>/reference-project-reports/*.md
+ * - .spec/changes/<change>/reference-project-reports/_summary.md
+ * - .spec/changes/<change>/reference-project-reports/_optimization-notes.md
  *
  * 用法：
  *   node scripts/collect-reference-project-reports.mjs
@@ -1890,7 +1890,7 @@ function parseCliArgs(argv) {
 }
 
 async function main(argv) {
-  const changeDir = path.join(ROOT_DIR, "openspec", "changes", argv.change);
+  const changeDir = path.join(ROOT_DIR, ".spec", "changes", argv.change);
   const reportDir = path.join(changeDir, "reference-project-reports");
   const summaryPath = path.join(reportDir, "_summary.md");
   const optimizationNotesPath = path.join(reportDir, "_optimization-notes.md");

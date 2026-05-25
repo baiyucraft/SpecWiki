@@ -93,4 +93,3 @@ export function resolveBinary(options: ResolveBinaryOptions = {}): string {
 
   return existingBinary ?? candidatePaths[1];
 }
-

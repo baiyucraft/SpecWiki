@@ -1,6 +1,6 @@
 /**
  * 这个文件实现 `spec-wiki init` 的交互式多选提示。
- * 它参考 openspec 的 searchable multi-select，但只保留当前三宿主场景需要的键盘交互。
+ * 它参考 UniSpec 的 searchable multi-select，但只保留当前三宿主场景需要的键盘交互。
  */
 import { clearScreenDown, emitKeypressEvents, moveCursor } from "node:readline";
 

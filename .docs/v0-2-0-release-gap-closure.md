@@ -5,7 +5,7 @@
 
 但当前“真相源”仍存在明显漂移，导致仓库虽然已经接近 `v0.2.0` 能力边界，却还不能直接当成口径一致的正式发布版：
 
-- OpenSpec 主 spec 已按 `v0.2.0` 与 6 个公开动作描述
+- UniSpec 主 spec 已按 `v0.2.0` 与 6 个公开动作描述
 - 英文 `README.md` 已按 `v0.2.0` 叙述
 - 中文 `README-CN.md`、`RELEASE-v0.1.0.md`、`dist/spec-wiki/README.md` 仍停留在 `v0.1.0 index-only`
 - `packages/spec-wiki/package.json` 版本仍是 `0.1.1`
@@ -16,7 +16,7 @@
 ## 当前漂移矩阵
 | 维度 | 当前状态 | 目标状态 | 主要缺口 |
 | --- | --- | --- | --- |
-| OpenSpec workflow contract | 已是 `v0.2.0`、6 个公开动作 | 保持为唯一正式合同 | requirement 标题与正文仍有少量表述漂移 |
+| UniSpec workflow contract | 已是 `v0.2.0`、6 个公开动作 | 保持为唯一正式合同 | requirement 标题与正文仍有少量表述漂移 |
 | TypeScript 源码 public surface | 已公开 `init/status/update/query/sync/rebuild` | 与 docs / dist / package 完全一致 | 需要与发布说明、staging 产物对齐 |
 | 英文 README | 已偏向 `v0.2.0 knowledge runtime` | 与 CLI/help/主包版本完全一致 | 还未体现完整 release drift matrix |
 | 中文 README | 仍是 `v0.1.0 index-only` | 升级为 `v0.2.0` | 版本、runtime、公开动作全部落后 |
@@ -40,7 +40,7 @@
 6. 发布前必须给出 staged package smoke 或等价 `publish` 证据，例如 `npm publish --dry-run`、staged README/help/manifests 对齐。
 
 ## 不属于 0.2.0 的项
-以下项不应混入本轮 OpenSpec change：
+以下项不应混入本轮 UniSpec change：
 
 - 完整 `declared knowledge` authoring/runtime
 - 完整 knowledge 治理与冲突消解

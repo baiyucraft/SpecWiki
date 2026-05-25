@@ -5,6 +5,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { Buffer } from "node:buffer";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { resolveBuiltBinary } from "./build/core-paths.mjs";

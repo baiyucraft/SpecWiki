@@ -86,8 +86,8 @@ export function shouldResumeInitFromFailure({
   const workflowAction = runtimeSnapshot?.runtimeSummary?.workflow_action;
   const runtimeGateCount = Number(
     runtimeSnapshot?.runtimeGateSummary?.total
-      ?? runtimeSnapshot?.unitRuntimeGates?.length
-      ?? 0,
+    ?? runtimeSnapshot?.unitRuntimeGates?.length
+    ?? 0,
   );
   const retryableMessage = isPreserveResumeEligibleInitErrorMessage(message)
     || isTransientFsErrorMessage(message);

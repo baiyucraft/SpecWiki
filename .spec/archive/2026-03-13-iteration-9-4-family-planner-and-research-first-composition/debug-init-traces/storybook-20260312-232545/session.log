@@ -1,0 +1,9 @@
+repo=E:\project\!byAI\spec-wiki\tmp\test\storybook
+binary=E:\project\!byAI\spec-wiki\target\debug\wiki-core.exe
+run_dir=E:\project\!byAI\spec-wiki\.spec\changes\iteration-9-4-family-planner-and-research-first-composition\debug-init-traces\storybook-20260312-232545
+
+[20ms] llm_uncertainty_gate 执行 LLM 不确定性判断
+[21ms] scan 扫描仓库源码
+[154s] llm_usage LLM usage 已更新：1 requests / 2286 tokens
+[157s] llm_usage LLM usage 已更新：2 requests / 5650 tokens
+[158s] llm_usage LLM usage 已更新：3 requests / 8116 tokens

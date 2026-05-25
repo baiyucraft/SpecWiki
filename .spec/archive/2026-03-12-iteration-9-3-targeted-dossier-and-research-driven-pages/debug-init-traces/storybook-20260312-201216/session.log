@@ -1,0 +1,70 @@
+repo=E:\project\!byAI\spec-wiki\tmp\test\storybook
+binary=E:\project\!byAI\spec-wiki\target\release\wiki-core.exe
+run_dir=E:\project\!byAI\spec-wiki\.spec\changes\iteration-9-1-topic-page-planner-and-evidence-layer\debug-init-traces\storybook-20260312-201216
+
+[5ms] llm_uncertainty_gate 执行 LLM 不确定性判断
+[5ms] scan 扫描仓库源码
+[68s] llm_usage LLM usage 已更新：1 requests / 2330 tokens
+[71s] llm_usage LLM usage 已更新：2 requests / 5720 tokens
+[72s] llm_usage LLM usage 已更新：3 requests / 8201 tokens
+[73s] llm_usage LLM usage 已更新：4 requests / 10789 tokens
+[74s] llm_usage LLM usage 已更新：5 requests / 12792 tokens
+[75s] llm_usage LLM usage 已更新：6 requests / 15717 tokens
+[77s] llm_usage LLM usage 已更新：7 requests / 18603 tokens
+[78s] llm_usage LLM usage 已更新：8 requests / 28233 tokens
+[79s] llm_usage LLM usage 已更新：9 requests / 42125 tokens
+[80s] llm_usage LLM usage 已更新：10 requests / 55550 tokens
+[81s] llm_usage LLM usage 已更新：11 requests / 58634 tokens
+[83s] llm_usage LLM usage 已更新：12 requests / 61593 tokens
+[84s] llm_usage LLM usage 已更新：13 requests / 64607 tokens
+[85s] llm_usage LLM usage 已更新：14 requests / 67593 tokens
+[86s] llm_usage LLM usage 已更新：15 requests / 70353 tokens
+[87s] llm_usage LLM usage 已更新：16 requests / 73115 tokens
+[99s] parse_symbols 0/3321 解析源码符号
+[101s] parse_symbols 333/3321 解析源码符号 333/3321
+[101s] parse_symbols 665/3321 解析源码符号 665/3321
+[101s] parse_symbols 997/3321 解析源码符号 997/3321
+[101s] parse_symbols 1329/3321 解析源码符号 1329/3321
+[101s] parse_symbols 1661/3321 解析源码符号 1661/3321
+[101s] parse_symbols 1993/3321 解析源码符号 1993/3321
+[101s] parse_symbols 2325/3321 解析源码符号 2325/3321
+[101s] parse_symbols 2657/3321 解析源码符号 2657/3321
+[102s] parse_symbols 2989/3321 解析源码符号 2989/3321
+[102s] parse_symbols 3321/3321 解析源码符号 3321/3321
+[102s] resolve_symbol_graph 解析符号关系
+[102s] analyze_symbol_graph 分析符号图
+[103s] build_module_tree 构建模块树
+[104s] build_contexts 构建页面上下文
+[104s] plan_pages 规划 Wiki 页面
+[106s] render_pages 0/124 渲染页面
+[106s] llm_enrichment 生成页面增强内容
+[122s] llm_usage LLM usage 已更新：17 requests / 84433 tokens
+[171s] llm_usage LLM usage 已更新：18 requests / 99598 tokens
+[179s] llm_usage LLM usage 已更新：19 requests / 107319 tokens
+[224s] llm_usage LLM usage 已更新：20 requests / 117520 tokens
+[231s] llm_usage LLM usage 已更新：21 requests / 127993 tokens
+[282s] llm_usage LLM usage 已更新：22 requests / 163408 tokens
+[292s] llm_usage LLM usage 已更新：23 requests / 174759 tokens
+[330s] llm_usage LLM usage 已更新：24 requests / 213264 tokens
+[339s] llm_usage LLM usage 已更新：25 requests / 219879 tokens
+[366s] llm_usage LLM usage 已更新：26 requests / 249061 tokens
+[372s] llm_usage LLM usage 已更新：27 requests / 258434 tokens
+[414s] llm_usage LLM usage 已更新：28 requests / 273622 tokens
+[457s] llm_usage LLM usage 已更新：29 requests / 278088 tokens
+[457s] llm_usage LLM usage 已更新：30 requests / 282303 tokens
+[458s] llm_enrichment 28/124 生成页面增强内容 28/124
+[459s] llm_enrichment 86/124 生成页面增强内容 86/124
+[460s] llm_enrichment 111/124 生成页面增强内容 111/124
+[467s] render_pages 13/124 渲染页面 13/124
+[472s] render_pages 25/124 渲染页面 25/124
+[478s] render_pages 38/124 渲染页面 38/124
+[483s] render_pages 50/124 渲染页面 50/124
+[488s] render_pages 62/124 渲染页面 62/124
+[492s] render_pages 75/124 渲染页面 75/124
+[498s] render_pages 87/124 渲染页面 87/124
+[502s] render_pages 100/124 渲染页面 100/124
+[507s] render_pages 112/124 渲染页面 112/124
+[511s] render_pages 124/124 渲染页面 124/124
+[513s] write_state 写入运行时状态
+[518s] write_metadata 写入元数据
+terminal={"ok":true,"error":null,"data":{"generated_pages":[".wiki/项目概述.md",".wiki/系统架构.md",".wiki/工作流与部署.md",".wiki/核心模块/code.md",".wiki/核心模块/code/addons.md",".wiki/核心模块/code/addons/a11y.md",".wiki/核心模块/code/addons/docs.md",".wiki/核心模块/code/addons/links.md",".wiki/核心模块/code/addons/onboarding.md",".wiki/核心模块/code/addons/pseudo-states.md",".wiki/核心模块/code/addons/themes.md",".wiki/核心模块/code/addons/vitest.md",".wiki/核心模块/code/builders.md",".wiki/核心模块/code/builders/builder-vite.md",".wiki/核心模块/code/builders/builder-webpack5.md",".wiki/核心模块/code/core.md",".wiki/核心模块/code/frameworks.md",".wiki/核心模块/code/frameworks/angular.md",".wiki/核心模块/code/frameworks/ember.md",".wiki/核心模块/code/frameworks/html-vite.md",".wiki/核心模块/code/frameworks/nextjs.md",".wiki/核心模块/code/frameworks/nextjs-vite.md",".wiki/核心模块/code/frameworks/preact-vite.md",".wiki/核心模块/code/frameworks/react-native-web-vite.md",".wiki/核心模块/code/frameworks/react-vite.md",".wiki/核心模块/code/frameworks/react-webpack5.md",".wiki/核心模块/code/frameworks/server-webpack5.md",".wiki/核心模块/code/frameworks/svelte-vite.md",".wiki/核心模块/code/frameworks/sveltekit.md",".wiki/核心模块/code/frameworks/vue3-vite.md",".wiki/核心模块/code/frameworks/web-components-vite.md",".wiki/核心模块/code/lib.md",".wiki/核心模块/code/lib/cli-sb.md",".wiki/核心模块/code/lib/cli-storybook.md",".wiki/核心模块/code/lib/codemod.md",".wiki/核心模块/code/lib/core-webpack.md",".wiki/核心模块/code/lib/create-storybook.md",".wiki/核心模块/code/lib/csf-plugin.md",".wiki/核心模块/code/lib/eslint-plugin.md",".wiki/核心模块/code/lib/react-dom-shim.md",".wiki/核心模块/code/presets.md",".wiki/核心模块/code/presets/create-react-app.md",".wiki/核心模块/code/presets/react-webpack.md",".wiki/核心模块/code/presets/server-webpack.md",".wiki/核心模块/code/renderers.md",".wiki/核心模块/code/renderers/html.md",".wiki/核心模块/code/renderers/preact.md",".wiki/核心模块/code/renderers/react.md",".wiki/核心模块/code/renderers/server.md",".wiki/核心模块/code/renderers/svelte.md",".wiki/核心模块/code/renderers/vue3.md",".wiki/核心模块/code/renderers/web-components.md",".wiki/核心模块/docs.md",".wiki/核心模块/scripts.md",".wiki/核心模块/scripts/eslint-plugin-local-rules.md",".wiki/核心模块/test-storybooks.md",".wiki/核心模块/test-storybooks/ember-cli.md",".wiki/核心模块/test-storybooks/external-docs.md",".wiki/核心模块/test-storybooks/portable-stories-kitchen-sink.md",".wiki/核心模块/test-storybooks/portable-stories-kitchen-sink/nextjs.md",".wiki/核心模块/test-storybooks/portable-stories-kitchen-sink/react.md",".wiki/核心模块/test-storybooks/portable-stories-kitchen-sink/react-vitest-3.md",".wiki/核心模块/test-storybooks/portable-stories-kitchen-sink/svelte.md",".wiki/核心模块/test-storybooks/portable-stories-kitchen-sink/vue3.md",".wiki/核心模块/test-storybooks/server-kitchen-sink.md",".wiki/核心模块/test-storybooks/standalone-preview.md",".wiki/核心模块/test-storybooks/yarn-pnp.md",".wiki/专题/process/process-handleaddvalueadd-flow-流程主题：handleAddValueAdd-flow.md",".wiki/专题/process/process-handlechange-flow-流程主题：handleChange-flow.md",".wiki/专题/process/process-handlefilechange-flow-流程主题：handleFileChange-flow.md",".wiki/专题/process/process-handlesnippetrendered-flow-流程主题：handleSnippetRendered-flow.md",".wiki/专题/process/process-handletriggerrunevent-flow-流程主题：handleTriggerRunEvent-flow.md",".wiki/专题/repo-archetype/cli-entry-命令入口与执行流.md",".wiki/专题/repo-archetype/config-runtime-配置与运行时.md",".wiki/专题/module-capability/module-8182c18ba204-component-a11y能力：界面组成.md",".wiki/专题/module-capability/module-8d6dc973c6b0-component-addons能力：界面组成.md",".wiki/专题/module-capability/module-3006222a09ec-entry-angular能力：入口编排.md",".wiki/专题/module-capability/module-f183267d666d-plugin-builder-vite能力：扩展机制.md",".wiki/专题/module-capability/module-da1388cbf763-plugin-builder-webpack5能力：扩展机制.md",".wiki/专题/module-capability/module-99d8c90f46b4-plugin-builders能力：扩展机制.md",".wiki/专题/module-capability/module-ca2e0a6d81e4-library-cli-sb能力：扩展机制.md",".wiki/专题/module-capability/module-f16579f4c153-library-cli-storybook能力：扩展机制.md",".wiki/专题/module-capability/module-b51ea519f0f1-library-codemod能力：扩展机制.md",".wiki/专题/module-capability/module-b67616f5f23b-component-code能力：界面组成.md",".wiki/专题/module-capability/module-eb98f4d9d066-library-core-webpack能力：扩展机制.md",".wiki/专题/module-capability/module-b35d061ec501-component-core能力：界面组成.md",".wiki/专题/module-capability/module-7744c084cfdc-library-create-storybook能力：扩展机制.md",".wiki/专题/module-capability/module-7351b0cc5a9b-library-csf-plugin能力：扩展机制.md",".wiki/专题/module-capability/module-5ed2352a9657-plugin-docs能力：扩展机制.md",".wiki/专题/module-capability/module-8992db69b585-component-docs能力：界面组成.md",".wiki/专题/module-capability/module-75fea8f5ed89-component-ember-cli能力：界面组成.md",".wiki/专题/module-capability/module-b340351f93b1-library-eslint-plugin能力：扩展机制.md",".wiki/专题/module-capability/module-e87d89923754-component-external-docs能力：界面组成.md",".wiki/专题/module-capability/module-802bfc6aff6d-page-frameworks能力：界面组成.md",".wiki/专题/module-capability/module-7ebbec0086be-page-html-vite能力：界面组成.md",".wiki/专题/module-capability/module-61698a049849-component-html能力：界面组成.md",".wiki/专题/module-capability/module-e1a57e3163b0-library-lib能力：扩展机制.md",".wiki/专题/module-capability/module-794a59a98110-component-links能力：界面组成.md",".wiki/专题/module-capability/module-f0dd7c8445c0-router-nextjs-vite能力：路由.md",".wiki/专题/module-capability/module-8da0ecf9a6af-page-nextjs能力：界面组成.md",".wiki/专题/module-capability/module-221ebe304f45-router-nextjs能力：路由.md",".wiki/专题/module-capability/module-3c338a256b00-component-onboarding能力：界面组成.md",".wiki/专题/module-capability/module-eae31257ec3a-entry-portable-stories-kitchen-sink能力：入口编排.md",".wiki/专题/module-capability/module-2373d5792d4d-component-preact能力：界面组成.md",".wiki/专题/module-capability/module-d04cc4beb05d-library-presets能力：扩展机制.md",".wiki/专题/module-capability/module-9afde067d120-library-react-dom-shim能力：扩展机制.md",".wiki/专题/module-capability/module-024ce3ea962b-page-react-native-web-vite能力：界面组成.md",".wiki/专题/module-capability/module-831cabed9c6e-plugin-react-vite能力：扩展机制.md",".wiki/专题/module-capability/module-0f96ce00c9a2-page-react-webpack5能力：界面组成.md",".wiki/专题/module-capability/module-c673c600225a-library-react能力：扩展机制.md",".wiki/专题/module-capability/module-52b3dc54672a-component-renderers能力：界面组成.md",".wiki/专题/module-capability/module-40617804ce25-repository-scripts能力：数据访问.md",".wiki/专题/module-capability/module-5f60b9426ab9-page-server-kitchen-sink能力：界面组成.md",".wiki/专题/module-capability/module-7526a957f0fc-library-server-webpack能力：扩展机制.md",".wiki/专题/module-capability/module-0f2ff1753d5a-page-svelte-vite能力：界面组成.md",".wiki/专题/module-capability/module-e24dd2bf80a2-plugin-sveltekit能力：扩展机制.md",".wiki/专题/module-capability/module-41906d72e7a0-component-svelte能力：界面组成.md",".wiki/专题/module-capability/module-c28fd0809d91-page-test-storybooks能力：界面组成.md",".wiki/专题/module-capability/module-d00597c4403b-component-vitest能力：界面组成.md",".wiki/专题/module-capability/module-63cd1c3f569d-plugin-vue3-vite能力：扩展机制.md",".wiki/专题/module-capability/module-b6d1a1d8c5a8-component-vue3能力：界面组成.md",".wiki/专题/module-capability/module-9f842b811b09-page-web-components-vite能力：界面组成.md",".wiki/专题/module-capability/module-5b6454edd8d9-component-web-components能力：界面组成.md",".wiki/专题/module-capability/module-726bb07a2a71-entry-yarn-pnp能力：入口编排.md"],"initialized":true,"state":"fresh"}}

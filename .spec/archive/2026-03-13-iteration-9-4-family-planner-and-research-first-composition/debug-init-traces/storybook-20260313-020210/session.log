@@ -1,0 +1,69 @@
+repo=E:\project\!byAI\spec-wiki\tmp\test\storybook
+binary=E:\project\!byAI\spec-wiki\target\release\wiki-core.exe
+run_dir=E:\project\!byAI\spec-wiki\.spec\changes\iteration-9-4-family-planner-and-research-first-composition\debug-init-traces\storybook-20260313-020210
+
+[130ms] llm_uncertainty_gate 执行 LLM 不确定性判断
+[130ms] scan 扫描仓库源码
+[155s] llm_usage LLM usage 已更新：1 requests / 2306 tokens
+[159s] llm_usage LLM usage 已更新：2 requests / 5641 tokens
+[161s] llm_usage LLM usage 已更新：3 requests / 8149 tokens
+[164s] llm_usage LLM usage 已更新：4 requests / 10758 tokens
+[168s] llm_usage LLM usage 已更新：5 requests / 12767 tokens
+[171s] llm_usage LLM usage 已更新：6 requests / 15730 tokens
+[173s] llm_usage LLM usage 已更新：7 requests / 18572 tokens
+[176s] llm_usage LLM usage 已更新：8 requests / 28181 tokens
+[178s] llm_usage LLM usage 已更新：9 requests / 42064 tokens
+[181s] llm_usage LLM usage 已更新：10 requests / 55516 tokens
+[184s] llm_usage LLM usage 已更新：11 requests / 58615 tokens
+[188s] llm_usage LLM usage 已更新：12 requests / 61514 tokens
+[191s] llm_usage LLM usage 已更新：13 requests / 64484 tokens
+[193s] llm_usage LLM usage 已更新：14 requests / 67330 tokens
+[196s] llm_usage LLM usage 已更新：15 requests / 70050 tokens
+[199s] llm_usage LLM usage 已更新：16 requests / 72817 tokens
+[214s] parse_symbols 0/3321 解析源码符号
+[216s] parse_symbols 333/3321 解析源码符号 333/3321
+[216s] parse_symbols 665/3321 解析源码符号 665/3321
+[216s] parse_symbols 997/3321 解析源码符号 997/3321
+[216s] parse_symbols 1329/3321 解析源码符号 1329/3321
+[216s] parse_symbols 1661/3321 解析源码符号 1661/3321
+[217s] parse_symbols 1993/3321 解析源码符号 1993/3321
+[217s] parse_symbols 2325/3321 解析源码符号 2325/3321
+[217s] parse_symbols 2657/3321 解析源码符号 2657/3321
+[218s] parse_symbols 2989/3321 解析源码符号 2989/3321
+[218s] parse_symbols 3321/3321 解析源码符号 3321/3321
+[218s] resolve_symbol_graph 解析符号关系
+[219s] analyze_symbol_graph 分析符号图
+[220s] build_module_tree 构建模块树
+[220s] build_contexts 构建页面上下文
+[221s] plan_pages 规划 Wiki 页面
+[223s] render_pages 0/60 渲染页面
+[223s] llm_enrichment 生成页面增强内容
+[307s] llm_usage LLM usage 已更新：17 requests / 79105 tokens
+[451s] llm_usage LLM usage 已更新：18 requests / 86338 tokens
+[662s] llm_usage LLM usage 已更新：19 requests / 92137 tokens
+[869s] llm_usage LLM usage 已更新：20 requests / 97982 tokens
+[1075s] llm_usage LLM usage 已更新：21 requests / 103823 tokens
+[1100s] llm_usage LLM usage 已更新：22 requests / 114599 tokens
+[1317s] llm_usage LLM usage 已更新：23 requests / 122626 tokens
+[1607s] llm_usage LLM usage 已更新：24 requests / 135048 tokens
+[1651s] llm_usage LLM usage 已更新：25 requests / 175679 tokens
+[1839s] llm_enrichment 47/60 生成页面增强内容 47/60
+[1871s] llm_usage LLM usage 已更新：26 requests / 202358 tokens
+[1884s] llm_usage LLM usage 已更新：27 requests / 229133 tokens
+[1901s] llm_usage LLM usage 已更新：28 requests / 256638 tokens
+[2088s] llm_enrichment 59/60 生成页面增强内容 59/60
+[2203s] llm_usage LLM usage 已更新：29 requests / 274398 tokens
+[2385s] llm_enrichment 60/60 生成页面增强内容 60/60
+[2391s] render_pages 6/60 渲染页面 6/60
+[2394s] render_pages 12/60 渲染页面 12/60
+[2398s] render_pages 18/60 渲染页面 18/60
+[2402s] render_pages 24/60 渲染页面 24/60
+[2407s] render_pages 30/60 渲染页面 30/60
+[2411s] render_pages 36/60 渲染页面 36/60
+[2415s] render_pages 42/60 渲染页面 42/60
+[2419s] render_pages 48/60 渲染页面 48/60
+[2423s] render_pages 54/60 渲染页面 54/60
+[2426s] render_pages 60/60 渲染页面 60/60
+[2427s] write_state 写入运行时状态
+[2430s] write_metadata 写入元数据
+terminal={"ok":true,"error":null,"data":{"generated_pages":[".wiki/项目概述.md",".wiki/系统架构.md",".wiki/工作流与部署.md",".wiki/核心概念/核心概念.md",".wiki/核心概念/CSF格式规范.md",".wiki/核心概念/组件故事（Stories）.md",".wiki/核心概念/装饰器和全局状态.md",".wiki/核心概念/预览和管理界面.md",".wiki/插件系统/插件系统.md",".wiki/插件系统/A11y-Addon（可访问性测试）.md",".wiki/插件系统/Addons概览.md",".wiki/插件系统/Docs-Addon（文档生成）.md",".wiki/插件系统/Links-Addon（故事导航）.md",".wiki/插件系统/Themes-Addon（主题切换）.md",".wiki/插件系统/Vitest-Addon（测试集成）.md",".wiki/插件系统/辅助工具-Addons（扩展工具）.md",".wiki/多框架支持/多框架支持.md",".wiki/多框架支持/Angular框架支持.md",".wiki/多框架支持/HTML框架支持.md",".wiki/多框架支持/React框架支持.md",".wiki/多框架支持/Svelte框架支持.md",".wiki/多框架支持/Vue-3框架支持.md",".wiki/多框架支持/Web-Components框架支持.md",".wiki/构建系统/构建系统.md",".wiki/构建系统/Vite构建器详解.md",".wiki/构建系统/Webpack构建器详解.md",".wiki/构建系统/预设配置.md",".wiki/API参考/API参考.md",".wiki/API参考/CLI命令参考.md",".wiki/API参考/开发API参考.md",".wiki/API参考/类型定义参考.md",".wiki/API参考/配置API参考/配置API参考.md",".wiki/API参考/配置API参考/main.js配置.md",".wiki/API参考/配置API参考/manager.js配置.md",".wiki/API参考/配置API参考/preview.js配置.md",".wiki/API参考/配置API参考/构建器配置.md",".wiki/API参考/配置API参考/预设配置.md",".wiki/主题和外观/主题和外观.md",".wiki/主题和外观/主题系统概览.md",".wiki/主题和外观/自定义主题开发.md",".wiki/故障排除/故障排除.md",".wiki/故障排除/调试工具和技巧.md",".wiki/故障排除/运行时错误.md",".wiki/故障排除/配置错误.md",".wiki/测试框架/测试框架.md",".wiki/测试框架/Playwright测试.md",".wiki/测试框架/Vitest集成.md",".wiki/测试框架/可访问性测试.md",".wiki/测试框架/组件测试.md",".wiki/部署和CI_CD/部署和CI_CD.md",".wiki/部署和CI_CD/CI_CD集成.md",".wiki/部署和CI_CD/Chromatic集成.md",".wiki/部署和CI_CD/静态部署.md",".wiki/专题/process/process-handleaddvalueadd-flow-流程主题：handleAddValueAdd-flow.md",".wiki/专题/process/process-handlechange-flow-流程主题：handleChange-flow.md",".wiki/专题/process/process-handlefilechange-flow-流程主题：handleFileChange-flow.md",".wiki/专题/process/process-handlesnippetrendered-flow-流程主题：handleSnippetRendered-flow.md",".wiki/专题/process/process-handletriggerrunevent-flow-流程主题：handleTriggerRunEvent-flow.md",".wiki/专题/repo-archetype/cli-entry-命令入口与执行流.md",".wiki/专题/repo-archetype/config-runtime-配置与运行时.md"],"initialized":true,"state":"fresh"}}

@@ -44,7 +44,6 @@ async function renderSourceHelp() {
   return stdout.join("").trim();
 }
 
-
 test("workspace skeleton files exist", () => {
   const requiredPaths = [
     "Cargo.toml",
@@ -188,6 +187,3 @@ test("spec-wiki build writes bundle into the main package dist directory", async
     path.normalize(path.join(mainPackageDir, "dist")),
   );
 });
-
-
-

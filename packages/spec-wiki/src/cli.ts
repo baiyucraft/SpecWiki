@@ -191,6 +191,3 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
     return 1;
   }
 }
-
-
-

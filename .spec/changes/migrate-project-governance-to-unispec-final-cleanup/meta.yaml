@@ -1,0 +1,15 @@
+id: migrate-project-governance-to-unispec-final-cleanup
+stage: exploration
+deliveryShape: single-change
+multiChange:
+  role: child
+  parent: migrate-project-governance-to-unispec
+  order: 4
+  dependsOn: 
+    - migrate-project-governance-to-unispec-tooling-switch
+    - migrate-project-governance-to-unispec-agent-entrypoints
+artifacts:
+  proposal:
+    status: missing
+  metadata:
+    status: present

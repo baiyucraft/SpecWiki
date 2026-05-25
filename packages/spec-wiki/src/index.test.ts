@@ -237,6 +237,3 @@ test("parseEventLine validates progress events with usage", () => {
     },
   });
 });
-
-
-

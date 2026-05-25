@@ -173,4 +173,3 @@ test("forwardCoreCommand 在 bridge-stdio 模式下打开 llmBridge 并转发 st
   expect(spawnMock.mock.calls[0][2].env?.SPEC_WIKI_V0_1_INDEX_ONLY).toBeUndefined();
   expect(stdin.resume).toHaveBeenCalled();
 });
-

@@ -1,14 +1,16 @@
 # 角色/灵魂
 
-**你是个优秀的项目管理者，组织者，执行者。尽可能的在沟通过程多召集 subagent 来协助你、替你头脑风暴、分析问题、给出最佳解决方案，然后执行。**
+**你是个优秀的项目管理者，组织者，执行者。尽可能的在沟通过程多召集 subagent 来协助你、替你头脑风暴、分析问题，给出最佳解决方案，然后执行。**
 
 # 必须遵守
 
-1. 用中文沟通；
-2. 目前处于测试开发阶段，不需要考虑旧版本的兼容性，兼容性代码可以全部删除；
-3. 在生成具体改动方案时，要召唤一个言辞犀利、标准很高的资深工程师 reviewer（gpt-5.4-mini high subagent）。参考相关项目与现有代码，对方案进行全面评估，只有方案被审核通过了，才可以被实施；
-4. 不要一次性编写很大的文件，要分批写入。
-5. 沟通时，用 `流程框图（Prefer Unicode box-drawing characters`；写入文档时，用 `Mermaid 图`。
+1. 用中文沟通。
+2. subagent 满了记得自动释放。
+3. 目前处于测试开发阶段，不需要考虑旧版本的兼容性，兼容性代码可以全部删除；
+4. 所有分析必须先给出方案，然后再让我确认是否按方案实现，不要擅自修改。
+5. 在生成具体改动方案时，要召唤一个言辞犀利、标准很高的资深工程师 reviewer（subagent）。参考相关项目与现有代码，对方案进行全面评估，只有方案被审核通过了，才可以被实施。
+6. 参考 upstream 时必须标明来源、目标落点和是否为直接迁移 / 改写 / 仅借鉴，禁止无说明照抄。
+7. 沟通时，不要画`Mermaid流程图`，要使用`流程框图/ASCII 图`。写进markdown文件时，才使用`Mermaid流程图`。
 
 # 项目目标
 
@@ -21,10 +23,10 @@
 
 开发过程中需要优先参考以下本地仓库路径，而不是只看远程项目名：
 
-- `deepwiki-rs`本地路径：[tmp/upstream/deepwiki-rs](E:/project/!byAI/spec-wiki/tmp/upstream/deepwiki-rs)
-- `CodeWiki`本地路径：[tmp/upstream/codewiki/codewiki](E:/project/!byAI/spec-wiki/tmp/upstream/codewiki/codewiki)
-- `deepwiki-open`[tmp/upstream/deepwiki-open](E:/project/!byAI/spec-wiki/tmp/upstream/deepwiki-open)
-- `GitNexus`本地路径：[tmp/upstream/GitNexus](E:/project/!byAI/spec-wiki/tmp/upstream/GitNexus)
+- `deepwiki-rs`本地路径：[.upstream/deepwiki-rs](E:/project/!byAI/spec-wiki/.upstream/deepwiki-rs)
+- `CodeWiki`本地路径：[.upstream/codewiki/codewiki](E:/project/!byAI/spec-wiki/.upstream/codewiki/codewiki)
+- `deepwiki-open`[.upstream/deepwiki-open](E:/project/!byAI/spec-wiki/.upstream/deepwiki-open)
+- `GitNexus`本地路径：[.upstream/GitNexus](E:/project/!byAI/spec-wiki/.upstream/GitNexus)
 
 引用这些参考实现时，以当前仓库的 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md)、[DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md) 和 [DESIGN-AGENTS.md](E:/project/!byAI/spec-wiki/DESIGN-AGENTS.md) 为最终边界，不直接照搬其产品形态或目录结构。若旧设计中的参考结论未被重新验证到这些本地仓库的实际源码实现，可以直接推翻。
 
@@ -94,7 +96,7 @@
 - 优先修改已有模块，不平行复制实现。
 - `*.ts` 使用根级 `tsconfig.base.json` 和 `eslint.config.mjs`。
 - 注释以“帮助读懂”为目标，具体格式和粒度统一遵守 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md)。
-- 每轮 OpenSpec tasks 设计或测试时，都需要检查注释是否符合 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md) 的要求（单独建立一个task）。
+- 每轮 UniSpec tasks 设计或测试时，都需要检查注释是否符合 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md) 的要求（单独建立一个task）。
 - 迭代归档时要commit一次
 - 当前阶段不要求保留旧实现兼容层；如果 2.0 主线已经成立，旧字段、旧流程、旧 fallback 可以直接删除。
 - 优先把局部修补收回通用抽象；不要把样本仓库经验直接落成硬编码规则。
@@ -103,14 +105,14 @@
 
 - Rust 测试放 `crates/*/tests/`，Agent 测试放 `agents/*/src/*.test.ts`，跨模块测试放 `scripts/tests/*.test.ts`。
 - 任何行为变化都要补对应层级的测试。
-- 先看 `openspec/**` 当前 change；需求或设计变了，先改 OpenSpec，再改代码。
-- 每轮 OpenSpec tasks 测试阶段，运行 `node scripts/run-test-projects.mjs` 批量对 19 个测试项目执行 `init`（也可指定项目：`node scripts/run-test-projects.mjs axum chi`）。
+- 先看 `.spec/changes/**` 当前 change；需求或设计变了，先改 UniSpec change artifact，再改代码。
+- 每轮 UniSpec tasks 测试阶段，运行 `node scripts/run-test-projects.mjs` 批量对 19 个测试项目执行 `init`（也可指定项目：`node scripts/run-test-projects.mjs axum chi`）。
   - 测试项目集详见 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md) 和 [DESIGN-ITER.md](E:/project/!byAI/spec-wiki/DESIGN-ITER.md)，覆盖 Rust/Go/Python/Java/TS/Vue/React/Android/运维等场景，并以 [SCENE-1.md](E:/project/!byAI/spec-wiki/SCENE-1.md) / [SCENE-2.md](E:/project/!byAI/spec-wiki/SCENE-2.md) 作为场景边界参考。
   - aLocal 和 spec-wiki 指向真实仓库 init 后拷贝回来，其余直接用 release 二进制 JSON IPC。
   - 脚本会保留 `.wiki/` 目录（已有则先删再重建），跑完后可直接检查 `tmp/test/*/.wiki/`。
   - 有 reference 的项目（`tmp/reference/*`）需对比页面结构和 `wiki.metadata.json`，发现差异后调整实现，并输出 `test-project-analysis.md`。
 - 全生命周期验证运行 `node scripts/test-wiki-lifecycle.mjs`（也可指定项目），覆盖 init → status → sync → query → update → 模拟源码变更 → rebuild 全链路，验证 JSON 响应、marker 覆盖率和状态流转。
-- 测试报告分析放在 `changes/**/reference-project-reports/*.md`。
+- 测试报告分析放在 `.spec/changes/**/reference-project-reports/*.md`。
 - 当前做页面质量/结构专项时，优先跑 `storybook + dagger`，再决定是否回到全量 19 项目。
 - 本地 provider / retry / timeout / backoff 等调试参数，测试时优先以 [wiki.dev.yaml](E:/project/!byAI/spec-wiki/wiki.dev.yaml) 为准。
 

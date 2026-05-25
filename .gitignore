@@ -2,11 +2,15 @@ target/
 node_modules/
 dist/
 docs/
-# openspec/
-openspec/changes/archive/
+# .spec/
 .worktrees/
 .archive/
-.wiki/
+.wiki/.cache/
+.wiki/.knowledge/
+.wiki/pages/
+.wiki/wiki.metadata.json
+**/.wiki/.cache/
+crates/wiki-runtime/tests/fixtures/**/.wiki/
 wiki.dev.yaml
 
 参考/
@@ -16,5 +20,5 @@ COMMENTING.md
 SCENE-*.md
 
 tmp/
+.upstream/
 .claude/
-.codex/

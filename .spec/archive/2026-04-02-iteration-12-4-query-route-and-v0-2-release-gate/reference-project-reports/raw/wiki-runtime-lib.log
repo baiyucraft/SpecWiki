@@ -1,0 +1,77 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.71s
+     Running unittests src\lib.rs (target\debug\deps\wiki_runtime-26f12b5d910f8dc6.exe)
+
+running 70 tests
+test generation::managed_sections::tests::render_managed_block_omits_heading_for_empty_title ... ok
+test generation::renderer::tests::renderer_avoids_duplicate_evidence_block_for_reference_markdown ... ok
+test generation::renderer::tests::appendix_section_collects_page_citations_when_section_has_none ... ok
+test generation::managed_sections::tests::parse_with_markers_preserves_empty_title_preamble ... ok
+test generation::renderer::tests::renderer_materializes_cite_and_outline_for_reference_style_sections ... ok
+test generation::renderer::tests::render_page_draft_prepends_page_level_cite_block_when_missing ... ok
+test generation::renderer::tests::render_page_draft_appends_generated_appendix_when_missing ... ok
+test generation::renderer::tests::render_page_draft_preserves_reference_outline_sequence_for_docs_backed_pages ... ok
+test generation::renderer::tests::render_page_draft_generates_outline_diagram_when_missing ... ok
+test generation::renderer::tests::render_page_draft_inserts_generated_toc_for_multi_section_page ... ok
+test generation::renderer::tests::render_page_draft_materializes_diagram_sources_from_page_citations ... ok
+test llm::tests::higher_default_budget_scales_page_research_slots ... ok
+test workflows::init::tests::build_minimal_page_context_marks_missing_child_rollup_as_waiting ... ok
+test workflows::page_render::tests::collect_compose_input_digests_uses_domain_indexes_for_system_pages ... ok
+test workflows::init::tests::build_minimal_page_context_persists_child_contract_and_unit_identity ... ok
+test workflows::page_render::tests::enrich_parent_research_keeps_child_key_sources_on_digest_channel ... ok
+test llm::tests::page_research_trim_crops_nested_evidence_and_diagram_arrays ... ok
+test workflows::init::tests::init_fails_when_user_config_is_invalid ... ok
+test workflows::init::tests::partial_markdown_runtime_is_not_preserved_when_runtime_gates_are_missing ... ok
+test workflows::page_render::tests::load_or_compute_research_stamps_unit_input_hash_on_cached_result ... ok
+test workflows::init::tests::partial_markdown_compose_complete_runtime_is_preserved_for_assemble_resume ... ok
+test workflows::init::tests::incomplete_init_runtime_is_preserved_only_for_narrow_resume_window ... ok
+test workflows::page_render::tests::persist_compose_contract_block_marks_runtime_gate ... ok
+test workflows::page_render::tests::load_or_compute_research_stamps_unit_input_hash_on_fresh_result ... ok
+test workflows::page_render::tests::unit_input_hash_changes_when_llm_budget_contract_changes ... ok
+test workflows::page_render::tests::initialize_runtime_summary_rehydrates_counts_from_preserved_gates ... ok
+test workflows::page_render::tests::validate_compose_contract_inputs_reports_missing_child_rollup ... ok
+test workflows::page_render::tests::validate_compose_contract_inputs_requires_parent_unit_research ... ok
+test workflows::release_scope::tests::release_scope_keeps_planned_state_without_index_only_projection ... ok
+test workflows::research_provider::tests::canonical_provider_input_is_idempotent_after_pretrim ... ok
+test workflows::research_provider::tests::high_level_provider_pages_force_no_tools_without_profile_override ... ok
+test workflows::research_provider::tests::parent_units_with_child_rollups_do_not_short_circuit_force_no_tools_provider_research ... ok
+test workflows::research_provider::tests::provider_diagram_rollup_keeps_deterministic_nodes_and_edges ... ok
+test workflows::research_provider::tests::provider_research_drops_unknown_evidence_paths ... ok
+test workflows::research_provider::tests::provider_research_merges_section_evidence_and_diagrams ... ok
+test workflows::research_provider::tests::provider_research_error_is_recorded_without_aborting_structural_baseline ... ok
+test workflows::research_provider::tests::provider_selection_allows_structural_fallback_in_development_mode ... ok
+test workflows::research_provider::tests::provider_selection_allows_structural_provider_when_development_mode_disables_llm ... ok
+test workflows::research_provider::tests::provider_selection_allows_structural_runtime_only_with_explicit_flag_in_production ... ok
+test workflows::research_provider::tests::provider_selection_blocks_agent_bridge_in_production ... ok
+test workflows::research_provider::tests::provider_selection_blocks_when_llm_disabled_in_production ... ok
+test workflows::research_provider::tests::provider_selection_requires_explicit_structural_runtime_flag_outside_development ... ok
+test workflows::research_provider::tests::provider_tools_policy_follows_research_profile ... ok
+test workflows::research_provider::tests::provider_selection_prefers_provider_backed_runtime ... ok
+test workflows::research_provider::tests::retry_input_only_replays_payload_pressure_errors ... ok
+test workflows::research_provider::tests::retry_input_skips_light_provider_payload ... ok
+test workflows::research_provider::tests::retry_input_trims_heavy_provider_payload ... ok
+test workflows::research_provider::tests::runtime_profile_never_short_circuits_force_no_tools_provider_research ... ok
+test workflows::research_provider::tests::sparse_force_no_tools_leaf_short_circuits_provider_research ... ok
+test workflows::status::tests::derive_runtime_state_keeps_blocker_precedence_over_gate_only_partial_runtime ... ok
+test workflows::status::tests::derive_runtime_state_marks_gate_only_partial_runtime_as_incomplete ... ok
+test workflows::research_provider::tests::sparse_force_no_tools_leaf_skips_provider_request ... ok
+test workflows::page_render::tests::research_stop_trace_records_extended_provider_stats ... ok
+test workflows::page_render::tests::initialize_runtime_gates_preserves_resume_progress_for_current_units ... ok
+test workflows::init::tests::incomplete_init_runtime_is_preserved_when_only_cache_db_exists ... ok
+test workflows::init::tests::init_runtime_is_not_preserved_once_metadata_exists ... ok
+test workflows::page_render::tests::persist_compose_progress_flushes_runtime_summary_immediately ... ok
+test workflows::page_render::tests::compose_pipeline_marks_system_research_failure_as_interrupted ... ok
+test workflows::page_render::tests::compose_pipeline_marks_domain_research_failure_as_interrupted ... ok
+test workflows::page_render::tests::persist_runtime_blocker_for_repo_projects_blocker_to_planned_unit_gates ... ok
+test workflows::page_render::tests::persist_runtime_blocker_for_repo_replaces_gates_with_runtime_blocker ... ok
+test workflows::page_render::tests::prepare_resume_state_keeps_incomplete_runtime_without_checkpoint ... ok
+test workflows::page_render::tests::resumed_research_and_compose_progress_do_not_double_count ... ok
+test workflows::page_render::tests::compose_pipeline_marks_summary_as_researching_before_system_research ... ok
+test workflows::page_render::tests::compose_pipeline_saves_checkpoint_and_resumes_from_research_cache ... ok
+test workflows::page_render::tests::compose_pipeline_persists_unit_research_stop_reason_in_cache ... ok
+test workflows::page_render::tests::compose_pipeline_invokes_research_in_system_domain_unit_order ... ok
+test workflows::page_render::tests::compose_pipeline_drops_stale_checkpoint_when_facts_change ... ok
+test workflows::page_render::tests::compose_pipeline_produces_deterministic_output ... ok
+test workflows::init::tests::init_creates_default_user_config_when_missing ... ok
+
+test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.52s
+

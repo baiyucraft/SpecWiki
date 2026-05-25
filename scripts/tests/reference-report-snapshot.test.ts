@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..", "..");
 const scriptPath = path.join(rootDir, "scripts", "collect-reference-project-reports.mjs");
-const changesDir = path.join(rootDir, "openspec", "changes");
+const changesDir = path.join(rootDir, ".spec", "changes");
 
 function runReport(changeName: string, extraArgs: string[] = []) {
   const changeDir = path.join(changesDir, changeName);

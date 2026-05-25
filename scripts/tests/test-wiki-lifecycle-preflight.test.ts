@@ -50,4 +50,3 @@ test("warm restore status after init 接受 fresh 与 needs_update", () => {
   expect(shouldAcceptStatusAfterWarmRestore({ data: { state: "needs_update" } })).toBe(true);
   expect(shouldAcceptStatusAfterWarmRestore({ data: { state: "runtime_incomplete" } })).toBe(false);
 });
-

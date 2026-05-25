@@ -1,0 +1,14 @@
+id: migrate-project-governance-to-unispec-agent-entrypoints
+stage: exploration
+deliveryShape: single-change
+multiChange:
+  role: child
+  parent: migrate-project-governance-to-unispec
+  order: 3
+  dependsOn: 
+    - migrate-project-governance-to-unispec-structure-artifacts
+artifacts:
+  proposal:
+    status: missing
+  metadata:
+    status: present

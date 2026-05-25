@@ -1,0 +1,13 @@
+{
+  "binary": "E:\\project\\!byAI\\spec-wiki\\target\\debug\\wiki-core.exe",
+  "args": [
+    "--json",
+    "--debug-trace-dir",
+    "E:\\project\\!byAI\\spec-wiki\\.spec\\changes\\iteration-9-4-family-planner-and-research-first-composition\\debug-init-traces\\storybook-20260312-232545"
+  ],
+  "command": {
+    "action": "init",
+    "repoRoot": "tmp/test/storybook",
+    "streamProgress": true
+  }
+}

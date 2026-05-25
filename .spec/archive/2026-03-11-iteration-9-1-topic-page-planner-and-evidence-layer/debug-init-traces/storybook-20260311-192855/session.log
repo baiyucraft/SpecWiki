@@ -1,0 +1,21 @@
+repo=E:\project\!byAI\spec-wiki\tmp\test\storybook
+binary=E:\project\!byAI\spec-wiki\target\debug\wiki-core.exe
+run_dir=E:\project\!byAI\spec-wiki\.spec\changes\iteration-9-1-topic-page-planner-and-evidence-layer\debug-init-traces\storybook-20260311-192855
+
+[7ms] llm_uncertainty_gate 执行 LLM 不确定性判断
+[7ms] scan 扫描仓库源码
+[390s] parse_symbols 0/3321 解析源码符号
+[396s] parse_symbols 1/3321 解析源码符号 1/3321
+[396s] parse_symbols 2/3321 解析源码符号 2/3321
+[396s] parse_symbols 3/3321 解析源码符号 3/3321
+[396s] parse_symbols 4/3321 解析源码符号 4/3321
+[396s] parse_symbols 5/3321 解析源码符号 5/3321
+[396s] parse_symbols 6/3321 解析源码符号 6/3321
+[396s] parse_symbols 7/3321 解析源码符号 7/3321
+[396s] parse_symbols 8/3321 解析源码符号 8/3321
+[396s] parse_symbols 9/3321 解析源码符号 9/3321
+[396s] parse_symbols 10/3321 解析源码符号 10/3321
+[396s] parse_symbols 11/3321 解析源码符号 11/3321
+[396s] parse_symbols 12/3321 解析源码符号 12/3321
+[396s] parse_symbols 13/3321 解析源码符号 13/3321
+[396s] parse_symbols 14/3321 解析源码符号 14/3321

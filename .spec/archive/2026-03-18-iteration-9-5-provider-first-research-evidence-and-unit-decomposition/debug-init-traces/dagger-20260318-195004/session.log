@@ -1,0 +1,114 @@
+repo=E:\project\!byAI\spec-wiki\tmp\test\dagger
+binary=E:\project\!byAI\spec-wiki\target\debug\wiki-core.exe
+run_dir=E:\project\!byAI\spec-wiki\.spec\changes\iteration-9-5-provider-first-research-evidence-and-unit-decomposition\debug-init-traces\dagger-20260318-195004
+
+[7ms] llm_uncertainty_gate 执行 LLM 不确定性判断
+[7ms] scan 扫描仓库源码
+[131s] llm_usage LLM usage 已更新：1 requests / 2036 tokens
+[135s] llm_usage LLM usage 已更新：2 requests / 4684 tokens
+[138s] llm_usage LLM usage 已更新：3 requests / 7331 tokens
+[143s] llm_usage LLM usage 已更新：4 requests / 10058 tokens
+[159s] llm_usage LLM usage 已更新：5 requests / 12425 tokens
+[186s] llm_usage LLM usage 已更新：6 requests / 15407 tokens
+[202s] llm_usage LLM usage 已更新：7 requests / 18515 tokens
+[209s] llm_usage LLM usage 已更新：8 requests / 21364 tokens
+[220s] llm_usage LLM usage 已更新：9 requests / 24226 tokens
+[233s] llm_usage LLM usage 已更新：10 requests / 27152 tokens
+[243s] llm_usage LLM usage 已更新：11 requests / 30099 tokens
+[251s] llm_usage LLM usage 已更新：12 requests / 33110 tokens
+[256s] llm_usage LLM usage 已更新：13 requests / 36137 tokens
+[262s] llm_usage LLM usage 已更新：14 requests / 39178 tokens
+[272s] llm_usage LLM usage 已更新：15 requests / 42260 tokens
+[279s] llm_usage LLM usage 已更新：16 requests / 45384 tokens
+[287s] llm_usage LLM usage 已更新：17 requests / 48605 tokens
+[291s] llm_usage LLM usage 已更新：18 requests / 51822 tokens
+[298s] llm_usage LLM usage 已更新：19 requests / 54893 tokens
+[303s] llm_usage LLM usage 已更新：20 requests / 58003 tokens
+[308s] llm_usage LLM usage 已更新：21 requests / 61053 tokens
+[310s] llm_usage LLM usage 已更新：22 requests / 64098 tokens
+[311s] llm_usage LLM usage 已更新：23 requests / 71837 tokens
+[313s] llm_usage LLM usage 已更新：24 requests / 74776 tokens
+[315s] llm_usage LLM usage 已更新：25 requests / 77970 tokens
+[316s] llm_usage LLM usage 已更新：26 requests / 80973 tokens
+[317s] llm_usage LLM usage 已更新：27 requests / 84033 tokens
+[319s] llm_usage LLM usage 已更新：28 requests / 87038 tokens
+[320s] llm_usage LLM usage 已更新：29 requests / 90090 tokens
+[322s] llm_usage LLM usage 已更新：30 requests / 93184 tokens
+[323s] llm_usage LLM usage 已更新：31 requests / 96265 tokens
+[325s] llm_usage LLM usage 已更新：32 requests / 99433 tokens
+[326s] llm_usage LLM usage 已更新：33 requests / 102470 tokens
+[328s] llm_usage LLM usage 已更新：34 requests / 105556 tokens
+[329s] llm_usage LLM usage 已更新：35 requests / 108600 tokens
+[331s] llm_usage LLM usage 已更新：36 requests / 111638 tokens
+[333s] llm_usage LLM usage 已更新：37 requests / 114783 tokens
+[334s] llm_usage LLM usage 已更新：38 requests / 117772 tokens
+[337s] llm_usage LLM usage 已更新：39 requests / 120752 tokens
+[338s] llm_usage LLM usage 已更新：40 requests / 123782 tokens
+[340s] llm_usage LLM usage 已更新：41 requests / 126866 tokens
+[341s] llm_usage LLM usage 已更新：42 requests / 129901 tokens
+[343s] llm_usage LLM usage 已更新：43 requests / 132956 tokens
+[345s] llm_usage LLM usage 已更新：44 requests / 157400 tokens
+[346s] llm_usage LLM usage 已更新：45 requests / 160394 tokens
+[348s] llm_usage LLM usage 已更新：46 requests / 163052 tokens
+[349s] llm_usage LLM usage 已更新：47 requests / 165926 tokens
+[351s] llm_usage LLM usage 已更新：48 requests / 168599 tokens
+[427s] parse_symbols 0/1950 解析源码符号
+[429s] parse_symbols 195/1950 解析源码符号 195/1950
+[429s] parse_symbols 390/1950 解析源码符号 390/1950
+[429s] parse_symbols 585/1950 解析源码符号 585/1950
+[429s] parse_symbols 780/1950 解析源码符号 780/1950
+[430s] parse_symbols 975/1950 解析源码符号 975/1950
+[430s] parse_symbols 1170/1950 解析源码符号 1170/1950
+[430s] parse_symbols 1365/1950 解析源码符号 1365/1950
+[430s] parse_symbols 1560/1950 解析源码符号 1560/1950
+[430s] parse_symbols 1755/1950 解析源码符号 1755/1950
+[430s] parse_symbols 1950/1950 解析源码符号 1950/1950
+[430s] resolve_symbol_graph 解析符号关系
+[433s] analyze_symbol_graph 分析符号图
+[444s] build_module_tree 构建模块树
+[444s] build_contexts 构建页面上下文
+[445s] knowledge_planning 知识域发现与单元规划
+[445s] research 执行分层研究
+[445s] compose 组合生成页面内容
+[445s] research_provider 当前 workflow 使用 provider-backed unit research，并保留 structural research 作为稳定基线 (mode=provider_backed)
+[457s] llm_usage LLM usage 已更新：49 requests / 173277 tokens
+[481s] llm_usage LLM usage 已更新：50 requests / 180031 tokens
+[515s] llm_usage LLM usage 已更新：51 requests / 185990 tokens
+[531s] llm_usage LLM usage 已更新：52 requests / 189434 tokens
+[559s] llm_usage LLM usage 已更新：53 requests / 195249 tokens
+[565s] llm_usage LLM usage 已更新：54 requests / 199145 tokens
+[590s] llm_usage LLM usage 已更新：55 requests / 205997 tokens
+[607s] llm_usage LLM usage 已更新：56 requests / 211580 tokens
+[610s] llm_usage LLM usage 已更新：57 requests / 215077 tokens
+[632s] llm_usage LLM usage 已更新：58 requests / 219680 tokens
+[637s] llm_usage LLM usage 已更新：59 requests / 222918 tokens
+[651s] llm_usage LLM usage 已更新：60 requests / 227197 tokens
+[656s] llm_usage LLM usage 已更新：61 requests / 232137 tokens
+[674s] llm_usage LLM usage 已更新：62 requests / 238321 tokens
+[676s] llm_usage LLM usage 已更新：63 requests / 241361 tokens
+[688s] llm_usage LLM usage 已更新：64 requests / 245268 tokens
+[692s] llm_usage LLM usage 已更新：65 requests / 248343 tokens
+[701s] llm_usage LLM usage 已更新：66 requests / 251930 tokens
+[704s] llm_usage LLM usage 已更新：67 requests / 254980 tokens
+[719s] llm_usage LLM usage 已更新：68 requests / 258770 tokens
+[721s] llm_usage LLM usage 已更新：69 requests / 261863 tokens
+[734s] llm_usage LLM usage 已更新：70 requests / 265808 tokens
+[764s] llm_usage LLM usage 已更新：71 requests / 272113 tokens
+[794s] llm_usage LLM usage 已更新：72 requests / 278395 tokens
+[821s] llm_usage LLM usage 已更新：73 requests / 284495 tokens
+[826s] llm_usage LLM usage 已更新：74 requests / 288604 tokens
+[848s] llm_usage LLM usage 已更新：75 requests / 295004 tokens
+[870s] llm_usage LLM usage 已更新：76 requests / 300782 tokens
+[875s] llm_usage LLM usage 已更新：77 requests / 304328 tokens
+[892s] llm_usage LLM usage 已更新：78 requests / 308925 tokens
+[897s] llm_usage LLM usage 已更新：79 requests / 312592 tokens
+[917s] llm_usage LLM usage 已更新：80 requests / 317442 tokens
+[1098s] llm_usage LLM usage 已更新：81 requests / 332466 tokens
+[1339s] llm_usage LLM usage 已更新：82 requests / 347265 tokens
+[1408s] llm_usage LLM usage 已更新：83 requests / 359408 tokens
+[1479s] llm_usage LLM usage 已更新：84 requests / 373040 tokens
+[1599s] llm_usage LLM usage 已更新：85 requests / 393160 tokens
+[1655s] llm_usage LLM usage 已更新：86 requests / 407881 tokens
+[1835s] llm_usage LLM usage 已更新：87 requests / 422863 tokens
+[1952s] llm_usage LLM usage 已更新：88 requests / 437771 tokens
+[1977s] llm_usage LLM usage 已更新：89 requests / 443914 tokens

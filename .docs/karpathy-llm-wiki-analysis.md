@@ -83,7 +83,7 @@ Karpathy 的文章和当前仓库并不等价，但它的方向与 `DESIGN-3.0.m
 
 4. 都把规则文件视为关键组成
    - 文章里叫 `schema`。
-   - 当前仓库里对应的是 `AGENTS.md`、设计文档、OpenSpec、注释规范和后续可能收束出的正式 workflow contract。
+   - 当前仓库里对应的是 `AGENTS.md`、设计文档、UniSpec、注释规范和后续可能收束出的正式 workflow contract。
 
 ### 不同点
 
@@ -164,7 +164,7 @@ flowchart TD
 文章对 `schema` 的强调是对的。当前仓库已经有这个雏形，但还可以更进一步：
 
 - 把“如何 ingest / update / compose / cite / lint”收束成更清晰的可执行合同
-- 让代理规则、设计文档、OpenSpec 和 runtime contract 的边界更清楚
+- 让代理规则、设计文档、UniSpec 和 runtime contract 的边界更清楚
 - 减少“知道很多原则，但 agent 不知道按什么顺序落实”的落差
 
 ## 不建议直接照搬的点

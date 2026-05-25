@@ -1,6 +1,6 @@
 /**
  * 这个文件负责 `spec-wiki init` 的宿主选择编排。
- * 它借鉴 openspec 的“检测 + 交互多选 + 非交互兜底”流程，并复用宿主层提供的 prompt 组件。
+ * 它借鉴 UniSpec 的“检测 + 交互多选 + 非交互兜底”流程，并复用宿主层提供的 prompt 组件。
  */
 import {
   searchableMultiSelect,

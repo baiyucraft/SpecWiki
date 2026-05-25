@@ -60,4 +60,3 @@ test("sync 与 rebuild skill 使用正式公开入口文案", () => {
   expect(rebuildSkill).toContain("`rebuild` is the explicit full runtime rebuild entry point. It does not replace `update`.");
   expect(rebuildSkill).not.toContain("formal guarantee");
 });
-
