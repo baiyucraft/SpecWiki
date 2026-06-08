@@ -1,49 +1,51 @@
 ---
 title: 01-快速上手
-description: <当前项目的最短上手路径>
-updated: 2026-04-28
-owner: unispec
+description: spec-wiki 的最短上手路径
+updated: 2026-05-25
+owner: docs
 ---
 
 # 01-快速上手
 
+本栏目面向首次接手项目的维护者和 Agent，目标是快速判断项目是什么、怎么准备环境、怎么运行验证。
+
 ## 项目定位
 
-- <项目一句话定位>
-- <目标用户或使用场景>
+- `spec-wiki` 是 Repo Wiki Core + Agents 项目。
+- 它提供 TS CLI 与 Rust runtime：CLI 负责宿主 bootstrap 和 runtime forwarding，Rust crates 负责事实扫描、知识组织、运行时生命周期和查询。
+- 当前包名仍为 `spec-wiki`；UniSpec 只管理项目变更治理，不改变产品包名。
 
 ## 环境前提
 
-- <运行时版本，例如 Node / Python / Java / Rust>
-- <包管理器或构建工具>
-- <外部服务或本地依赖>
+- Node.js / pnpm：根级 `package.json` 声明 `pnpm@10.6.3`。
+- Rust / Cargo：根级 `Cargo.toml` 管理 `wiki-model`、`wiki-index`、`wiki-knowledge`、`wiki-runtime` workspace。
+- Windows x64：`packages/spec-wiki/package.json` 当前发布目标限制为 `win32` / `x64`。
+- 本地 provider、timeout、retry 等调试配置优先参考 `wiki.dev.yaml`。
 
 ## 首次运行
 
-~~~bash
-<安装依赖命令>
-<启动或运行命令>
-~~~
+```bash
+pnpm install
+pnpm run build
+pnpm run lint
+cargo test
+```
 
 ## 常用命令
 
 | 命令 | 用途 |
 | --- | --- |
-| <命令> | <用途> |
+| `pnpm run build` | 构建发布产物与 CLI bundle |
+| `pnpm run lint` | 运行 ESLint |
+| `pnpm run test` | 运行工作区测试脚本；依赖本地共享 fixture 时可能需要先准备 `tmp/test/*` |
+| `cargo test` | 运行 Rust workspace 测试 |
+| `spec-wiki init --tool codex --repo-root .` | 安装宿主 bootstrap 资产 |
+| `spec-wiki wiki init --repo-root .` | 初始化 repo-local knowledge runtime |
 
 ## 推荐阅读路径
 
-- <第一步阅读>
-- <第二步阅读>
-- <第三步阅读>
-
-## 按需补充页面
-
-初始化 wiki 时，按项目情况创建或补充以下页面；不适用的页面可在本页标记原因，不要硬造内容。
-
-| 页面 | 用途 |
-| --- | --- |
-| 00-环境准备.md | <运行时、工具链、账号权限和外部依赖> |
-| 01-启动项目.md | <本地启动、开发服务器或主要运行入口> |
-| 02-构建项目.md | <构建、打包、发布前检查；无构建步骤时标记不适用> |
-| 03-常见问题.md | <新成员或使用者最常遇到的问题与处理方式> |
+1. [00-环境准备](./00-环境准备.md)
+2. [01-启动项目](./01-启动项目.md)
+3. [02-构建项目](./02-构建项目.md)
+4. [03-常见问题](./03-常见问题.md)
+5. [03-模块指南](../03-模块指南/INDEX.md)

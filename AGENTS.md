@@ -12,109 +12,59 @@
 6. 参考 upstream 时必须标明来源、目标落点和是否为直接迁移 / 改写 / 仅借鉴，禁止无说明照抄。
 7. 沟通时，不要画`Mermaid流程图`，要使用`流程框图/ASCII 图`。写进markdown文件时，才使用`Mermaid流程图`。
 
-# 项目目标
+# 项目入口
 
-目标是构建一个 Repo Wiki Core + Agents 体系：自动扫描代码仓库，生成并持续更新 `.wiki/`，让人和 Agent 都能共享同一层项目知识。
+目标是构建一个 Repo Wiki Core + Agents 体系：自动扫描代码仓库，生成并持续更新 `.wiki/`，让人和 Agent 共享同一层项目知识。
 
-设计与边界优先看 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md)、[DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md)、[DESIGN-AGENTS.md](E:/project/!byAI/spec-wiki/DESIGN-AGENTS.md)、[SCENE-1.md](E:/project/!byAI/spec-wiki/SCENE-1.md) 和 [SCENE-2.md](E:/project/!byAI/spec-wiki/SCENE-2.md)。
-代码注释规范单独见 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md)。
+本文件只保留执行入口和强约束。长期项目知识从 [.wiki/INDEX.md](E:/project/!byAI/spec-wiki/.wiki/INDEX.md) 进入；Agent 协作入口见 [.wiki/00-文档约定/03-Agent协作入口.md](E:/project/!byAI/spec-wiki/.wiki/00-文档约定/03-Agent协作入口.md)。
 
-# 开发参考
+# 必读入口
 
-开发过程中需要优先参考以下本地仓库路径，而不是只看远程项目名：
+| 事项 | 入口 |
+| --- | --- |
+| 总体设计 | [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md) |
+| runtime 主路径、`.wiki/` 分层和生命周期 | [DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md) |
+| 宿主接入、bootstrap 和资产模型 | [DESIGN-AGENTS.md](E:/project/!byAI/spec-wiki/DESIGN-AGENTS.md) |
+| 场景边界 | [SCENE-1.md](E:/project/!byAI/spec-wiki/SCENE-1.md)、[SCENE-2.md](E:/project/!byAI/spec-wiki/SCENE-2.md) |
+| 注释规范 | [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md) |
+| Wiki 长期知识 | [.wiki/INDEX.md](E:/project/!byAI/spec-wiki/.wiki/INDEX.md) |
+| UniSpec 开发规范 | [.wiki/00-文档约定/02-UniSpec开发规范.md](E:/project/!byAI/spec-wiki/.wiki/00-文档约定/02-UniSpec开发规范.md) |
+| 测试与验收 | [.wiki/02-开发指南/01-测试与验收.md](E:/project/!byAI/spec-wiki/.wiki/02-开发指南/01-测试与验收.md) |
+| 脚本与工作流 | [.wiki/02-开发指南/02-脚本与工作流.md](E:/project/!byAI/spec-wiki/.wiki/02-开发指南/02-脚本与工作流.md) |
+| 参考实现边界 | [.wiki/02-开发指南/03-参考实现边界.md](E:/project/!byAI/spec-wiki/.wiki/02-开发指南/03-参考实现边界.md) |
+| 模块分层 | [.wiki/03-模块指南/INDEX.md](E:/project/!byAI/spec-wiki/.wiki/03-模块指南/INDEX.md) |
+| CLI 与运行时产物 | [.wiki/04-对外方法/INDEX.md](E:/project/!byAI/spec-wiki/.wiki/04-对外方法/INDEX.md) |
 
-- `deepwiki-rs`本地路径：[.upstream/deepwiki-rs](E:/project/!byAI/spec-wiki/.upstream/deepwiki-rs)
-- `CodeWiki`本地路径：[.upstream/codewiki/codewiki](E:/project/!byAI/spec-wiki/.upstream/codewiki/codewiki)
-- `deepwiki-open`[.upstream/deepwiki-open](E:/project/!byAI/spec-wiki/.upstream/deepwiki-open)
-- `GitNexus`本地路径：[.upstream/GitNexus](E:/project/!byAI/spec-wiki/.upstream/GitNexus)
+# 开工检查
 
-引用这些参考实现时，以当前仓库的 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md)、[DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md) 和 [DESIGN-AGENTS.md](E:/project/!byAI/spec-wiki/DESIGN-AGENTS.md) 为最终边界，不直接照搬其产品形态或目录结构。若旧设计中的参考结论未被重新验证到这些本地仓库的实际源码实现，可以直接推翻。
+```text
+AGENTS.md
+  -> .spec/changes/**
+  -> .wiki/INDEX.md
+  -> DESIGN-*.md / COMMENTING.md
+  -> code / tests
+```
 
-# 当前核心设计约束
-
-- 当前系统设计主路径以 [DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md) 为准：
-  - `Facts -> Knowledge Planning -> Research -> Compose -> Assemble`
-- 当前 crate 目标边界以 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md) 为准：
-  - `wiki-model / wiki-index / wiki-knowledge / wiki-runtime`
-- “知识单元（KnowledgeUnit）”是一等抽象，“页面类型”是结果，不要再回到 `module/topic/family` 直接驱动一切的旧思路。
-- `overview / architecture / module / topic / family-*` 这些页面语义如果需要新增或调整，必须先回答：
-  - 它对应的 KnowledgeDomain / KnowledgeUnit 是什么
-  - 它属于哪一层输出
-- 生成链可优先从这些仓库的实际源码中寻找实现灵感：
-  - `CodeWiki`
-  - `deepwiki-rs`
-  - `GitNexus`
-  - `deepwiki-open`
-- 但这些参考映射不是固定教条；只有当本地源码阅读能支撑时，才允许沉淀为当前设计依据。
-- `deepwiki-open` 默认仍偏 query / RAG / session / 消费层参考，不自动视为 core 生成主链模板。
-
-# 当前验收约束
-
-- 当前阶段的页面质量专项验收样本是：
-  - `storybook`
-  - `dagger`
-- 这两个样本用于验证 core 抽象是否正确，不允许把样本仓库名、reference 标题或固定目录结构硬编码进 core 逻辑。
-- 对这类样本仓库的结论，应沉淀为通用规则，例如：
-  - `repo_archetype_signals`
-  - `knowledge domain`
-  - `knowledge unit`
-  - `leaf decomposition policy`
-  - `citation / diagram / compose policy`
-- 不允许新增“为了某个样本过测试”的专有 planner / renderer 分支。
-
-# 目录通配
-
-- `crates/*`
-  - Rust 包。`crates/wiki-model/**`、`crates/wiki-index/**`、`crates/wiki-knowledge/**`、`crates/wiki-runtime/**` 分别承载共享模型、facts/index、knowledge、runtime。
-- `agents/*`
-  - 宿主接入层。只做参数收集、binary 调用、结果解析，不承载 Wiki 业务规则。
-- `scripts/*.mjs`
-  - 根级编排脚本。只负责 build / test / publish / dist 组装。
-- `scripts/tests/*.test.ts`
-  - 根级整体测试。只放跨包、staging、e2e、工作区级检查。
-- `dist/**`
-  - 发布产物目录，不写业务逻辑。
-- `*.config.mjs` / `tsconfig*.json`
-  - 共享工具链配置。TypeScript 与 ESLint 统一从根目录继承。
-
-# 分层规则
-
-- 命名统一使用 `Agents`，不要回退到 `Adapters`。
-- 宿主接入、bootstrap、资产模型与扩展适配边界以 [DESIGN-AGENTS.md](E:/project/!byAI/spec-wiki/DESIGN-AGENTS.md) 为准；新增宿主优先走公共内核 + HostAdapter，而不是新增独立宿主包。
-- `.wiki/.knowledge/**`、`.wiki/pages/**`、`.wiki/wiki.metadata.json`、`.wiki/.cache/**` 是当前 runtime 分层，职责不能混用。
-- `Facts -> Knowledge Planning -> Research -> Compose -> Assemble` 是当前 core 的主路径，新增实现不要绕过这条链路直接拼页面。
-- `PageContext`、`PlannedPage`、`renderer` 都应服务于 KnowledgeUnit 主线，避免重新长出独立的旧页面语义层。
-- `crates/*/package.json`
-  - 子包自管 `build / test`。
-- `agents/*/package.json`
-  - 子包自管 `build / test`。
-- 根级 `package.json`
-  - 只保留总入口：`build`、`lint`、`test`、`publish`。
-
-# 实施约定
-
-- 优先修改已有模块，不平行复制实现。
-- `*.ts` 使用根级 `tsconfig.base.json` 和 `eslint.config.mjs`。
-- 注释以“帮助读懂”为目标，具体格式和粒度统一遵守 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md)。
-- 每轮 UniSpec tasks 设计或测试时，都需要检查注释是否符合 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md) 的要求（单独建立一个task）。
-- 迭代归档时要commit一次
-- 当前阶段不要求保留旧实现兼容层；如果 2.0 主线已经成立，旧字段、旧流程、旧 fallback 可以直接删除。
-- 优先把局部修补收回通用抽象；不要把样本仓库经验直接落成硬编码规则。
-
-# 测试与变更
-
-- Rust 测试放 `crates/*/tests/`，Agent 测试放 `agents/*/src/*.test.ts`，跨模块测试放 `scripts/tests/*.test.ts`。
-- 任何行为变化都要补对应层级的测试。
 - 先看 `.spec/changes/**` 当前 change；需求或设计变了，先改 UniSpec change artifact，再改代码。
-- 每轮 UniSpec tasks 测试阶段，运行 `node scripts/run-test-projects.mjs` 批量对 19 个测试项目执行 `init`（也可指定项目：`node scripts/run-test-projects.mjs axum chi`）。
-  - 测试项目集详见 [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md) 和 [DESIGN-ITER.md](E:/project/!byAI/spec-wiki/DESIGN-ITER.md)，覆盖 Rust/Go/Python/Java/TS/Vue/React/Android/运维等场景，并以 [SCENE-1.md](E:/project/!byAI/spec-wiki/SCENE-1.md) / [SCENE-2.md](E:/project/!byAI/spec-wiki/SCENE-2.md) 作为场景边界参考。
-  - aLocal 和 spec-wiki 指向真实仓库 init 后拷贝回来，其余直接用 release 二进制 JSON IPC。
-  - 脚本会保留 `.wiki/` 目录（已有则先删再重建），跑完后可直接检查 `tmp/test/*/.wiki/`。
-  - 有 reference 的项目（`tmp/reference/*`）需对比页面结构和 `wiki.metadata.json`，发现差异后调整实现，并输出 `test-project-analysis.md`。
-- 全生命周期验证运行 `node scripts/test-wiki-lifecycle.mjs`（也可指定项目），覆盖 init → status → sync → query → update → 模拟源码变更 → rebuild 全链路，验证 JSON 响应、marker 覆盖率和状态流转。
-- 测试报告分析放在 `.spec/changes/**/reference-project-reports/*.md`。
-- 当前做页面质量/结构专项时，优先跑 `storybook + dagger`，再决定是否回到全量 19 项目。
-- 本地 provider / retry / timeout / backoff 等调试参数，测试时优先以 [wiki.dev.yaml](E:/project/!byAI/spec-wiki/wiki.dev.yaml) 为准。
+- 新实现沿 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble` 主链推进。
+- Rust core 边界是 `wiki-model / wiki-index / wiki-knowledge / wiki-runtime`。
+- 宿主接入统一使用 `Agents` 命名；新增宿主优先走公共内核 + HostAdapter。
+- 当前阶段不要求保留旧实现兼容层；旧字段、旧流程、旧 fallback 可以在主线成立后删除。
+- 迭代归档时要 commit 一次。
 
+# 文档与产物边界
 
+- `.wiki/` 只沉淀稳定项目说明、开发约定、模块指南和对外契约索引。
+- `.spec/changes/**` 与 `.spec/archive/**` 保存 change artifact，不把 proposal、design、review 或测试报告原文复制到 Wiki。
+- `.wiki/.knowledge/**`、`.wiki/pages/**`、`.wiki/wiki.metadata.json`、`.wiki/.cache/**` 是 runtime 分层，职责不能混用。
+- 普通 Wiki 页面命名使用 `NN-主题.md`；栏目入口保留 `INDEX.md`；规格基线 capability 保留 `capabilities/<capability>/spec.md`。
+- `CLAUDE.md` 是当前并列宿主入口，通过 symlink 指向 `AGENTS.md`；除非用户明确要求，本文件整理不单独拆分或删除它。
 
+<!-- unispec:common-doc-rules:start -->
+# 常用文档规范
+
+- 项目总索引：`.wiki/INDEX.md`。
+- `.wiki/` 是项目长期知识库，沉淀稳定的项目说明、开发约定、模块指南和对外契约索引。
+- `.tmp/` 用于本地临时输出、调试文件和一次性验证结果。
+- `.docs/` 只用于阶段性设计稿、调研记录或迁移说明；实现完成后应删除或整理迁移到 `.wiki/`。
+<!-- unispec:common-doc-rules:end -->
