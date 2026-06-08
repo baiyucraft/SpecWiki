@@ -39,7 +39,7 @@ project knowledge runtime + auditable long-term memory
 |------|------|------|
 | [DESIGN-RUNTIME.md](./DESIGN-RUNTIME.md) | 整个 wiki 系统的总运行架构、`.wiki/` 结构、query route、生命周期与恢复策略 | **当前** |
 | [DESIGN-AGENTS.md](./DESIGN-AGENTS.md) | `spec-wiki` 的宿主接入、bootstrap、runtime forwarding 与宿主扩展模型 | **当前** |
-| [.docs/implementation-roadmap.md](./.docs/implementation-roadmap.md) | 3.0 的拆包顺序、迁移路线、验收重点、**阶段性迭代参考** | 阶段材料 |
+| [.docs/roadmap/implementation-roadmap.md](./.docs/roadmap/implementation-roadmap.md) | 3.0 的拆包顺序、迁移路线、验收重点、**阶段性迭代参考** | 阶段材料 |
 | [SCENE-1.md](./SCENE-1.md) | 第一版 9 个核心用户故事 | **当前** |
 | [SCENE-2.md](./SCENE-2.md) | 第一版之外的重要扩展场景 | **当前** |
 | [.archive/design/README.md](./.archive/design/README.md) | 旧 DESIGN 文档归档说明与映射关系 | 历史归档 |
@@ -207,7 +207,7 @@ wiki-runtime    <- 依赖 wiki-model + wiki-index + wiki-knowledge
 
 与实施脚本的关系：
 
-- 项目集跑批与生命周期验证的具体执行方式，见 [.docs/implementation-roadmap.md](./.docs/implementation-roadmap.md)
+- 项目集跑批与生命周期验证的具体执行方式，见 [.docs/roadmap/implementation-roadmap.md](./.docs/roadmap/implementation-roadmap.md)
 - 日常测试约束以 [AGENTS.md](./AGENTS.md) 中的测试与变更章节为准
 
 ## 当前阶段的设计约束
