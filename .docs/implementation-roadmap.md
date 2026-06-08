@@ -6,14 +6,14 @@
 
 请先结合：
 
-- [DESIGN-3.0.md](./DESIGN-3.0.md)
-- [DESIGN-RUNTIME.md](./DESIGN-RUNTIME.md)
-- [SCENE-1.md](./SCENE-1.md)
-- [SCENE-2.md](./SCENE-2.md)
+- [DESIGN-3.0.md](../DESIGN-3.0.md)
+- [DESIGN-RUNTIME.md](../DESIGN-RUNTIME.md)
+- [SCENE-1.md](../SCENE-1.md)
+- [SCENE-2.md](../SCENE-2.md)
 
 历史迭代、旧目标和旧编号说明，见：
 
-- [.archive/design/DESIGN-ITER.md](./.archive/design/DESIGN-ITER.md)
+- [.archive/design/DESIGN-ITER.md](../.archive/design/DESIGN-ITER.md)
 
 ## 编号约定
 
