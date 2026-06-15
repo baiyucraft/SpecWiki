@@ -2,7 +2,10 @@
 //! 这里产出的 `PlannedPage` 属于 knowledge 侧，不代表 runtime 持久化真相。
 
 use serde::{Deserialize, Serialize};
-use wiki_model::domain::knowledge::{KnowledgeTree, KnowledgeUnit, UnitType};
+use wiki_model::domain::knowledge::{
+    is_official_wiki_relative_path, official_wiki_relative_path, KnowledgeTree, KnowledgeUnit,
+    UnitType,
+};
 use wiki_model::domain::stable_id::stable_id;
 
 /// `PlannedPage` 描述“要生成什么页面”的稳定投影决策。
@@ -59,15 +62,31 @@ fn knowledge_unit_to_planned_page(unit: &KnowledgeUnit, tree: &KnowledgeTree) ->
     let page_type = unit_type_to_page_type(&unit.unit_type);
     let scope = unit_type_to_scope(&unit.unit_type);
 
+    let relative_path =
+        official_wiki_relative_path(&unit.unit_type, &unit.title, &unit.relative_path);
+
+    debug_assert!(
+        is_official_wiki_relative_path(&relative_path),
+        "planner produced non-official wiki page path: {relative_path}"
+    );
+
     let parent_id = unit.parent_unit_id.as_ref().and_then(|parent_unit_id| {
-        tree.get_unit(parent_unit_id)
-            .map(|parent| stable_id("page", &parent.relative_path))
+        tree.get_unit(parent_unit_id).map(|parent| {
+            stable_id(
+                "page",
+                official_wiki_relative_path(
+                    &parent.unit_type,
+                    &parent.title,
+                    &parent.relative_path,
+                ),
+            )
+        })
     });
 
     PlannedPage {
-        id: stable_id("page", &unit.relative_path),
+        id: stable_id("page", &relative_path),
         title: unit.title.clone(),
-        relative_path: unit.relative_path.clone(),
+        relative_path,
         page_type: page_type.to_string(),
         parent_id,
         scope: scope.to_string(),

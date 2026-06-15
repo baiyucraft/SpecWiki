@@ -87,6 +87,125 @@ impl UnitType {
     }
 }
 
+/// 把 KnowledgeUnit 规划路径收敛到正式 `.wiki/` 页面树。
+///
+/// 返回值是相对 `.wiki/` 的路径：
+/// - `INDEX.md`
+/// - `<栏目路径>/INDEX.md`
+/// - `<栏目路径>/NN-主题.md`
+pub fn official_wiki_relative_path(unit_type: &UnitType, title: &str, raw_path: &str) -> String {
+    match unit_type {
+        UnitType::Overview => "INDEX.md".to_string(),
+        UnitType::Architecture => "00-项目总览/00-系统架构.md".to_string(),
+        UnitType::DomainIndex => {
+            let category =
+                first_path_segment(raw_path).unwrap_or_else(|| sanitize_page_segment(title));
+            format!("{category}/INDEX.md")
+        }
+        _ => {
+            let mut segments = normalized_path_segments(raw_path);
+            let file_stem = segments
+                .pop()
+                .map(|file| strip_markdown_extension(&file).to_string())
+                .filter(|stem| !stem.eq_ignore_ascii_case("index"))
+                .unwrap_or_else(|| sanitize_page_segment(title));
+            let topic = ensure_numbered_leaf(&sanitize_page_segment(&file_stem));
+            if segments.is_empty() {
+                format!("99-未分类/{topic}")
+            } else {
+                format!("{}/{}", segments.join("/"), topic)
+            }
+        }
+    }
+}
+
+pub fn is_official_wiki_relative_path(path: &str) -> bool {
+    let normalized = normalize_wiki_relative_path(path);
+    if normalized.is_empty()
+        || normalized == "wiki.metadata.json"
+        || normalized.starts_with(".cache/")
+        || normalized.starts_with(".knowledge/")
+        || normalized.starts_with("pages/")
+    {
+        return false;
+    }
+    if normalized == "INDEX.md" {
+        return true;
+    }
+    let Some(file_name) = normalized.rsplit('/').next() else {
+        return false;
+    };
+    if file_name == "INDEX.md" {
+        return normalized.contains('/');
+    }
+    is_numbered_markdown_leaf(file_name) && normalized.contains('/')
+}
+
+pub fn normalize_wiki_relative_path(path: &str) -> String {
+    path.trim()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_start_matches(".wiki/")
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn normalized_path_segments(path: &str) -> Vec<String> {
+    normalize_wiki_relative_path(path)
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(sanitize_page_segment)
+        .collect()
+}
+
+fn first_path_segment(path: &str) -> Option<String> {
+    normalized_path_segments(path).into_iter().next()
+}
+
+fn sanitize_page_segment(segment: &str) -> String {
+    let cleaned = strip_markdown_extension(segment)
+        .trim()
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            _ => ch,
+        })
+        .collect::<String>();
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join("-");
+    let trimmed = collapsed.trim_matches(['-', '.', ' ']);
+    if trimmed.is_empty() {
+        "未命名".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn strip_markdown_extension(file_name: &str) -> &str {
+    file_name
+        .strip_suffix(".md")
+        .or_else(|| file_name.strip_suffix(".mdx"))
+        .unwrap_or(file_name)
+}
+
+fn ensure_numbered_leaf(stem: &str) -> String {
+    if has_numeric_prefix(stem) {
+        format!("{stem}.md")
+    } else {
+        format!("10-{stem}.md")
+    }
+}
+
+fn is_numbered_markdown_leaf(file_name: &str) -> bool {
+    file_name.ends_with(".md") && has_numeric_prefix(strip_markdown_extension(file_name))
+}
+
+fn has_numeric_prefix(stem: &str) -> bool {
+    let bytes = stem.as_bytes();
+    bytes.len() >= 4 && bytes[0].is_ascii_digit() && bytes[1].is_ascii_digit() && bytes[2] == b'-'
+}
+
 // ─── DecompositionProfile ──────────────────────────────────
 
 /// 知识单元的中粒度拆分画像。
@@ -472,7 +591,10 @@ fn compare_unit_priority(
 
 #[cfg(test)]
 mod tests {
-    use super::{KnowledgeTree, KnowledgeUnit, UnitType};
+    use super::{
+        is_official_wiki_relative_path, official_wiki_relative_path, KnowledgeTree, KnowledgeUnit,
+        UnitType,
+    };
     use std::collections::BTreeMap;
 
     #[test]
@@ -524,5 +646,49 @@ mod tests {
                 "overview".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn official_wiki_relative_path_maps_units_to_page_tree_contract() {
+        assert_eq!(
+            official_wiki_relative_path(&UnitType::Overview, "项目概述", "项目概述.md"),
+            "INDEX.md"
+        );
+        assert_eq!(
+            official_wiki_relative_path(&UnitType::Architecture, "系统架构", "系统架构.md"),
+            "00-项目总览/00-系统架构.md"
+        );
+        assert_eq!(
+            official_wiki_relative_path(&UnitType::DomainIndex, "核心模块", "核心模块/核心模块.md"),
+            "核心模块/INDEX.md"
+        );
+        assert_eq!(
+            official_wiki_relative_path(&UnitType::ModuleDoc, "运行时", "核心模块/运行时.md"),
+            "核心模块/10-运行时.md"
+        );
+        assert_eq!(
+            official_wiki_relative_path(
+                &UnitType::ConceptGuide,
+                "Setup",
+                "概念指南/get-started/Setup.md"
+            ),
+            "概念指南/get-started/10-Setup.md"
+        );
+    }
+
+    #[test]
+    fn official_wiki_relative_path_predicate_rejects_runtime_surface_outside_pages() {
+        assert!(is_official_wiki_relative_path("INDEX.md"));
+        assert!(is_official_wiki_relative_path(".wiki/核心模块/INDEX.md"));
+        assert!(is_official_wiki_relative_path("核心模块/10-运行时.md"));
+        assert!(!is_official_wiki_relative_path("项目概述.md"));
+        assert!(!is_official_wiki_relative_path(".wiki/pages/ignored.md"));
+        assert!(!is_official_wiki_relative_path(
+            ".wiki/.knowledge/unit.json"
+        ));
+        assert!(!is_official_wiki_relative_path(
+            ".wiki/.cache/wiki-cache.db"
+        ));
+        assert!(!is_official_wiki_relative_path(".wiki/wiki.metadata.json"));
     }
 }

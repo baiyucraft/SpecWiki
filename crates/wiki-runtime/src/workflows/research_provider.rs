@@ -27,6 +27,7 @@ use wiki_knowledge::domain::research::{
 };
 use wiki_knowledge::research::{ResearchDataSource, ResearchProvider, StructuralResearchProvider};
 use wiki_knowledge::PlannedPage;
+use wiki_model::domain::knowledge::official_wiki_relative_path;
 
 use serde_json::json;
 
@@ -741,10 +742,15 @@ fn apply_seed_to_unit_research(research: &mut UnitResearch, seed: ResearchPageSe
 }
 
 fn build_system_provider_page(page_type: &str, title: &str, relative_path: &str) -> PlannedPage {
+    let unit_type = match page_type {
+        "architecture" => UnitType::Architecture,
+        _ => UnitType::Overview,
+    };
+    let relative_path = official_wiki_relative_path(&unit_type, title, relative_path);
     PlannedPage {
-        id: stable_id("page", relative_path),
+        id: stable_id("page", &relative_path),
         title: title.to_string(),
-        relative_path: relative_path.to_string(),
+        relative_path,
         page_type: page_type.to_string(),
         parent_id: None,
         scope: "repository".to_string(),
@@ -761,10 +767,15 @@ fn build_system_provider_page(page_type: &str, title: &str, relative_path: &str)
 }
 
 fn build_domain_provider_page(domain: &crate::domain::knowledge::KnowledgeDomain) -> PlannedPage {
+    let relative_path = official_wiki_relative_path(
+        &UnitType::DomainIndex,
+        &domain.label,
+        &format!("{0}/{0}.md", domain.id),
+    );
     PlannedPage {
-        id: stable_id("page", format!("{0}/{0}.md", domain.id)),
+        id: stable_id("page", &relative_path),
         title: domain.label.clone(),
-        relative_path: format!("{0}/{0}.md", domain.id),
+        relative_path,
         page_type: "family-index".to_string(),
         parent_id: None,
         scope: format!("domain:{}", domain.id),
@@ -992,15 +1003,23 @@ fn build_provider_page(unit: &KnowledgeUnit, tree: &KnowledgeTree) -> PlannedPag
         _ if unit.child_unit_ids.is_empty() => "topic",
         _ => "family-child",
     };
+    let relative_path =
+        official_wiki_relative_path(&unit.unit_type, &unit.title, &unit.relative_path);
     let parent_id = unit.parent_unit_id.as_ref().and_then(|parent_unit_id| {
-        tree.get_unit(parent_unit_id)
-            .map(|parent| crate::domain::stable_id::stable_id("page", &parent.relative_path))
+        tree.get_unit(parent_unit_id).map(|parent| {
+            let parent_path = official_wiki_relative_path(
+                &parent.unit_type,
+                &parent.title,
+                &parent.relative_path,
+            );
+            crate::domain::stable_id::stable_id("page", parent_path)
+        })
     });
 
     PlannedPage {
-        id: crate::domain::stable_id::stable_id("page", &unit.relative_path),
+        id: crate::domain::stable_id::stable_id("page", &relative_path),
         title: unit.title.clone(),
-        relative_path: unit.relative_path.clone(),
+        relative_path,
         page_type: page_type.to_string(),
         parent_id,
         scope: provider_page_scope(unit, page_type),

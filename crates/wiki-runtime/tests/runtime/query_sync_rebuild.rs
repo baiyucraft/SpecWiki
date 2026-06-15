@@ -63,7 +63,7 @@ fn write_graph_query_repo(repo_root: &Path) {
 }
 
 fn set_declared_blocks_for_query(repo_root: &Path, declared_blocks: &str) {
-    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let overview_path = official_overview_path(repo_root);
     let content = fs::read_to_string(&overview_path).unwrap();
     let marker = "<!-- wiki:managed:end";
     let pos = content
@@ -78,6 +78,10 @@ fn set_declared_blocks_for_query(repo_root: &Path, declared_blocks: &str) {
     fs::write(&overview_path, &new_content).unwrap();
 }
 
+fn official_overview_path(repo_root: &Path) -> std::path::PathBuf {
+    repo_root.join(".wiki/INDEX.md")
+}
+
 /// 场景：人工改页后，sync 必须更新状态层；随后 query 和 rebuild 仍应可用。
 #[test]
 fn sync_detects_manual_markdown_changes() {
@@ -87,7 +91,7 @@ fn sync_detects_manual_markdown_changes() {
     fs::write(repo_root.join("package.json"), r#"{"name":"demo"}"#).unwrap();
     run_init(repo_root).unwrap();
 
-    let overview = repo_root.join(".wiki/项目概述.md");
+    let overview = official_overview_path(repo_root);
     fs::write(&overview, "# 项目概述\n\n自定义说明\n").unwrap();
 
     let result = run_sync(repo_root).unwrap();
@@ -95,7 +99,7 @@ fn sync_detects_manual_markdown_changes() {
     assert!(result
         .synced_pages
         .iter()
-        .any(|path| path.ends_with("项目概述.md")));
+        .any(|path| path.ends_with("INDEX.md")));
 
     let query = run_query(repo_root, "项目概述").unwrap();
     assert_eq!(query.term, "项目概述");
@@ -104,7 +108,7 @@ fn sync_detects_manual_markdown_changes() {
     assert!(query
         .matches
         .iter()
-        .any(|page| page.path.ends_with("项目概述.md")));
+        .any(|page| page.path.ends_with("INDEX.md")));
     assert!(
         query.provenance_summary.contains("knowledge_hit")
             || query.provenance_summary.contains("page_fallback"),
@@ -126,7 +130,7 @@ fn query_falls_back_to_markdown_and_returns_empty_result() {
     fs::write(repo_root.join("package.json"), r#"{"name":"demo"}"#).unwrap();
     run_init(repo_root).unwrap();
 
-    let overview = repo_root.join(".wiki/项目概述.md");
+    let overview = official_overview_path(repo_root);
     let custom_phrase = "仅在 Markdown 中出现的唯一短语";
     fs::write(&overview, format!("# 项目概述\n\n{custom_phrase}\n")).unwrap();
     run_sync(repo_root).unwrap();
@@ -181,6 +185,26 @@ fn query_falls_back_to_markdown_and_returns_empty_result() {
 }
 
 #[test]
+fn query_ignores_pages_directory_markdown_fallback() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("package.json"), r#"{"name":"demo"}"#).unwrap();
+    run_init(repo_root).unwrap();
+
+    let ignored_phrase = "only-inside-runtime-surface-outside-pages";
+    write_repo_file(
+        repo_root,
+        ".wiki/pages/ignored.md",
+        &format!("# Ignored\n\n{ignored_phrase}\n"),
+    );
+
+    let query = run_query(repo_root, ignored_phrase).unwrap();
+    assert!(query.matches.is_empty());
+    assert!(query.matched_pages.is_empty());
+}
+
+#[test]
 fn query_keeps_textual_page_fallback_degraded_even_with_graph_hits() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
@@ -188,9 +212,13 @@ fn query_keeps_textual_page_fallback_degraded_even_with_graph_hits() {
 
     run_init(repo_root).unwrap();
 
-    let overview = repo_root.join(".wiki/项目概述.md");
+    let overview = official_overview_path(repo_root);
     let existing = fs::read_to_string(&overview).unwrap();
-    fs::write(&overview, format!("{existing}\nhandleCheckout textual fallback\n")).unwrap();
+    fs::write(
+        &overview,
+        format!("{existing}\nhandleCheckout textual fallback\n"),
+    )
+    .unwrap();
     run_sync(repo_root).unwrap();
 
     let query = run_query(repo_root, "handleCheckout").unwrap();

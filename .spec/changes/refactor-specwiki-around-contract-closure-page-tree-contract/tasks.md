@@ -1,5 +1,5 @@
 ---
-implementation-ready: false
+implementation-ready: true
 ---
 
 # refactor-specwiki-around-contract-closure-page-tree-contract 任务计划
@@ -16,18 +16,18 @@ normal
 
 ## 1. 页面树路径规划与正式路径 predicate
 
-- [ ] 1.1 修改 `crates/wiki-knowledge/src/planning.rs` 的页面路径规划，使 `KnowledgeUnit.relative_path` 直接产出 `.wiki/INDEX.md`、`.wiki/<栏目路径>/INDEX.md` 或 `.wiki/<栏目路径>/NN-主题.md` 对应的相对路径语义。
-- [ ] 1.2 调整 `crates/wiki-knowledge/src/projection.rs` 中 `PlannedPage.relative_path` 的透传与校验，确保下游不再接收根级散页或 `.wiki/pages/**` 作为正式规划结果。
-- [ ] 1.3 在 `crates/wiki-runtime/src/storage/wiki_fs.rs` 或相邻 domain helper 中新增正式页面树 predicate / normalizer，集中判断 `.wiki/INDEX.md`、栏目 `INDEX.md`、`NN-主题.md` 与 runtime 隐藏目录排除规则。
-- [ ] 1.4 将 planner 输出与正式页面树 predicate 接起来：planner 产出非正式路径时阻断 workflow，而不是由 runtime 下游静默改名。
-- [ ] 1.5 添加或调整 planner / predicate 局部测试，覆盖多级栏目、根 `INDEX.md`、栏目 `INDEX.md`、`NN-主题.md`、`.wiki/pages/**`、`.wiki/.knowledge/**`、`.wiki/.cache/**` 和 metadata 文件排除。
+- [x] 1.1 修改 `crates/wiki-knowledge/src/planning.rs` 的页面路径规划，使 `KnowledgeUnit.relative_path` 直接产出 `.wiki/INDEX.md`、`.wiki/<栏目路径>/INDEX.md` 或 `.wiki/<栏目路径>/NN-主题.md` 对应的相对路径语义。
+- [x] 1.2 调整 `crates/wiki-knowledge/src/projection.rs` 中 `PlannedPage.relative_path` 的透传与校验，确保下游不再接收根级散页或 `.wiki/pages/**` 作为正式规划结果。
+- [x] 1.3 在 `crates/wiki-runtime/src/storage/wiki_fs.rs` 或相邻 domain helper 中新增正式页面树 predicate / normalizer，集中判断 `.wiki/INDEX.md`、栏目 `INDEX.md`、`NN-主题.md` 与 runtime 隐藏目录排除规则。
+- [x] 1.4 将 planner 输出与正式页面树 predicate 接起来：planner 产出非正式路径时阻断 workflow，而不是由 runtime 下游静默改名。
+- [x] 1.5 添加或调整 planner / predicate 局部测试，覆盖多级栏目、根 `INDEX.md`、栏目 `INDEX.md`、`NN-主题.md`、`.wiki/pages/**`、`.wiki/.knowledge/**`、`.wiki/.cache/**` 和 metadata 文件排除。
 
 ### CheckList
 
-- [ ] 单元测试或替代局部验证已覆盖
-- [ ] 相关验证通过
-- [ ] 本大 task 局部质量检查通过（按项目可用命令执行：lint / typecheck / static analysis / formatter check / compiler check 等）
-- [ ] 注释规范检查完成（参考 .wiki/02-开发指南/00-代码注释规范.md）
+- [x] 单元测试或替代局部验证已覆盖
+- [x] 相关验证通过
+- [x] 本大 task 局部质量检查通过（按项目可用命令执行：lint / typecheck / static analysis / formatter check / compiler check 等）
+- [x] 注释规范检查完成（参考 .wiki/02-开发指南/00-代码注释规范.md）
 
 ## 2. runtime 写入、metadata 与 SQLite 只消费正式页面
 

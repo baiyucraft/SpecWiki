@@ -10,9 +10,9 @@ use std::path::Path;
 use crate::domain::change_set::plan_runtime_changes_with_mode;
 use crate::domain::module_tree::ModuleNode;
 use crate::domain::runtime_profile::{
-    AnswerEnvelope, AnswerMode, AnswerSupportingRef, AnswerTrust,
     merge_recommended_action, preflight_for_state, query_trust_for, summarize_health_signals,
-    QueryMode, QueryTrust, RecommendedAction,
+    AnswerEnvelope, AnswerMode, AnswerSupportingRef, AnswerTrust, QueryMode, QueryTrust,
+    RecommendedAction,
 };
 use crate::domain::state::{WikiPageState, WikiState};
 use crate::domain::steering::SteeringLoadMode;
@@ -22,7 +22,7 @@ use crate::storage::knowledge_artifacts::{
 };
 use crate::storage::sqlite::index_store::SqliteIndexStore;
 use crate::storage::state_store::{facts_snapshot_ready, load_or_rebuild_state};
-use crate::storage::wiki_fs::resolve_page_path;
+use crate::storage::wiki_fs::{is_official_page_path, resolve_page_path};
 use crate::workflows::release_scope::project_external_runtime_state;
 use wiki_index::query::{self as index_query, IndexQueryRequest, MatchBasis};
 use wiki_knowledge::plan_pages_from_knowledge_tree;
@@ -568,6 +568,7 @@ fn collect_knowledge_matches(
             runtime
                 .pages
                 .iter()
+                .filter(|page| is_official_page_path(&page.path))
                 .map(|page| (page.page_id.clone(), page))
                 .collect::<BTreeMap<_, _>>()
         })
@@ -714,6 +715,7 @@ fn collect_page_fallback_matches(
     let mut matches = state
         .pages
         .iter()
+        .filter(|page| is_official_page_path(&page.path))
         .filter_map(|page| {
             let page_path = resolve_page_path(repo_root, &page.path);
             let content = fs::read_to_string(&page_path).unwrap_or_default();
@@ -793,6 +795,9 @@ fn collect_knowledge_source_files(
 fn build_page_ids_by_source_path(state: &WikiState) -> BTreeMap<String, Vec<String>> {
     let mut page_ids_by_source_path = BTreeMap::<String, Vec<String>>::new();
     for page in &state.pages {
+        if !is_official_page_path(&page.path) {
+            continue;
+        }
         for source_path in &page.source_paths {
             page_ids_by_source_path
                 .entry(source_path.clone())
@@ -1207,7 +1212,10 @@ fn build_answer_text(
     };
     let action_text = match recommended_action {
         RecommendedAction::None => String::new(),
-        _ => format!("建议下一步执行 {}。", recommended_action_label(recommended_action)),
+        _ => format!(
+            "建议下一步执行 {}。",
+            recommended_action_label(recommended_action)
+        ),
     };
 
     match answer_mode {

@@ -1,5 +1,5 @@
 id: refactor-specwiki-around-contract-closure-page-tree-contract
-stage: tasks
+stage: implementation
 deliveryShape: single-change
 multiChange:
   role: child

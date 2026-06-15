@@ -919,10 +919,7 @@ fn derive_declared_conflicts(
     declared_records: &[DeclaredKnowledgeRecord],
     detected_at: &str,
 ) -> Vec<KnowledgeConflictRecord> {
-    let mut grouped = BTreeMap::<
-        (String, String),
-        Vec<&DeclaredKnowledgeRecord>,
-    >::new();
+    let mut grouped = BTreeMap::<(String, String), Vec<&DeclaredKnowledgeRecord>>::new();
     for record in declared_records {
         grouped
             .entry((
@@ -1029,7 +1026,10 @@ fn build_declared_conflict_record(
         status: KnowledgeConflictStatus::Open,
         severity: KnowledgeHealthSeverity::Warning,
         scope,
-        record_ids: records.iter().map(|record| record.record_id.clone()).collect(),
+        record_ids: records
+            .iter()
+            .map(|record| record.record_id.clone())
+            .collect(),
         authoring_ids: records
             .iter()
             .map(|record| record.authoring_id.clone())
@@ -1051,6 +1051,9 @@ fn build_declared_conflict_record(
 
 fn pages_match_metadata_snapshot(repo_root: &Path, metadata: &WikiMetadata) -> io::Result<bool> {
     for item in &metadata.wiki_items {
+        if !crate::storage::wiki_fs::is_official_page_path(&item.path) {
+            return Ok(false);
+        }
         let page_path = resolve_page_path(repo_root, &item.path);
         if !page_path.exists() {
             return Ok(false);
@@ -1145,6 +1148,9 @@ fn restore_page_caches(
         .collect::<BTreeMap<_, _>>();
 
     for page in &rebuilt_state.pages {
+        if !crate::storage::wiki_fs::is_official_page_path(&page.path) {
+            continue;
+        }
         let Some(planned_page) = planned_pages.get(&page.page_id) else {
             continue;
         };

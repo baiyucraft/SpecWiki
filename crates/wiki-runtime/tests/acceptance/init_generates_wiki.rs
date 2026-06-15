@@ -30,8 +30,7 @@ fn init_writes_wiki_layout() {
     )
     .unwrap();
 
-    assert!(repo_root.join(".wiki/项目概述.md").exists());
-    assert!(repo_root.join(".wiki/系统架构.md").exists());
+    assert!(repo_root.join(".wiki/INDEX.md").exists());
     assert!(repo_root.join(".wiki/wiki.metadata.json").exists());
     assert!(repo_root.join(".wiki/.cache").exists());
     // scan cache 和关系型状态都应该落在 SQLite DB 中
@@ -49,6 +48,14 @@ fn init_writes_wiki_layout() {
     assert!(metadata
         .wiki_items
         .iter()
-        .any(|item| item.path.ends_with("系统架构.md")));
+        .all(|item| is_official_page_path(&item.path)));
+    assert!(metadata
+        .wiki_items
+        .iter()
+        .any(|item| item.path == ".wiki/00-项目总览/00-系统架构.md"));
     assert!(metadata.wiki_items.len() >= 2);
+}
+
+fn is_official_page_path(path: &str) -> bool {
+    wiki_model::domain::knowledge::is_official_wiki_relative_path(path)
 }

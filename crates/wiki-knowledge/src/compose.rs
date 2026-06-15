@@ -8,7 +8,9 @@ use crate::domain::research::{
     ResearchPageSeed, ResearchProfile, SectionGroundingRef, SkeletonProfile, SourceCitation,
     SystemResearch, UnitResearch,
 };
-use wiki_model::domain::knowledge::{DecompositionProfile, KnowledgeTree, KnowledgeUnit, UnitType};
+use wiki_model::domain::knowledge::{
+    official_wiki_relative_path, DecompositionProfile, KnowledgeTree, KnowledgeUnit, UnitType,
+};
 use wiki_model::domain::stable_id::stable_id;
 
 /// 最低 citation 密度——整页不低于此数。
@@ -285,12 +287,15 @@ fn build_compose_page_contract_from_parts(
     child_digests: &[PageDigest],
 ) -> ComposePageContract {
     let missing_child_unit_ids = collect_missing_child_unit_ids(unit, child_digests);
+    let relative_path =
+        official_wiki_relative_path(&unit.unit_type, &unit.title, &unit.relative_path);
+    let page_id = stable_id("page", &relative_path);
 
     ComposePageContract {
-        page_id: stable_id("page", &unit.relative_path),
+        page_id,
         unit_id: unit.id.clone(),
         title: unit.title.clone(),
-        relative_path: unit.relative_path.clone(),
+        relative_path,
         summary,
         decomposition_profile,
         research_profile,

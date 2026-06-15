@@ -10,6 +10,7 @@ use crate::domain::metadata::{DirtyState, WikiMetadata};
 use crate::domain::module_tree::ModuleTree;
 use crate::domain::relation::WikiRelation;
 use crate::generation::sections::SectionDraft;
+use crate::storage::wiki_fs::is_official_page_path;
 use wiki_index::fingerprint::fingerprint_bytes;
 use wiki_index::scanner::ScanReport;
 use wiki_knowledge::PlannedPage;
@@ -88,17 +89,22 @@ pub fn assemble_state_from_pages(
     generated_at: &str,
     dirty_state: DirtyState,
 ) -> WikiState {
+    let pages = pages
+        .iter()
+        .filter(|page| is_official_page_path(&page.path))
+        .cloned()
+        .collect::<Vec<_>>();
     WikiState {
-        pages: pages.to_vec(),
-        sources: build_source_states(pages, scan_report, module_tree),
+        sources: build_source_states(&pages, scan_report, module_tree),
         modules: module_tree.modules.clone(),
-        relations: build_relations(pages, module_tree),
+        relations: build_relations(&pages, module_tree),
         dirty_state,
         build_state: BuildState {
             generated_at: generated_at.to_string(),
             page_count: pages.len(),
             module_count: module_tree.modules.len(),
         },
+        pages,
     }
 }
 
@@ -114,6 +120,7 @@ pub fn rebuild_state_from_metadata(metadata: &WikiMetadata) -> WikiState {
     let pages = metadata
         .wiki_items
         .iter()
+        .filter(|item| is_official_page_path(&item.path))
         .map(|item| WikiPageState {
             page_id: item.id.clone(),
             title: item.title.clone(),
@@ -140,10 +147,17 @@ pub fn rebuild_state_from_metadata(metadata: &WikiMetadata) -> WikiState {
             source_id: source.id.clone(),
             path: source.path.clone(),
             fingerprint: source.fingerprint.clone(),
-            page_ids: source.wiki_item_ids.clone(),
+            page_ids: source
+                .wiki_item_ids
+                .iter()
+                .filter(|page_id| pages.iter().any(|page| &page.page_id == *page_id))
+                .cloned()
+                .collect(),
             module_ids: source.module_ids.clone(),
         })
         .collect();
+
+    let page_count = pages.len();
 
     WikiState {
         pages,
@@ -153,7 +167,7 @@ pub fn rebuild_state_from_metadata(metadata: &WikiMetadata) -> WikiState {
         dirty_state: metadata.dirty_state.clone(),
         build_state: BuildState {
             generated_at: metadata.generated_at.clone(),
-            page_count: metadata.wiki_items.len(),
+            page_count,
             module_count: metadata.modules.len(),
         },
     }

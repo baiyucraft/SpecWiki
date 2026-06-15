@@ -1,6 +1,8 @@
 use crate::domain::metadata::{SourceFileRecord, WikiMetadata};
 use crate::domain::state::WikiState;
 use crate::domain::wiki_item::WikiItem;
+use crate::storage::wiki_fs::is_official_page_path;
+use std::collections::BTreeSet;
 
 /// `ExportContext` 承载 WikiState 中不包含的外部展示字段。
 /// MetadataMapper 在导出时用它补齐 repo_root、branch 等信息。
@@ -19,6 +21,7 @@ pub fn export_metadata(state: &WikiState, context: &ExportContext) -> WikiMetada
     let wiki_items = state
         .pages
         .iter()
+        .filter(|page| is_official_page_path(&page.path))
         .map(|page| WikiItem {
             id: page.page_id.clone(),
             title: page.title.clone(),
@@ -32,7 +35,11 @@ pub fn export_metadata(state: &WikiState, context: &ExportContext) -> WikiMetada
             summary: page.summary.clone(),
             provenance: page.provenance.clone(),
         })
-        .collect();
+        .collect::<Vec<_>>();
+    let official_page_ids = wiki_items
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<BTreeSet<_>>();
 
     let source_files = state
         .sources
@@ -41,7 +48,12 @@ pub fn export_metadata(state: &WikiState, context: &ExportContext) -> WikiMetada
             id: source.source_id.clone(),
             path: source.path.clone(),
             fingerprint: source.fingerprint.clone(),
-            wiki_item_ids: source.page_ids.clone(),
+            wiki_item_ids: source
+                .page_ids
+                .iter()
+                .filter(|page_id| official_page_ids.contains(page_id.as_str()))
+                .cloned()
+                .collect(),
             module_ids: source.module_ids.clone(),
         })
         .collect();

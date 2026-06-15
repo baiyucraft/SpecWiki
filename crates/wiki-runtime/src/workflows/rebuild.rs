@@ -286,7 +286,7 @@ pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
 
     for (index, draft) in page_drafts.iter().enumerate() {
         let rendered = render_page_draft(draft);
-        let planned_page = find_or_build_planned_page(draft, &pages_by_id);
+        let planned_page = find_or_build_planned_page(draft, &pages_by_id)?;
         let page_context = build_minimal_page_context(
             draft,
             &planned_page,
@@ -306,8 +306,8 @@ pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
             None => rendered.content.clone(),
         };
 
-        write_page(repo_root, &draft.relative_path, &final_content)?;
-        let page_path = format!(".wiki/{}", draft.relative_path);
+        write_page(repo_root, &planned_page.relative_path, &final_content)?;
+        let page_path = format!(".wiki/{}", planned_page.relative_path);
         generated_pages.push(page_path);
         let ancestor_ids = ancestor_ids_for_page(&planned_page, &ancestor_ids_by_page);
         ancestor_ids_by_page.insert(planned_page.id.clone(), ancestor_ids.clone());

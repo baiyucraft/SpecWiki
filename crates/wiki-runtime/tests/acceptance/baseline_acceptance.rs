@@ -28,10 +28,14 @@ fn baseline_fixture_generates_hierarchical_wiki_and_structured_query_results() {
 
     run_init_in_development(repo_root);
 
-    assert!(repo_root.join(".wiki/项目概述.md").exists());
-    assert!(repo_root.join(".wiki/系统架构.md").exists());
+    assert!(repo_root.join(".wiki/INDEX.md").exists());
+    assert!(repo_root.join(".wiki/00-项目总览/00-系统架构.md").exists());
 
     let metadata = read_metadata(repo_root).unwrap();
+    assert!(metadata
+        .wiki_items
+        .iter()
+        .all(|item| wiki_model::domain::knowledge::is_official_wiki_relative_path(&item.path)));
     assert!(
         metadata
             .wiki_items
@@ -48,7 +52,7 @@ fn baseline_fixture_generates_hierarchical_wiki_and_structured_query_results() {
     let architecture_item = metadata
         .wiki_items
         .iter()
-        .find(|item| item.path.ends_with("系统架构.md"))
+        .find(|item| item.path == ".wiki/00-项目总览/00-系统架构.md")
         .expect("architecture page should be exported to metadata");
     assert!(!auth_item.module_ids.is_empty());
     assert!(auth_item

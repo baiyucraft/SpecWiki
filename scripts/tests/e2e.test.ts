@@ -72,7 +72,7 @@ test("spec-wiki wiki init, status, update, and query keep v0.2 knowledge runtime
     expect(initTerminal.response.data.state).toBe("fresh");
     expect((initTerminal.response.data.generated_pages ?? []).length).toBeGreaterThan(0);
     expect(existsSync(path.join(repoRoot, ".wiki", ".cache", "wiki-cache.db"))).toBe(true);
-    expect(existsSync(path.join(repoRoot, ".wiki", "项目概述.md"))).toBe(true);
+    expect(existsSync(path.join(repoRoot, ".wiki", "INDEX.md"))).toBe(true);
     expect(existsSync(path.join(repoRoot, ".wiki", "wiki.metadata.json"))).toBe(true);
 
     const statusResult = await runWikiCli(repoRoot, "wiki", "status");
@@ -118,7 +118,7 @@ test("spec-wiki wiki init, status, update, and query keep v0.2 knowledge runtime
         return (
           (hit.hit_type === "symbol" && hit.location === "src.ts")
           || (hit.hit_type === "source" && hit.location.endsWith("src.ts"))
-          || (hit.hit_type === "page" && hit.location.endsWith("项目概述.md"))
+          || (hit.hit_type === "page" && hit.location.endsWith("INDEX.md"))
         );
       }),
     ).toBe(true);

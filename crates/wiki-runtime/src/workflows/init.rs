@@ -297,13 +297,12 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
     for (index, draft) in page_drafts.iter().enumerate() {
         let rendered = render_page_draft(draft);
 
-        write_page(repo_root, &draft.relative_path, &rendered.content)?;
-        let page_path = format!(".wiki/{}", draft.relative_path);
-        generated_pages.push(page_path);
-
         let content_hash = wiki_index::fingerprint::fingerprint_bytes(rendered.content.as_bytes());
 
-        let planned_page = find_or_build_planned_page(draft, &pages_by_id);
+        let planned_page = find_or_build_planned_page(draft, &pages_by_id)?;
+        write_page(repo_root, &planned_page.relative_path, &rendered.content)?;
+        let page_path = format!(".wiki/{}", planned_page.relative_path);
+        generated_pages.push(page_path);
         let page_context = build_minimal_page_context(
             draft,
             &planned_page,
@@ -565,31 +564,21 @@ pub(crate) fn page_provenance(
     provenance.into_keys().collect()
 }
 
-/// 从 pages_by_id 中查找对应的 PlannedPage，找不到时基于 PageDraft 构建。
+/// 从 pages_by_id 中查找对应的 PlannedPage。
 pub(crate) fn find_or_build_planned_page(
     draft: &PageDraft,
     pages_by_id: &BTreeMap<String, wiki_knowledge::PlannedPage>,
-) -> wiki_knowledge::PlannedPage {
+) -> io::Result<wiki_knowledge::PlannedPage> {
     if let Some(page) = pages_by_id.get(&draft.page_id) {
-        return page.clone();
+        return Ok(page.clone());
     }
-    wiki_knowledge::PlannedPage {
-        id: draft.page_id.clone(),
-        title: draft.title.clone(),
-        page_type: "module".to_string(),
-        relative_path: draft.relative_path.clone(),
-        parent_id: None,
-        source_ids: Vec::new(),
-        module_ids: Vec::new(),
-        merged_module_ids: Vec::new(),
-        relation_ids: Vec::new(),
-        scope: "unit".to_string(),
-        priority: 0,
-        generation_mode: "compose".to_string(),
-        unit_id: Some(draft.unit_id.clone()),
-        unit_type: None,
-        domain_id: None,
-    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "PageDraft is not backed by a PlannedPage: page_id={}, relative_path={}",
+            draft.page_id, draft.relative_path
+        ),
+    ))
 }
 
 /// 基于 PageDraft 和 KnowledgeTree 构建最小 PageContext。
@@ -896,16 +885,27 @@ mod tests {
         parent_with_child.child_unit_ids = vec![child.id.clone()];
         tree.add_unit(parent_with_child.clone());
         tree.add_unit(child.clone());
+        tree.build_processing_order();
+        let planned_pages = wiki_knowledge::plan_pages_from_knowledge_tree(&tree);
+        let planned_page = planned_pages
+            .iter()
+            .find(|page| page.unit_id.as_deref() == Some(parent_with_child.id.as_str()))
+            .cloned()
+            .expect("parent planned page should exist");
+        let pages_by_id = planned_pages
+            .into_iter()
+            .map(|page| (page.id.clone(), page))
+            .collect::<BTreeMap<_, _>>();
         let draft = PageDraft {
-            page_id: crate::domain::stable_id::stable_id("page", &parent_with_child.relative_path),
+            page_id: planned_page.id.clone(),
             unit_id: parent_with_child.id.clone(),
             title: parent_with_child.title.clone(),
-            relative_path: parent_with_child.relative_path.clone(),
+            relative_path: planned_page.relative_path.clone(),
             sections: Vec::new(),
             diagrams: Vec::new(),
             citation_count: 0,
         };
-        let planned_page = super::find_or_build_planned_page(&draft, &BTreeMap::new());
+        let planned_page = super::find_or_build_planned_page(&draft, &pages_by_id).unwrap();
         let unit_researches = BTreeMap::from([(
             parent_with_child.id.clone(),
             UnitResearch {
@@ -926,6 +926,33 @@ mod tests {
         assert_eq!(context.readiness_status, "waiting_children");
         assert_eq!(context.missing_child_unit_ids, vec![child.id.clone()]);
         assert!(context.has_unit_research_contract);
+    }
+
+    #[test]
+    fn compose_draft_path_matches_planned_page_contract() {
+        let unit = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "运行时",
+            "domain-runtime",
+            "核心模块/运行时.md",
+        );
+        let mut tree = KnowledgeTree::new(unit.id.clone());
+        tree.add_unit(unit.clone());
+        tree.build_processing_order();
+        let planned_page = wiki_knowledge::plan_pages_from_knowledge_tree(&tree)
+            .into_iter()
+            .next()
+            .expect("planned page should exist");
+        let research = UnitResearch {
+            unit_id: unit.id.clone(),
+            summary: "运行时摘要".to_string(),
+            ..UnitResearch::default()
+        };
+        let (draft, digest) = wiki_knowledge::compose::compose_leaf_page(&unit, &research);
+
+        assert_eq!(draft.page_id, planned_page.id);
+        assert_eq!(draft.relative_path, planned_page.relative_path);
+        assert_eq!(digest.page_id, planned_page.id);
     }
 
     #[test]

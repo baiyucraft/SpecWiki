@@ -577,7 +577,12 @@ fn replace_state_rows_tx(tx: &Transaction<'_>, state: &WikiState) -> io::Result<
         .map_err(|e| io::Error::other(format!("insert source_state {}: {e}", source.source_id)))?;
     }
 
-    for (index, page) in state.pages.iter().enumerate() {
+    for (index, page) in state
+        .pages
+        .iter()
+        .filter(|page| crate::storage::wiki_fs::is_official_page_path(&page.path))
+        .enumerate()
+    {
         tx.execute(
             "INSERT INTO wiki_pages
              (page_id, sort_order, title, path, page_type, parent_id, ancestor_ids,
@@ -679,7 +684,11 @@ fn replace_state_rows_tx(tx: &Transaction<'_>, state: &WikiState) -> io::Result<
     )
     .map_err(|e| io::Error::other(format!("insert build_state: {e}")))?;
 
-    for page in &state.pages {
+    for page in state
+        .pages
+        .iter()
+        .filter(|page| crate::storage::wiki_fs::is_official_page_path(&page.path))
+    {
         tx.execute(
             "INSERT INTO wiki_pages_fts (page_id, title, path, summary) VALUES (?1, ?2, ?3, ?4)",
             params![page.page_id, page.title, page.path, page.summary],

@@ -1056,6 +1056,11 @@ where
 }
 
 fn build_research_digest(unit: &KnowledgeUnit, research: &UnitResearch) -> PageDigest {
+    let relative_path = wiki_model::domain::knowledge::official_wiki_relative_path(
+        &unit.unit_type,
+        &unit.title,
+        &unit.relative_path,
+    );
     let (projection_status, status_reasons) = match research.provider_stop_reason.as_ref() {
         Some(
             ResearchStopReason::ProviderError
@@ -1088,7 +1093,7 @@ fn build_research_digest(unit: &KnowledgeUnit, research: &UnitResearch) -> PageD
     PageDigest {
         digest_id: crate::domain::stable_id::stable_id("digest", &unit.id),
         unit_id: unit.id.clone(),
-        page_id: crate::domain::stable_id::stable_id("page", &unit.relative_path),
+        page_id: crate::domain::stable_id::stable_id("page", relative_path),
         title: unit.title.clone(),
         decomposition_profile: research.decomposition_profile.clone(),
         research_profile: research.research_profile.clone(),

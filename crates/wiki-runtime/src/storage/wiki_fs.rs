@@ -5,6 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::domain::steering::LlmCacheMode;
+use wiki_model::domain::knowledge::{is_official_wiki_relative_path, normalize_wiki_relative_path};
 
 /// 把页面内容写到 `.wiki/` 下的目标路径。
 /// 页面路径由 planner 决定，这里只负责落盘。
@@ -20,7 +21,8 @@ use crate::domain::steering::LlmCacheMode;
 /// # 错误
 /// - 当目录创建或文件写入失败时返回错误。
 pub fn write_page(repo_root: &Path, relative_path: &str, content: &str) -> io::Result<()> {
-    let target = wiki_root(repo_root).join(relative_path);
+    ensure_official_page_path(relative_path)?;
+    let target = wiki_root(repo_root).join(normalize_wiki_relative_path(relative_path));
 
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
@@ -49,7 +51,25 @@ pub fn wiki_root(repo_root: &Path) -> PathBuf {
 /// # 返回
 /// - 返回页面对应的磁盘路径。
 pub fn resolve_page_path(repo_root: &Path, page_path: &str) -> PathBuf {
-    wiki_root(repo_root).join(page_path.trim_start_matches(".wiki/"))
+    wiki_root(repo_root).join(normalize_wiki_relative_path(page_path))
+}
+
+pub fn is_official_page_path(page_path: &str) -> bool {
+    is_official_wiki_relative_path(page_path)
+}
+
+pub fn ensure_official_page_path(page_path: &str) -> io::Result<()> {
+    if is_official_page_path(page_path) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "page path is outside official .wiki page tree: {}",
+                normalize_wiki_relative_path(page_path)
+            ),
+        ))
+    }
 }
 
 /// 判断页面文件是否真的存在。
@@ -144,4 +164,26 @@ where
 
 fn is_retryable_fs_remove_error(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(5 | 32))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ensure_official_page_path, is_official_page_path};
+
+    #[test]
+    fn official_page_path_accepts_page_tree_contract() {
+        assert!(is_official_page_path("INDEX.md"));
+        assert!(is_official_page_path(".wiki/核心模块/INDEX.md"));
+        assert!(is_official_page_path("核心模块/10-运行时.md"));
+        assert!(is_official_page_path(".wiki/核心模块/子栏目/10-运行时.md"));
+    }
+
+    #[test]
+    fn official_page_path_rejects_runtime_surface_outside_paths() {
+        assert!(ensure_official_page_path("项目概述.md").is_err());
+        assert!(ensure_official_page_path(".wiki/pages/ignored.md").is_err());
+        assert!(ensure_official_page_path(".wiki/.knowledge/unit.json").is_err());
+        assert!(ensure_official_page_path(".wiki/.cache/wiki-cache.db").is_err());
+        assert!(ensure_official_page_path(".wiki/wiki.metadata.json").is_err());
+    }
 }
