@@ -24,7 +24,7 @@
 - [x] 4.1b 补一组 sync 分类矩阵测试，覆盖 `declared_writeback`、`metadata_only` 与 `illegal_drift`，并验证 `illegal_drift > declared_writeback > metadata_only` 的优先级。
 - [x] 4.2 运行 `node scripts/run-test-projects.mjs storybook dagger`，验证 knowledge runtime contract 收敛不会退化为样本特化逻辑。
 - [x] 4.3 视实现影响范围决定是否补跑全量 `node scripts/run-test-projects.mjs`，并将差异分析沉淀到 change 报告。
-- [x] 4.4 单独执行一次 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md) 合规检查，确认新增或修改注释符合仓库规范。
+- [x] 4.4 单独执行一次 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 合规检查，确认新增或修改注释符合仓库规范。
 
 ## 5. 文档与发布面收口
 

@@ -12,7 +12,7 @@ owner: docs
 ## 项目定位
 
 - `spec-wiki` 是 Repo Wiki Core + Agents 项目。
-- 它提供 TS CLI 与 Rust runtime：CLI 负责宿主 bootstrap 和 runtime forwarding，Rust crates 负责事实扫描、知识组织、运行时生命周期和查询。
+- 它提供 TS CLI 与 Rust runtime：CLI 负责统一初始化、宿主 bootstrap 和 runtime forwarding，Rust crates 负责事实扫描、知识组织、运行时生命周期和查询。
 - 当前包名仍为 `spec-wiki`；UniSpec 只管理项目变更治理，不改变产品包名。
 
 ## 环境前提
@@ -39,8 +39,10 @@ cargo test
 | `pnpm run lint` | 运行 ESLint |
 | `pnpm run test` | 运行工作区测试脚本；依赖本地共享 fixture 时可能需要先准备 `tmp/test/*` |
 | `cargo test` | 运行 Rust workspace 测试 |
-| `spec-wiki init --tool codex --repo-root .` | 安装宿主 bootstrap 资产 |
-| `spec-wiki wiki init --repo-root .` | 初始化 repo-local knowledge runtime |
+| `spec-wiki init --host codex --repo-root .` | 初始化 SpecWiki，包括宿主 bootstrap、repo-local knowledge runtime 和必要的 Agent 入口 |
+| `spec-wiki status --repo-root .` | 查看 Wiki runtime、index、knowledge 和治理 readiness |
+| `spec-wiki query "runtime"` | 查询代码、知识、页面和治理证据引用 |
+| `spec-wiki update --repo-root .` | 变化后刷新 runtime |
 
 ## 推荐阅读路径
 

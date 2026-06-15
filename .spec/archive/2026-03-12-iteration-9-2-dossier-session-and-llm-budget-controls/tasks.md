@@ -35,5 +35,5 @@
 
 ## 6. 注释与收尾
 
-- [x] 6.1 按 `COMMENTING.md` 单独检查 `crates/wiki-core/**`、`scripts/**` 中 dossier、session、budget 和 usage 相关新增注释。
+- [x] 6.1 按 `.wiki/02-开发指南/00-代码注释规范.md` 单独检查 `crates/wiki-core/**`、`scripts/**` 中 dossier、session、budget 和 usage 相关新增注释。
 - [x] 6.2 在当前 9.2 change 目录中沉淀一份“cold/warm 对照与 session trace 解读”说明，避免关键判断只存在对话上下文里。

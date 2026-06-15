@@ -4,7 +4,7 @@
 - [x] 1.3 将 staged `package.json`、README、CLI/help 与当前源码版本/公开动作的一致性纳入自动化验证
 
 ## 2. Gate Alignment
-- [x] 2.1 收口 `packages/spec-wiki` 自动化测试、`storybook` primary gate、`chi + zustand` smoke 与 `COMMENTING.md` 检查为正式 release evidence
+- [x] 2.1 收口 `packages/spec-wiki` 自动化测试、`storybook` primary gate、`chi + zustand` smoke 与 `.wiki/02-开发指南/00-代码注释规范.md` 检查为正式 release evidence
 - [x] 2.2 明确 `dagger` 与 19 项目全量结果在本轮仅作为观察项或 baseline guard，不重新提升为强制 release blocker
 
 ## 3. Reporting

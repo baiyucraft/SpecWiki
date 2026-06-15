@@ -8,7 +8,7 @@
   - `cargo test -p wiki-runtime --test runtime`
   - `cargo test -p wiki-knowledge artifact_summary_carries_provenance_and_status`
   - `node scripts/run-test-projects.mjs --no-build --timeout-minutes 2 storybook dagger`
-  - `COMMENTING.md` 合规检查
+  - `.wiki/02-开发指南/00-代码注释规范.md` 合规检查
 
 ```mermaid
 flowchart TD
@@ -100,7 +100,7 @@ flowchart TD
 - 新增或修改的文件级、类型级、函数级注释继续使用中文
 - 新增注释重点解释 formal contract、scope 语义和测试场景，没有机械复述代码字面行为
 - 新增测试说明了它们保护的具体场景
-- 本轮没有发现违反 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md) 的新增注释写法
+- 本轮没有发现违反 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 的新增注释写法
 
 备注：
 
@@ -120,7 +120,7 @@ flowchart TD
 - `2.4` 可以完成：`status / query / rebuild` 的 readiness 与 health 语义已分层稳定
 - `4.2` 可以完成：已明确写成 diagnostic acceptance，不再误写成 full compose 验收
 - `4.3` 可以完成：已明确说明本轮为何不跑全量 `run-test-projects`
-- `4.4` 可以完成：本报告已记录单独的 `COMMENTING.md` 合规检查
+- `4.4` 可以完成：本报告已记录单独的 `.wiki/02-开发指南/00-代码注释规范.md` 合规检查
 - `5.2` 可以完成：本报告已明确本轮只收稳 `minimal formal knowledge runtime`
 
 ## Conclusion

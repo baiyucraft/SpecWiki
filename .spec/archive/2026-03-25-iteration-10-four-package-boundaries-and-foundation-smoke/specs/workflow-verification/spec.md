@@ -13,4 +13,4 @@
 - **WHEN** 系统执行本 change 的脚本级验证
 - **THEN** 系统 MUST 运行 `node scripts/test-wiki-lifecycle.mjs`
 - **THEN** `storybook + dagger` MUST 继续作为专项守门样本，证明拆层没有让 runtime/workflow 进一步退化
-- **THEN** 系统 MUST 单独执行一轮 `COMMENTING.md` 合规检查
+- **THEN** 系统 MUST 单独执行一轮 `.wiki/02-开发指南/00-代码注释规范.md` 合规检查

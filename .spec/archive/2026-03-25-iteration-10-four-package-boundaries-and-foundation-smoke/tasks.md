@@ -32,7 +32,7 @@
 
 ## 6. 注释与收尾检查
 
-- [x] 6.1 单独执行一轮 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md) 合规检查，确认本轮涉及的 Rust/TS 代码、测试与脚本注释都符合仓库规范。
+- [x] 6.1 单独执行一轮 [.wiki/02-开发指南/00-代码注释规范.md](E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 合规检查，确认本轮涉及的 Rust/TS 代码、测试与脚本注释都符合仓库规范。
 - [x] 6.2 运行 `.spec status --change iteration-10-four-package-boundaries-and-foundation-smoke` 与等价校验命令，确认 proposal、design、specs、tasks 一致且 change 已 ready for implementation。
 
 

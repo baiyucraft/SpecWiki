@@ -12,4 +12,4 @@
 
 - [x] 3.1 更新 acceptance 与 e2e 断言
 - [x] 3.2 更新 lifecycle 验证脚本的 query 断言
-- [x] 3.3 检查本轮新增注释与命名是否符合 `COMMENTING.md`
+- [x] 3.3 检查本轮新增注释与命名是否符合 `.wiki/02-开发指南/00-代码注释规范.md`

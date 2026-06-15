@@ -14,7 +14,7 @@
 
 - [x] 3.1 让 `workflow-verification` 与 `reference-fidelity-reporting` 对齐新的 gate contract 与 acceptance harness 边界。
 - [x] 3.2 为后续脚本实现列出需要补的结构化输出、阻断语义与 gate 汇总变更点。
-- [x] 3.3 单独检查 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md) 对脚本、测试与 gate 诊断注释的要求。
+- [x] 3.3 单独检查 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 对脚本、测试与 gate 诊断注释的要求。
 
 ## 4. 验收规划
 

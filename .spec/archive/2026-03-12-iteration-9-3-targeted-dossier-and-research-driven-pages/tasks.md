@@ -26,11 +26,11 @@
 
 - [x] 5.1 为 targeted snippets、line-span evidence、section plan、overview/architecture research 和 planner archetype 规则补齐 Rust 测试
 - [x] 5.2 为 provider-first research session 补齐回归测试，覆盖结构化结果、显式 session state、budget 裁剪和 deterministic fallback
-- [x] 5.3 检查并修正本轮新增/修改代码中的注释，使其符合 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md)
+- [x] 5.3 检查并修正本轮新增/修改代码中的注释，使其符合 [.wiki/02-开发指南/00-代码注释规范.md](E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md)
 
 ## 6. 项目集与 Reference 验证
 
-- [x] 6.1 运行 `node scripts/run-test-projects.mjs` 对 `DESIGN.md` 约定的 19 个测试项目执行 `init` 分析，并检查 `.wiki/` 产物
+- [x] 6.1 运行 `node scripts/run-test-projects.mjs` 对 `.wiki/06-设计文档/00-总体设计.md` 约定的 19 个测试项目执行 `init` 分析，并检查 `.wiki/` 产物
 - [x] 6.2 运行 `node scripts/test-wiki-lifecycle.mjs` 覆盖 init → status → sync → update → rebuild 全链路
 - [x] 6.3 更新 `test-project-analysis.md`，逐项目输出 section-plan 覆盖、overview/architecture research 命中、精准 evidence 引用密度和与 reference 的差异
 - [x] 6.4 重新生成带 reference 项目的逐项目对比报告，输出 archetype 高频专题、citation 密度、图覆盖和缺失专题类别

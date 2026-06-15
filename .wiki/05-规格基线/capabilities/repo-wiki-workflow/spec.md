@@ -41,7 +41,7 @@
 系统 MUST 把 `init` 与 `update` 的正式发布承诺收敛到 knowledge runtime，而不是继续停留在 facts-only runtime。执行成功后，系统 MUST 至少保证 `.wiki/.knowledge/**`、`.wiki/pages/**`、`wiki.metadata.json` 与可重建 `.wiki/.cache/**` 的正式 snapshot 成立；仅有 facts/index snapshot 可查而缺失正式 knowledge/runtime 提交时，系统 MUST NOT 将该结果表述为 `v0.2.0` 的 workflow 成功。
 
 #### Scenario: `init` 成功建立 knowledge runtime
-- **WHEN** 用户在有效本地仓库上执行 `spec-wiki wiki init`
+- **WHEN** 用户在有效本地仓库上执行 `spec-wiki init`
 - **THEN** 系统 MUST 建立可供后续 `status`、`query` 与恢复链消费的正式 knowledge runtime snapshot
 - **THEN** 系统 MUST NOT 仅凭 facts/index 可查就把缺失 `.knowledge / pages / metadata` 的结果表述为 `v0.2.0` init 成功
 
@@ -112,4 +112,3 @@
 - **WHEN** 最近一次 `sync` 产生了 `illegal_drift`
 - **THEN** 后续 `status` MUST 能反映该知识层诊断
 - **THEN** 系统 MUST 不得把该状态压平为普通 `needs_update`
-

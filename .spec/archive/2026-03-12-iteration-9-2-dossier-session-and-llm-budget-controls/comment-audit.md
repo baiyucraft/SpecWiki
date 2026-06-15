@@ -2,7 +2,7 @@
 
 检查日期：2026-03-11
 
-本轮按 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md) 重新核对了 dossier、session、budget、usage 相关新增代码的注释边界，重点确认两件事：
+本轮按 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 重新核对了 dossier、session、budget、usage 相关新增代码的注释边界，重点确认两件事：
 
 - 注释是否解释“为什么有这层对象/流程”，而不是逐字段复述代码。
 - 新增 helper 是否只在复杂控制流、预算裁剪、session/tool 协议处保留说明，避免到处堆解释性噪音。

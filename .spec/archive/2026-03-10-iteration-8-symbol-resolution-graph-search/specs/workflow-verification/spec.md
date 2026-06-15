@@ -19,7 +19,7 @@
 - **THEN** 测试 MUST 观察到 provenance 区分 BM25 与 graph 命中来源
 
 ### Requirement: 包装语言与项目集验证必须覆盖 Vue / Svelte graph 解析
-系统 MUST 在 fixture、integration test 或项目集分析中覆盖 Vue / Svelte 单文件组件的 script wrapper 解析，验证定义类符号、raw relation captures 与 graph resolution 都能映射回原始组件文件。每轮与迭代 8 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出 graph facts、graph query 命中表现与 reference 差异。
+系统 MUST 在 fixture、integration test 或项目集分析中覆盖 Vue / Svelte 单文件组件的 script wrapper 解析，验证定义类符号、raw relation captures 与 graph resolution 都能映射回原始组件文件。每轮与迭代 8 相关的 tasks 设计、实现或测试时，还 MUST 对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出 graph facts、graph query 命中表现与 reference 差异。
 
 #### Scenario: Vue 或 Svelte wrapper 解析通过
 - **WHEN** 测试在包含 Vue 或 Svelte 单文件组件的 fixture 或项目中执行 `init`

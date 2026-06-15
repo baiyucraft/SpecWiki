@@ -1,12 +1,12 @@
 # 迭代 3 测试项目集分析
 
-日期：2026-03-09（按更新后的 `DESIGN.md` 重新执行）
+日期：2026-03-09（按更新后的 `.wiki/06-设计文档/00-总体设计.md` 重新执行）
 
 ## 范围
 
 - 当前仓库：`E:\project\!byAI\spec-wiki`
 - 真实参考仓库：`E:\project\aLocal`
-- 其余测试项目集：当前 `DESIGN.md` 中除 `test-aLocal`、`test-spec-wiki` 外的 17 个样本仓库
+- 其余测试项目集：当前 `.wiki/06-设计文档/00-总体设计.md` 中除 `test-aLocal`、`test-spec-wiki` 外的 17 个样本仓库
 - reference 对照：
   - `tmp/reference-aLocal`
   - `tmp/reference-pinia`
@@ -14,7 +14,7 @@
 
 备注：
 
-- 当前 `DESIGN.md` 的测试项目集实际列出 19 个项目；旧分析中的 `test-turbo-basic` 已不在当前名单里。
+- 当前 `.wiki/06-设计文档/00-总体设计.md` 的测试项目集实际列出 19 个项目；旧分析中的 `test-turbo-basic` 已不在当前名单里。
 - 本轮新增关注项是 `test-wot-starter`、`test-storybook`，以及 `reference-restaurant-app` 对照。
 
 ## 自动化测试入口

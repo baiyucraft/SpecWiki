@@ -1,0 +1,15 @@
+id: refactor-specwiki-around-contract-closure-cli-product-surface
+stage: exploration
+deliveryShape: single-change
+multiChange:
+  role: child
+  parent: refactor-specwiki-around-contract-closure
+  order: 6
+  dependsOn:
+    - refactor-specwiki-around-contract-closure-query-route-readiness
+    - refactor-specwiki-around-contract-closure-projection-writeback-boundaries
+artifacts:
+  proposal:
+    status: missing
+  metadata:
+    status: present

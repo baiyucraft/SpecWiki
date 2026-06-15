@@ -22,11 +22,11 @@
 
 | 事项 | 入口 |
 | --- | --- |
-| 总体设计 | [DESIGN-3.0.md](E:/project/!byAI/spec-wiki/DESIGN-3.0.md) |
-| runtime 主路径、`.wiki/` 分层和生命周期 | [DESIGN-RUNTIME.md](E:/project/!byAI/spec-wiki/DESIGN-RUNTIME.md) |
-| 宿主接入、bootstrap 和资产模型 | [DESIGN-AGENTS.md](E:/project/!byAI/spec-wiki/DESIGN-AGENTS.md) |
-| 场景边界 | [SCENE-1.md](E:/project/!byAI/spec-wiki/SCENE-1.md)、[SCENE-2.md](E:/project/!byAI/spec-wiki/SCENE-2.md) |
-| 注释规范 | [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md) |
+| 总体设计 | [.wiki/06-设计文档/00-总体设计.md](E:/project/!byAI/spec-wiki/.wiki/06-设计文档/00-总体设计.md) |
+| runtime 主路径、`.wiki/` 分层和生命周期 | [.wiki/06-设计文档/01-Runtime设计.md](E:/project/!byAI/spec-wiki/.wiki/06-设计文档/01-Runtime设计.md) |
+| 宿主接入、bootstrap 和资产模型 | [.wiki/06-设计文档/02-Agents设计.md](E:/project/!byAI/spec-wiki/.wiki/06-设计文档/02-Agents设计.md) |
+| 场景边界 | [.wiki/06-设计文档/03-核心场景.md](E:/project/!byAI/spec-wiki/.wiki/06-设计文档/03-核心场景.md)、[.wiki/06-设计文档/04-扩展场景.md](E:/project/!byAI/spec-wiki/.wiki/06-设计文档/04-扩展场景.md) |
+| 注释规范 | [.wiki/02-开发指南/00-代码注释规范.md](E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) |
 | Wiki 长期知识 | [.wiki/INDEX.md](E:/project/!byAI/spec-wiki/.wiki/INDEX.md) |
 | UniSpec 开发规范 | [.wiki/00-文档约定/02-UniSpec开发规范.md](E:/project/!byAI/spec-wiki/.wiki/00-文档约定/02-UniSpec开发规范.md) |
 | 测试与验收 | [.wiki/02-开发指南/01-测试与验收.md](E:/project/!byAI/spec-wiki/.wiki/02-开发指南/01-测试与验收.md) |
@@ -41,7 +41,7 @@
 AGENTS.md
   -> .spec/changes/**
   -> .wiki/INDEX.md
-  -> DESIGN-*.md / COMMENTING.md
+  -> .wiki/06-设计文档/** / .wiki/02-开发指南/00-代码注释规范.md
   -> code / tests
 ```
 

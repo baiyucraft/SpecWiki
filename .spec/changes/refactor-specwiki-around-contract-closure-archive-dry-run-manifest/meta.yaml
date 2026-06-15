@@ -1,0 +1,15 @@
+id: refactor-specwiki-around-contract-closure-archive-dry-run-manifest
+stage: exploration
+deliveryShape: single-change
+multiChange:
+  role: child
+  parent: refactor-specwiki-around-contract-closure
+  order: 8
+  dependsOn:
+    - refactor-specwiki-around-contract-closure-governance-isolation
+    - refactor-specwiki-around-contract-closure-cli-product-surface
+artifacts:
+  proposal:
+    status: missing
+  metadata:
+    status: present

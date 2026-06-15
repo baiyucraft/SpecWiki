@@ -1,6 +1,6 @@
 ## Why
 
-`9.4` 已经把主链切到 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble`，但当前真实实现和 reference 结果之间还存在三个结构性断层：一是 `init / rebuild / update` 仍直接绑定 `StructuralResearchProvider`，Research 在 runtime 中还不是真正的 provider-first 主驱动；二是 `page_drafts` 里已有 citation 计数，但最终 `.wiki/*.md` 与 reference 报告脚本都还无法把它识别成正式的 citation / evidence / diagram 落页；三是 `storybook / dagger` 的 KnowledgeUnit 仍大量收敛到 `ModuleDoc + ConceptGuide`，中粒度的 API / config / runtime / testing / tutorial / example 页树还不够稳定。现在继续堆 prompt 或继续加 family/topic 语义，只会放大复杂度，不能收敛到 [DESIGN-CORE2.0.md](E:/project/!byAI/spec-wiki/DESIGN-CORE2.0.md) 要求的 knowledge-unit driven、citation-driven、LLM-required 主线。
+`9.4` 已经把主链切到 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble`，但当前真实实现和 reference 结果之间还存在三个结构性断层：一是 `init / rebuild / update` 仍直接绑定 `StructuralResearchProvider`，Research 在 runtime 中还不是真正的 provider-first 主驱动；二是 `page_drafts` 里已有 citation 计数，但最终 `.wiki/*.md` 与 reference 报告脚本都还无法把它识别成正式的 citation / evidence / diagram 落页；三是 `storybook / dagger` 的 KnowledgeUnit 仍大量收敛到 `ModuleDoc + ConceptGuide`，中粒度的 API / config / runtime / testing / tutorial / example 页树还不够稳定。现在继续堆 prompt 或继续加 family/topic 语义，只会放大复杂度，不能收敛到 [.wiki/06-设计文档/00-总体设计.md](E:/project/!byAI/spec-wiki/.wiki/06-设计文档/00-总体设计.md) 要求的 knowledge-unit driven、citation-driven、LLM-required 主线。
 
 ## What Changes
 

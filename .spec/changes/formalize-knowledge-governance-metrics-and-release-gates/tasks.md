@@ -19,5 +19,5 @@
 ## 4. Docs And Hygiene
 
 - [ ] 4.1 更新 release closeout、quality gates 与 governance 相关文档，明确本轮只做 governance aggregation，不做 dashboard 或后台
-- [ ] 4.2 检查实现注释是否符合 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md)，删除把 metrics 解释成脚本私有统计的误导性注释
+- [ ] 4.2 检查实现注释是否符合 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md)，删除把 metrics 解释成脚本私有统计的误导性注释
 - [ ] 4.3 复核 UniSpec 与实现边界一致，确保本轮不改写 `knowledge-quality-gates` transport shape

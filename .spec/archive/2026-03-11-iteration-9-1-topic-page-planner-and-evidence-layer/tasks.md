@@ -26,12 +26,12 @@
 
 - [x] 5.1 为 Rust core 增加自动化测试，覆盖专题页发现、专题页 identity 稳定、evidence block 落页、facts-driven 图回退与增量 update 受影响集合。
 - [x] 5.2 升级 `scripts/collect-reference-project-reports.mjs` 与相关分析输出，新增专题页覆盖率、evidence 落页和图表达覆盖统计。
-- [x] 5.3 运行 `node scripts/run-test-projects.mjs` 对 `DESIGN.md` 定义的 19 个测试项目全量执行 `init`，并更新 `test-project-analysis.md`。
+- [x] 5.3 运行 `node scripts/run-test-projects.mjs` 对 `.wiki/06-设计文档/00-总体设计.md` 定义的 19 个测试项目全量执行 `init`，并更新 `test-project-analysis.md`。
 - [x] 5.4 运行 `node scripts/test-wiki-lifecycle.mjs` 验证 `init -> status -> sync -> query -> update -> rebuild` 全链路在专题页与 evidence layer 引入后仍保持正确状态流转。
 - [x] 5.5 运行 `node scripts/collect-reference-project-reports.mjs --jobs <N>` 对全部有 reference 的项目生成逐项目报告，并在当前 change 目录下输出新的差距分析。
 - [x] 5.6 新增一个针对指定测试项目的 debug init 脚本，要求输出进度、完整 LLM JSON trace，并把日志目录固定落到当前 change 下。
 
 ## 6. 注释与收尾
 
-- [x] 6.1 按 `COMMENTING.md` 对本轮新增或修改的 `crates/wiki-core/**`、`scripts/**` 注释做一次单独检查，补齐专题发现、evidence layer 和图输入相关的关键注释。
+- [x] 6.1 按 `.wiki/02-开发指南/00-代码注释规范.md` 对本轮新增或修改的 `crates/wiki-core/**`、`scripts/**` 注释做一次单独检查，补齐专题发现、evidence layer 和图输入相关的关键注释。
 - [x] 6.2 将四个参考项目得出的“下一步优化建议”沉淀到当前 `9.1` change 目录，避免只存在对话上下文里。

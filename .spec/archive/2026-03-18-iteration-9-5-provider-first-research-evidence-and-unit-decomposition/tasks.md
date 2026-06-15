@@ -41,6 +41,6 @@
 ## 6. 专项回归、注释与收尾
 
 - [x] 6.1 为 `storybook + dagger` 的 planner、research、renderer、lifecycle 和 reference 对比补齐必要测试，确保每个行为变化都有对应断言，尤其覆盖“本地化 docs corpus 优先于英文 raw docs corpus”和“reference 主章节骨架稳定落页”这两类约束
-- [x] 6.2 按 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md) 审核本轮新增或重构代码注释，并修正不符合规范的注释
+- [x] 6.2 按 [.wiki/02-开发指南/00-代码注释规范.md](E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 审核本轮新增或重构代码注释，并修正不符合规范的注释
 - [x] 6.3 输出最终 `storybook + dagger` 专项报告、`_optimization-notes.md` 和结论摘要，明确记录两者对 reference 的最终匹配率、三类差距收敛过程和剩余尾差
 - [ ] 6.4 仅当 `storybook` 与 `dagger` 同时满足 `overall_match_rate >= 95%`、高频 collapse 不再是主问题、citation / diagram 不再是主短板、`extra generated pages` 未明显失控、英文 raw docs 文件名不再大批残留、docs-backed 页面主章节骨架不再明显偏离 reference 时，才将本轮标记为完成

@@ -13,7 +13,7 @@ flowchart TD
 
 ## Checks
 
-- 核对 `README.md`、`README-CN.md`、`RELEASE-v0.2.0.md`、`dist/spec-wiki/README.md` 是否统一描述 `v0.2.0 minimal formal knowledge runtime`
+- 核对 `README.md`、`README-CN.md`、`.docs/release/v0-2-0.md`、`dist/spec-wiki/README.md` 是否统一描述 `v0.2.0 minimal formal knowledge runtime`
 - 核对 source package 与 staged package 的版本号、description 是否统一为 `0.2.0`
 - 核对 `repo-wiki-workflow` 与 `adapter-distribution` 的 purpose、requirement 标题、scenario wording 是否清掉旧版本漂移
 - 单独检查 README、staged README 与 CLI help 是否统一公开 `init / status / update / query / sync / rebuild`
@@ -22,7 +22,7 @@ flowchart TD
 ## Commenting Check
 
 - 本轮没有新增 TypeScript / Rust 业务逻辑，只修改文档、UniSpec wording 与 package metadata
-- `COMMENTING.md` 约束未新增违背点
+- `.wiki/02-开发指南/00-代码注释规范.md` 约束未新增违背点
 
 ## Result
 

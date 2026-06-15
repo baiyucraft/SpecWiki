@@ -62,7 +62,7 @@ flowchart TD
 - `chi + zustand` smoke gate
   - Source: [smoke-gate-chi-zustand-2026-04-02.md](E:/project/!byAI/spec-wiki/.spec/archive/2026-04-02-iteration-12-4-query-route-and-v0-2-release-gate/reference-project-reports/smoke-gate-chi-zustand-2026-04-02.md)
   - Status: inherited as formal smoke gate evidence
-- `COMMENTING.md` check
+- `.wiki/02-开发指南/00-代码注释规范.md` check
   - Source: [verification-and-commenting.md](E:/project/!byAI/spec-wiki/.spec/archive/2026-04-02-iteration-12-4-query-route-and-v0-2-release-gate/reference-project-reports/verification-and-commenting.md)
   - Status: inherited as formal commenting evidence
 
@@ -84,7 +84,7 @@ flowchart TD
 - `build-dist.mjs` 已保持文件头注释，并为新增 evidence helper 保留职责说明
 - `publish-packages.mjs` 已补文件头注释与导出函数注释
 - `distribution.test.ts` 继续使用中文文件注释，新增 helper 名称与断言语义保持直接可读
-- 本轮没有新增违背 `COMMENTING.md` 的注释写法
+- 本轮没有新增违背 `.wiki/02-开发指南/00-代码注释规范.md` 的注释写法
 
 ## Conclusion
 

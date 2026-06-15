@@ -33,6 +33,10 @@ Agent 直接进入大仓库时，通常会先盲搜、盲读，token 花得多�
 
 当前正式发布合同已经是最小 knowledge runtime，不再是 `facts-only` 的过渡口径。
 
+## 项目知识入口
+
+长期项目知识、架构设计、场景边界和协作约定从 [.wiki/INDEX.md](./.wiki/INDEX.md) 进入。仓库根目录只保留产品入口和 Agent 入口。
+
 ## 快速开始
 
 ### 1. 给宿主做 bootstrap

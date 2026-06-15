@@ -9,7 +9,7 @@ owner: docs
 
 `spec-wiki` 构建 Repo Wiki Core + Agents 体系：扫描代码仓库，生成并持续维护 `.wiki/`，让人和 Agent 共享同一层项目知识。
 
-本次初始化只整理长期文档层，不生成或更新 runtime 产物 `.wiki/pages/**`、`.wiki/.knowledge/**`、`.wiki/.cache/**` 或 `wiki.metadata.json`。runtime 初始化另按 `spec-wiki wiki init` 或对应任务执行。
+本次文档整理只更新长期文档层，不生成或更新 runtime 产物 `.wiki/pages/**`、`.wiki/.knowledge/**`、`.wiki/.cache/**` 或 `wiki.metadata.json`。完整初始化统一通过 `spec-wiki init` 进入；runtime 构建是该入口内部阶段，不再作为另一套用户初始化入口描述。
 
 ## 一级目录
 
@@ -21,6 +21,7 @@ owner: docs
 | [03-模块指南](./03-模块指南/INDEX.md) | 以 KnowledgeDomain / KnowledgeUnit 解释模块边界、事实来源和输出层 |
 | [04-对外方法](./04-对外方法/INDEX.md) | CLI、配置、运行时产物和公开使用方式 |
 | [05-规格基线](./05-规格基线/INDEX.md) | 从治理迁移沉淀来的稳定 capability 基线 |
+| [06-设计文档](./06-设计文档/INDEX.md) | 当前稳定设计、runtime 设计、Agents 设计和场景边界 |
 
 ## SSOT 规则
 
@@ -46,6 +47,7 @@ flowchart LR
 | 准备本地开发环境 | [00-环境准备](./01-快速上手/00-环境准备.md) |
 | 运行、构建和测试 | [01-启动项目](./01-快速上手/01-启动项目.md)、[02-构建项目](./01-快速上手/02-构建项目.md) |
 | 理解核心分层 | [03-模块指南](./03-模块指南/INDEX.md) |
+| 查总体设计和场景边界 | [06-设计文档](./06-设计文档/INDEX.md) |
 | 使用 CLI 或 runtime 命令 | [00-CLI](./04-对外方法/00-CLI.md) |
 | 查配置和运行时产物边界 | [01-配置与运行时产物](./04-对外方法/01-配置与运行时产物.md) |
 | 编写或推进 UniSpec change | [02-UniSpec开发规范](./00-文档约定/02-UniSpec开发规范.md) |

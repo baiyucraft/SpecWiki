@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: 系统必须提供端到端验证适配层到 Wiki 产物的主链路
-系统 MUST 提供自动化测试，验证适配层调用 Rust core 后能够在目标仓库完成 Wiki 初始化、手工编辑同步、增量更新、强制重建并执行查询，且生成的 `.wiki/` 产物与返回结果符合预期。针对迭代 7 收口，验证 MUST 继续覆盖 page identity 稳定性（增删少量源文件后核心页面 `page_id` 不变）、steering 配置生效（忽略路径、模块提升/降级、合并阈值）、页面合并/拆分正确性、父子关系按模块树层级分配、扩展 section 模板的内容密度，并新增覆盖多语言 symbol parsing 质量、`symbols` / `symbols_fts` 写盘、一致性的增量重解析、symbol BM25 query 和解析失败隔离。验证脚本还 MUST 使用与当前源码一致的 release binary，并允许对 `init / update / rebuild` 这类重 workflow 使用更长超时，避免把大型 monorepo 的正常初始化误判为失败。每轮与迭代 7 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init` 分析；如果目标仓库存在 reference，则必须对照 `.wiki/*.md` 与 `wiki.metadata.json`。项目集分析报告 MUST 按项目逐个输出，而不是只给总表或总括结论。
+系统 MUST 提供自动化测试，验证适配层调用 Rust core 后能够在目标仓库完成 Wiki 初始化、手工编辑同步、增量更新、强制重建并执行查询，且生成的 `.wiki/` 产物与返回结果符合预期。针对迭代 7 收口，验证 MUST 继续覆盖 page identity 稳定性（增删少量源文件后核心页面 `page_id` 不变）、steering 配置生效（忽略路径、模块提升/降级、合并阈值）、页面合并/拆分正确性、父子关系按模块树层级分配、扩展 section 模板的内容密度，并新增覆盖多语言 symbol parsing 质量、`symbols` / `symbols_fts` 写盘、一致性的增量重解析、symbol BM25 query 和解析失败隔离。验证脚本还 MUST 使用与当前源码一致的 release binary，并允许对 `init / update / rebuild` 这类重 workflow 使用更长超时，避免把大型 monorepo 的正常初始化误判为失败。每轮与迭代 7 相关的 tasks 设计、实现或测试时，还 MUST 对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init` 分析；如果目标仓库存在 reference，则必须对照 `.wiki/*.md` 与 `wiki.metadata.json`。项目集分析报告 MUST 按项目逐个输出，而不是只给总表或总括结论。
 
 #### Scenario: page identity 稳定性验证
 - **WHEN** 测试在临时仓库中执行 `init`，然后增加一个源文件并执行 `update`
@@ -79,7 +79,7 @@
 
 #### Scenario: 测试项目集全量 init 分析
 - **WHEN** 迭代 7 的 tasks 设计或测试阶段
-- **THEN** 必须对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init` 分析
+- **THEN** 必须对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init` 分析
 - **THEN** 必须重点关注多语言 symbol 提取质量、symbol query 命中、增量重解析结果以及既有页面拓扑不变量
 - **THEN** 如果存在 reference，必须对照 `.wiki/*.md` 与 `wiki.metadata.json`
 - **THEN** 必须输出 `test-project-analysis.md`

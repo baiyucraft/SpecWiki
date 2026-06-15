@@ -98,7 +98,7 @@
 ## REMOVED Requirements
 
 ### Requirement: steering 配置必须支持全局和按语言两层忽略路径
-**Reason**: `DESIGN-RUNTIME.md` 已将扫描与 runtime 边界统一收敛到正式分层，扫描侧 steering 结构以 `scan.ignore` / `scan.include` 为长期事实模型，旧的 `ignore.global` 与 `ignore.<language>` 结构不再保留。
+**Reason**: `.wiki/06-设计文档/01-Runtime设计.md` 已将扫描与 runtime 边界统一收敛到正式分层，扫描侧 steering 结构以 `scan.ignore` / `scan.include` 为长期事实模型，旧的 `ignore.global` 与 `ignore.<language>` 结构不再保留。
 **Migration**: 现有仓库应把旧的 `ignore.global` / `ignore.<language>` 配置迁移为 `scan.ignore`，需要强制纳入扫描的路径迁移为 `scan.include`。兼容读取仅作为过渡行为，不构成长期 contract。
 
 ## ADDED Requirements

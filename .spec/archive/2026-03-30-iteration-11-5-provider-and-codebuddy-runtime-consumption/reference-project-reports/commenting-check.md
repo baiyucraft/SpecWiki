@@ -25,4 +25,4 @@
 ## 备注
 
 - 本轮没有为了通过检查而新增大段注释。
-- 注释风格与粒度符合 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md) 当前要求。
+- 注释风格与粒度符合 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 当前要求。

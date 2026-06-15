@@ -19,5 +19,5 @@
 
 - [x] 4.1 更新包级测试，覆盖 CodeBuddy 四个 action skill、hooks/settings 与 Claude/Codex 模板复用路径
 - [x] 4.2 验证重复执行 `spec-wiki init --tool codebuddy` 时只刷新 `spec-wiki` 管理的 skills/hooks/settings，不覆盖无关宿主文件与用户自有 settings 项
-- [x] 4.3 单独执行一轮 `COMMENTING.md` 合规检查，确认新增模板/renderer 注释符合规范
+- [x] 4.3 单独执行一轮 `.wiki/02-开发指南/00-代码注释规范.md` 合规检查，确认新增模板/renderer 注释符合规范
 

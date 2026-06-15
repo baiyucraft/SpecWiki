@@ -6,7 +6,7 @@
 
 ## 2. 多语言解析与批处理
 
-- [x] 2.1 按 `DESIGN-ITER.md` 的 12 种核心语言实现 tree-sitter parser / query 定义，至少让 definition capture 可稳定产出符号节点，并补 query registry coverage 单测，确保每种 supported language 都有对应 query
+- [x] 2.1 按 `.docs/roadmap/implementation-roadmap.md` 的 12 种核心语言实现 tree-sitter parser / query 定义，至少让 definition capture 可稳定产出符号节点，并补 query registry coverage 单测，确保每种 supported language 都有对应 query
 - [x] 2.2 先收口到新版 grammar 直接覆盖的语言与 React(JSX/TSX) 委托解析；Vue/Svelte symbol 包装层延期到迭代 8，并对当前未覆盖场景保持 fail-soft
 - [x] 2.3 实现 symbol parsing 的字节预算批处理、稳定排序和单文件失败隔离策略，并补解析失败与超预算场景测试
 
@@ -26,10 +26,10 @@
 
 - [x] 5.1 在 `crates/wiki-core/tests/` 中补齐 symbol parsing、导出判断、增量重解析、解析失败隔离和 lifecycle 集成测试
 - [x] 5.2 运行 `cargo test -p wiki-core` 与根级 `pnpm test`，修复本迭代引入的回归
-- [x] 5.3 运行 `node scripts/run-test-projects.mjs` 对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init`，重点检查多语言 symbol 提取、symbol query 命中和既有页面拓扑不变量，并输出本 change 的 `test-project-analysis.md`；报告格式参考 [archive/2026-03-09-iteration-5-editable-wiki-runtime/test-project-analysis.md](E:/project/!byAI/spec-wiki/.spec/archive/2026-03-09-iteration-5-editable-wiki-runtime/test-project-analysis.md) 与 [archive/2026-03-09-iteration-6-page-topology-and-steering/test-project-analysis.md](E:/project/!byAI/spec-wiki/.spec/archive/2026-03-09-iteration-6-page-topology-and-steering/test-project-analysis.md)，对每个项目逐个分析、逐个输出，不得只给总表
+- [x] 5.3 运行 `node scripts/run-test-projects.mjs` 对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init`，重点检查多语言 symbol 提取、symbol query 命中和既有页面拓扑不变量，并输出本 change 的 `test-project-analysis.md`；报告格式参考 [archive/2026-03-09-iteration-5-editable-wiki-runtime/test-project-analysis.md](E:/project/!byAI/spec-wiki/.spec/archive/2026-03-09-iteration-5-editable-wiki-runtime/test-project-analysis.md) 与 [archive/2026-03-09-iteration-6-page-topology-and-steering/test-project-analysis.md](E:/project/!byAI/spec-wiki/.spec/archive/2026-03-09-iteration-6-page-topology-and-steering/test-project-analysis.md)，对每个项目逐个分析、逐个输出，不得只给总表
 - [x] 5.4 使用拆分后的生命周期脚本（例如 `node scripts/test-wiki-lifecycle.mjs --phase bootstrap|steady|mutation|rebuild` 或对应薄包装脚本）分阶段验证 `init -> status -> sync -> query -> update -> rebuild` 全链路，确认 symbol snapshot 与 query contract 在生命周期内保持一致（已执行全量 `bootstrap=147/147`、`steady=249/249`、`mutation=228/228`、`rebuild=257/257`）
 
 ## 6. 注释与收口
 
-- [x] 6.1 按 `COMMENTING.md` 复核本轮新增/修改的 Rust 与 TypeScript 注释，重点覆盖 parser registry、SQLite symbol 存储、workflow 接入和 query 返回结构
+- [x] 6.1 按 `.wiki/02-开发指南/00-代码注释规范.md` 复核本轮新增/修改的 Rust 与 TypeScript 注释，重点覆盖 parser registry、SQLite symbol 存储、workflow 接入和 query 返回结构
 - [x] 6.2 根据测试项目集与生命周期验证结果回调本 change 的 design / specs / tasks，确保最终提案与真实实现边界一致

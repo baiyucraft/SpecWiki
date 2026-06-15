@@ -1,0 +1,15 @@
+id: refactor-specwiki-around-contract-closure-code-graph-index
+stage: exploration
+deliveryShape: single-change
+multiChange:
+  role: child
+  parent: refactor-specwiki-around-contract-closure
+  order: 5
+  dependsOn:
+    - refactor-specwiki-around-contract-closure-truth-restore-snapshot
+    - refactor-specwiki-around-contract-closure-query-route-readiness
+artifacts:
+  proposal:
+    status: missing
+  metadata:
+    status: present

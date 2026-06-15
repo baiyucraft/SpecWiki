@@ -8,7 +8,7 @@
 
 - 为 `v0.2.0` 收口 staged package、distribution proof 与 publish dry-run 证据
 - 对齐 staged `package.json`、README、CLI/help 与实际构建产物之间的一致性检查
-- 将 `storybook` primary gate、`chi + zustand` smoke、`packages/spec-wiki` 测试与 `COMMENTING.md` 检查收口为正式 release gate 证据
+- 将 `storybook` primary gate、`chi + zustand` smoke、`packages/spec-wiki` 测试与 `.wiki/02-开发指南/00-代码注释规范.md` 检查收口为正式 release gate 证据
 - 明确当前 `dist/spec-wiki/` 必须从当前源码真相重新装配，而不是继续沿用旧 release 口径
 - 本轮只做 evidence / packaging gap closure，不新增新的 capability 或 runtime contract
 

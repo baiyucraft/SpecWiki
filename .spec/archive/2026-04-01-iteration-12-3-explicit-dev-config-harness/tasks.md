@@ -11,4 +11,4 @@
 ## 3. Verification
 
 - [x] 3.1 运行与本 change 直接相关的脚本 / 测试验证，确认调试脚本和共享 helper 没有再保留双份 dev config 逻辑
-- [x] 3.2 检查涉及脚本注释是否符合 `COMMENTING.md`
+- [x] 3.2 检查涉及脚本注释是否符合 `.wiki/02-开发指南/00-代码注释规范.md`

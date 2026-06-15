@@ -55,7 +55,7 @@
 
 ## 8. 测试项目集分析
 
-- [x] 8.1 运行 `node scripts/run-test-projects.mjs` 对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init`，重点关注页面拓扑稳定性、合并策略效果、父子关系正确性和 section 内容密度。
+- [x] 8.1 运行 `node scripts/run-test-projects.mjs` 对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init`，重点关注页面拓扑稳定性、合并策略效果、父子关系正确性和 section 内容密度。
 - [x] 8.2 对存在 reference 的测试项目（aLocal、axum、bat、chi、cobra、dagger、pinia、restaurant-app、storybook、zustand）执行结果对照，覆盖页面组织和 `wiki.metadata.json` 字段差异。
 - [x] 8.3 对当前仓库 `E:\project\!byAI\spec-wiki` 执行 `init` 分析，重点记录页面合并效果和父子关系。
 - [x] 8.4 运行 `node scripts/test-wiki-lifecycle.mjs` 验证全生命周期（init → status → sync → query → update → rebuild），确认 SQLite 存储、steering 配置和新 planner 不破坏已有 workflow 语义。
@@ -63,4 +63,4 @@
 
 ## 9. 注释合规检查
 
-- [x] 9.1 按 `COMMENTING.md` 检查本轮新增或修改文件的注释，覆盖 SQLite 存储模块、steering 配置模块、planner 合并策略、section 模板扩展、workflow 集成和测试场景注释。
+- [x] 9.1 按 `.wiki/02-开发指南/00-代码注释规范.md` 检查本轮新增或修改文件的注释，覆盖 SQLite 存储模块、steering 配置模块、planner 合并策略、section 模板扩展、workflow 集成和测试场景注释。

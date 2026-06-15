@@ -25,5 +25,5 @@
 
 ## 5. Commenting And Change Hygiene
 
-- [x] 5.1 检查本 change 涉及代码的注释是否符合 `COMMENTING.md`
+- [x] 5.1 检查本 change 涉及代码的注释是否符合 `.wiki/02-开发指南/00-代码注释规范.md`
 - [x] 5.2 在实现前后核对 UniSpec 产物、测试范围与代码改动保持一致

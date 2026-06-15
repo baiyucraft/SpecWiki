@@ -1,0 +1,19 @@
+id: refactor-specwiki-around-contract-closure-page-tree-contract
+stage: tasks
+deliveryShape: single-change
+multiChange:
+  role: child
+  parent: refactor-specwiki-around-contract-closure
+  order: 1
+  dependsOn: []
+artifacts:
+  proposal:
+    status: present
+  design:
+    status: present
+  cases:
+    status: present
+  tasks:
+    status: present
+  metadata:
+    status: present

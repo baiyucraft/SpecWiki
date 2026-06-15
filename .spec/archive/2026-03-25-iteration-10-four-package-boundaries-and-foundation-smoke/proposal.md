@@ -1,12 +1,12 @@
 ## Why
 
-`DESIGN-3.0.md`、`DESIGN-RUNTIME.md` 和 `DESIGN-ITER.md` 已经把 3.0 的真相改成 `wiki-model / wiki-index / wiki-knowledge / wiki-runtime` 四层，但当前工作区仍只有 [`Cargo.toml`](E:/project/!byAI/spec-wiki/Cargo.toml) 中的单一 `crates/wiki-core` 成员，且 [`lib.rs`](E:/project/!byAI/spec-wiki/crates/wiki-core/src/lib.rs) 继续把 `domain / generation / llm / repo / storage / transport / workflows` 一并导出。再继续在这个单包上追加能力，只会让 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble` 的 3.0 边界长期停留在文档里，后续 `wiki-index`、`wiki-knowledge`、`wiki-runtime` 的职责都会继续互相污染。
+`.wiki/06-设计文档/00-总体设计.md`、`.wiki/06-设计文档/01-Runtime设计.md` 和 `.docs/roadmap/implementation-roadmap.md` 已经把 3.0 的真相改成 `wiki-model / wiki-index / wiki-knowledge / wiki-runtime` 四层，但当前工作区仍只有 [`Cargo.toml`](E:/project/!byAI/spec-wiki/Cargo.toml) 中的单一 `crates/wiki-core` 成员，且 [`lib.rs`](E:/project/!byAI/spec-wiki/crates/wiki-core/src/lib.rs) 继续把 `domain / generation / llm / repo / storage / transport / workflows` 一并导出。再继续在这个单包上追加能力，只会让 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble` 的 3.0 边界长期停留在文档里，后续 `wiki-index`、`wiki-knowledge`、`wiki-runtime` 的职责都会继续互相污染。
 
 本轮之所以必须现在做，是因为当前代码里的跨层耦合已经进入“会反向定义设计”的阶段：[`workflows/init.rs`](E:/project/!byAI/spec-wiki/crates/wiki-core/src/workflows/init.rs) 直接串起 facts、knowledge、LLM、storage 与 runtime 写盘；[`workflows/page_render.rs`](E:/project/!byAI/spec-wiki/crates/wiki-core/src/workflows/page_render.rs) 同时负责 knowledge planning、research、compose 与 SQLite checkpoint；[`domain/change_set.rs`](E:/project/!byAI/spec-wiki/crates/wiki-core/src/domain/change_set.rs) 在“domain”层直接依赖 generation、repo 和 storage；[`llm/mod.rs`](E:/project/!byAI/spec-wiki/crates/wiki-core/src/llm/mod.rs) 又横穿 scanner/hierarchy、research、SQLite cache 与 section/title 推导。与此同时，reference/rdb 与现产物分析已经说明：`storybook` 当前仍存在 runtime missing，`dagger` 仍存在 grounding/skeleton/reuse 缺口；如果不先把 crate 边界拆正，后续任何 fidelity、query 或 knowledge 生命周期优化都会继续建立在错误的工程分层上。
 
 ## What Changes
 
-- 新增正式的四包边界：`wiki-model`、`wiki-index`、`wiki-knowledge`、`wiki-runtime`，并让 workspace 依赖方向与 `DESIGN-3.0.md` 一致。
+- 新增正式的四包边界：`wiki-model`、`wiki-index`、`wiki-knowledge`、`wiki-runtime`，并让 workspace 依赖方向与 `.wiki/06-设计文档/00-总体设计.md` 一致。
 - 把当前 `wiki-core` 收缩并重命名为 `wiki-runtime`；旧 `wiki-core` crate/binary/package 不保留兼容层或并行实现。
 - 新增一份明确的“对象归属矩阵”，至少覆盖 `KnowledgeDomain / KnowledgeUnit / KnowledgeTree / UnitScope / SourceCitation / PageDraft / PageDigest / SystemResearch / DomainResearch / UnitResearch / PageContext / PlannedPage / WikiState / WikiMetadata / PipelineRuntimeSummary / UnitRuntimeGate / ChangePlan / ExportContext / ManagedSectionBlock`，禁止再以“按目录搬家”代替按边界拆层。
 - 把 `knowledge_planner / research_engine / compose_engine` 收回 `wiki-knowledge`，但把 `renderer / managed_sections / page merge / managed marker / Markdown projection` 留在 `wiki-runtime`，不允许把整个 `generation/**` 整包塞进 `wiki-knowledge`。
@@ -30,7 +30,7 @@
 - `repo-wiki-runtime`: runtime 的正式职责收紧为 lifecycle、storage、transport、managed projection、query route 骨架与 adapter，不再拥有 scanner、knowledge planning、research engine、compose engine 的主实现。
 - `codebuddy-agent-integration`: CodeBuddy Agent 继续保持 thin boundary，但必须解析并调用本地 `wiki-runtime` binary，而不是旧 `wiki-core` 命名。
 - `adapter-distribution`: 平台包 staging、二进制复制目标和主包入口必须跟随 `wiki-runtime` 命名与新的 workspace 布局更新。
-- `workflow-verification`: 验证面新增多 crate workspace build/test、crate 边界 smoke、生命周期脚本、`storybook + dagger` 不回退样本，以及 `COMMENTING.md` 单独检查要求。
+- `workflow-verification`: 验证面新增多 crate workspace build/test、crate 边界 smoke、生命周期脚本、`storybook + dagger` 不回退样本，以及 `.wiki/02-开发指南/00-代码注释规范.md` 单独检查要求。
 
 ## Impact
 

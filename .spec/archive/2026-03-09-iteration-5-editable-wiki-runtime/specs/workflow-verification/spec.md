@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: 系统必须提供端到端验证适配层到 Wiki 产物的主链路
-系统 MUST 提供自动化测试，验证适配层调用 Rust core 后能够在目标仓库完成 Wiki 初始化、手工编辑同步、增量更新、强制重建并执行查询，且生成的 `.wiki/` 产物与返回结果符合预期。针对迭代 5 收口，验证 MUST 覆盖 managed marker 写盘、legacy 页面迁移、`sync` 回写 section / summary / metadata、`update / rebuild` 保留同页 user sections，以及测试项目集 `init` 分析。每轮与迭代 5 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init` 分析；如果目标仓库存在 reference，则必须对照 `.wiki/*.md` 与 `wiki.metadata.json`。
+系统 MUST 提供自动化测试，验证适配层调用 Rust core 后能够在目标仓库完成 Wiki 初始化、手工编辑同步、增量更新、强制重建并执行查询，且生成的 `.wiki/` 产物与返回结果符合预期。针对迭代 5 收口，验证 MUST 覆盖 managed marker 写盘、legacy 页面迁移、`sync` 回写 section / summary / metadata、`update / rebuild` 保留同页 user sections，以及测试项目集 `init` 分析。每轮与迭代 5 相关的 tasks 设计、实现或测试时，还 MUST 对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init` 分析；如果目标仓库存在 reference，则必须对照 `.wiki/*.md` 与 `wiki.metadata.json`。
 
 #### Scenario: 初始化后页面包含 managed marker
 - **WHEN** 端到端或集成测试在临时仓库中执行 `init`
@@ -32,6 +32,6 @@
 
 #### Scenario: 对照测试项目集与参考产物
 - **WHEN** 开发者为迭代 5 相关 change 设计 tasks、执行实现或做回归验证
-- **THEN** 系统必须能够对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init`
+- **THEN** 系统必须能够对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init`
 - **THEN** 开发者必须固定分析 `E:\\project\\aLocal` 和 `E:\\project\\!byAI\\spec-wiki`，且不得省略其余样本仓库
 - **THEN** 如果目标仓库存在 reference 参考，则必须将生成结果与 reference 的页面结构和 metadata 字段做对照

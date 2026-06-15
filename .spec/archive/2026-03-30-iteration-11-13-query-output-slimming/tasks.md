@@ -12,4 +12,4 @@
 ## 3. 测试与注释
 
 - [x] 3.1 更新 runtime/transport/CLI/e2e 测试，覆盖默认 query payload 字段瘦身、内部 rich 结构保留与 provenance 负向断言
-- [x] 3.2 检查本轮新增和修改注释，确保符合 `COMMENTING.md`
+- [x] 3.2 检查本轮新增和修改注释，确保符合 `.wiki/02-开发指南/00-代码注释规范.md`

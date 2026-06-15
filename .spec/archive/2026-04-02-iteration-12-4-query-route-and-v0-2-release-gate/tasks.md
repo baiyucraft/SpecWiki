@@ -18,5 +18,5 @@
 
 ## 4. Contract Hygiene
 
-- [x] 4.1 单独执行一次 `COMMENTING.md` 合规检查，并把结果写入本 change 的验收记录
+- [x] 4.1 单独执行一次 `.wiki/02-开发指南/00-代码注释规范.md` 合规检查，并把结果写入本 change 的验收记录
 - [x] 4.2 复核实现、测试、报告与文案边界，确保本轮没有新增 capability、没有扩成 13 阶段 lifecycle/public-surface 迁移，且不把 `runtime_incomplete` 重新包装成发布成功态

@@ -22,7 +22,7 @@
 
 - [x] 4.1 运行 `storybook + dagger` 的专项报告生成流程，产出新的 `_snapshot.json`、`_summary.md`、项目报告与 gap ledger，确认 9.6 门禁能稳定回答页数、reuse、骨架与关键文件四个问题
 - [x] 4.2 运行 warm report 重跑验证，确认 `reuse_overage / median skeleton fidelity / median key source coverage` 波动可控，能作为 9.7-9.9 的验收基线
-- [x] 4.3 按 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md) 检查本轮新增或重构脚本中的注释，确保中文摘要、参数和关键流程注释符合仓库规范
+- [x] 4.3 按 [.wiki/02-开发指南/00-代码注释规范.md](E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 检查本轮新增或重构脚本中的注释，确保中文摘要、参数和关键流程注释符合仓库规范
 - [x] 4.4 汇总最终 9.6 基线结论，明确记录哪些样本 `ready`、哪些 `runtime_incomplete`、哪些 reuse/skeleton/key-source 指标仍是后续 9.7-9.9 的主要收敛入口
 
 

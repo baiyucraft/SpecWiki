@@ -15,4 +15,4 @@
 - [x] 3.1 为 declared 删除写回补 integration tests，覆盖“原本有 declared → 合法删除部分/全部 → snapshot 正确 prune”。
 - [x] 3.2 补 `illegal_drift` 压过 declared 删除写回的测试。
 - [x] 3.3 补 declared 删除后 `update` 仍能消费 stale / health scope 的测试。
-- [x] 3.4 单独检查 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md) 合规性，并同步更新 tasks 状态。
+- [x] 3.4 单独检查 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 合规性，并同步更新 tasks 状态。

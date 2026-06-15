@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: 系统必须提供端到端验证适配层到 Wiki 产物的主链路
-系统 MUST 提供自动化测试，验证适配层调用 Rust core 后能够在目标仓库完成 Wiki 初始化、手工编辑同步、增量更新、强制重建并执行查询，且生成的 `.wiki/` 产物与返回结果符合预期。针对迭代 6 收口，验证 MUST 覆盖 page identity 稳定性（增删少量源文件后核心页面 page_id 不变）、steering 配置生效（忽略路径、模块提升/降级、合并阈值）、页面合并/拆分正确性、父子关系按模块树层级分配、扩展 section 模板的内容密度，以及测试项目集 `init` 分析。每轮与迭代 6 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init` 分析；如果目标仓库存在 reference，则必须对照 `.wiki/*.md` 与 `wiki.metadata.json`。
+系统 MUST 提供自动化测试，验证适配层调用 Rust core 后能够在目标仓库完成 Wiki 初始化、手工编辑同步、增量更新、强制重建并执行查询，且生成的 `.wiki/` 产物与返回结果符合预期。针对迭代 6 收口，验证 MUST 覆盖 page identity 稳定性（增删少量源文件后核心页面 page_id 不变）、steering 配置生效（忽略路径、模块提升/降级、合并阈值）、页面合并/拆分正确性、父子关系按模块树层级分配、扩展 section 模板的内容密度，以及测试项目集 `init` 分析。每轮与迭代 6 相关的 tasks 设计、实现或测试时，还 MUST 对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init` 分析；如果目标仓库存在 reference，则必须对照 `.wiki/*.md` 与 `wiki.metadata.json`。
 
 #### Scenario: page identity 稳定性验证
 - **WHEN** 测试在临时仓库中执行 `init`，然后增加一个源文件并执行 `update`
@@ -52,6 +52,6 @@
 
 #### Scenario: 测试项目集全量 init 分析
 - **WHEN** 迭代 6 的 tasks 设计或测试阶段
-- **THEN** 必须对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init` 分析
+- **THEN** 必须对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init` 分析
 - **THEN** 必须重点关注页面拓扑稳定性、合并策略效果和父子关系正确性
 - **THEN** 如果存在 reference，必须对照 `.wiki/*.md` 与 `wiki.metadata.json`

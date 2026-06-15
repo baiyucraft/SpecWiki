@@ -4,7 +4,7 @@
 定义 Repo Wiki workflow 的验证面，确保主链行为、graph 能力、progress 协议和热路径优化都能被自动化测试覆盖。
 ## Requirements
 ### Requirement: 系统必须提供端到端验证适配层到 Wiki 产物的主链路
-系统 MUST 提供自动化测试，验证适配层调用 Rust core 后能够在目标仓库完成 Wiki 初始化、手工编辑同步、增量更新、强制重建并执行查询，且生成的 `.wiki/` 产物与返回结果符合预期。针对迭代 7 收口，验证 MUST 继续覆盖 page identity 稳定性（增删少量源文件后核心页面 `page_id` 不变）、steering 配置生效（忽略路径、模块提升/降级、合并阈值）、页面合并/拆分正确性、父子关系按模块树层级分配、扩展 section 模板的内容密度，并新增覆盖多语言 symbol parsing 质量、`symbols` / `symbols_fts` 写盘、一致性的增量重解析、symbol BM25 query 和解析失败隔离。验证脚本还 MUST 使用与当前源码一致的 release binary，并允许对 `init / update / rebuild` 这类重 workflow 使用更长超时，避免把大型 monorepo 的正常初始化误判为失败。每轮与迭代 7 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN-3.0.md § 测试项目集` 的完整项目集执行 `init` 分析；如果目标仓库存在 reference，则必须对照 `.wiki/*.md` 与 `wiki.metadata.json`。项目集分析报告 MUST 按项目逐个输出，而不是只给总表或总括结论。
+系统 MUST 提供自动化测试，验证适配层调用 Rust core 后能够在目标仓库完成 Wiki 初始化、手工编辑同步、增量更新、强制重建并执行查询，且生成的 `.wiki/` 产物与返回结果符合预期。针对迭代 7 收口，验证 MUST 继续覆盖 page identity 稳定性（增删少量源文件后核心页面 `page_id` 不变）、steering 配置生效（忽略路径、模块提升/降级、合并阈值）、页面合并/拆分正确性、父子关系按模块树层级分配、扩展 section 模板的内容密度，并新增覆盖多语言 symbol parsing 质量、`symbols` / `symbols_fts` 写盘、一致性的增量重解析、symbol BM25 query 和解析失败隔离。验证脚本还 MUST 使用与当前源码一致的 release binary，并允许对 `init / update / rebuild` 这类重 workflow 使用更长超时，避免把大型 monorepo 的正常初始化误判为失败。每轮与迭代 7 相关的 tasks 设计、实现或测试时，还 MUST 对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init` 分析；如果目标仓库存在 reference，则必须对照 `.wiki/*.md` 与 `wiki.metadata.json`。项目集分析报告 MUST 按项目逐个输出，而不是只给总表或总括结论。
 
 #### Scenario: page identity 稳定性验证
 - **WHEN** 测试在临时仓库中执行 `init`，然后增加一个源文件并执行 `update`
@@ -89,7 +89,7 @@
 
 #### Scenario: 测试项目集全量 init 分析
 - **WHEN** 迭代 7 的 tasks 设计或测试阶段
-- **THEN** 必须对 `DESIGN-3.0.md § 测试项目集` 的完整项目集执行 `init` 分析
+- **THEN** 必须对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init` 分析
 - **THEN** 必须重点关注多语言 symbol 提取质量、symbol query 命中、增量重解析结果以及既有页面拓扑不变量
 - **THEN** 如果存在 reference，必须对照 `.wiki/*.md` 与 `wiki.metadata.json`
 - **THEN** 必须输出 `test-project-analysis.md`
@@ -120,7 +120,7 @@
 - **THEN** 测试 MUST 观察到 provenance 区分 BM25 与 graph 命中来源
 
 ### Requirement: 包装语言与项目集验证必须覆盖 Vue / Svelte graph 解析
-系统 MUST 在 fixture、integration test 或项目集分析中覆盖 Vue / Svelte 单文件组件的 script wrapper 解析，验证定义类符号、raw relation captures 与 graph resolution 都能映射回原始组件文件。每轮与迭代 8 相关的 tasks 设计、实现或测试时，还 MUST 对 `DESIGN-3.0.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出 graph facts、graph query 命中表现与 reference 差异。
+系统 MUST 在 fixture、integration test 或项目集分析中覆盖 Vue / Svelte 单文件组件的 script wrapper 解析，验证定义类符号、raw relation captures 与 graph resolution 都能映射回原始组件文件。每轮与迭代 8 相关的 tasks 设计、实现或测试时，还 MUST 对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出 graph facts、graph query 命中表现与 reference 差异。
 
 #### Scenario: Vue 或 Svelte wrapper 解析通过
 - **WHEN** 测试在包含 Vue 或 Svelte 单文件组件的 fixture 或项目中执行 `init`
@@ -197,7 +197,7 @@
 - **THEN** 测试 MUST 同时验证父页晚于子页、总真实调用数不超过预算、缓存命中页不占用真实并行槽
 
 ### Requirement: 项目集验证必须覆盖增强后的页面信息密度与 graph 落地
-每轮与迭代 9 相关的 tasks 设计、实现或测试时，系统 MUST 对 `DESIGN-3.0.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出增强后的页面信息密度、graph facts 是否进入页面正文、workflow/architecture 页面表现，以及与 reference 的差异。9.3 还 MUST 逐项目统计 `section_plan` 覆盖率、overview/architecture research 命中和精准 evidence 引用密度；验证可以按 deterministic baseline 与增强模式做对照，但不得只给总表结论。
+每轮与迭代 9 相关的 tasks 设计、实现或测试时，系统 MUST 对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出增强后的页面信息密度、graph facts 是否进入页面正文、workflow/architecture 页面表现，以及与 reference 的差异。9.3 还 MUST 逐项目统计 `section_plan` 覆盖率、overview/architecture research 命中和精准 evidence 引用密度；验证可以按 deterministic baseline 与增强模式做对照，但不得只给总表结论。
 
 #### Scenario: 项目集分析逐项目输出增强表现
 - **WHEN** 迭代 9 的 tasks 设计或测试阶段执行完整项目集 `init` 分析
@@ -380,7 +380,7 @@
 - **THEN** 验证 MUST 证明该升级来自 knowledge scope 判定，而不是页面 dirty 数量或 Markdown 差异
 
 ### Requirement: 本 change 的 tasks 设计与测试必须继续执行完整项目集 init 分析与注释合规检查
-系统 MUST 在本 change 的 tasks 设计或测试阶段继续执行 `node scripts/run-test-projects.mjs` 的完整项目集 `init` 分析，并单独执行一次 `COMMENTING.md` 合规检查。完整项目集分析 MUST 作为 baseline guard 保留，但本轮 primary gate 仍然是 `storybook + dagger` 的 knowledge-first update 专项结果。
+系统 MUST 在本 change 的 tasks 设计或测试阶段继续执行 `node scripts/run-test-projects.mjs` 的完整项目集 `init` 分析，并单独执行一次 `.wiki/02-开发指南/00-代码注释规范.md` 合规检查。完整项目集分析 MUST 作为 baseline guard 保留，但本轮 primary gate 仍然是 `storybook + dagger` 的 knowledge-first update 专项结果。
 
 #### Scenario: tasks 设计或测试阶段执行完整项目集 init 分析
 - **WHEN** 开发者进入本 change 的 tasks 设计或测试阶段
@@ -389,7 +389,7 @@
 
 #### Scenario: 本 change 单独执行注释合规检查
 - **WHEN** 本 change 进入实现前校验或测试收口阶段
-- **THEN** 系统 MUST 单独检查涉及代码与脚本的注释是否符合 `COMMENTING.md`
+- **THEN** 系统 MUST 单独检查涉及代码与脚本的注释是否符合 `.wiki/02-开发指南/00-代码注释规范.md`
 - **THEN** 该检查结果 MUST 进入 tasks 或验收记录，而不是口头略过
 
 ### Requirement: 迭代 10 验证必须证明四 crate 边界成立且 workflow 不回退
@@ -405,7 +405,7 @@
 - **WHEN** 系统执行本 change 的脚本级验证
 - **THEN** 系统 MUST 运行 `node scripts/test-wiki-lifecycle.mjs`
 - **THEN** `storybook + dagger` MUST 继续作为专项守门样本，证明拆层没有让 runtime/workflow 进一步退化
-- **THEN** 系统 MUST 单独执行一轮 `COMMENTING.md` 合规检查
+- **THEN** 系统 MUST 单独执行一轮 `.wiki/02-开发指南/00-代码注释规范.md` 合规检查
 
 ### Requirement: 验证必须覆盖 `storybook` 与 `dagger` 的 index readiness
 系统 MUST 在本轮专项验证中直接检查 `storybook` 与 `dagger` 的 facts snapshot 是否真正落盘，并验证 downstream incomplete 时 index-first 查询仍可工作。验证口径 MUST 以 `modules / module_source_map / symbols / edges` 和 query 结果为主，而不是页面 fidelity。
@@ -504,7 +504,7 @@
 
 #### Scenario: 本 change 继续执行注释合规检查
 - **WHEN** 本 change 进入测试收口阶段
-- **THEN** 系统 MUST 单独执行一次 `COMMENTING.md` 合规检查
+- **THEN** 系统 MUST 单独执行一次 `.wiki/02-开发指南/00-代码注释规范.md` 合规检查
 - **THEN** 该检查结果 MUST 进入本 change 的验收记录
 
 ### Requirement: 公开 workflow surface 验证必须覆盖 `sync` 与 `rebuild`
@@ -542,11 +542,11 @@
 - **THEN** 报告 MUST 明确记录这是 public-surface smoke，而不是 19 项目全量 gate
 
 ### Requirement: `v0.2.0` 发布 gate 必须收口为固定 release evidence 集合
-系统 MUST 将当前版本的发布 gate 收口为固定的 release evidence 集合，而不是每轮临时拼装放行条件。对 `v0.2.0` 而言，正式 release evidence MUST 至少覆盖 `packages/spec-wiki` 自动化测试、`storybook` primary gate、`chi + zustand` smoke，以及 `COMMENTING.md` 检查。系统 MUST NOT 将 `dagger`、19 项目全量回归或额外观察样本重新提升为本轮强制 release blocker。
+系统 MUST 将当前版本的发布 gate 收口为固定的 release evidence 集合，而不是每轮临时拼装放行条件。对 `v0.2.0` 而言，正式 release evidence MUST 至少覆盖 `packages/spec-wiki` 自动化测试、`storybook` primary gate、`chi + zustand` smoke，以及 `.wiki/02-开发指南/00-代码注释规范.md` 检查。系统 MUST NOT 将 `dagger`、19 项目全量回归或额外观察样本重新提升为本轮强制 release blocker。
 
 #### Scenario: 生成 `v0.2.0` release evidence
 - **WHEN** 系统为当前版本生成发布前验证记录
-- **THEN** 记录 MUST 明确包含 `packages/spec-wiki` 测试、`storybook` primary gate、`chi + zustand` smoke 与 `COMMENTING.md` 检查
+- **THEN** 记录 MUST 明确包含 `packages/spec-wiki` 测试、`storybook` primary gate、`chi + zustand` smoke 与 `.wiki/02-开发指南/00-代码注释规范.md` 检查
 - **THEN** 记录 MUST 区分正式 release gate 与观察性样本，不得混淆
 
 #### Scenario: 观察性样本不得被伪装为强制 blocker

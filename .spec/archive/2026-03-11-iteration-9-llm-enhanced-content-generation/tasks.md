@@ -28,11 +28,11 @@
 ## 5. 验证与项目集
 
 - [x] 5.1 为 Rust core 与 CodeBuddy Agent 增加自动化测试，覆盖 LLM 关闭、桥接不可用、缓存命中、增强成功、页面稳定性和协议回退场景。
-- [x] 5.2 运行 `node scripts/run-test-projects.mjs` 对 `DESIGN.md` 定义的 19 个测试项目全量执行 `init`，输出并更新 `test-project-analysis.md`，逐项目分析增强后页面信息密度、graph facts 落页情况与 reference 差异。
+- [x] 5.2 运行 `node scripts/run-test-projects.mjs` 对 `.wiki/06-设计文档/00-总体设计.md` 定义的 19 个测试项目全量执行 `init`，输出并更新 `test-project-analysis.md`，逐项目分析增强后页面信息密度、graph facts 落页情况与 reference 差异。
 - [x] 5.3 运行 `node scripts/test-wiki-lifecycle.mjs` 验证 `init -> status -> sync -> query -> update -> rebuild` 全链路在 LLM 关闭和桥接回退场景下都能保持正确状态流转。
 - [x] 5.4 增加 provider 直连优先和 `wiki.dev.yaml` dev 覆盖的自动化测试，并更新项目分析脚本/说明，避免再把“未协商 Agent bridge”等同于“没有任何 LLM 路径”。
 - [x] 5.5 升级 `scripts/collect-reference-project-reports.mjs`，支持流式输出项目/phase 进度和 `--jobs` 项目并行，并补充对应自动化测试或脚本级验证。
 
 ## 6. 注释与收尾
 
-- [x] 6.1 按 `COMMENTING.md` 对本轮新增或修改的 `crates/wiki-core/**`、`agents/codebuddy/**` 注释做一次单独检查，补齐公共接口、核心类型和关键流程注释。
+- [x] 6.1 按 `.wiki/02-开发指南/00-代码注释规范.md` 对本轮新增或修改的 `crates/wiki-core/**`、`agents/codebuddy/**` 注释做一次单独检查，补齐公共接口、核心类型和关键流程注释。

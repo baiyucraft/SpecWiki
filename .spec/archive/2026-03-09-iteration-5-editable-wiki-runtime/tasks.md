@@ -33,9 +33,9 @@
 
 - [x] 6.1 对 `E:\\project\\aLocal` 执行 `init` 并分析当前 `.wiki` 结构与 `reference-aLocal` 的差异，确认 editable runtime 不与现有页面结构假设冲突。
 - [x] 6.2 对当前仓库 `E:\\project\\!byAI\\spec-wiki` 执行 `init` / `sync` 分析，重点记录页面结构与 editable runtime 的兼容性，以及 legacy 页面迁移边界。
-- [x] 6.3 对 `DESIGN.md § 测试项目集` 中其余所有样本仓库执行 `init`，并把每个仓库的结构观察写回本 change 的分析材料。
+- [x] 6.3 对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 中其余所有样本仓库执行 `init`，并把每个仓库的结构观察写回本 change 的分析材料。
 - [x] 6.4 对存在 reference 的测试项目执行结果对照，覆盖 `reference-aLocal`、`reference-axum`、`reference-bat`、`reference-chi`、`reference-cobra`、`reference-dagger`、`reference-pinia`、`reference-restaurant-app`、`reference-storybook` 和 `reference-zustand`，明确页面组织和 `wiki.metadata.json` 字段差异。
 
 ## 7. Commenting Compliance
 
-- [x] 7.1 按 `COMMENTING.md` 检查本轮新增或修改文件的注释，覆盖 parse / merge 内核、扩展后的状态模型、workflow 关键路径和测试场景注释。
+- [x] 7.1 按 `.wiki/02-开发指南/00-代码注释规范.md` 检查本轮新增或修改文件的注释，覆盖 parse / merge 内核、扩展后的状态模型、workflow 关键路径和测试场景注释。

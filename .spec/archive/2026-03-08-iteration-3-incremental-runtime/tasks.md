@@ -33,8 +33,8 @@
 
 - [x] 6.1 对 `E:\\project\\aLocal` 执行 `init`，把结果与 reference 的页面结构、内容信号和 `wiki.metadata.json` 字段做对照分析
 - [x] 6.2 对当前仓库 `E:\\project\\!byAI\\spec-wiki` 执行 `init`，重点分析 fixture 误提升、单文件模块、关键源码淹没、kind 分类和增量 runtime 边界
-- [x] 6.3 按 `DESIGN.md` 的测试项目集要求，对其余目标仓库执行 `init` 并记录差异，必要时回调本 change 的 spec / design / tasks 或实现
+- [x] 6.3 按 `.wiki/06-设计文档/00-总体设计.md` 的测试项目集要求，对其余目标仓库执行 `init` 并记录差异，必要时回调本 change 的 spec / design / tasks 或实现
 
 ## 7. Commenting Compliance
 
-- [x] 7.1 按 `COMMENTING.md` 检查本轮新增或修改文件的注释，覆盖公共接口、核心类型、关键流程和测试场景注释，并修正不符合规范的注释
+- [x] 7.1 按 `.wiki/02-开发指南/00-代码注释规范.md` 检查本轮新增或修改文件的注释，覆盖公共接口、核心类型、关键流程和测试场景注释，并修正不符合规范的注释

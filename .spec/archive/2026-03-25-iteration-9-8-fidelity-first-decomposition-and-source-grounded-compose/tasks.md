@@ -21,7 +21,7 @@
 - [x] 4.1 运行 `cargo test -p wiki-core`、相关 `scripts/tests/*.test.ts`，确认 planner、research、compose、reporting 的行为变化都有对应测试。
 - [x] 4.2 运行 `node scripts/run-test-projects.mjs storybook dagger`，检查 `tmp/test/storybook/.wiki/` 与 `tmp/test/dagger/.wiki/` 的 runtime 和页面产物，并输出本 change 的专项分析报告。
 - [ ] 4.3 运行 `node scripts/test-wiki-lifecycle.mjs storybook dagger`，验证 init → status → sync → query → update → rebuild 全链路。（按当前用户范围，本轮 defer，不作为 init 专项验收前置）
-- [x] 4.4 单独执行一轮注释规范检查，确认本轮涉及的 Rust/TS 代码与测试注释符合 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md)。
+- [x] 4.4 单独执行一轮注释规范检查，确认本轮涉及的 Rust/TS 代码与测试注释符合 [.wiki/02-开发指南/00-代码注释规范.md](E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md)。
 
 ## 5. Storybook-first 后续收敛计划
 

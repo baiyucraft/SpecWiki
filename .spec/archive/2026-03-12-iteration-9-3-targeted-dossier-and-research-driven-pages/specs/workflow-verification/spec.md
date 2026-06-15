@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: 项目集验证必须覆盖增强后的页面信息密度与 graph 落地
-每轮与迭代 9 相关的 tasks 设计、实现或测试时，系统 MUST 对 `DESIGN.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出增强后的页面信息密度、graph facts 是否进入页面正文、workflow/architecture 页面表现，以及与 reference 的差异。9.3 还 MUST 逐项目统计 `section_plan` 覆盖率、overview/architecture research 命中和精准 evidence 引用密度；验证可以按 deterministic baseline 与增强模式做对照，但不得只给总表结论。
+每轮与迭代 9 相关的 tasks 设计、实现或测试时，系统 MUST 对 `.wiki/06-设计文档/00-总体设计.md § 测试项目集` 的完整项目集执行 `init` 分析，并在 `test-project-analysis.md` 中按项目输出增强后的页面信息密度、graph facts 是否进入页面正文、workflow/architecture 页面表现，以及与 reference 的差异。9.3 还 MUST 逐项目统计 `section_plan` 覆盖率、overview/architecture research 命中和精准 evidence 引用密度；验证可以按 deterministic baseline 与增强模式做对照，但不得只给总表结论。
 
 #### Scenario: 项目集分析逐项目输出增强表现
 - **WHEN** 迭代 9 的 tasks 设计或测试阶段执行完整项目集 `init` 分析

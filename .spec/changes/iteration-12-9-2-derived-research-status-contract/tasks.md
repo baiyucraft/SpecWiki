@@ -22,4 +22,4 @@
 - [x] 4.2 补 runtime status / health / unit projection 测试，覆盖 `ready / degraded / blocked`。
 - [x] 4.3 跑 `cargo test -p wiki-runtime`。
 - [x] 4.4 跑 `node scripts/run-test-projects.mjs --jobs 1 --timeout-minutes 90 storybook dagger`。
-- [x] 4.5 单独检查 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md) 合规性，并同步更新 tasks 状态。
+- [x] 4.5 单独检查 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 合规性，并同步更新 tasks 状态。

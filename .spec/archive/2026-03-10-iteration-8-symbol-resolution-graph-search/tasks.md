@@ -34,4 +34,4 @@
 - [x] 4.3 扩展 `scripts/test-wiki-lifecycle*.mjs` 与相关整体测试，验证 graph tables、graph query 和大型仓库超时策略
 - [x] 4.4 运行 `node scripts/run-test-projects.mjs` 对完整 19 个测试项目执行 `init` 分析，并输出本轮 `test-project-analysis.md`
 - [x] 4.5 运行 `node scripts/test-wiki-lifecycle.mjs` 完成 init → status → sync → query → update → rebuild 全链路验证
-- [x] 4.6 按 `COMMENTING.md` 检查本轮新增或修改代码的注释粒度与格式，必要时补充或收敛注释
+- [x] 4.6 按 `.wiki/02-开发指南/00-代码注释规范.md` 检查本轮新增或修改代码的注释粒度与格式，必要时补充或收敛注释

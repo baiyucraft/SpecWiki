@@ -26,5 +26,5 @@
 
 ## 5. Commenting And Boundary Hygiene
 
-- [x] 5.1 检查本 change 涉及代码、脚本与测试的注释是否符合 `COMMENTING.md`
+- [x] 5.1 检查本 change 涉及代码、脚本与测试的注释是否符合 `.wiki/02-开发指南/00-代码注释规范.md`
 - [x] 5.2 复核 proposal、design、specs 与 tasks 的边界一致性，确保没有把 query release、declared knowledge lifecycle 或 13/14 阶段语义混入本轮

@@ -65,7 +65,7 @@ knowledge completeness roadmap MUST 为全部 7 个 capability 提供正式矩�
 - **THEN** 系统 MUST 要求继续补齐统一验收矩阵中的适用项
 
 ### Requirement: 统一验收矩阵必须显式包含 primary sample、batch baseline 与 COMMENTING 检查
-knowledge completeness roadmap 的 acceptance matrix MUST 显式包含：`storybook + dagger` 专项验收与报告要求、全量 `19` 项目的批量验收入口与质量指标，以及 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md) 与 UniSpec 产物边界一致性检查。系统 MUST NOT 只定义 schema 或 workflow 验收，而遗漏 program-level closeout 所需的样本、批量和注释一致性检查。
+knowledge completeness roadmap 的 acceptance matrix MUST 显式包含：`storybook + dagger` 专项验收与报告要求、全量 `19` 项目的批量验收入口与质量指标，以及 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 与 UniSpec 产物边界一致性检查。系统 MUST NOT 只定义 schema 或 workflow 验收，而遗漏 program-level closeout 所需的样本、批量和注释一致性检查。
 
 #### Scenario: 某个 child change 准备收口
 - **WHEN** 团队准备关闭某个 knowledge completeness child change

@@ -21,4 +21,4 @@
 - [x] 4.1 为 `status`、`query` 与长流程终态增加 Rust 测试，覆盖 `recommended_action`、可选 `runtime_summary / gate_summary`、`query_trust` 与 `llm_execution_mode` 的边界。
 - [x] 4.2 为 CodeBuddy 增加 TS 测试，覆盖 preflight 结果解析、query trust 透传、`usage` 消费与“只在终态里消费真实执行路径”的约束。
 - [x] 4.3 运行与当前变更相关的 Rust/TS 测试，并补一份 11.5 的场景验证说明，明确 knowledge/page 正式消费仍留在后续迭代。
-- [x] 4.4 单独执行一轮 `COMMENTING.md` 合规检查，确认本轮新增或修改代码的注释风格与粒度符合要求。
+- [x] 4.4 单独执行一轮 `.wiki/02-开发指南/00-代码注释规范.md` 合规检查，确认本轮新增或修改代码的注释风格与粒度符合要求。

@@ -20,5 +20,5 @@
 
 ## 4. 注释与收尾
 
-- [ ] 4.1 按 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md) 复核本轮新增或修改的 query route 注释，确保注释解释语义与边界，而不是复述代码。
+- [ ] 4.1 按 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 复核本轮新增或修改的 query route 注释，确保注释解释语义与边界，而不是复述代码。
 - [ ] 4.2 同步更新 UniSpec tasks 状态，并记录本轮 route contract 的验证结果与剩余缺口。

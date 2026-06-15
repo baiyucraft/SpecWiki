@@ -44,12 +44,14 @@ node scripts/test-wiki-lifecycle.mjs
 
 ## 测试 Suite
 
-`crates/wiki-runtime/tests/**` 按主题拆成 integration suites，顶层只保留 suite 入口，避免测试根目录失控增长。详细说明以 [crates/wiki-runtime/tests/README.md](../../crates/wiki-runtime/tests/README.md) 为准。
+`crates/wiki-runtime/tests/**` 按主题拆成 integration suites，顶层只保留 suite 入口，避免测试根目录失控增长。
 
 | Suite | 用途 |
 | --- | --- |
 | `acceptance.rs` | CLI 合约、基础 acceptance、`init` 产物检查 |
 | `hierarchy.rs` | module tree、hierarchy planning、page topology、merge strategy |
+| `llm_runtime.rs` | LLM runtime contract 与降级路径验证 |
 | `repo.rs` | repo scan、language parsing、noise filter、steering |
 | `runtime.rs` | runtime / SQLite、query / sync / update / rebuild、markdown merge、metadata |
+| `suite_env.rs` | integration suite 共享测试环境 |
 | `symbols.rs` | symbol parsing、symbol resolution、symbol graph analysis |

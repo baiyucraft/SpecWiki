@@ -14,7 +14,7 @@
 
 - [x] 3.1 更新 `reference-fidelity-reporting` 与项目分析脚本，使高复用页可以映射回具体高层 `KnowledgeUnit`，并输出 runtime readiness 级诊断。
 - [x] 3.2 为高层 parent contract、compose-readiness gate、runtime incomplete 诊断补齐对应层级测试：Rust 测试放 `crates/*/tests/`，脚本/工作区测试放 `scripts/tests/*.test.ts`。
-- [x] 3.3 作为独立 task，在本轮 UniSpec tasks 的设计与测试阶段单独执行注释规范检查，确认涉及代码与测试的新增/修改注释符合 [COMMENTING.md](E:/project/!byAI/spec-wiki/COMMENTING.md)。
+- [x] 3.3 作为独立 task，在本轮 UniSpec tasks 的设计与测试阶段单独执行注释规范检查，确认涉及代码与测试的新增/修改注释符合 [.wiki/02-开发指南/00-代码注释规范.md](E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md)。
 
 ## 4. Validation
 

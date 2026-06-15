@@ -7,7 +7,7 @@
 
 - UniSpec 主 spec 已按 `v0.2.0` 与 6 个公开动作描述
 - 英文 `README.md` 已按 `v0.2.0` 叙述
-- 中文 `README-CN.md`、`RELEASE-v0.1.0.md`、`dist/spec-wiki/README.md` 仍停留在 `v0.1.0 index-only`
+- 中文 `README-CN.md`、`.docs/release/v0-2-0.md`、`dist/spec-wiki/README.md` 仍停留在 `v0.1.0 index-only`
 - `packages/spec-wiki/package.json` 版本仍是 `0.1.1`
 - staged `dist/` 产物还不是从当前源码真相重新收口出的统一发布面
 
@@ -20,7 +20,7 @@
 | TypeScript 源码 public surface | 已公开 `init/status/update/query/sync/rebuild` | 与 docs / dist / package 完全一致 | 需要与发布说明、staging 产物对齐 |
 | 英文 README | 已偏向 `v0.2.0 knowledge runtime` | 与 CLI/help/主包版本完全一致 | 还未体现完整 release drift matrix |
 | 中文 README | 仍是 `v0.1.0 index-only` | 升级为 `v0.2.0` | 版本、runtime、公开动作全部落后 |
-| Release Note | 仍是 `RELEASE-v0.1.0.md` | 增补或替换为 `v0.2.0` 说明 | 当前仍宣传 4 动作与 index-only |
+| Release Note | 仍是 `.docs/release/v0-2-0.md` | 增补或替换为 `v0.2.0` 说明 | 当前仍宣传 4 动作与 index-only |
 | dist README / staging contract | 仍是 `v0.1.0` | 与源码当前真相一致 | staged 说明与源码、spec 撕裂 |
 | package version / publish evidence | `packages/spec-wiki` 仍是 `0.1.1` | 明确切到 `0.2.0` 或显式保留 preview 口径 | 版本叙事未定、缺 dry-run 证据 |
 | release verification evidence | 有 `storybook` primary gate、`chi + zustand` smoke、packages test | 成为可复用 release gate | 证据分散，尚未收口为统一发布清单 |
@@ -36,7 +36,7 @@
    - `storybook` primary gate
    - `chi + zustand` smoke
    - `packages/spec-wiki` 测试
-   - `COMMENTING.md` 合规检查
+   - `.wiki/02-开发指南/00-代码注释规范.md` 合规检查
 6. 发布前必须给出 staged package smoke 或等价 `publish` 证据，例如 `npm publish --dry-run`、staged README/help/manifests 对齐。
 
 ## 不属于 0.2.0 的项

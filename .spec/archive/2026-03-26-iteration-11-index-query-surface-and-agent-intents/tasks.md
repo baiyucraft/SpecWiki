@@ -26,6 +26,6 @@
 - [x] 4.3 运行 `node scripts/run-test-projects.mjs storybook dagger`，检查 `modules / module_source_map / symbols / edges` 落盘和 query 表现，并输出本 change 的专项分析报告。
 - [x] 4.4 运行 `node scripts/test-wiki-lifecycle.mjs storybook dagger`，验证 `init -> status -> sync -> update -> rebuild` 下的 index readiness 与 query 不回退。
 - [x] 4.5 在 `.spec/changes/iteration-11-index-query-surface-and-agent-intents/reference-project-reports/` 中补齐 `storybook`、`dagger` 与总结合并报告，明确记录 snapshot readiness、query 命中与剩余断点。
-- [x] 4.6 单独执行一轮 `COMMENTING.md` 合规检查，确认本轮新增或修改代码的注释范围、粒度与风格符合要求。
+- [x] 4.6 单独执行一轮 `.wiki/02-开发指南/00-代码注释规范.md` 合规检查，确认本轮新增或修改代码的注释范围、粒度与风格符合要求。
 
 

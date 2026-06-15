@@ -19,5 +19,5 @@
 ## 4. Docs And Hygiene
 
 - [ ] 4.1 更新 query / answer / compose 相关文档，明确这轮是 runtime hardening，不是重新 formalize answer contract
-- [ ] 4.2 检查实现注释是否符合 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md)，删除暗示 page fallback 可作为正常 answer substrate 的旧注释
+- [ ] 4.2 检查实现注释是否符合 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md)，删除暗示 page fallback 可作为正常 answer substrate 的旧注释
 - [ ] 4.3 复核 UniSpec、测试和实现边界一致，确保本轮不重写 query route、不扩成 host/UI 功能

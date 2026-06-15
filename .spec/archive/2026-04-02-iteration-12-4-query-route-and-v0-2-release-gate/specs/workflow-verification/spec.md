@@ -45,5 +45,5 @@
 
 #### Scenario: 本 change 继续执行注释合规检查
 - **WHEN** 本 change 进入测试收口阶段
-- **THEN** 系统 MUST 单独执行一次 `COMMENTING.md` 合规检查
+- **THEN** 系统 MUST 单独执行一次 `.wiki/02-开发指南/00-代码注释规范.md` 合规检查
 - **THEN** 该检查结果 MUST 进入本 change 的验收记录

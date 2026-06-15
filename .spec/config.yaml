@@ -1,2 +1,2 @@
-imageAnalysis: false
-playwright: false
+imageAnalysis: true
+playwright: true

@@ -6,7 +6,7 @@
 ## 2. Staged Docs Alignment
 - [x] 2.1 收口 `dist/spec-wiki/README.md` 与当前 release 文档的动作列表、runtime contract 和平台边界
 - [x] 2.2 单独检查帮助文本、README 与 staged README 是否继续存在 4 动作 / 6 动作混用
-- [x] 2.3 对涉及文档与脚本执行一次 `COMMENTING.md` 合规检查
+- [x] 2.3 对涉及文档与脚本执行一次 `.wiki/02-开发指南/00-代码注释规范.md` 合规检查
 
 ## 3. Verification
 - [x] 3.1 运行与本轮相关的文档/清单一致性检查，确认 public truth sources 已统一

@@ -47,7 +47,7 @@
   - `page_fallback`
 - `spec-wiki` CLI forwarding 修复了 `gate_summary.blockers` 缺省时把 `status` 误判为失败的问题。
 
-## COMMENTING.md 检查
+## .wiki/02-开发指南/00-代码注释规范.md 检查
 
 本轮新增或修改的关键文件已人工复核：
 

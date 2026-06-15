@@ -12,7 +12,7 @@
 - 收紧 `wiki-query` / `wiki-update` skill description，只描述当前稳定公开能力，不再提前承诺 `owner / entrypoint / impact`
 - 删除发布包中的占位 skill 模板，统一宿主 skill 的真相源
 - 修正 CLI/runtime forwarding 的 contract：失败退出码与 `--bridge-stdio` 暴露边界
-- 把 intent-aware query、owner/impact/entrypoint 稳定 schema、宿主 trigger 语料测试体系写入 `DESIGN-RUNTIME.md` 与 `DESIGN-AGENTS.md`
+- 把 intent-aware query、owner/impact/entrypoint 稳定 schema、宿主 trigger 语料测试体系写入 `.wiki/06-设计文档/01-Runtime设计.md` 与 `.wiki/06-设计文档/02-Agents设计.md`
 
 ## Capabilities
 
@@ -31,4 +31,4 @@
 - Rust: `crates/wiki-runtime/src/workflows/{init,status,query,update,release_scope}.rs`、相关 transport 与 runtime_profile
 - TypeScript: `packages/spec-wiki/src/cli.ts`、`packages/spec-wiki/src/runtime/{forwardCore,invokeCore}.ts`、`packages/spec-wiki/src/agents/shared/commandAssets.ts`
 - 发布与测试：`packages/spec-wiki/package.json`、`scripts/build-dist.mjs`、`scripts/tests/distribution.test.ts`、runtime/CLI/skill 相关测试
-- 设计文档：`DESIGN-RUNTIME.md`、`DESIGN-AGENTS.md`
+- 设计文档：`.wiki/06-设计文档/01-Runtime设计.md`、`.wiki/06-设计文档/02-Agents设计.md`

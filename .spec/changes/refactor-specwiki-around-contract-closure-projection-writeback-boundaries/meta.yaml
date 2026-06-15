@@ -1,0 +1,14 @@
+id: refactor-specwiki-around-contract-closure-projection-writeback-boundaries
+stage: exploration
+deliveryShape: single-change
+multiChange:
+  role: child
+  parent: refactor-specwiki-around-contract-closure
+  order: 3
+  dependsOn:
+    - refactor-specwiki-around-contract-closure-truth-restore-snapshot
+artifacts:
+  proposal:
+    status: missing
+  metadata:
+    status: present

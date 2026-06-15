@@ -2,7 +2,7 @@
 
 - [x] 1.1 明确 `iteration-12-9-knowledge-system-completeness` 是 umbrella / roadmap change，不直接承诺 runtime 代码落地。
 - [x] 1.2 将“完善 knowledge system”收敛为 7 个 capability，并写清非目标：不回到 page-first、不做治理平台空话、不做多 repo 编排、不做宿主 UI 扩张。
-- [x] 1.3 复核 capability 命名、owner crate 与依赖顺序，确保与 `DESIGN-3.0.md`、`DESIGN-RUNTIME.md`、`SCENE-1.md`、`SCENE-2.md` 一致。
+- [x] 1.3 复核 capability 命名、owner crate 与依赖顺序，确保与 `.wiki/06-设计文档/00-总体设计.md`、`.wiki/06-设计文档/01-Runtime设计.md`、`.wiki/06-设计文档/03-核心场景.md`、`.wiki/06-设计文档/04-扩展场景.md` 一致。
 
 ## 2. Spec Impact Matrix
 
@@ -26,4 +26,4 @@
 - [x] 4.2 为每个 capability 定义 `workflow consumption` 与 `artifact / recovery` 验收。
 - [x] 4.3 定义 `storybook + dagger` 的专项验收与报告要求。
 - [x] 4.4 定义全量 `19` 项目的批量验收入口与质量指标。
-- [x] 4.5 单独检查 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md) 与 UniSpec 产物边界一致性，避免后续子 change 把注释和 contract 一起漂移。
+- [x] 4.5 单独检查 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 与 UniSpec 产物边界一致性，避免后续子 change 把注释和 contract 一起漂移。

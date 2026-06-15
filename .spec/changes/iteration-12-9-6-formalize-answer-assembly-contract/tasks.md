@@ -14,7 +14,7 @@
 
 - [x] 3.1 让 `research-driven-page-composition` 与 answer contract 对齐，明确 projection digest 与 supporting refs 的关系。
 - [x] 3.2 为后续 `wiki-runtime` / `wiki-knowledge` 实现列出 DTO、workflow consumer 与 artifact consumer 变更点。
-- [x] 3.3 单独检查 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md) 对 answer contract 相关类型、字段和流程注释的要求。
+- [x] 3.3 单独检查 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md) 对 answer contract 相关类型、字段和流程注释的要求。
 
 ## 4. 验收规划
 

@@ -25,7 +25,7 @@
 
 - `README.md`
 - `README-CN.md`
-- `RELEASE-v0.1.0.md` 或其替代的 `v0.2.0` release 文档
+- `.docs/release/v0-2-0.md` 或其替代的 `v0.2.0` release 文档
 - `dist/spec-wiki/README.md`
 - `packages/spec-wiki/package.json`
 - `.wiki/05-规格基线/capabilities/repo-wiki-workflow/spec.md`

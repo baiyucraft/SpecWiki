@@ -32,7 +32,7 @@
 
 ## 6. 注释与验证
 
-- [x] 6.1 按 `COMMENTING.md` 检查本轮修改涉及的 Rust/TypeScript 注释，补齐或收敛不符合规范的注释
+- [x] 6.1 按 `.wiki/02-开发指南/00-代码注释规范.md` 检查本轮修改涉及的 Rust/TypeScript 注释，补齐或收敛不符合规范的注释
 - [x] 6.2 运行 `cargo test -p wiki-core`（或等效工作区测试命令），确认 SQLite、scanner、query、workflow 相关测试全部通过
 - [x] 6.3 运行 `node scripts/run-test-projects.mjs` 对 19 个测试项目批量执行 `init`，对照 `tmp/reference/*` 检查 `.wiki/*.md` 与 `wiki.metadata.json`，并产出/更新本 change 的 `test-project-analysis.md`
 - [x] 6.4 运行 `node scripts/test-wiki-lifecycle.mjs` 验证 `init → status → sync → query → update → rebuild` 全链路 JSON 响应、marker 覆盖率与状态流转

@@ -32,8 +32,8 @@
 
 ## 5. 文档、注释与验证
 
-- [x] 5.1 实现收口后复核 `DESIGN-ITER.md` / `DESIGN.md` 与最终落地范围保持一致，避免 8.5 与后续迭代的边界再次漂移
-- [x] 5.2 按 `COMMENTING.md` 逐项检查本轮新增或重构代码的注释，确保 transport、workflow 和 parser 热路径代码的注释粒度与风格符合仓库规范
+- [x] 5.1 实现收口后复核 `.docs/roadmap/implementation-roadmap.md` / `.wiki/06-设计文档/00-总体设计.md` 与最终落地范围保持一致，避免 8.5 与后续迭代的边界再次漂移
+- [x] 5.2 按 `.wiki/02-开发指南/00-代码注释规范.md` 逐项检查本轮新增或重构代码的注释，确保 transport、workflow 和 parser 热路径代码的注释粒度与风格符合仓库规范
 - [x] 5.3 运行 `cargo test -p wiki-core`、`pnpm test`，并补跑根级流式协议相关测试
 - [x] 5.4 运行 `node scripts/run-test-projects.mjs` 对 19 个测试项目执行 `init` 分析，确认进度流与解析热路径优化没有引入回归
 - [x] 5.5 运行 `node scripts/test-wiki-lifecycle.mjs` 完成全生命周期验证，重点检查 `init / update / rebuild` 的进度事件与最终状态一致性

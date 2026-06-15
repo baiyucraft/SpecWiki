@@ -1,6 +1,6 @@
 ## Why
 
-迭代 6 已经把 runtime 从散落 JSON 推进到单库 SQLite，但当前实现仍然把 `WikiState`、`ScanReport` 和 `ModuleTree` 作为 JSON 大对象写入 `kv_store`，`query` 也仍停留在内存结构匹配，无法为后续符号表、关系图和全文检索提供稳定存储基础。现在推进迭代 6.5，是为了在进入 tree-sitter 符号解析前，先把存储 schema、文件角色分类和页面检索面补齐到 `DESIGN-CORE.md` 定义的边界。
+迭代 6 已经把 runtime 从散落 JSON 推进到单库 SQLite，但当前实现仍然把 `WikiState`、`ScanReport` 和 `ModuleTree` 作为 JSON 大对象写入 `kv_store`，`query` 也仍停留在内存结构匹配，无法为后续符号表、关系图和全文检索提供稳定存储基础。现在推进迭代 6.5，是为了在进入 tree-sitter 符号解析前，先把存储 schema、文件角色分类和页面检索面补齐到 `.wiki/06-设计文档/00-总体设计.md` 定义的边界。
 
 ## What Changes
 
@@ -9,7 +9,7 @@
 - 将扫描阶段的 `ScannedFile.kind` 粗粒度字符串升级为 `FilePurpose` 文件角色分类，先落 deterministic 路径/文件名规则，并让 hierarchy / planner / context / query 使用新角色信号。
 - 在 SQLite 中建立 `wiki_pages_fts` 和 `symbols_fts` FTS5 虚拟表；本迭代先完成页面标题与路径的 BM25 查询接入，并为迭代 7 的符号搜索预留 schema。
 - 升级 `WikiPageState` 的 section 级状态，补入页面级 `section_anchors` 聚合字段，让 `sync`、`change_set` 与 section-level 脏检测共享同一组稳定锚点。
-- 升级 steering 扫描配置结构，使其对齐 `DESIGN-CORE.md` 的 `scan.ignore` / `scan.include` 形态，并明确 include 对 ignore 的覆盖关系。
+- 升级 steering 扫描配置结构，使其对齐 `.wiki/06-设计文档/00-总体设计.md` 的 `scan.ignore` / `scan.include` 形态，并明确 include 对 ignore 的覆盖关系。
 
 ## Capabilities
 

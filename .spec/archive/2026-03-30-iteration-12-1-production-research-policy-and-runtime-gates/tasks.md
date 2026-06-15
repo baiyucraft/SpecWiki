@@ -20,5 +20,5 @@
 
 ## 4. Commenting And Change Hygiene
 
-- [x] 4.1 检查本 change 涉及代码的注释是否符合 `COMMENTING.md`
+- [x] 4.1 检查本 change 涉及代码的注释是否符合 `.wiki/02-开发指南/00-代码注释规范.md`
 - [x] 4.2 核对实现、design、specs 与 tasks 的边界一致，确保没有把 `.wiki/.knowledge/**`、knowledge-first update 或 release 验收混入本轮

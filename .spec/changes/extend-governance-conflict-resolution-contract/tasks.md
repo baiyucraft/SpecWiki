@@ -19,5 +19,5 @@
 ## 4. Docs And Hygiene
 
 - [ ] 4.1 更新相关文档，明确 conflict record 与 resolution artifact 的职责分层
-- [ ] 4.2 检查实现注释是否符合 [COMMENTING.md](/E:/project/!byAI/spec-wiki/COMMENTING.md)，删除把 governance resolution 说成平台审批系统的误导性注释
+- [ ] 4.2 检查实现注释是否符合 [.wiki/02-开发指南/00-代码注释规范.md](/E:/project/!byAI/spec-wiki/.wiki/02-开发指南/00-代码注释规范.md)，删除把 governance resolution 说成平台审批系统的误导性注释
 - [ ] 4.3 复核 UniSpec 与实现边界一致，确保本轮不扩成 dashboard、审批 UI 或跨 repo 治理

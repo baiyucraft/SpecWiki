@@ -6,14 +6,10 @@
 
 请先结合：
 
-- [DESIGN-3.0.md](../../DESIGN-3.0.md)
-- [DESIGN-RUNTIME.md](../../DESIGN-RUNTIME.md)
-- [SCENE-1.md](../../SCENE-1.md)
-- [SCENE-2.md](../../SCENE-2.md)
-
-历史迭代、旧目标和旧编号说明，见：
-
-- [.archive/design/DESIGN-ITER.md](../../.archive/design/DESIGN-ITER.md)
+- [.wiki/06-设计文档/00-总体设计.md](../../.wiki/06-设计文档/00-总体设计.md)
+- [.wiki/06-设计文档/01-Runtime设计.md](../../.wiki/06-设计文档/01-Runtime设计.md)
+- [.wiki/06-设计文档/03-核心场景.md](../../.wiki/06-设计文档/03-核心场景.md)
+- [.wiki/06-设计文档/04-扩展场景.md](../../.wiki/06-设计文档/04-扩展场景.md)
 
 ## 编号约定
 
@@ -195,7 +191,7 @@
 - `.wiki/.knowledge/**` 有最小正式对象集
 - `storybook + dagger` 专项通过
 - 至少 `1-2` 个小规模 smoke 项目通过
-- 完成一次 `COMMENTING.md` 合规检查
+- 完成一次 `.wiki/02-开发指南/00-代码注释规范.md` 合规检查
 - 最后再跑 `19` 项目回归
 
 ## 迭代 10：四包拆分与基础测试收口
@@ -228,7 +224,7 @@
 
 完成标准：
 
-- 四个 crate 的边界与 [DESIGN-3.0.md](./DESIGN-3.0.md) 一致
+- 四个 crate 的边界与 [.wiki/06-设计文档/00-总体设计.md](../../.wiki/06-设计文档/00-总体设计.md) 一致
 - `wiki-runtime` 不再承载 facts/index 和 knowledge 的主要实现
 - runtime 侧只要求完成归属迁移与不回退，不要求在本轮收口最终 lifecycle contract
 - 基础 Rust 测试与工作区构建可通过
@@ -333,7 +329,7 @@
 
 完成标准：
 
-- runtime 生命周期与恢复策略和 [DESIGN-RUNTIME.md](./DESIGN-RUNTIME.md) 一致
+- runtime 生命周期与恢复策略和 [.wiki/06-设计文档/01-Runtime设计.md](../../.wiki/06-设计文档/01-Runtime设计.md) 一致
 - `.cache` 仍不上库，但能由正式产物恢复
 - query route 不再 page-first
 
@@ -352,7 +348,7 @@
 
 - 校准 page projection 何时生成、何时升级、何时回收
 - 校准 declared knowledge、derived knowledge 与 page 的投影关系
-- 围绕 [SCENE-1.md](./SCENE-1.md) 和 [SCENE-2.md](./SCENE-2.md) 做专项验收
+- 围绕 [.wiki/06-设计文档/03-核心场景.md](../../.wiki/06-设计文档/03-核心场景.md) 和 [.wiki/06-设计文档/04-扩展场景.md](../../.wiki/06-设计文档/04-扩展场景.md) 做专项验收
 - 对 `storybook + dagger` 做页面质量和知识抽象专项复核
 
 重点验收：
@@ -400,7 +396,7 @@
 
 ## 测试与验收要求
 
-总体要求不变，仍以 [DESIGN-3.0.md](./DESIGN-3.0.md) 中的测试项目集和 [AGENTS.md](./AGENTS.md) 中的测试约束为准。
+总体要求不变，仍以 [.wiki/06-设计文档/00-总体设计.md](../../.wiki/06-设计文档/00-总体设计.md) 中的测试项目集和 [AGENTS.md](../../AGENTS.md) 中的测试约束为准。
 
 当前迭代路线下的测试重点：
 

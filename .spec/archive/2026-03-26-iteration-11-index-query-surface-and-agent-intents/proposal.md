@@ -1,6 +1,6 @@
 ## Why
 
-`DESIGN-ITER.md` 已经把 3.0 的 `迭代 11` 定义为“强化 `wiki-index`，先服务 AGENT/provider 初步消费”，但当前真实实现还停在半成品状态：[`crates/wiki-index/src/store.rs`](E:/project/!byAI/spec-wiki/crates/wiki-index/src/store.rs) 只有底层 store/query trait，正式查询语义仍主要堆在 [`crates/wiki-runtime/src/workflows/query.rs`](E:/project/!byAI/spec-wiki/crates/wiki-runtime/src/workflows/query.rs) 的混合 keyword query 里。这样继续演进，只会让 runtime 再次长成 facts 查询、图扩展、页面回填混杂的大包。
+`.docs/roadmap/implementation-roadmap.md` 已经把 3.0 的 `迭代 11` 定义为“强化 `wiki-index`，先服务 AGENT/provider 初步消费”，但当前真实实现还停在半成品状态：[`crates/wiki-index/src/store.rs`](E:/project/!byAI/spec-wiki/crates/wiki-index/src/store.rs) 只有底层 store/query trait，正式查询语义仍主要堆在 [`crates/wiki-runtime/src/workflows/query.rs`](E:/project/!byAI/spec-wiki/crates/wiki-runtime/src/workflows/query.rs) 的混合 keyword query 里。这样继续演进，只会让 runtime 再次长成 facts 查询、图扩展、页面回填混杂的大包。
 
 更关键的是，复杂样本的真实产物已经暴露出 index readiness 缺口：[`tmp/test/storybook/.wiki/.cache/wiki-cache.db`](E:/project/!byAI/spec-wiki/tmp/test/storybook/.wiki/.cache/wiki-cache.db) 与 [`tmp/test/dagger/.wiki/.cache/wiki-cache.db`](E:/project/!byAI/spec-wiki/tmp/test/dagger/.wiki/.cache/wiki-cache.db) 中已经有 `knowledge_units / research_cache`，但 `modules / symbols / edges` 仍为 `0`。结合历史 reference 报告里“页面 fidelity 主要阻断在 planner/research/compose/citation”的结论，本轮更合理的目标不是重开页面专项，而是先把 `wiki-index` 做成真实可查、可解释、可在 downstream 未完成时仍保持可用的 substrate。
 

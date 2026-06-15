@@ -1,0 +1,68 @@
+id: refactor-specwiki-around-contract-closure
+stage: exploration
+deliveryShape: multi-change
+multiChange:
+  role: parent
+  children:
+    - id: refactor-specwiki-around-contract-closure-page-tree-contract
+      order: 1
+      dependsOn: []
+    - id: refactor-specwiki-around-contract-closure-truth-restore-snapshot
+      order: 2
+      dependsOn:
+        - refactor-specwiki-around-contract-closure-page-tree-contract
+    - id: refactor-specwiki-around-contract-closure-projection-writeback-boundaries
+      order: 3
+      dependsOn:
+        - refactor-specwiki-around-contract-closure-truth-restore-snapshot
+    - id: refactor-specwiki-around-contract-closure-query-route-readiness
+      order: 4
+      dependsOn:
+        - refactor-specwiki-around-contract-closure-truth-restore-snapshot
+    - id: refactor-specwiki-around-contract-closure-code-graph-index
+      order: 5
+      dependsOn:
+        - refactor-specwiki-around-contract-closure-truth-restore-snapshot
+        - refactor-specwiki-around-contract-closure-query-route-readiness
+    - id: refactor-specwiki-around-contract-closure-cli-product-surface
+      order: 6
+      dependsOn:
+        - refactor-specwiki-around-contract-closure-query-route-readiness
+        - refactor-specwiki-around-contract-closure-projection-writeback-boundaries
+    - id: refactor-specwiki-around-contract-closure-governance-isolation
+      order: 7
+      dependsOn:
+        - refactor-specwiki-around-contract-closure-query-route-readiness
+        - refactor-specwiki-around-contract-closure-code-graph-index
+    - id: refactor-specwiki-around-contract-closure-archive-dry-run-manifest
+      order: 8
+      dependsOn:
+        - refactor-specwiki-around-contract-closure-governance-isolation
+        - refactor-specwiki-around-contract-closure-cli-product-surface
+refactor:
+  kind: contract-closure-driven-runtime-rebuild
+  parallelAllowed: limited
+  rollbackPolicy: branch-local-revert
+  sourceDesigns:
+    - .docs/design/specwiki-contract-closure.md
+    - .docs/design/specwiki-code-graph-index-design.md
+    - .docs/design/knowledge-to-wiki-projection-contract.md
+    - .docs/design/governance-runtime-integration.md
+    - .docs/design/specwiki-cli-unification.md
+  affectedSurfaces:
+    - wiki page tree
+    - runtime truth layers
+    - restore and snapshot lifecycle
+    - projection and declared writeback
+    - query route and readiness DTO
+    - code graph index
+    - CLI product surface
+    - governance evidence isolation
+    - archive dry-run and operation manifest
+    - agent skills and host assets
+    - tests and fixtures
+artifacts:
+  split:
+    status: present
+  metadata:
+    status: present

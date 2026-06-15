@@ -19,7 +19,7 @@
 - **THEN** 验证 MUST 证明该升级来自 knowledge scope 判定，而不是页面 dirty 数量或 Markdown 差异
 
 ### Requirement: 本 change 的 tasks 设计与测试必须继续执行完整项目集 init 分析与注释合规检查
-系统 MUST 在本 change 的 tasks 设计或测试阶段继续执行 `node scripts/run-test-projects.mjs` 的完整项目集 `init` 分析，并单独执行一次 `COMMENTING.md` 合规检查。完整项目集分析 MUST 作为 baseline guard 保留，但本轮 primary gate 仍然是 `storybook + dagger` 的 knowledge-first update 专项结果。
+系统 MUST 在本 change 的 tasks 设计或测试阶段继续执行 `node scripts/run-test-projects.mjs` 的完整项目集 `init` 分析，并单独执行一次 `.wiki/02-开发指南/00-代码注释规范.md` 合规检查。完整项目集分析 MUST 作为 baseline guard 保留，但本轮 primary gate 仍然是 `storybook + dagger` 的 knowledge-first update 专项结果。
 
 #### Scenario: tasks 设计或测试阶段执行完整项目集 init 分析
 - **WHEN** 开发者进入本 change 的 tasks 设计或测试阶段
@@ -28,5 +28,5 @@
 
 #### Scenario: 本 change 单独执行注释合规检查
 - **WHEN** 本 change 进入实现前校验或测试收口阶段
-- **THEN** 系统 MUST 单独检查涉及代码与脚本的注释是否符合 `COMMENTING.md`
+- **THEN** 系统 MUST 单独检查涉及代码与脚本的注释是否符合 `.wiki/02-开发指南/00-代码注释规范.md`
 - **THEN** 该检查结果 MUST 进入 tasks 或验收记录，而不是口头略过

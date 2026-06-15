@@ -2,7 +2,7 @@
 
 ## 当前结果
 
-9.4 的主链重构已经把 core 从旧的 `module/topic/family` 混合页面规划，推进到了更接近 [DESIGN-CORE2.0.md](E:/project/!byAI/spec-wiki/DESIGN-CORE2.0.md) 的 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble` 结构。`storybook + dagger` 两个验收样本的 init / lifecycle 都已经能稳定跑通，说明这轮的主要问题已经不再是 runtime 稳定性，而是页面质量、知识单元粒度和最终产物与 reference 的贴近度。
+9.4 的主链重构已经把 core 从旧的 `module/topic/family` 混合页面规划，推进到了更接近 [.wiki/06-设计文档/00-总体设计.md](E:/project/!byAI/spec-wiki/.wiki/06-设计文档/00-总体设计.md) 的 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble` 结构。`storybook + dagger` 两个验收样本的 init / lifecycle 都已经能稳定跑通，说明这轮的主要问题已经不再是 runtime 稳定性，而是页面质量、知识单元粒度和最终产物与 reference 的贴近度。
 
 当前专项结果：
 
@@ -24,7 +24,7 @@
 - `storybook` 的主要差距是 docs-heavy / product-doc-heavy 仓库的中粒度页面仍然折叠过多
 - `dagger` 的主要差距是 runtime-heavy / compiler-heavy 仓库的 API / framework / tutorial / testing 页面仍然缺失或被压回大模块页
 
-## DESIGN-CORE2.0 达成情况
+## 2.0 总体设计达成情况
 
 ### 已经做到的
 

@@ -27,5 +27,5 @@
 ## 5. Docs And Hygiene
 
 - [x] 5.1 更新 runtime / knowledge 相关文档，明确 declared artifact 是 truth layer，page 不是 source of truth
-- [x] 5.2 在实现改动中检查注释是否符合 `COMMENTING.md`，删除不再成立的弱约定与兼容描述
+- [x] 5.2 在实现改动中检查注释是否符合 `.wiki/02-开发指南/00-代码注释规范.md`，删除不再成立的弱约定与兼容描述
 - [x] 5.3 复核 UniSpec 产物与实现边界一致，不把本轮扩成 answer assembly、provider hardening 或治理平台

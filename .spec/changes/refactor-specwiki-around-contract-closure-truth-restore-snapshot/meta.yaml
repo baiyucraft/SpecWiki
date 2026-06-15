@@ -1,0 +1,14 @@
+id: refactor-specwiki-around-contract-closure-truth-restore-snapshot
+stage: exploration
+deliveryShape: single-change
+multiChange:
+  role: child
+  parent: refactor-specwiki-around-contract-closure
+  order: 2
+  dependsOn:
+    - refactor-specwiki-around-contract-closure-page-tree-contract
+artifacts:
+  proposal:
+    status: missing
+  metadata:
+    status: present

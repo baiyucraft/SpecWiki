@@ -1,7 +1,7 @@
 ## 1. UniSpec
 
 - [x] 1.1 为 `repo-wiki-runtime`、`repo-wiki-workflow`、`adapter-distribution` 和 `global-cli-bootstrap` 补充 `v0.1.0` contract 收口要求
-- [x] 1.2 更新 `DESIGN-RUNTIME.md` 与 `DESIGN-AGENTS.md`，把 intent-aware query、稳定 owner/impact schema 与 trigger 测试体系转入后续设计
+- [x] 1.2 更新 `.wiki/06-设计文档/01-Runtime设计.md` 与 `.wiki/06-设计文档/02-Agents设计.md`，把 intent-aware query、稳定 owner/impact schema 与 trigger 测试体系转入后续设计
 
 ## 2. Runtime / CLI / Skill
 
@@ -14,4 +14,4 @@
 ## 3. 测试与注释
 
 - [x] 3.1 补充并更新 runtime/CLI/skill/distribution 测试，覆盖 `index_only` 状态、query trust、错误退出码、bridge 参数与 hook 触发边界
-- [x] 3.2 检查本轮新增和修改注释，确保符合 `COMMENTING.md`
+- [x] 3.2 检查本轮新增和修改注释，确保符合 `.wiki/02-开发指南/00-代码注释规范.md`

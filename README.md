@@ -32,6 +32,10 @@ The goal of `v0.2.0` is a reliable first-pass repo map backed by a minimal forma
 
 The public release contract is now the minimal knowledge runtime, not a facts-only shortcut.
 
+## Project Knowledge
+
+Long-lived project knowledge, architecture notes, scenario boundaries, and contribution guidance live in [.wiki/INDEX.md](./.wiki/INDEX.md). The repository root keeps only product and agent entry points.
+
 ## Quick Start
 
 ### 1. Bootstrap your agent host
