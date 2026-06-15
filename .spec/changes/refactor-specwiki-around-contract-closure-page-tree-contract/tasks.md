@@ -31,34 +31,34 @@ normal
 
 ## 2. runtime 写入、metadata 与 SQLite 只消费正式页面
 
-- [ ] 2.1 修改 `crates/wiki-runtime/src/workflows/init.rs` 的页面写入和 generated pages 统计，只写入并返回正式页面树路径。
-- [ ] 2.2 修改 `crates/wiki-runtime/src/workflows/update.rs` 的 planned page 写入、路径变更处理和 `AffectedProjectionScope`，确保 `.wiki/pages/**` 不被刷新或纳入 affected scope。
-- [ ] 2.3 修改 `crates/wiki-runtime/src/workflows/rebuild.rs` 与 restore 相关路径，使重建过程只从正式页面树和正式 metadata 恢复 runtime state。
-- [ ] 2.4 修改 `crates/wiki-runtime/src/domain/state.rs` 与 `crates/wiki-runtime/src/domain/metadata_mapper.rs`，确保 `WikiState.pages` 和 `.wiki/wiki.metadata.json` 只导出正式页面。
-- [ ] 2.5 修改 `crates/wiki-runtime/src/storage/knowledge_artifacts.rs`、state store 和 SQLite 写入路径，确保 `wiki_pages / wiki_pages_fts` 只记录正式页面。
-- [ ] 2.6 添加或调整 runtime 集成测试，覆盖 init / update / rebuild / restore 后 metadata、state、SQLite 路径全量满足正式页面树 predicate。
+- [x] 2.1 修改 `crates/wiki-runtime/src/workflows/init.rs` 的页面写入和 generated pages 统计，只写入并返回正式页面树路径。
+- [x] 2.2 修改 `crates/wiki-runtime/src/workflows/update.rs` 的 planned page 写入、路径变更处理和 `AffectedProjectionScope`，确保 `.wiki/pages/**` 不被刷新或纳入 affected scope。
+- [x] 2.3 修改 `crates/wiki-runtime/src/workflows/rebuild.rs` 与 restore 相关路径，使重建过程只从正式页面树和正式 metadata 恢复 runtime state。
+- [x] 2.4 修改 `crates/wiki-runtime/src/domain/state.rs` 与 `crates/wiki-runtime/src/domain/metadata_mapper.rs`，确保 `WikiState.pages` 和 `.wiki/wiki.metadata.json` 只导出正式页面。
+- [x] 2.5 修改 `crates/wiki-runtime/src/storage/knowledge_artifacts.rs`、state store 和 SQLite 写入路径，确保 `wiki_pages / wiki_pages_fts` 只记录正式页面。
+- [x] 2.6 添加或调整 runtime 集成测试，覆盖 init / update / rebuild / restore 后 metadata、state、SQLite 路径全量满足正式页面树 predicate。
 
 ### CheckList
 
-- [ ] 单元测试或替代局部验证已覆盖
-- [ ] 相关验证通过
-- [ ] 本大 task 局部质量检查通过（按项目可用命令执行：lint / typecheck / static analysis / formatter check / compiler check 等）
-- [ ] 注释规范检查完成（参考 .wiki/02-开发指南/00-代码注释规范.md）
+- [x] 单元测试或替代局部验证已覆盖
+- [x] 相关验证通过
+- [x] 本大 task 局部质量检查通过（按项目可用命令执行：lint / typecheck / static analysis / formatter check / compiler check 等）
+- [x] 注释规范检查完成（参考 .wiki/02-开发指南/00-代码注释规范.md）
 
 ## 3. query、status 与旧测试迁移验证
 
-- [ ] 3.1 修改 `crates/wiki-runtime/src/workflows/query.rs` 的 Markdown fallback 与 page refs 回填逻辑，使默认 query 只返回正式页面路径。
-- [ ] 3.2 检查 status machine-readable 输出路径，移除 `.wiki/pages/**` 专用状态、诊断字段或清理建议。
-- [ ] 3.3 更新 `crates/wiki-runtime/tests/acceptance/init_generates_wiki.rs`、`crates/wiki-runtime/tests/acceptance/baseline_acceptance.rs` 和相关 runtime tests，将断言从根级散页 / 旧目录改为正式页面树。
-- [ ] 3.4 更新 `scripts/tests/e2e.test.ts` 与涉及 reference report / init debug trace 的脚本测试，使其断言 `.wiki/INDEX.md`、栏目 `INDEX.md` 和 `NN-主题.md`。
-- [ ] 3.5 添加 query 干扰文件验证：存在 `.wiki/pages/ignored.md` 且包含唯一短语时，默认 query 不返回该文件作为正式页面结果。
+- [x] 3.1 修改 `crates/wiki-runtime/src/workflows/query.rs` 的 Markdown fallback 与 page refs 回填逻辑，使默认 query 只返回正式页面路径。
+- [x] 3.2 检查 status machine-readable 输出路径，移除 `.wiki/pages/**` 专用状态、诊断字段或清理建议。
+- [x] 3.3 更新 `crates/wiki-runtime/tests/acceptance/init_generates_wiki.rs`、`crates/wiki-runtime/tests/acceptance/baseline_acceptance.rs` 和相关 runtime tests，将断言从根级散页 / 旧目录改为正式页面树。
+- [x] 3.4 更新 `scripts/tests/e2e.test.ts` 与涉及 reference report / init debug trace 的脚本测试，使其断言 `.wiki/INDEX.md`、栏目 `INDEX.md` 和 `NN-主题.md`。
+- [x] 3.5 添加 query 干扰文件验证：存在 `.wiki/pages/ignored.md` 且包含唯一短语时，默认 query 不返回该文件作为正式页面结果。
 
 ### CheckList
 
-- [ ] 单元测试或替代局部验证已覆盖
-- [ ] 相关验证通过
-- [ ] 本大 task 局部质量检查通过（按项目可用命令执行：lint / typecheck / static analysis / formatter check / compiler check 等）
-- [ ] 注释规范检查完成（参考 .wiki/02-开发指南/00-代码注释规范.md）
+- [x] 单元测试或替代局部验证已覆盖
+- [x] 相关验证通过
+- [x] 本大 task 局部质量检查通过（按项目可用命令执行：lint / typecheck / static analysis / formatter check / compiler check 等）
+- [x] 注释规范检查完成（参考 .wiki/02-开发指南/00-代码注释规范.md）
 
 ## 4. 文档、规格与 fixture 口径同步
 

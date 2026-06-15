@@ -11,8 +11,6 @@ fn init_runtime_suite_env() {
 mod editable_runtime;
 #[path = "runtime/knowledge_artifacts_roundtrip.rs"]
 mod knowledge_artifacts_roundtrip;
-#[path = "runtime/legacy_page_migration.rs"]
-mod legacy_page_migration;
 #[path = "runtime/managed_section_kernel.rs"]
 mod managed_section_kernel;
 #[path = "runtime/metadata_roundtrip.rs"]

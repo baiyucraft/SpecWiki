@@ -5,9 +5,7 @@
 use std::fs;
 
 use tempfile::tempdir;
-use wiki_runtime::storage::knowledge_artifacts::{
-    load_conflict_records, load_knowledge_artifacts,
-};
+use wiki_runtime::storage::knowledge_artifacts::{load_conflict_records, load_knowledge_artifacts};
 use wiki_runtime::storage::state_store::read_state;
 use wiki_runtime::workflows::{
     init::run_init, rebuild::run_rebuild, sync::run_sync, update::run_update,
@@ -33,7 +31,7 @@ const DECLARED_RUNTIME_CONFLICT_BLOCK: &str = concat!(
 
 /// 辅助：在 init 后的页面中插入 user section。
 fn insert_user_section_after_init(repo_root: &std::path::Path) -> String {
-    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let overview_path = repo_root.join(".wiki/INDEX.md");
     let content = fs::read_to_string(&overview_path).unwrap();
 
     // 找到第一个 managed end marker 后插入 user section
@@ -71,14 +69,14 @@ fn insert_conflicting_declared_blocks_into_first_managed_section(repo_root: &std
 }
 
 fn keep_only_second_declared_block(repo_root: &std::path::Path) {
-    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let overview_path = repo_root.join(".wiki/INDEX.md");
     let content = fs::read_to_string(&overview_path).unwrap();
     let new_content = content.replace(DECLARED_RUNTIME_BLOCK, "");
     fs::write(&overview_path, &new_content).unwrap();
 }
 
 fn remove_all_declared_blocks_from_first_managed_section(repo_root: &std::path::Path) {
-    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let overview_path = repo_root.join(".wiki/INDEX.md");
     let content = fs::read_to_string(&overview_path).unwrap();
     let new_content = content
         .replace(DECLARED_RUNTIME_BLOCK, "")
@@ -91,7 +89,7 @@ fn set_declared_blocks_in_first_managed_section(
     repo_root: &std::path::Path,
     declared_blocks: &str,
 ) {
-    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let overview_path = repo_root.join(".wiki/INDEX.md");
     let content = fs::read_to_string(&overview_path).unwrap();
     let marker = "<!-- wiki:managed:end";
     let pos = content
@@ -109,7 +107,7 @@ fn set_declared_blocks_in_first_managed_section(
 
 /// 辅助：同时注入合法 declared block 和非法 managed 正文漂移。
 fn inject_declared_block_and_managed_drift(repo_root: &std::path::Path) {
-    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let overview_path = repo_root.join(".wiki/INDEX.md");
     let content = fs::read_to_string(&overview_path).unwrap();
     let marker = "<!-- wiki:managed:end";
     let pos = content
@@ -130,7 +128,7 @@ fn inject_declared_block_and_managed_drift(repo_root: &std::path::Path) {
 
 fn remove_declared_blocks_and_inject_managed_drift(repo_root: &std::path::Path) {
     remove_all_declared_blocks_from_first_managed_section(repo_root);
-    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let overview_path = repo_root.join(".wiki/INDEX.md");
     let content = fs::read_to_string(&overview_path).unwrap();
     let marker = "<!-- wiki:managed:end";
     let pos = content
@@ -154,7 +152,7 @@ fn sync_recognizes_user_section_after_hand_edit() {
     assert!(init.initialized);
 
     // 验证 init 输出包含 managed marker
-    let overview_content = fs::read_to_string(repo_root.join(".wiki/项目概述.md")).unwrap();
+    let overview_content = fs::read_to_string(repo_root.join(".wiki/INDEX.md")).unwrap();
     assert!(overview_content.contains("<!-- wiki:managed:start"));
 
     // 插入 user section
@@ -166,7 +164,7 @@ fn sync_recognizes_user_section_after_hand_edit() {
     assert!(sync_result
         .synced_pages
         .iter()
-        .any(|p| p.contains("项目概述")));
+        .any(|p| p.ends_with("INDEX.md")));
 
     // 验证 state 中有 user section
     let state = read_state(repo_root).unwrap();
@@ -202,7 +200,7 @@ fn update_preserves_user_section_after_source_change() {
     assert_eq!(update_result.state, "fresh");
 
     // 验证 user section 仍在页面中
-    let overview_content = fs::read_to_string(repo_root.join(".wiki/项目概述.md")).unwrap();
+    let overview_content = fs::read_to_string(repo_root.join(".wiki/INDEX.md")).unwrap();
     assert!(
         overview_content.contains("手工笔记"),
         "user section heading should be preserved after update"
@@ -230,7 +228,7 @@ fn rebuild_preserves_user_section() {
     let rebuild_result = run_rebuild(repo_root).unwrap();
     assert_eq!(rebuild_result.state, "fresh");
 
-    let overview_content = fs::read_to_string(repo_root.join(".wiki/项目概述.md")).unwrap();
+    let overview_content = fs::read_to_string(repo_root.join(".wiki/INDEX.md")).unwrap();
     assert!(
         overview_content.contains("手工笔记"),
         "user section heading should be preserved after rebuild"
@@ -275,7 +273,7 @@ fn sync_detects_managed_drift() {
     run_init(repo_root).unwrap();
 
     // 修改 managed section 的正文（不删除 marker）
-    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let overview_path = repo_root.join(".wiki/INDEX.md");
     let content = fs::read_to_string(&overview_path).unwrap();
     let marker_start = "<!-- wiki:managed:start";
     let pos = content
@@ -291,7 +289,7 @@ fn sync_detects_managed_drift() {
     assert!(sync_result
         .synced_pages
         .iter()
-        .any(|p| p.contains("项目概述")));
+        .any(|p| p.ends_with("INDEX.md")));
 
     // 应该有 managed drift 警告
     assert!(
@@ -415,7 +413,7 @@ fn sync_keeps_user_only_edit_as_metadata_only_when_declared_snapshot_unchanged()
         "declared_writeback"
     );
 
-    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let overview_path = repo_root.join(".wiki/INDEX.md");
     let before_user_edit = fs::read_to_string(&overview_path).unwrap();
     insert_user_section_after_init(repo_root);
     let after_user_edit = fs::read_to_string(&overview_path).unwrap();
@@ -520,12 +518,12 @@ fn sync_prunes_removed_declared_records_after_full_delete() {
 
     fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
     run_init(repo_root).unwrap();
-    let original_overview = fs::read_to_string(repo_root.join(".wiki/项目概述.md")).unwrap();
+    let original_overview = fs::read_to_string(repo_root.join(".wiki/INDEX.md")).unwrap();
     insert_declared_block_into_first_managed_section(repo_root);
     run_sync(repo_root).unwrap();
 
     remove_all_declared_blocks_from_first_managed_section(repo_root);
-    let removed_overview = fs::read_to_string(repo_root.join(".wiki/项目概述.md")).unwrap();
+    let removed_overview = fs::read_to_string(repo_root.join(".wiki/INDEX.md")).unwrap();
     assert_eq!(
         removed_overview, original_overview,
         "removing declared blocks should restore original page content"
@@ -636,7 +634,7 @@ fn sync_rejects_same_scope_duplicate_records_without_explicit_ids() {
     fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
     run_init(repo_root).unwrap();
 
-    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let overview_path = repo_root.join(".wiki/INDEX.md");
     let content = fs::read_to_string(&overview_path).unwrap();
     let marker = "<!-- wiki:managed:end";
     let pos = content

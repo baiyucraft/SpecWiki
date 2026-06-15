@@ -2223,10 +2223,11 @@ fn init_uses_wiki_dev_yaml_provider_without_agent_bridge() {
         !report.generated_pages.is_empty(),
         "init with provider should generate pages"
     );
-    let has_module_page = report
-        .generated_pages
-        .iter()
-        .any(|path| !path.ends_with("项目概述.md") && !path.ends_with("系统架构.md"));
+    let has_module_page = report.generated_pages.iter().any(|path| {
+        wiki_model::domain::knowledge::is_official_wiki_relative_path(path)
+            && path != ".wiki/INDEX.md"
+            && path != ".wiki/00-项目总览/00-系统架构.md"
+    });
     assert!(
         has_module_page,
         "should generate at least one module-level page"

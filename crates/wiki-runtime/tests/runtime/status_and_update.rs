@@ -1776,7 +1776,7 @@ fn clear_declared_blocks_for_status(repo_root: &Path) {
 }
 
 fn set_declared_blocks_for_status(repo_root: &Path, declared_blocks: &str) {
-    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let overview_path = repo_root.join(".wiki/INDEX.md");
     let content = fs::read_to_string(&overview_path).unwrap();
     let marker = "<!-- wiki:managed:end";
     let pos = content
@@ -1802,7 +1802,7 @@ fn init_builds_formal_runtime_and_reports_v0_2_ready_state() {
     assert_eq!(init.state, "fresh");
     assert!(!init.generated_pages.is_empty());
     assert!(metadata_exists(repo_root));
-    assert!(repo_root.join(".wiki/项目概述.md").exists());
+    assert!(repo_root.join(".wiki/INDEX.md").exists());
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "fresh");
@@ -1855,7 +1855,7 @@ fn update_keeps_formal_runtime_ready_after_source_change() {
     let init = run_init(repo_root).unwrap();
     assert_eq!(init.state, "fresh");
     assert!(metadata_exists(repo_root));
-    assert!(repo_root.join(".wiki/项目概述.md").exists());
+    assert!(repo_root.join(".wiki/INDEX.md").exists());
 
     fs::write(repo_root.join("src.ts"), "export const version = 2;\n").unwrap();
     let update = run_update(repo_root).unwrap();
@@ -1863,7 +1863,7 @@ fn update_keeps_formal_runtime_ready_after_source_change() {
     assert_eq!(update.state, "fresh");
     assert!(!update.updated_pages.is_empty());
     assert!(metadata_exists(repo_root));
-    assert!(repo_root.join(".wiki/项目概述.md").exists());
+    assert!(repo_root.join(".wiki/INDEX.md").exists());
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "fresh");

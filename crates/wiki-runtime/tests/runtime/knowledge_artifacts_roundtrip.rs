@@ -6,9 +6,9 @@ use wiki_knowledge::domain::research::{
 };
 use wiki_model::domain::knowledge_artifact::KnowledgeResearchSummaryStatus;
 use wiki_runtime::storage::knowledge_artifacts::{
-    knowledge_artifacts_exist, load_conflict_records, load_declared_records,
-    load_health_signals, load_knowledge_artifacts, persist_knowledge_artifacts,
-    restore_runtime_cache_from_artifacts, PersistKnowledgeArtifactsInput,
+    knowledge_artifacts_exist, load_conflict_records, load_declared_records, load_health_signals,
+    load_knowledge_artifacts, persist_knowledge_artifacts, restore_runtime_cache_from_artifacts,
+    PersistKnowledgeArtifactsInput,
 };
 use wiki_runtime::storage::metadata_store::read_metadata;
 use wiki_runtime::storage::sqlite_store;
@@ -171,7 +171,7 @@ fn restore_refuses_page_snapshot_drift_even_when_artifacts_exist() {
     fs::write(repo_root.join("src.ts"), "export const restore = true;\n").unwrap();
 
     run_init(repo_root).unwrap();
-    let overview_path = repo_root.join(".wiki/项目概述.md");
+    let overview_path = repo_root.join(".wiki/INDEX.md");
     let original = fs::read_to_string(&overview_path).unwrap();
     fs::write(&overview_path, format!("{original}\n<!-- drift -->\n")).unwrap();
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
@@ -385,7 +385,10 @@ fn artifact_roundtrip_persists_declared_conflict_records() {
     drop(conn);
     let conflicts = load_conflict_records(repo_root).unwrap();
     assert_eq!(conflicts.len(), 1);
-    assert_eq!(conflicts[0].conflict_kind.as_str(), "parallel_active_declared");
+    assert_eq!(
+        conflicts[0].conflict_kind.as_str(),
+        "parallel_active_declared"
+    );
     assert!(restore_runtime_cache_from_artifacts(repo_root).unwrap());
 }
 
@@ -477,7 +480,10 @@ fn restore_refuses_invalid_conflict_snapshot() {
         .conflict_records
         .first_mut()
         .expect("conflict snapshot should exist");
-    target.record_ids = vec!["missing-record".to_string(), "another-missing-record".to_string()];
+    target.record_ids = vec![
+        "missing-record".to_string(),
+        "another-missing-record".to_string(),
+    ];
 
     let conflict_path = repo_root.join(".wiki/.knowledge/runtime/conflict-records.jsonl");
     let conflict_jsonl = artifacts
