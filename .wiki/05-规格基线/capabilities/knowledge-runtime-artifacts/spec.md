@@ -34,15 +34,15 @@ TBD - created by archiving change iteration-12-2-knowledge-runtime-artifact-mini
 系统 MUST 让 `.wiki/.knowledge/**` 与 `wiki.metadata.json` 共享稳定的 snapshot 身份线索，用于审计、恢复和一致性校验。`recovery-manifest` MUST 至少包含 `schema_version`、`repo_root`、`facts_input_hash`、`knowledge_snapshot_id`、`metadata_hash` 或等价锚点字段。系统 MUST 能基于这些字段判断当前正式产物是否可用于 restore，而不是依赖目录存在与否盲猜。
 
 #### Scenario: restore 前校验正式产物快照一致性
-- **WHEN** 系统尝试基于 `.wiki/.knowledge/** + pages + metadata` 恢复本地 runtime
+- **WHEN** 系统尝试基于 `.wiki/.knowledge/** + official page tree + metadata` 恢复本地 runtime
 - **THEN** 系统 MUST 先校验 `recovery-manifest` 与 `wiki.metadata.json` 的 snapshot 锚点是否一致
 - **THEN** 若锚点不一致，系统 MUST 返回显式 `stale`、`needs_update` 或 blocker，而不是静默继续恢复
 
 ### Requirement: restore 必须从正式产物恢复本地 runtime，而不是重新生成知识
-系统 MUST 支持在 `.wiki/.cache/**` 缺失、被删除或需要重建时，仅凭 `.wiki/.knowledge/** + .wiki/pages/** + wiki.metadata.json` 恢复本地 runtime。该 restore 语义 MUST 是“重建本地 `.cache` 与可消费状态”，而不是重新执行 planning、research、compose 或 assemble。系统 MUST NOT 因 `.cache` 缺失就自动退回 full `init` 并把它伪装成 restore 成功。
+系统 MUST 支持在 `.wiki/.cache/**` 缺失、被删除或需要重建时，仅凭 `.wiki/.knowledge/** + official page tree + wiki.metadata.json` 恢复本地 runtime。official page tree 只包括 `.wiki/INDEX.md`、`.wiki/<栏目路径>/INDEX.md` 和 `.wiki/<栏目路径>/NN-主题.md`。该 restore 语义 MUST 是“重建本地 `.cache` 与可消费状态”，而不是重新执行 planning、research、compose 或 assemble。系统 MUST NOT 因 `.cache` 缺失就自动退回 full `init` 并把它伪装成 restore 成功。
 
 #### Scenario: B 用户从已上库正式产物恢复本地 `.cache`
-- **WHEN** 仓库中已存在可读取的 `.wiki/.knowledge/**`、`.wiki/pages/**` 与 `wiki.metadata.json`，但本地 `.wiki/.cache/**` 缺失
+- **WHEN** 仓库中已存在可读取的 `.wiki/.knowledge/**`、official page tree 与 `wiki.metadata.json`，但本地 `.wiki/.cache/**` 缺失
 - **THEN** 系统 MUST 仅基于这些正式产物重建本地 `.wiki/.cache/**`
 - **THEN** restore MUST NOT 重新调用 planning、research 或 compose 主链
 

@@ -131,7 +131,7 @@ SpecWiki 同时服务四类角色：
 
 - 不把 `.spec/changes/**` 搬进 `.wiki/`。
 - 不把 proposal、design、review、test report 原文复制到 Wiki 长期页面。
-- 不让 `.wiki/pages/**` 与 `.wiki/**/*.md` 长期形成双页面 truth。
+- 不让旧页面目录与 `.wiki/**/*.md` 形成双页面 truth。
 - 不让 SQLite cache 取代 `.spec` artifact 的正式审计证据。
 - 不在 TS CLI 或 skill markdown 中重新实现治理 validator。
 - 不第一阶段迁移 archive；archive 涉及目录移动和审计边界，必须最后做。
@@ -306,9 +306,9 @@ standard:
 后续内容收缩后允许降级回单页
 ```
 
-`.wiki/pages/**` 不作为目标页面目录。若旧设计或旧产物中存在 `.wiki/pages/**`，它只作为 legacy import source。迁移到 `.wiki/INDEX.md`、栏目 `INDEX.md` 和 `NN-主题.md` 前，runtime 不得同时写入两套 page truth。
+`.wiki/pages/**` 不作为目标页面目录。当前页面树合同已决策为唯一正式可见页面树：`.wiki/INDEX.md`、栏目 `INDEX.md` 和 `NN-主题.md`。runtime 不迁移、不清理、不诊断、不查询 `.wiki/pages/**`，也不把它作为 status 分支或 debug route。
 
-页面树统一必须拆成独立前置 change：`unify-wiki-page-tree-runtime-contract`。该 change 需要同步 `.wiki/06-设计文档/01-Runtime设计.md`、`.wiki` 规范、runtime init/rebuild 的保护策略和 metadata 重建规则。在它完成前，governance integration 不承诺顺手废弃或迁移 `.wiki/pages/**`。
+页面树统一由独立前置 change `refactor-specwiki-around-contract-closure-page-tree-contract` 落地。governance integration 只能消费该合同，不能重新引入旧目录兼容层。
 
 ## 内容进入页面的路径
 
@@ -651,20 +651,9 @@ Wiki 页面不是一次性生成物，而是由 code index、knowledge、manual 
 | legacy governance CLI | `spec-wiki changes / change / validate / archive` | 短期 wrapper | runtime validate parity、CLI tests、skill forwarding 通过 |
 | legacy governance skill 状态机 | runtime DTO + thin skill wrapper | 短期保留交互入口 | skill golden tests 通过，skill 不再自行判断 stage |
 | legacy reviewer / verifier 文案规则 | `ReviewGateContract` | 改写为调用 runtime | review fixture 全覆盖 |
-| `.wiki/pages/**` | `.wiki/**/*.md` 单页面树 | legacy import source | 页面树合同 change 完成，metadata 重建，runtime 不再写旧路径 |
+| 旧页面目录 | `.wiki/**/*.md` 单页面树 | 不保留 runtime 分支 | 页面树合同 change 完成，metadata 重建，runtime 不再写旧路径 |
 | `05-规格基线/**` / `capabilities/**/spec.md` | 普通 Wiki 页面或 governance knowledge | 迁移输入 | 独立 change 决定保留、改写或删除 |
 | legacy 命名入口 | `SpecWiki` / `spec-wiki` | 测试开发阶段不长期兼容 | 全仓用户可见入口无旧命名残留 |
-
-legacy import dry-run：
-
-```text
-scan legacy paths
-  -> classify importable / ignored / conflict
-  -> produce migration report
-  -> user confirm
-  -> rewrite target pages / metadata
-  -> verify no runtime writes legacy paths
-```
 
 删除旧兼容层前必须满足：
 
@@ -677,9 +666,10 @@ scan legacy paths
 
 ## 迁移计划
 
-### Phase 0a: 页面树合同决策
+### Phase 0a: 页面树合同已决策
 
-- 明确继续保留 `.wiki/pages/**`，还是迁移到唯一 `.wiki/**/*.md` 页面树。
+- 唯一页面树已决策为 `.wiki/INDEX.md`、栏目 `INDEX.md` 和 `NN-主题.md`。
+- `.wiki/pages/**` 不进入 migration、cleanup、diagnosis、query 或 status 分支。
 - 同步 `.wiki/06-设计文档/01-Runtime设计.md`、`.wiki` 文档规范和 runtime init/rebuild 保护策略。
 - 定义 managed projection、人工长期页和 metadata 的边界。
 - 该阶段独立于 governance integration，不夹带实现。
@@ -758,7 +748,7 @@ scan legacy paths
 - validate 能阻止缺失 required artifact 的 archive。
 - governance query 能找到 change、capability 和 wiki-sync issue。
 - archive dry-run 不移动目录，但能生成 readiness report 和 operation manifest。
-- 页面树迁移前，runtime 不同时写两套 page truth。
+- runtime 不同时写两套 page truth。
 
 ## 风险
 
@@ -773,7 +763,7 @@ scan legacy paths
 | runtime 对 `.spec` 文件布局硬编码 | evidence backend 无法演进 | `GovernanceEvidenceStore` 端口隔离 |
 | public archive 误触发破坏性移动 | active/archive 撕裂 | readiness report、operation manifest、显式确认 |
 | 新旧 validator 并行期间判断不一致 | Agent 输出互相冲突 | parity fixture 和 skill golden tests |
-| `.wiki/pages/**` 与 `.wiki/**/*.md` 双 truth | 页面状态和 metadata 失配 | 独立页面树合同 change |
+| 旧页面目录与 `.wiki/**/*.md` 双 truth | 页面状态和 metadata 失配 | 独立页面树合同 change |
 | 自动生成覆盖人工编辑 | 长期知识丢失 | 受控区块、conflict 标记、人工确认 |
 | `INDEX.md` 膨胀 | 导航失效 | INDEX 只保留范围、索引、入口、来源 |
 | 模块页和对外方法页职责重复 | 页面互相复制 | 栏目职责边界和链接规则 |
@@ -799,7 +789,7 @@ scan legacy paths
 - public archive 默认不会静默移动目录；移动前有 readiness report 和 operation manifest。
 - archive 失败可定位到具体步骤，且不会产生不可解释的半归档状态。
 - 新旧入口不长期分叉；legacy governance CLI 最终可删除。
-- legacy `.wiki/pages/**` 不再被新 runtime 创建或写入。
+- 旧页面目录不再被新 runtime 创建、写入、查询或诊断。
 
 ## 建议的 Governance Parent Change
 
@@ -810,7 +800,7 @@ integrate-spec-governance-into-spec-wiki-runtime
 建议拆分：
 
 ```text
-0a. unify-wiki-page-tree-runtime-contract
+0a. refactor-specwiki-around-contract-closure-page-tree-contract
 0b. governance-runtime-contract
 1. governance-model-and-readonly-status
 2. governance-validation-runtime

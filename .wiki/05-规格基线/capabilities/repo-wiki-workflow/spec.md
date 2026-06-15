@@ -38,16 +38,16 @@
 - **THEN** 系统 MUST NOT 继续保留与当前 release 叙事冲突的旧版本说明
 
 ### Requirement: `init` 与 `update` 的正式承诺必须收敛到 knowledge runtime
-系统 MUST 把 `init` 与 `update` 的正式发布承诺收敛到 knowledge runtime，而不是继续停留在 facts-only runtime。执行成功后，系统 MUST 至少保证 `.wiki/.knowledge/**`、`.wiki/pages/**`、`wiki.metadata.json` 与可重建 `.wiki/.cache/**` 的正式 snapshot 成立；仅有 facts/index snapshot 可查而缺失正式 knowledge/runtime 提交时，系统 MUST NOT 将该结果表述为 `v0.2.0` 的 workflow 成功。
+系统 MUST 把 `init` 与 `update` 的正式发布承诺收敛到 knowledge runtime，而不是继续停留在 facts-only runtime。执行成功后，系统 MUST 至少保证 `.wiki/.knowledge/**`、official page tree、`wiki.metadata.json` 与可重建 `.wiki/.cache/**` 的正式 snapshot 成立；official page tree 只包括 `.wiki/INDEX.md`、`.wiki/<栏目路径>/INDEX.md` 和 `.wiki/<栏目路径>/NN-主题.md`。仅有 facts/index snapshot 可查而缺失正式 knowledge/runtime 提交时，系统 MUST NOT 将该结果表述为 `v0.2.0` 的 workflow 成功。
 
 #### Scenario: `init` 成功建立 knowledge runtime
 - **WHEN** 用户在有效本地仓库上执行 `spec-wiki init`
 - **THEN** 系统 MUST 建立可供后续 `status`、`query` 与恢复链消费的正式 knowledge runtime snapshot
-- **THEN** 系统 MUST NOT 仅凭 facts/index 可查就把缺失 `.knowledge / pages / metadata` 的结果表述为 `v0.2.0` init 成功
+- **THEN** 系统 MUST NOT 仅凭 facts/index 可查就把缺失 `.knowledge / official page tree / metadata` 的结果表述为 `v0.2.0` init 成功
 
 #### Scenario: `update` 以 knowledge-first refresh 提交成功
 - **WHEN** 用户在已有 runtime 的仓库上执行 `spec-wiki wiki update`
-- **THEN** 系统 MUST 以 knowledge-first refresh 更新正式 `.knowledge / pages / metadata / cache` snapshot
+- **THEN** 系统 MUST 以 knowledge-first refresh 更新正式 `.knowledge / official page tree / metadata / cache` snapshot
 - **THEN** 系统 MUST NOT 继续把“只刷新 facts/index”表述为 `v0.2.0` update 的正式成功语义
 
 ### Requirement: `status` 必须表达 knowledge runtime readiness 与恢复态推荐动作

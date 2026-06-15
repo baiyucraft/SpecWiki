@@ -65,6 +65,24 @@ owner: unispec
 - 拆分后同步更新父目录 `INDEX.md`、栏目 `INDEX.md`，必要时更新 `.wiki/INDEX.md`。
 - 检查其它 wiki 页面、生成 Skill / reference 文案和测试断言中的旧链接；未完成的链接迁移必须记录为待处理 wiki 工作。
 
+## 正式页面树规则
+
+正式可见 Wiki 页面树只包括：
+
+~~~text
+.wiki/INDEX.md
+.wiki/<栏目路径>/INDEX.md
+.wiki/<栏目路径>/NN-主题.md
+~~~
+
+规则：
+
+- 根入口和栏目入口使用 `INDEX.md`。
+- 普通长期页面使用 `NN-主题.md`。
+- 多级目录必须逐层提供 `INDEX.md`。
+- runtime 隐藏目录、metadata、cache 和 knowledge artifacts 不属于正式可见页面树。
+- `.wiki/pages/**` 不作为写入、查询、恢复、status、迁移或清理目标。
+
 ## 一级栏目边界
 
 | 栏目 | 职责 | 不承载 |

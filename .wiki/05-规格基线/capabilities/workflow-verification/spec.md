@@ -435,12 +435,13 @@
 - **THEN** 验证 MUST 观察到系统没有为所有命中统一伪造 `tier`
 
 ### Requirement: 本 change 的专项验证必须覆盖 `.knowledge` 最小正式产物与 cold restore
-系统 MUST 在本 change 的专项验证中优先验证 `.wiki/.knowledge/**` 的最小正式产物集、cold restore / cache rebuild 与恢复后的 runtime 可消费性，而不是继续把页面 fidelity 作为主门禁。验证 MUST 直接读取 `.wiki/.knowledge/**`、`.wiki/pages/**`、`wiki.metadata.json` 与重建后的 `.wiki/.cache/wiki-cache.db`，确认：
+系统 MUST 在本 change 的专项验证中优先验证 `.wiki/.knowledge/**` 的最小正式产物集、cold restore / cache rebuild 与恢复后的 runtime 可消费性，而不是继续把页面 fidelity 作为主门禁。验证 MUST 直接读取 `.wiki/.knowledge/**`、official page tree、`wiki.metadata.json` 与重建后的 `.wiki/.cache/wiki-cache.db`，确认：
 
 - formal artifact taxonomy 是否完整
 - restore 是否只执行 cache rebuild，而不是隐式重跑 research / compose / assemble
 - 恢复后 `status` 是否能正确表达 `ready / stale / needs_update / blocker`
 - 恢复后当前 `query` 入口是否能消费恢复态 runtime
+- 验证不得通过读取 `.wiki/pages/**` 判断 page fidelity、restore readiness 或 runtime status
 
 恢复成功的结论 MUST 只表示“本地 cache 可重建、`status/query` 可工作、blocker/readiness 可诊断”，MUST NOT 被表述成“完整 wiki runtime 已 ready”。
 

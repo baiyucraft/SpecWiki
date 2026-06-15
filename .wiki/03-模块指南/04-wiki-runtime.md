@@ -40,7 +40,7 @@ cargo test -p wiki-runtime
 node scripts/test-wiki-lifecycle.mjs
 ```
 
-`.wiki/.knowledge/**`、`.wiki/pages/**`、`.wiki/wiki.metadata.json` 和 `.wiki/.cache/**` 是 runtime 分层，职责不能混用。
+`.wiki/.knowledge/**`、正式可见 Wiki 页面树、`.wiki/wiki.metadata.json` 和 `.wiki/.cache/**` 是 runtime 分层，职责不能混用。正式可见 Wiki 页面树只包括 `.wiki/INDEX.md`、栏目 `INDEX.md` 和 `NN-主题.md`。
 
 ## 测试 Suite
 

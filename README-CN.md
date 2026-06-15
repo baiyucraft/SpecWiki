@@ -25,7 +25,7 @@ Agent 直接进入大仓库时，通常会先盲搜、盲读，token 花得多�
 
 - Windows runtime 支持
 - 对外公开 CLI：`init`、`status`、`update`、`query`、`sync`、`rebuild`
-- 正式 runtime 产物至少包括 `.wiki/.knowledge/**`、`.wiki/pages/**`、`wiki.metadata.json` 与可恢复的 `.wiki/.cache/**`
+- 正式 runtime 产物至少包括 `.wiki/.knowledge/**`、正式可见 Wiki 页面树、`wiki.metadata.json` 与可恢复的 `.wiki/.cache/**`
 - `init`、`update` 收敛到正式 knowledge runtime
 - `query` 走 `index -> knowledge -> page fallback`
 - `sync` 用于把受管 `.wiki` 页面编辑回写到 runtime state、metadata 与 cache
@@ -173,8 +173,11 @@ runtime 会在仓库里写入本地 `.wiki/` 目录。
 
 ```text
 .wiki/
+├─ INDEX.md
+├─ <栏目>/
+│  ├─ INDEX.md
+│  └─ NN-主题.md
 ├─ .knowledge/
-├─ pages/
 ├─ wiki.metadata.json
 └─ .cache/
    └─ wiki-cache.db

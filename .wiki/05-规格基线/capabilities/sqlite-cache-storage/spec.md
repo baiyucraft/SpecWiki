@@ -4,7 +4,7 @@
 定义 Repo Wiki SQLite 缓存与状态库的结构、原子性，以及增量 workflow 需要的局部读取能力。
 ## Requirements
 ### Requirement: 系统必须使用 SQLite 数据库统一承载缓存和状态数据
-系统 MUST 使用单个 SQLite 数据库文件 `.wiki/.cache/wiki-cache.db` 统一承载运行时状态、增量缓存、symbol graph 和全文索引数据。数据库初始化时 MUST 启用 WAL journal mode（`PRAGMA journal_mode=WAL`）。除了现有的每页缓存表外，数据库 MUST 至少包含以下状态与索引表：`wiki_pages`、`wiki_page_sections`、`source_states`、`modules`、`module_source_map`、`page_source_map`、`page_module_map`、`wiki_relations`、`scan_cache`、`llm_cache`、`symbols`、`edges`、`communities`、`community_members`、`processes`、`process_steps`、`wiki_pages_fts`、`symbols_fts`，以及 knowledge runtime 需要的本地镜像表。系统 MAY 保留 `kv_store` 表壳用于历史遗留测试，但不得继续把它作为运行时事实源或自动升级入口。与此前不同的是，SQLite 数据库在本轮后 MUST 被明确定位为本地 cache / state substrate，而不是 `.wiki/.knowledge/** + .wiki/pages/** + wiki.metadata.json` 的替代品。与迭代 7 不同的是，`symbols`、`edges`、`communities`、`community_members`、`processes` 和 `process_steps` 在本迭代起 MUST 承载真实的 symbol graph 与 graph-derived rows，而不再只是空 schema。
+系统 MUST 使用单个 SQLite 数据库文件 `.wiki/.cache/wiki-cache.db` 统一承载运行时状态、增量缓存、symbol graph 和全文索引数据。数据库初始化时 MUST 启用 WAL journal mode（`PRAGMA journal_mode=WAL`）。除了现有的每页缓存表外，数据库 MUST 至少包含以下状态与索引表：`wiki_pages`、`wiki_page_sections`、`source_states`、`modules`、`module_source_map`、`page_source_map`、`page_module_map`、`wiki_relations`、`scan_cache`、`llm_cache`、`symbols`、`edges`、`communities`、`community_members`、`processes`、`process_steps`、`wiki_pages_fts`、`symbols_fts`，以及 knowledge runtime 需要的本地镜像表。系统 MAY 保留 `kv_store` 表壳用于历史遗留测试，但不得继续把它作为运行时事实源或自动升级入口。与此前不同的是，SQLite 数据库在本轮后 MUST 被明确定位为本地 cache / state substrate，而不是 `.wiki/.knowledge/** + official page tree + wiki.metadata.json` 的替代品。与迭代 7 不同的是，`symbols`、`edges`、`communities`、`community_members`、`processes` 和 `process_steps` 在本迭代起 MUST 承载真实的 symbol graph 与 graph-derived rows，而不再只是空 schema。
 
 #### Scenario: 初始化时创建关系型 schema
 - **WHEN** 系统首次执行 `init` 且 `.wiki/.cache/wiki-cache.db` 不存在
@@ -18,7 +18,7 @@
 - **THEN** 若关键状态记录仍无法恢复，系统 MUST 走 metadata / rebuild 回退，而不是尝试旧版 DB 自动迁移
 
 #### Scenario: cache 缺失时可由正式产物重建
-- **WHEN** 本地 SQLite 数据库缺失，但 `.wiki/.knowledge/** + .wiki/pages/** + wiki.metadata.json` 可读
+- **WHEN** 本地 SQLite 数据库缺失，但 `.wiki/.knowledge/** + official page tree + wiki.metadata.json` 可读
 - **THEN** 系统 MUST 允许先执行 restore 重建本地数据库
 - **THEN** 系统 MUST NOT 把 SQLite 缺失本身等同于必须重新 full `init`
 

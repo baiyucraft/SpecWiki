@@ -177,7 +177,7 @@
 - **THEN** runtime MUST NOT 直接承载 facts/index 或 knowledge planning/research/compose 的主实现
 
 ### Requirement: runtime 的 SQLite 存储必须按 index、knowledge、runtime 三段分治
-系统 MUST 在 `wiki-runtime` 中把 SQLite 具体实现拆成 `index_store`、`knowledge_store` 和 `runtime_store` 三段。`wiki-index` 与 `wiki-knowledge` 必须各自定义自己需要的 store trait，`wiki-runtime` 只实现这些 trait。系统 MUST 明确每张表的 schema contract owner、读写 API owner 与 truth kind，避免跨层直接读库。与此前不同的是，`knowledge_store` 中的 `knowledge_domains`、`knowledge_units`、`research_cache`、`page_digests` 等对象在本轮后 MUST 被视为本地 working cache、加速索引或 `.wiki/.knowledge/**` 的 rebuild target，而不是唯一正式 knowledge truth。正式可共享 truth MUST 由 `.wiki/.knowledge/** + .wiki/pages/** + wiki.metadata.json` 承载。
+系统 MUST 在 `wiki-runtime` 中把 SQLite 具体实现拆成 `index_store`、`knowledge_store` 和 `runtime_store` 三段。`wiki-index` 与 `wiki-knowledge` 必须各自定义自己需要的 store trait，`wiki-runtime` 只实现这些 trait。系统 MUST 明确每张表的 schema contract owner、读写 API owner 与 truth kind，避免跨层直接读库。与此前不同的是，`knowledge_store` 中的 `knowledge_domains`、`knowledge_units`、`research_cache`、`page_digests` 等对象在本轮后 MUST 被视为本地 working cache、加速索引或 `.wiki/.knowledge/**` 的 rebuild target，而不是唯一正式 knowledge truth。正式可共享 truth MUST 由 `.wiki/.knowledge/** + official page tree + wiki.metadata.json` 承载。
 
 #### Scenario: index facts 通过 index_store 持久化
 - **WHEN** 系统持久化或读取 `modules`、`symbols`、`edges` 或 graph analysis 相关数据
@@ -228,18 +228,19 @@
 - **THEN** runtime MUST 返回成功的空结果
 - **THEN** 系统 MUST 不得把这种情况提升为 `index not ready`
 
-### Requirement: runtime 必须把 `.knowledge / pages / metadata / cache` 作为正式分层
-系统 MUST 将 `.wiki/.knowledge/**`、`.wiki/pages/**`、`wiki.metadata.json` 与 `.wiki/.cache/**` 视为不同 truth kind 的正式分层，而不是继续让 SQLite 或 `.cache` 充当隐性主真相。`.wiki/.knowledge/**` MUST 承载可上库的 formal knowledge artifacts，`.wiki/pages/**` MUST 承载 page projection，`wiki.metadata.json` MUST 承载正式索引与恢复入口，`.wiki/.cache/**` MUST 只承载本地 working state 与可重建缓存。
+### Requirement: runtime 必须把 `.knowledge / official page tree / metadata / cache` 作为正式分层
+系统 MUST 将 `.wiki/.knowledge/**`、official page tree、`wiki.metadata.json` 与 `.wiki/.cache/**` 视为不同 truth kind 的正式分层，而不是继续让 SQLite 或 `.cache` 充当隐性主真相。`.wiki/.knowledge/**` MUST 承载可上库的 formal knowledge artifacts，official page tree MUST 承载 page projection 和 authoring surface，`wiki.metadata.json` MUST 承载正式索引与恢复入口，`.wiki/.cache/**` MUST 只承载本地 working state 与可重建缓存。official page tree 只包括 `.wiki/INDEX.md`、`.wiki/<栏目路径>/INDEX.md` 和 `.wiki/<栏目路径>/NN-主题.md`；`.wiki/pages/**` 位于 runtime surface 外。
 
 #### Scenario: runtime 写盘时保持四层职责分离
 - **WHEN** 系统执行正式 `init`、`update` 或 `rebuild`
 - **THEN** `.wiki/.knowledge/**` MUST 只写入 formal knowledge artifacts 与 recovery anchors
-- **THEN** `.wiki/pages/**` MUST 只写入 page projection
+- **THEN** official page tree MUST 只写入 page projection 和合法 authoring surface
+- **THEN** `.wiki/pages/**` MUST NOT 作为写入、恢复、query 或 status 目标
 - **THEN** `.wiki/.cache/**` MUST 只写入本地 working state
 - **THEN** 系统 MUST NOT 把 `.cache` 或 SQLite 继续当成唯一正式 knowledge 真相
 
 ### Requirement: runtime 必须支持从正式产物恢复本地 cache 与可消费状态
-系统 MUST 支持在 `.wiki/.cache/**` 缺失或需要重建时，从 `.wiki/.knowledge/** + .wiki/pages/** + wiki.metadata.json` 恢复本地 cache 与 runtime 可消费状态。恢复完成后，`status` MUST 能表达当前仓库是 `ready`、`stale`、`needs_update` 还是 `blocker`；当前 `query` 入口 MUST 能消费恢复后的 runtime，而不是强制要求先执行 full `init`。该恢复成功语义 MUST 只表示“本地 cache 已恢复且 runtime 可被消费与诊断”，MUST NOT 被表述成“完整 wiki runtime 已 ready”。
+系统 MUST 支持在 `.wiki/.cache/**` 缺失或需要重建时，从 `.wiki/.knowledge/** + official page tree + wiki.metadata.json` 恢复本地 cache 与 runtime 可消费状态。恢复完成后，`status` MUST 能表达当前仓库是 `ready`、`stale`、`needs_update` 还是 `blocker`；当前 `query` 入口 MUST 能消费恢复后的 runtime，而不是强制要求先执行 full `init`。该恢复成功语义 MUST 只表示“本地 cache 已恢复且 runtime 可被消费与诊断”，MUST NOT 被表述成“完整 wiki runtime 已 ready”。
 
 #### Scenario: cold restore 后 `status` 可直接消费恢复态 runtime
 - **WHEN** 系统基于正式产物完成本地 `.wiki/.cache/**` 重建
@@ -265,7 +266,7 @@
 - **THEN** 系统 MUST NOT 仅因整树 replan 就自动切换到 rebuild workflow
 
 ### Requirement: `update` 提交必须按 knowledge scope 定向刷新正式产物与 projection anchors
-系统 MUST 让 `update` 在提交阶段按 `AffectedKnowledgeScope` 定向刷新 `.wiki/.knowledge/**`、`.wiki/pages/**`、`wiki.metadata.json` 与 `.wiki/.cache/**`。未受影响的 formal records、projection anchors 与页面投影 MUST 保持稳定；受影响或已移除的 unit/page 对应记录 MUST 被显式更新或回收。系统 MUST 以统一 snapshot 身份完成本次提交，而不是让 `.knowledge`、pages、metadata 与 cache 各自漂移。
+系统 MUST 让 `update` 在提交阶段按 `AffectedKnowledgeScope` 定向刷新 `.wiki/.knowledge/**`、official page tree、`wiki.metadata.json` 与 `.wiki/.cache/**`。未受影响的 formal records、projection anchors 与页面投影 MUST 保持稳定；受影响或已移除的 unit/page 对应记录 MUST 被显式更新或回收。系统 MUST 以统一 snapshot 身份完成本次提交，而不是让 `.knowledge`、official page tree、metadata 与 cache 各自漂移。
 
 #### Scenario: 未受影响 formal records 保持稳定
 - **WHEN** 某次 `update` 只命中局部 `AffectedKnowledgeScope`
@@ -312,7 +313,7 @@
 系统 MUST 让 `query` 结果中的 readiness 与 provenance 分层表达。`query_trust`、`recommended_action` 与等价字段 MUST 负责回答“当前结果是否可直接消费、是否需要 update/rebuild”；`provenance_summary` 与等价字段 MUST 负责回答“结果来自 index、knowledge 还是 page fallback”。本轮 `provenance_summary` MUST 至少能稳定区分 `index_hit`、`knowledge_hit` 与 `page_fallback` 三类 route tags。系统 MUST NOT 用单一字段同时承载这两类语义。
 
 #### Scenario: 恢复态 runtime 可查询但不伪装成 ready
-- **WHEN** 当前 runtime 是基于 `.wiki/.knowledge/** + pages + metadata` 恢复出的可查询状态，但当前代码与正式 snapshot 不一致
+- **WHEN** 当前 runtime 是基于 `.wiki/.knowledge/** + official page tree + metadata` 恢复出的可查询状态，但当前代码与正式 snapshot 不一致
 - **THEN** `query` MAY 返回可消费结果
 - **THEN** `query_trust` 与 `recommended_action` MUST 提醒调用方该结果处于恢复态或待更新态
 - **THEN** `provenance_summary` MUST 继续只描述命中来源，而不是把恢复态直接编码成 provenance

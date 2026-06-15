@@ -62,17 +62,17 @@ normal
 
 ## 4. 文档、规格与 fixture 口径同步
 
-- [ ] 4.1 更新 `.wiki/00-文档约定/00-边界与SSOT规则.md`、`.wiki/00-文档约定/01-页面模板.md` 和相关模块 / 对外方法页面，明确正式页面树规则。
-- [ ] 4.2 更新 `.docs/design/knowledge-to-wiki-projection-contract.md`、`.docs/design/governance-runtime-integration.md`、`.docs/design/specwiki-contract-closure.md` 中仍把 `.wiki/pages/**` 写作 runtime page projection 的旧口径。
-- [ ] 4.3 更新 capability specs、fixtures、测试快照和脚本文案，确保 `.wiki/pages/**` 只在“runtime surface 外目录”或历史上下文中出现。
-- [ ] 4.4 执行文档搜索复核，确认没有把 `.wiki/pages/**` 描述为新版写入目标、query 来源、restore 来源或 status 分支。
+- [x] 4.1 更新 `.wiki/00-文档约定/00-边界与SSOT规则.md`、`.wiki/00-文档约定/01-页面模板.md` 和相关模块 / 对外方法页面，明确正式页面树规则。
+- [x] 4.2 更新 `.docs/design/knowledge-to-wiki-projection-contract.md`、`.docs/design/governance-runtime-integration.md`、`.docs/design/specwiki-contract-closure.md` 中仍把 `.wiki/pages/**` 写作 runtime page projection 的旧口径。
+- [x] 4.3 更新 capability specs、fixtures、测试快照和脚本文案，确保 `.wiki/pages/**` 只在“runtime surface 外目录”或历史上下文中出现。
+- [x] 4.4 执行文档搜索复核，确认没有把 `.wiki/pages/**` 描述为新版写入目标、query 来源、restore 来源或 status 分支。
 
 ### CheckList
 
-- [ ] 单元测试或替代局部验证已覆盖
-- [ ] 相关验证通过
-- [ ] 本大 task 局部质量检查通过（按项目可用命令执行：lint / typecheck / static analysis / formatter check / compiler check 等）
-- [ ] 注释规范检查完成（参考 .wiki/02-开发指南/00-代码注释规范.md）
+- [x] 单元测试或替代局部验证已覆盖
+- [x] 相关验证通过
+- [x] 本大 task 局部质量检查通过（按项目可用命令执行：lint / typecheck / static analysis / formatter check / compiler check 等）
+- [x] 注释规范检查完成（参考 .wiki/02-开发指南/00-代码注释规范.md）
 
 ## 用例到任务映射
 

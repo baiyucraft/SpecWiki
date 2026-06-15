@@ -14,11 +14,11 @@ status: draft
 
 它补足三类问题：
 
-- `.wiki/.knowledge/**` 中的结构化知识如何投影为 `.wiki/pages/**/*.md`。
-- `.wiki/pages/**/*.md` 的人工编辑如何被允许或拒绝回写到 declared knowledge。
+- `.wiki/.knowledge/**` 中的结构化知识如何投影为正式可见 Wiki 页面树。
+- 正式可见 Wiki 页面树中的人工编辑如何被允许或拒绝回写到 declared knowledge。
 - `wiki.metadata.json` 如何记录 knowledge、page、section、source 和 runtime 状态之间的绑定。
 
-本文不改变目录归属：`.wiki/.knowledge/**` 是 knowledge truth，`.wiki/pages/**` 是 runtime page projection，`.wiki/wiki.metadata.json` 是绑定索引，`.wiki/.cache/**` 是可重建本地 cache。`.wiki/` 下的长期手写文档默认不是 runtime 自动投影目标，只有显式声明受管 section 时才参与同步或投影。
+本文采用当前页面树合同：`.wiki/.knowledge/**` 是 knowledge truth，正式可见 Wiki 页面树是 projection output / authoring surface，`.wiki/wiki.metadata.json` 是绑定索引，`.wiki/.cache/**` 是可重建本地 cache。正式可见 Wiki 页面树只包括 `.wiki/INDEX.md`、`.wiki/<栏目路径>/INDEX.md` 和 `.wiki/<栏目路径>/NN-主题.md`。`.wiki/pages/**` 位于 runtime surface 外，不作为写入、查询、恢复、status 或迁移目标。
 
 ## 核心原则
 
@@ -31,11 +31,11 @@ index graph
   -> knowledge
   -> projection plan
   -> page draft
-  -> .wiki/pages/**/*.md
+  -> official wiki page tree
   -> wiki.metadata.json
 ```
 
-`.wiki/pages/**/*.md` 不得反向成为 derived knowledge 的主真相。
+正式可见 Wiki 页面树不得反向成为 derived knowledge 的主真相。
 
 ### 2. 映射必须显式
 
@@ -226,14 +226,15 @@ projection_policy
 
 | Knowledge 类型 | 默认目标 |
 | --- | --- |
-| repo overview / architecture | `.wiki/pages/overview/**` |
-| module unit | `.wiki/pages/modules/**` |
-| public CLI / config / protocol | `.wiki/pages/public-contracts/**` |
-| convention / policy / workflow rule | `.wiki/pages/conventions/**` |
-| testing / scripts / acceptance | `.wiki/pages/development/**` |
+| repo overview | `.wiki/INDEX.md` |
+| architecture / system overview | `.wiki/00-项目总览/NN-主题.md` |
+| module unit | `.wiki/03-模块指南/NN-主题.md` 或 `.wiki/03-模块指南/<主题>/INDEX.md` |
+| public CLI / config / protocol | `.wiki/04-对外方法/NN-主题.md` |
+| convention / policy / workflow rule | `.wiki/00-文档约定/NN-主题.md` 或 `.wiki/02-开发指南/NN-主题.md` |
+| testing / scripts / acceptance | `.wiki/02-开发指南/NN-主题.md` |
 | governance summary / wiki-sync issue | 只投影摘要和引用，不复制 `.spec` 原文 |
 
-`.wiki/INDEX.md`、`.wiki/00-文档约定/**`、`.wiki/02-开发指南/**`、`.wiki/03-模块指南/**`、`.wiki/04-对外方法/**`、`.wiki/06-设计文档/**` 等长期手写 Wiki 页面是项目知识入口，不是默认 runtime 自动投影目标。后续如果需要让其中某个 section 受 runtime 管理，必须显式声明 section owner 与 metadata binding。
+`.wiki/INDEX.md`、栏目 `INDEX.md` 和 `NN-主题.md` 共同构成唯一正式页面树。已有人工维护页面默认是 authoring surface；只有显式声明 section owner 与 metadata binding 的 section 才允许被 runtime 更新或回写。
 
 路由不得只靠标题。必须至少消费：
 
@@ -295,7 +296,7 @@ projection_digest_ref
 metadata_patch
 ```
 
-`PageProjection` 写入 `.wiki/pages/**/*.md`，并同步更新 `wiki.metadata.json`。
+`PageProjection` 写入正式可见 Wiki 页面树，并同步更新 `wiki.metadata.json`。写入路径必须满足 `.wiki/INDEX.md`、`.wiki/<栏目路径>/INDEX.md` 或 `.wiki/<栏目路径>/NN-主题.md` 规则。
 
 ## Section Ownership
 
@@ -497,7 +498,7 @@ detect source/docs/spec changes
 `sync-pages` 是高级维护动作，用于把合法页面编辑回写到 knowledge。
 
 ```text
-read .wiki/pages/**/*.md
+read official wiki page tree
   -> compare metadata hashes
   -> locate changed sections
   -> classify section ownership
@@ -680,7 +681,7 @@ metadata stale/conflict reporting
 - `manual_unmanaged` section 永不被 runtime 覆盖。
 - `derived_managed` 和 `projection_static` section 漂移不会污染 declared / derived knowledge。
 - `.spec` 原文不会被复制进 `.wiki` 页面。
-- `.wiki/.cache/**` 缺失时，可从 `.wiki/.knowledge/** + .wiki/pages/** + wiki.metadata.json` 恢复 runtime 可消费状态。
+- `.wiki/.cache/**` 缺失时，可从 `.wiki/.knowledge/** + 正式可见 Wiki 页面树 + wiki.metadata.json` 恢复 runtime 可消费状态。
 
 ## Validation Gates
 
@@ -691,7 +692,7 @@ metadata stale/conflict reporting
 
 ### Restore Gate
 
-- 删除 `.wiki/.cache/**` 后，系统必须能从 `.wiki/.knowledge/** + .wiki/pages/** + wiki.metadata.json` 恢复可消费 runtime。
+- 删除 `.wiki/.cache/**` 后，系统必须能从 `.wiki/.knowledge/** + 正式可见 Wiki 页面树 + wiki.metadata.json` 恢复可消费 runtime。
 - 恢复后若当前源码与 snapshot 不一致，状态必须是 `stale` 或 `needs_update`，不得伪装为完整 ready。
 
 ### Sync Gate

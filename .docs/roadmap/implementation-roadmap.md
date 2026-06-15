@@ -137,7 +137,7 @@
 
 - 把最小正式知识产物写入 `.wiki/.knowledge/**`
 - SQLite 回到 cache / working state 角色
-- 形成 `.knowledge + pages + metadata + cache` 最小恢复闭环
+- 形成 `.knowledge + official page tree + metadata + cache` 最小恢复闭环
 
 建议最小落盘集：
 
@@ -316,7 +316,7 @@
 范围：
 
 - 收口 `init / status / sync / update / rebuild / query`
-- 收口 `.wiki/.knowledge + pages + wiki.metadata.json + .cache`
+- 收口 `.wiki/.knowledge + official page tree + wiki.metadata.json + .cache`
 - 收口 A 提交、B 拉取后的本地恢复链
 - 让 query 明确遵循 `index first -> knowledge -> page projection`
 - 暴露 `ready / stale / needs_update / conflict` 等状态

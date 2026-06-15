@@ -25,7 +25,7 @@ The goal of `v0.2.0` is a reliable first-pass repo map backed by a minimal forma
 
 - Windows x64 runtime support
 - public CLI actions: `init`, `status`, `update`, `query`, `sync`, `rebuild`
-- minimal formal knowledge runtime artifacts in `.wiki/.knowledge/**`, `.wiki/pages/**`, `wiki.metadata.json`, and recoverable `.wiki/.cache/**`
+- minimal formal knowledge runtime artifacts in `.wiki/.knowledge/**`, the official wiki page tree, `wiki.metadata.json`, and recoverable `.wiki/.cache/**`
 - knowledge runtime initialization and refresh
 - query routing through `index -> knowledge -> page fallback`
 - explicit page-writeback through `sync` and explicit full runtime rebuild through `rebuild`
@@ -171,8 +171,11 @@ In `v0.2.0`, the runtime artifacts you should rely on are:
 
 ```text
 .wiki/
+|- INDEX.md
+|- <section>/
+|  |- INDEX.md
+|  `- NN-topic.md
 |- .knowledge/
-|- pages/
 |- wiki.metadata.json
 `- .cache/
    `- wiki-cache.db

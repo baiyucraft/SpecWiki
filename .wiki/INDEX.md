@@ -9,7 +9,7 @@ owner: docs
 
 `spec-wiki` 构建 Repo Wiki Core + Agents 体系：扫描代码仓库，生成并持续维护 `.wiki/`，让人和 Agent 共享同一层项目知识。
 
-本次文档整理只更新长期文档层，不生成或更新 runtime 产物 `.wiki/pages/**`、`.wiki/.knowledge/**`、`.wiki/.cache/**` 或 `wiki.metadata.json`。完整初始化统一通过 `spec-wiki init` 进入；runtime 构建是该入口内部阶段，不再作为另一套用户初始化入口描述。
+本次文档整理只更新长期文档层，不生成或更新 runtime 产物 `.wiki/.knowledge/**`、`.wiki/.cache/**` 或 `wiki.metadata.json`。完整初始化统一通过 `spec-wiki init` 进入；runtime 构建是该入口内部阶段，不再作为另一套用户初始化入口描述。
 
 ## 一级目录
 
@@ -28,7 +28,7 @@ owner: docs
 - 代码、配置和测试是行为事实来源；Wiki 只组织长期知识、入口和维护说明。
 - `.spec/changes/**` 与 `.spec/archive/**` 保存 change artifact，不把 proposal、design、review 或测试报告原文复制到 Wiki。
 - `.wiki/` 保存稳定项目知识；临时探索、一次性验证和未确认假设不进入长期页。
-- runtime 产物 `.wiki/pages/**`、`.wiki/.knowledge/**`、`.wiki/.cache/**` 和 `wiki.metadata.json` 属于运行时分层，不与长期文档页混写。
+- runtime 产物 `.wiki/.knowledge/**`、`.wiki/.cache/**` 和 `wiki.metadata.json` 属于运行时分层；正式可见 Wiki 页面树由 `.wiki/INDEX.md`、栏目 `INDEX.md` 和 `NN-主题.md` 组成。
 - 同一事实只维护一处；次级页面用摘要和链接回到 SSOT。
 
 ```mermaid

@@ -38,7 +38,7 @@ flowchart LR
 ### 1. Workflow surface 已成立
 
 - `init / update / status / query / sync / rebuild` 已形成正式 workflow surface。
-- `.wiki/.knowledge/**`、`.wiki/pages/**`、`wiki.metadata.json`、`.wiki/.cache/**` 已进入公开 runtime contract。
+- `.wiki/.knowledge/**`、official page tree、`wiki.metadata.json`、`.wiki/.cache/**` 已进入公开 runtime contract。official page tree 只包括 `.wiki/INDEX.md`、`.wiki/<栏目路径>/INDEX.md` 和 `.wiki/<栏目路径>/NN-主题.md`。
 - `query` 已保持 `index -> knowledge -> page fallback` 路由口径。
 
 ### 2. `KnowledgeUnit` 最小合同已落地

@@ -73,6 +73,7 @@ governance、sync、rebuild、repair、trace 和 archive 都是场景触发能�
 ```
 
 `.wiki/pages/**` 不作为新版目标页面目录。
+当前阶段不考虑历史兼容性，因此 runtime 不迁移、不清理、不诊断、不查询 `.wiki/pages/**`，也不把它作为 status 分支或 debug route。
 
 ### 目录语义
 
@@ -93,16 +94,16 @@ governance、sync、rebuild、repair、trace 和 archive 都是场景触发能�
 
 ```text
 new runtime target: 禁止
-legacy import source: 允许
+legacy import source: 禁止
 compat write path: 禁止
 ```
 
 如果旧产物中存在 `.wiki/pages/**`：
 
 - `init / update / rebuild` 不再写入该目录。
-- migration dry-run 可以读取它并生成迁移报告。
-- 迁移后页面必须落到 `.wiki/INDEX.md`、栏目 `INDEX.md` 或 `NN-主题.md`。
-- metadata 不得同时把 `.wiki/pages/**` 和 `.wiki/**/*.md` 都视为正式 page truth。
+- runtime 不读取该目录。
+- runtime 不生成迁移报告、清理建议或 legacy 诊断。
+- metadata 不得把 `.wiki/pages/**` 视为正式 page truth。
 
 ### Legacy Read Policy
 
@@ -110,11 +111,11 @@ compat write path: 禁止
 
 ```text
 status
-  -> report legacy_pages_detected / migration_pending
+  -> 不报告 legacy_pages_detected / migration_pending
 
 query
   -> 默认不读取 `.wiki/pages/**`
-  -> 只有显式 debug / migration 模式才允许返回 legacy_page_debug_ref
+  -> 不提供 legacy page debug route
 
 update
   -> 不刷新 `.wiki/pages/**`
@@ -122,10 +123,10 @@ update
 
 rebuild
   -> 不从 `.wiki/pages/**` 重建正式 metadata
-  -> 可生成 migration report
+  -> 不生成 migration report
 ```
 
-legacy pages 不参与正式 page truth，不参与默认 query，不参与 projection readiness。它们只允许作为迁移输入或显式 legacy debug route。
+legacy pages 不参与正式 page truth，不参与 query，不参与 projection readiness，也不参与 migration、cleanup、diagnosis 或 status。
 
 ### Markdown 页面术语
 
@@ -510,7 +511,6 @@ route tag 语义：
 | `governance_summary_hit` | 命中治理派生摘要 |
 | `projection_ref` | 命中正式 Markdown projection 引用 |
 | `rendered_page_debug_fallback` | 降级读取页面正文 |
-| `legacy_page_debug_ref` | 显式 legacy / migration debug 模式命中旧 `.wiki/pages/**` |
 
 ### Readiness
 
@@ -805,7 +805,7 @@ repair marker
 | 文件 | 修正方向 |
 | --- | --- |
 | `specwiki-code-graph-index-design.md` | 已承接旧 graph-first 草案中的 code graph schema、phase DAG、raw captures、SymbolNode 和 upstream 借鉴 |
-| `knowledge-to-wiki-projection-contract.md` | 投影目标从 `.wiki/pages/**` 改为 `.wiki/**/*.md` 的唯一页面树，并排除 `.knowledge/.cache` 等 runtime 目录 |
+| `knowledge-to-wiki-projection-contract.md` | 投影目标从旧目录改为 `.wiki/**/*.md` 的唯一页面树，并排除 `.knowledge/.cache` 等 runtime 目录 |
 | `governance-runtime-integration.md` | 保留页面树决策，替换 `readable page truth` 为 `projection output / authoring surface` |
 | `specwiki-cli-unification.md` | 默认 help 收窄到 4 个主命令，治理命令通过场景触发 |
 | `.wiki/05-规格基线/**` | 后续通过 `.spec` change 同步正式 capability 口径 |

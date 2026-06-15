@@ -247,14 +247,14 @@ wiki-runtime    <- 依赖 wiki-model + wiki-index + wiki-knowledge
 
 ```text
 .wiki/
+├─ INDEX.md
+├─ <栏目>/
+│  ├─ INDEX.md
+│  └─ NN-主题.md
 ├─ .knowledge/
 │  ├─ declared/
 │  ├─ derived/
 │  └─ runtime/
-├─ pages/
-│  ├─ 项目概览.md
-│  ├─ 系统架构.md
-│  └─ ...
 ├─ wiki.metadata.json
 └─ .cache/
 ```
@@ -293,7 +293,7 @@ wiki-runtime    <- 依赖 wiki-model + wiki-index + wiki-knowledge
 
 - `wiki.metadata.json` hash 一致
 - `.wiki/.knowledge/declared/**` snapshot 一致
-- `.wiki/pages/**` 当前内容仍与 metadata 记录的 content hash 一致
+- 正式可见 Wiki 页面树当前内容仍与 metadata 记录的 content hash 一致
 
 ```mermaid
 flowchart LR
@@ -304,9 +304,9 @@ flowchart LR
     A -.不是 truth source.-> E
 ```
 
-### `.wiki/pages/`
+### 正式可见 Wiki 页面树
 
-这是正式 page 投影层。
+这是正式 page 投影层和 authoring surface。
 
 职责：
 
@@ -318,6 +318,8 @@ flowchart LR
 - page 是 projection，不是主本体
 - 不允许为了“看起来很全”而盲目增殖 page
 - 新知识默认先进入记录或摘要层，足够稳定再升级为 page
+- 页面路径只允许 `.wiki/INDEX.md`、`.wiki/<栏目路径>/INDEX.md` 和 `.wiki/<栏目路径>/NN-主题.md`
+- `.wiki/pages/**` 位于 runtime surface 外，不作为写入、恢复、query 或 status 目标
 
 ### `wiki.metadata.json`
 
@@ -346,7 +348,7 @@ flowchart LR
 原则：
 
 - 不是正式真相源
-- 应可由 `.knowledge + pages + wiki.metadata.json` 重建
+- 应可由 `.knowledge + 正式可见 Wiki 页面树 + wiki.metadata.json` 重建
 - 如果本地代码与上库状态不一致，恢复后应显式标记为 `stale` 或 `needs_update`
 
 ## 什么上库、什么不上库
@@ -354,7 +356,7 @@ flowchart LR
 上库：
 
 - `.wiki/.knowledge/**`
-- `.wiki/pages/**`
+- `.wiki/INDEX.md`、栏目 `INDEX.md` 与 `NN-主题.md`
 - `.wiki/wiki.metadata.json`
 
 不上库：
@@ -363,7 +365,7 @@ flowchart LR
 
 理由：
 
-- `.knowledge / pages / meta` 共同组成可共享、可审计、可恢复的正式产物
+- `.knowledge / 正式可见 Wiki 页面树 / meta` 共同组成可共享、可审计、可恢复的正式产物
 - `.cache` 只是本地派生层，应该始终可丢弃、可恢复
 
 ## Page Projection 策略
@@ -468,7 +470,7 @@ GitNexus 对当前系统的 query 演进有明确参考价值，但参考面主�
 不应把它直接当成：
 
 - `wiki-knowledge` 的知识组织模板
-- `.wiki/pages/**` 的页面语义模板
+- 正式可见 Wiki 页面树的页面语义模板
 - 当前 runtime query contract 的直接真相来源
 
 换句话说：
@@ -532,7 +534,7 @@ scan
 -> research
 -> compose
 -> assemble
--> write .knowledge / pages / meta / .cache
+-> write .knowledge / official page tree / meta / .cache
 ```
 
 ### `update`
@@ -595,13 +597,13 @@ detect affected facts
 场景：
 
 - A 用户执行 `init` 或 `update`
-- A 用户提交 `.wiki/.knowledge/`、`pages/`、`wiki.metadata.json`
+- A 用户提交 `.wiki/.knowledge/`、正式可见 Wiki 页面树、`wiki.metadata.json`
 - B 用户拉取代码，但本地没有 `.cache`
 
 期望流程：
 
 ```text
-read .knowledge + pages + meta
+read .knowledge + official page tree + meta
 -> rebuild local .cache
 -> verify current repo state
 -> mark ready / stale / needs_update
