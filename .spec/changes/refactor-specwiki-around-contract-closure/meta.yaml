@@ -7,6 +7,9 @@ multiChange:
     - id: refactor-specwiki-around-contract-closure-page-tree-contract
       order: 1
       dependsOn: []
+      archiveStatus: archived
+      archivedAt: 2026-06-16T01:49:05.455Z
+      archivedTo: .spec/archive/2026-06-16-refactor-specwiki-around-contract-closure-page-tree-contract
     - id: refactor-specwiki-around-contract-closure-truth-restore-snapshot
       order: 2
       dependsOn:

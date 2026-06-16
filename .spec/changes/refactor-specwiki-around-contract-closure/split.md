@@ -19,7 +19,7 @@
 - 目标: 统一新版用户可见 Wiki 页面树，停止把 `.wiki/pages/**` 作为 runtime 目标目录；旧目录不属于新版 runtime surface，不迁移、不清理、不诊断。
 - 依赖: 无。
 - 关键验收: `init / update / rebuild` 不再写 `.wiki/pages/**`；metadata、state、SQLite FTS、query fallback 和 restore 只消费正式页面树。
-- 归档状态: [ ] pending
+- 归档状态: [x] archived
 
 ### 2. refactor-specwiki-around-contract-closure-truth-restore-snapshot
 
