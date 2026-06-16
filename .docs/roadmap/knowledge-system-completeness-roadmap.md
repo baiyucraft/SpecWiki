@@ -34,17 +34,13 @@
 - query / sync / update / rebuild 语义清晰
 - 冲突与治理可承接
 
-## 当前 authoritative program
+## 历史 program 状态
 
-当前 authoritative 路线图不再用“8 组条件 + 4 phase”做主框架，而是直接使用 `iteration-12-9` umbrella 已冻结的 7 个 capability。原因很简单：
+这份路线图记录的是 `iteration-12-9` 期间冻结过的 knowledge system capability program。它现在只作为历史阅读镜像保留，不再是当前 active implementation queue，也不再作为 program-level authoritative source。
 
-- capability 更适合作为 UniSpec child change 的实施颗粒度
-- capability 能直接绑定 formal object、truth source、workflow 与 artifact layer
-- capability 比“phase 愿景”更容易验收和归档
+当前 authoritative program 已切换到 `.spec/changes/refactor-specwiki-around-contract-closure/`，旧 `iteration-12-9` / `iteration-12-10` active changes 已被整理为历史路线材料或被当前 contract-closure child changes 吸收。
 
-因此，这份文档以下内容都以 7 capability program 为准。
-
-这份 `.docs` 文档只承担阅读镜像角色；program-level authoritative source 仍然是 `.spec/changes/iteration-12-9-knowledge-system-completeness/**`。
+后续若继续推进其中某项能力，必须先进入当前 contract-closure 主线或新的 `.spec/changes/**`，不能直接复活旧 `iteration-*` change。
 
 ## 当前状态映射
 
@@ -62,7 +58,7 @@
 - provider-backed 大仓库 full compose 稳定性
 - 全局质量评价与治理闭环
 
-## Capability Program
+## 历史 Capability Program
 
 ```mermaid
 flowchart TD
@@ -145,9 +141,9 @@ flowchart LR
 | Answer Assembly Contract | `AnswerEnvelope`、supporting refs | query transport / host answer surface | answer substrate 在 restore 后仍可消费 | 样本仓库验证 formal inputs 主导 | batch/lifecycle 只保 route baseline | `formal/schema + workflow + artifact/recovery` required now；`storybook + dagger` required now；`19 projects` inherited from baseline guard / later-stage quality gate |
 | Engineering Hardening / Quality Gates | gate summary、formal gates、matrix | scripts / reports / closeout consumption | report snapshot、summary reuse | `collect-reference-project-reports.mjs storybook dagger` 是 primary gate | `run-test-projects.mjs` + `test-wiki-lifecycle.mjs` 是 baseline guard | primary gate + baseline guard required now；`19 projects` becomes current gate only in this capability |
 
-## 当前最值得做的 program-level动作
+## 历史 program-level 动作
 
-如果只看收口顺序，当前最关键的是：
+这组动作是旧 program 的历史收口建议，不再代表当前执行队列：
 
 1. 先把 7 个 child changes 全部实现并保持与 umbrella 矩阵一致
 2. 再按 primary gate / baseline guard 收 release evidence

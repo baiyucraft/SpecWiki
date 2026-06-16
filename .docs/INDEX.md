@@ -21,7 +21,7 @@
 | [design/specwiki-contract-closure.md](./design/specwiki-contract-closure.md) | 新版 SpecWiki 页面树、truth 分层、恢复、query、governance 隔离和产品体验收口合同 | 作为后续实现拆分 change 的上位草案 |
 | [research/karpathy-llm-wiki-analysis.md](./research/karpathy-llm-wiki-analysis.md) | 外部理念分析 | 只提炼理念和不采用边界 |
 | [roadmap/implementation-roadmap.md](./roadmap/implementation-roadmap.md) | 3.0 实施路线 | 保留为阶段路线参考 |
-| [roadmap/knowledge-system-completeness-roadmap.md](./roadmap/knowledge-system-completeness-roadmap.md) | knowledge system roadmap | 以对应 `.spec/changes/**` 为 authoritative source |
+| [roadmap/knowledge-system-completeness-roadmap.md](./roadmap/knowledge-system-completeness-roadmap.md) | knowledge system 历史路线镜像 | 当前 authoritative source 已切换到 contract-closure 主线 |
 | [release/v0-2-0.md](./release/v0-2-0.md) | v0.2.0 版本说明 | 保留为历史发布面记录 |
 | [release/v0-2-0-knowledge-runtime-gaps.md](./release/v0-2-0-knowledge-runtime-gaps.md) | v0.2.0 缺口分析 | 保留为历史判断依据 |
 | [release/v0-2-0-release-gap-closure.md](./release/v0-2-0-release-gap-closure.md) | 发布收口过程 | 不全文沉淀到 Wiki |
