@@ -1,5 +1,5 @@
 id: formalize-declared-authoring-contract
-stage: tasks
+stage: verification
 deliveryShape: single-change
 artifacts:
   proposal:

@@ -14,10 +14,16 @@ multiChange:
       order: 2
       dependsOn:
         - refactor-specwiki-around-contract-closure-page-tree-contract
+      archiveStatus: archived
+      archivedAt: 2026-06-16T17:54:49.601Z
+      archivedTo: .spec/archive/2026-06-16-refactor-specwiki-around-contract-closure-truth-restore-snapshot
     - id: refactor-specwiki-around-contract-closure-projection-writeback-boundaries
       order: 3
       dependsOn:
         - refactor-specwiki-around-contract-closure-truth-restore-snapshot
+      archiveStatus: archived
+      archivedAt: 2026-06-17T05:02:04.249Z
+      archivedTo: .spec/archive/2026-06-17-refactor-specwiki-around-contract-closure-projection-writeback-boundaries
     - id: refactor-specwiki-around-contract-closure-query-route-readiness
       order: 4
       dependsOn:

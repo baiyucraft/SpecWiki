@@ -51,8 +51,8 @@ TBD - created by archiving change iteration-12-2-knowledge-runtime-artifact-mini
 - **THEN** 系统 MUST 返回显式 blocker 或 `needs_update`
 - **THEN** 系统 MUST NOT 静默退回 full `init` 并把该结果标记为 restore 成功
 
-### Requirement: 最小正式知识产物集不得混入工作态缓存与 declared lifecycle
-系统 MUST 让 `.wiki/.knowledge/**` 保持最小正式知识产物定位。本轮正式 contract MUST 只覆盖 `derived/**` 与 `runtime/**` 的最小对象集；`declared/**` MAY 保留为空目录或占位，但 MUST NOT 在本轮被定型为正式 lifecycle contract。`page_drafts`、`llm_cache`、临时 session state、工作中的 compose artifact 和 declared knowledge authoring 状态 MUST NOT 在本轮进入 `.wiki/.knowledge/**` 的正式 contract。
+### Requirement: 最小正式知识产物集不得混入工作态缓存
+系统 MUST 让 `.wiki/.knowledge/**` 保持正式知识产物定位。`declared/**`、`derived/**` 与 `runtime/**` 都属于正式 snapshot 的组成部分，但 `page_drafts`、`llm_cache`、临时 session state、工作中的 compose artifact 和其它本地工作态缓存 MUST NOT 进入 `.wiki/.knowledge/**`。
 
 #### Scenario: 工作态缓存继续留在 `.cache`
 - **WHEN** 系统持久化 `page_drafts`、`llm_cache`、临时 session state 或其它工作态缓存
@@ -73,7 +73,7 @@ TBD - created by archiving change iteration-12-2-knowledge-runtime-artifact-mini
 - **THEN** 系统 MUST NOT 仅靠 cache 缺失间接表达该状态
 
 ### Requirement: 正式知识产物必须补充 declared 与 health artifacts
-系统 MUST 在 `.wiki/.knowledge/**` 的最小正式产物集中补充 `declared/**` 与 health artifacts，而不再只稳定承诺 `derived/**` 与 `runtime/**`。最小补充对象 MUST 至少包括：结构化 `declared records` 与可供 `status` / `query` / `sync` 诊断消费的 `health signals` 摘要。
+系统 MUST 在 `.wiki/.knowledge/**` 的正式产物集中补充 `declared/**` 与 health artifacts，而不再只稳定承诺 `derived/**` 与 `runtime/**`。最小补充对象 MUST 至少包括：结构化 declared records、declared snapshot identity、declared conflict / lifecycle diagnostics，以及可供 `status` / `query` / `sync` 消费的 health signals 摘要。
 
 #### Scenario: declared artifact 成为正式 snapshot 组成部分
 - **WHEN** 仓库中存在至少一条正式 declared record

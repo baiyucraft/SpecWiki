@@ -1,5 +1,5 @@
 id: refactor-specwiki-around-contract-closure-truth-restore-snapshot
-stage: proposal
+stage: verification
 deliveryShape: single-change
 multiChange:
   role: child
@@ -9,6 +9,16 @@ multiChange:
     - refactor-specwiki-around-contract-closure-page-tree-contract
 artifacts:
   proposal:
+    status: present
+  design:
+    status: present
+  cases:
+    status: present
+  tasks:
+    status: present
+  review:
+    status: present
+  verification:
     status: present
   metadata:
     status: present
