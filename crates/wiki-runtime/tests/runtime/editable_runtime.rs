@@ -5,8 +5,14 @@
 use std::fs;
 
 use tempfile::tempdir;
-use wiki_runtime::storage::knowledge_artifacts::{load_conflict_records, load_knowledge_artifacts};
+use wiki_model::domain::knowledge_artifact::{
+    DeclaredKnowledgeRecord, DeclaredKnowledgeRecordStatus, DeclaredKnowledgeRelationKind,
+};
+use wiki_runtime::storage::knowledge_artifacts::{
+    load_conflict_records, load_knowledge_artifacts, restore_runtime_cache_from_artifacts,
+};
 use wiki_runtime::storage::state_store::read_state;
+use wiki_runtime::storage::wiki_fs::resolve_page_path;
 use wiki_runtime::workflows::{
     init::run_init, rebuild::run_rebuild, sync::run_sync, update::run_update,
 };
@@ -26,6 +32,24 @@ const DECLARED_QUERY_BLOCK: &str = concat!(
 const DECLARED_RUNTIME_CONFLICT_BLOCK: &str = concat!(
     "\n<!-- wiki:declared id=repo-runtime-contract-v2 kind=policy scope=repo status=active source=manual -->\n",
     "当前仓库必须先写 formal artifact，且由另一条并行 policy 再次声明。\n",
+    "<!-- wiki:declared:end -->\n"
+);
+
+const DECLARED_LIFECYCLE_BLOCKS: &str = concat!(
+    "\n<!-- wiki:declared id=runtime-active kind=policy scope=module:runtime status=active source=manual -->\n",
+    "runtime active contract.\n",
+    "<!-- wiki:declared:end -->\n",
+    "\n<!-- wiki:declared id=runtime-deprecated kind=policy scope=module:runtime-deprecated status=deprecated deprecated=true source=manual -->\n",
+    "runtime deprecated contract.\n",
+    "<!-- wiki:declared:end -->\n",
+    "\n<!-- wiki:declared id=runtime-old kind=policy scope=module:runtime status=superseded replaced_by=runtime-active source=manual -->\n",
+    "runtime old contract.\n",
+    "<!-- wiki:declared:end -->\n",
+    "\n<!-- wiki:declared id=runtime-legacy kind=policy scope=module:runtime-supersedes status=active source=manual -->\n",
+    "runtime legacy contract.\n",
+    "<!-- wiki:declared:end -->\n",
+    "\n<!-- wiki:declared id=runtime-new kind=policy scope=module:runtime-supersedes status=replaced supersedes=runtime-legacy source=manual -->\n",
+    "runtime new contract.\n",
     "<!-- wiki:declared:end -->\n"
 );
 
@@ -51,10 +75,12 @@ fn insert_user_section_after_init(repo_root: &std::path::Path) -> String {
 
 /// 辅助：在第一个 managed section 结束前插入合法 declared block。
 fn insert_declared_block_into_first_managed_section(repo_root: &std::path::Path) {
+    mark_first_managed_section_declared(repo_root);
     set_declared_blocks_in_first_managed_section(repo_root, DECLARED_RUNTIME_BLOCK);
 }
 
 fn insert_two_declared_blocks_into_first_managed_section(repo_root: &std::path::Path) {
+    mark_first_managed_section_declared(repo_root);
     set_declared_blocks_in_first_managed_section(
         repo_root,
         &format!("{DECLARED_RUNTIME_BLOCK}{DECLARED_QUERY_BLOCK}"),
@@ -62,6 +88,7 @@ fn insert_two_declared_blocks_into_first_managed_section(repo_root: &std::path::
 }
 
 fn insert_conflicting_declared_blocks_into_first_managed_section(repo_root: &std::path::Path) {
+    mark_first_managed_section_declared(repo_root);
     set_declared_blocks_in_first_managed_section(
         repo_root,
         &format!("{DECLARED_RUNTIME_BLOCK}{DECLARED_RUNTIME_CONFLICT_BLOCK}"),
@@ -90,6 +117,35 @@ fn set_declared_blocks_in_first_managed_section(
     declared_blocks: &str,
 ) {
     let overview_path = repo_root.join(".wiki/INDEX.md");
+    set_declared_blocks_in_first_managed_section_path(overview_path.as_path(), declared_blocks);
+}
+
+fn set_declared_blocks_in_first_managed_section_path(
+    page_path: &std::path::Path,
+    declared_blocks: &str,
+) {
+    mark_first_managed_section_declared_path(page_path);
+    let content = fs::read_to_string(page_path).unwrap();
+    let marker = "<!-- wiki:managed:end";
+    let pos = content
+        .find(marker)
+        .expect("should have managed end marker");
+
+    let mut new_content = content[..pos]
+        .replace(DECLARED_RUNTIME_BLOCK, "")
+        .replace(DECLARED_RUNTIME_CONFLICT_BLOCK, "")
+        .replace(DECLARED_QUERY_BLOCK, "")
+        .replace(DECLARED_LIFECYCLE_BLOCKS, "");
+    new_content.push_str(declared_blocks);
+    new_content.push_str(&content[pos..]);
+    fs::write(page_path, &new_content).unwrap();
+}
+
+fn set_declared_blocks_in_first_managed_section_without_owner_change(
+    repo_root: &std::path::Path,
+    declared_blocks: &str,
+) {
+    let overview_path = repo_root.join(".wiki/INDEX.md");
     let content = fs::read_to_string(&overview_path).unwrap();
     let marker = "<!-- wiki:managed:end";
     let pos = content
@@ -103,6 +159,44 @@ fn set_declared_blocks_in_first_managed_section(
     new_content.push_str(declared_blocks);
     new_content.push_str(&content[pos..]);
     fs::write(&overview_path, &new_content).unwrap();
+}
+
+fn mark_first_managed_section_declared(repo_root: &std::path::Path) {
+    let overview_path = repo_root.join(".wiki/INDEX.md");
+    mark_first_managed_section_declared_path(overview_path.as_path());
+}
+
+fn mark_first_managed_section_declared_path(page_path: &std::path::Path) {
+    let content = fs::read_to_string(page_path).unwrap();
+    let marker = "<!-- wiki:managed:start";
+    let start = content
+        .find(marker)
+        .expect("should have managed start marker");
+    let end = content[start..].find('\n').unwrap() + start;
+    let line = &content[start..end];
+    let declared_line = line.replace("owner=derived_managed", "owner=declared_managed");
+    if line == declared_line {
+        assert!(
+            line.contains("owner=declared_managed"),
+            "first managed section should be derived or already declared"
+        );
+        return;
+    }
+
+    let mut new_content = content[..start].to_string();
+    new_content.push_str(&declared_line);
+    new_content.push_str(&content[end..]);
+    fs::write(page_path, &new_content).unwrap();
+}
+
+fn declared_record<'a>(
+    records: &'a [DeclaredKnowledgeRecord],
+    authoring_id: &str,
+) -> &'a DeclaredKnowledgeRecord {
+    records
+        .iter()
+        .find(|record| record.authoring_id == authoring_id)
+        .unwrap_or_else(|| panic!("declared record {authoring_id} should exist"))
 }
 
 /// 辅助：同时注入合法 declared block 和非法 managed 正文漂移。
@@ -350,6 +444,37 @@ fn sync_classifies_valid_declared_block_as_declared_writeback() {
 }
 
 #[test]
+fn sync_rejects_declared_block_inside_derived_section() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    set_declared_blocks_in_first_managed_section_without_owner_change(
+        repo_root,
+        DECLARED_RUNTIME_BLOCK,
+    );
+
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"],
+        "illegal_drift",
+        "warnings = {:?}, sync = {:?}",
+        sync_result.warnings,
+        sync_json
+    );
+    assert!(sync_result
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("不允许 declared writeback")));
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert!(artifacts.declared_records.is_empty());
+}
+
+#[test]
 fn sync_generates_conflict_artifact_for_parallel_active_declared() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
@@ -468,6 +593,62 @@ fn sync_prioritizes_illegal_drift_over_declared_writeback() {
 }
 
 #[test]
+fn sync_keeps_page_level_atomicity_while_unrelated_page_commits() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+
+    let state = read_state(repo_root).unwrap();
+    let unrelated_page = state
+        .pages
+        .iter()
+        .find(|page| page.path != "INDEX.md")
+        .expect("fixture should generate a second page");
+    let unrelated_page_id = unrelated_page.page_id.clone();
+    let unrelated_path = unrelated_page.path.clone();
+
+    inject_declared_block_and_managed_drift(repo_root);
+    let unrelated_page_path = resolve_page_path(repo_root, &unrelated_path);
+    set_declared_blocks_in_first_managed_section_path(
+        unrelated_page_path.as_path(),
+        DECLARED_QUERY_BLOCK,
+    );
+
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+    let outcomes = sync_json["page_outcomes"].as_array().unwrap();
+    assert_eq!(outcomes.len(), 2, "sync = {sync_json:?}");
+
+    let overview = outcomes
+        .iter()
+        .find(|outcome| {
+            outcome["path"]
+                .as_str()
+                .map(|path| path.ends_with("INDEX.md"))
+                .unwrap_or(false)
+        })
+        .expect("overview outcome should exist");
+    let unrelated = outcomes
+        .iter()
+        .find(|outcome| outcome["path"] == unrelated_path)
+        .expect("unrelated outcome should exist");
+
+    assert_eq!(overview["result_kind"], "illegal_drift");
+    assert_eq!(unrelated["result_kind"], "declared_writeback");
+    assert_eq!(unrelated["page_id"], unrelated_page_id);
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(artifacts.declared_records.len(), 1);
+    assert_eq!(
+        artifacts.declared_records[0].authoring_id,
+        "marker:repo-query-contract"
+    );
+    assert_eq!(artifacts.declared_records[0].page_id, unrelated_page_id);
+}
+
+#[test]
 fn sync_keeps_previous_conflict_snapshot_when_illegal_drift_happens_after_conflict() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
@@ -518,15 +699,15 @@ fn sync_prunes_removed_declared_records_after_full_delete() {
 
     fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
     run_init(repo_root).unwrap();
-    let original_overview = fs::read_to_string(repo_root.join(".wiki/INDEX.md")).unwrap();
     insert_declared_block_into_first_managed_section(repo_root);
+    let declared_owner_overview = fs::read_to_string(repo_root.join(".wiki/INDEX.md")).unwrap();
     run_sync(repo_root).unwrap();
 
     remove_all_declared_blocks_from_first_managed_section(repo_root);
     let removed_overview = fs::read_to_string(repo_root.join(".wiki/INDEX.md")).unwrap();
     assert_eq!(
-        removed_overview, original_overview,
-        "removing declared blocks should restore original page content"
+        removed_overview, declared_owner_overview.replace(DECLARED_RUNTIME_BLOCK, ""),
+        "removing declared blocks should preserve declared section ownership and restore section body"
     );
     let sync_result = run_sync(repo_root).unwrap();
     let sync_json = serde_json::to_value(&sync_result).unwrap();
@@ -633,6 +814,7 @@ fn sync_rejects_same_scope_duplicate_records_without_explicit_ids() {
 
     fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
     run_init(repo_root).unwrap();
+    mark_first_managed_section_declared(repo_root);
 
     let overview_path = repo_root.join(".wiki/INDEX.md");
     let content = fs::read_to_string(&overview_path).unwrap();
@@ -667,4 +849,93 @@ fn sync_rejects_same_scope_duplicate_records_without_explicit_ids() {
         .any(|warning| warning.contains("authoring identity 冲突")));
     let artifacts = load_knowledge_artifacts(repo_root).unwrap();
     assert!(artifacts.declared_records.is_empty());
+}
+
+#[test]
+fn sync_materializes_declared_lifecycle_relations_from_managed_blocks() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    mark_first_managed_section_declared(repo_root);
+    set_declared_blocks_in_first_managed_section(repo_root, DECLARED_LIFECYCLE_BLOCKS);
+
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+
+    assert_eq!(
+        sync_json["page_outcomes"][0]["result_kind"],
+        "declared_writeback"
+    );
+    assert_eq!(
+        sync_json["page_outcomes"][0]["recommended_action"],
+        "update"
+    );
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(artifacts.declared_records.len(), 5);
+
+    let active = declared_record(&artifacts.declared_records, "marker:runtime-active");
+    assert_eq!(active.status, DeclaredKnowledgeRecordStatus::Active);
+    assert!(active.relations.is_empty());
+    assert_eq!(active.scope.canonical_key(), "module:runtime");
+
+    let deprecated = declared_record(&artifacts.declared_records, "marker:runtime-deprecated");
+    assert_eq!(deprecated.status, DeclaredKnowledgeRecordStatus::Deprecated);
+    assert_eq!(deprecated.relations.len(), 1);
+    assert_eq!(
+        deprecated.relations[0].relation_kind,
+        DeclaredKnowledgeRelationKind::Deprecated
+    );
+    assert!(deprecated.relations[0].target_record_ref.is_none());
+
+    let old = declared_record(&artifacts.declared_records, "marker:runtime-old");
+    assert_eq!(old.status, DeclaredKnowledgeRecordStatus::Superseded);
+    assert_eq!(old.relations.len(), 1);
+    assert_eq!(
+        old.relations[0].relation_kind,
+        DeclaredKnowledgeRelationKind::ReplacedBy
+    );
+    assert_eq!(
+        old.relations[0].target_record_ref.as_deref(),
+        Some("marker:runtime-active")
+    );
+
+    let legacy = declared_record(&artifacts.declared_records, "marker:runtime-legacy");
+    assert_eq!(legacy.status, DeclaredKnowledgeRecordStatus::Active);
+    assert!(legacy.relations.is_empty());
+
+    let new = declared_record(&artifacts.declared_records, "marker:runtime-new");
+    assert_eq!(new.status, DeclaredKnowledgeRecordStatus::Replaced);
+    assert_eq!(new.relations.len(), 1);
+    assert_eq!(
+        new.relations[0].relation_kind,
+        DeclaredKnowledgeRelationKind::Supersedes
+    );
+    assert_eq!(
+        new.relations[0].target_record_ref.as_deref(),
+        Some("marker:runtime-legacy")
+    );
+
+    fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
+    assert!(restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
+
+    let restored = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(restored.declared_records.len(), 5);
+    let restored_old = declared_record(&restored.declared_records, "marker:runtime-old");
+    assert_eq!(
+        restored_old.status,
+        DeclaredKnowledgeRecordStatus::Superseded
+    );
+    assert_eq!(
+        restored_old.relations[0].target_record_ref.as_deref(),
+        Some("marker:runtime-active")
+    );
+    let restored_new = declared_record(&restored.declared_records, "marker:runtime-new");
+    assert_eq!(restored_new.status, DeclaredKnowledgeRecordStatus::Replaced);
+    assert_eq!(
+        restored_new.relations[0].target_record_ref.as_deref(),
+        Some("marker:runtime-legacy")
+    );
 }

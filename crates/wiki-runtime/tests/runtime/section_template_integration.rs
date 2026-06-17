@@ -1,11 +1,11 @@
 use wiki_knowledge::domain::compose::{ComposeSectionDraft, DiagramDraft, PageDraft};
 use wiki_knowledge::domain::research::SourceCitation;
-use wiki_knowledge::PlannedPage;
+use wiki_knowledge::PagePlan;
 use wiki_runtime::domain::context::PageContext;
 use wiki_runtime::generation::renderer::{render_page_bundle, render_page_draft};
 
-fn planned_page(page_type: &str, title: &str, path: &str) -> PlannedPage {
-    PlannedPage {
+fn planned_page(page_type: &str, title: &str, path: &str) -> PagePlan {
+    PagePlan {
         id: format!("page:{path}"),
         title: title.to_string(),
         relative_path: path.to_string(),

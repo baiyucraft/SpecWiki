@@ -81,7 +81,7 @@ fn plan_pages(
     repo_ctx: &wiki_knowledge::RepoContext,
     mod_ctxs: &[wiki_knowledge::ModuleContext],
     steering: &SteeringConfig,
-) -> Vec<wiki_knowledge::PlannedPage> {
+) -> Vec<wiki_knowledge::PagePlan> {
     let repo_root = Path::new(&report.root);
     let parsed_symbols = wiki_index::symbols::parse_symbols(repo_root, report).unwrap();
     let resolved_graph = resolve_symbol_graph(repo_root, report, &parsed_symbols).unwrap();
@@ -102,8 +102,8 @@ fn plan_pages(
 }
 
 fn first_module_page<'a>(
-    pages: &'a [wiki_knowledge::PlannedPage],
-) -> &'a wiki_knowledge::PlannedPage {
+    pages: &'a [wiki_knowledge::PagePlan],
+) -> &'a wiki_knowledge::PagePlan {
     pages
         .iter()
         .find(|page| page.page_type == "module")
@@ -111,8 +111,8 @@ fn first_module_page<'a>(
 }
 
 fn storybook_addons_page<'a>(
-    pages: &'a [wiki_knowledge::PlannedPage],
-) -> &'a wiki_knowledge::PlannedPage {
+    pages: &'a [wiki_knowledge::PagePlan],
+) -> &'a wiki_knowledge::PagePlan {
     pages
         .iter()
         .find(|page| page.relative_path == "插件生态/addons.md")
@@ -125,7 +125,7 @@ fn storybook_addons_page<'a>(
         .expect("storybook addons page should exist")
 }
 
-fn storybook_family_page(pages: &[wiki_knowledge::PlannedPage]) -> wiki_knowledge::PlannedPage {
+fn storybook_family_page(pages: &[wiki_knowledge::PagePlan]) -> wiki_knowledge::PagePlan {
     let mut page = storybook_addons_page(pages).clone();
     page.page_type = "family-index".to_string();
     page

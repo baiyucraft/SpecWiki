@@ -1,97 +1,183 @@
 //! managed section 内核负责页面级 parse / merge。
-//! 它定义 marker 协议、区段类型、解析模式和合并计划，
+//! 它定义 marker 协议、区段类型、解析诊断和合并计划，
 //! 供 sync / update / rebuild 共享同一套页面语义。
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use wiki_index::fingerprint::fingerprint_bytes;
+use wiki_model::domain::projection::{SectionBinding, SectionOwnership, SyncResultKind};
 
 // ---------------------------------------------------------------------------
 // Marker 协议常量
 // ---------------------------------------------------------------------------
 
-/// managed section 开始标记前缀。
 pub const MARKER_START_PREFIX: &str = "<!-- wiki:managed:start";
-/// managed section 结束标记前缀。
 pub const MARKER_END_PREFIX: &str = "<!-- wiki:managed:end";
-/// marker 协议当前版本号。
-pub const MARKER_VERSION: u32 = 1;
+pub const MARKER_VERSION: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // 区段类型
 // ---------------------------------------------------------------------------
 
-/// 页面中的一个区段，可以是 runtime 托管区段或用户手写区段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PageBlock {
-    /// runtime 托管区段，由生成器产出并以 marker 包裹。
     Managed(ManagedSectionBlock),
-    /// 用户手写区段，位于 managed blocks 之间。
     User(UserSectionBlock),
 }
 
-/// runtime 托管区段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManagedSectionBlock {
-    /// 稳定 section ID，与 state / cache 对齐。
     pub section_id: String,
-    /// section 展示标题。
+    pub owner_kind: SectionOwnership,
     pub title: String,
-    /// marker 协议版本。
     pub version: u32,
-    /// marker 之间的完整 Markdown 正文（不含 marker 行本身）。
     pub body: String,
+    #[serde(default)]
+    pub knowledge_refs: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub input_hash: String,
+    #[serde(default)]
+    pub content_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_content_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_digest_ref: Option<String>,
 }
 
-/// 用户手写区段。
+impl ManagedSectionBlock {
+    pub fn generated(section_id: String, title: String, body: String) -> Self {
+        let body_hash = content_hash(&body);
+        Self {
+            section_id,
+            owner_kind: SectionOwnership::DerivedManaged,
+            title,
+            version: MARKER_VERSION,
+            body,
+            knowledge_refs: Vec::new(),
+            source_refs: Vec::new(),
+            input_hash: String::new(),
+            content_hash: body_hash.clone(),
+            generated_content_hash: Some(body_hash),
+            projection_digest_ref: None,
+        }
+    }
+
+    pub fn section_binding(&self) -> SectionBinding {
+        SectionBinding {
+            section_id: self.section_id.clone(),
+            owner_kind: Some(self.owner_kind),
+            knowledge_refs: self.knowledge_refs.clone(),
+            source_refs: self.source_refs.clone(),
+            input_hash: self.input_hash.clone(),
+            content_hash: self.content_hash.clone(),
+            projection_status: Default::default(),
+            projection_digest_ref: self.projection_digest_ref.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserSectionBlock {
-    /// 运行时分配的临时 ID，仅用于当次 merge 的锚点引用。
     pub id: String,
-    /// 用户区段的完整 Markdown 正文。
     pub body: String,
-    /// 该 user section 前方最近的 managed section ID。
     pub anchor_after_section_id: Option<String>,
-    /// 该 user section 后方最近的 managed section ID。
     pub anchor_before_section_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SectionBindingIndex {
+    bindings: BTreeMap<String, SectionBinding>,
+}
+
+impl SectionBindingIndex {
+    pub fn from_bindings(bindings: impl IntoIterator<Item = SectionBinding>) -> Self {
+        Self {
+            bindings: bindings
+                .into_iter()
+                .map(|binding| (binding.section_id.clone(), binding))
+                .collect(),
+        }
+    }
+
+    pub fn from_blocks(blocks: &[ManagedSectionBlock]) -> Self {
+        Self::from_bindings(blocks.iter().map(ManagedSectionBlock::section_binding))
+    }
+
+    pub fn get(&self, section_id: &str) -> Option<&SectionBinding> {
+        self.bindings.get(section_id)
+    }
 }
 
 // ---------------------------------------------------------------------------
 // 解析模式与解析结果
 // ---------------------------------------------------------------------------
 
-/// 页面解析模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageParseMode {
-    /// 页面包含 managed marker，直接按 marker 解析。
     ManagedMarkers,
-    /// legacy 页面无 marker，按已知 section 标题做 best-effort 迁移。
-    LegacyHeadings,
+    UnmanagedOnly,
 }
 
-/// 页面解析结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageParseDiagnosticKind {
+    MarkerMissing,
+    MarkerMalformed,
+    MarkerMissingId,
+    MarkerMissingOwner,
+    MarkerVersionUnsupported,
+    MarkerEndMismatch,
+    MetadataBindingMismatch,
+    HashMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageParseDiagnostic {
+    pub kind: PageParseDiagnosticKind,
+    pub section_id: Option<String>,
+    pub message: String,
+}
+
+impl PageParseDiagnostic {
+    fn new(
+        kind: PageParseDiagnosticKind,
+        section_id: Option<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            section_id,
+            message: message.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ParsedWikiPage {
-    /// 页面一级标题（`# xxx`），视为 runtime 托管内容。
     pub title: String,
-    /// 按文件顺序排列的区段序列。
     pub blocks: Vec<PageBlock>,
-    /// 本次解析使用的模式。
     pub parse_mode: PageParseMode,
-    /// 解析过程中产生的警告信息。
     pub warnings: Vec<String>,
+    pub diagnostics: Vec<PageParseDiagnostic>,
 }
 
-// ---------------------------------------------------------------------------
-// 合并计划
-// ---------------------------------------------------------------------------
+impl ParsedWikiPage {
+    pub fn managed_blocks(&self) -> Vec<&ManagedSectionBlock> {
+        self.blocks
+            .iter()
+            .filter_map(|block| match block {
+                PageBlock::Managed(managed) => Some(managed),
+                PageBlock::User(_) => None,
+            })
+            .collect()
+    }
+}
 
-/// 页面合并计划，描述如何把新生成的 managed sections 与已有 user sections 重新组装。
 #[derive(Debug, Clone)]
 pub struct PageMergePlan {
-    /// 合并后的最终区段序列。
     pub blocks: Vec<PageBlock>,
-    /// 合并过程中产生的警告信息（如锚点丢失）。
     pub warnings: Vec<String>,
 }
 
@@ -99,39 +185,45 @@ pub struct PageMergePlan {
 // Marker 渲染
 // ---------------------------------------------------------------------------
 
-/// 把一个 managed section 渲染成带 marker 的 Markdown 片段。
 pub fn render_managed_block(section_id: &str, title: &str, body: &str) -> String {
+    render_managed_section_block(&ManagedSectionBlock::generated(
+        section_id.to_string(),
+        title.to_string(),
+        body.to_string(),
+    ))
+}
+
+fn render_managed_section_block(block: &ManagedSectionBlock) -> String {
     let start = format!(
-        "{} id={} title=\"{}\" version={} -->",
-        MARKER_START_PREFIX, section_id, title, MARKER_VERSION
+        "{} id={} owner={} title=\"{}\" version={} knowledge=\"{}\" source=\"{}\" input-hash={} content-hash={} generated-content-hash={} projection=\"{}\" -->",
+        MARKER_START_PREFIX,
+        block.section_id,
+        block.owner_kind.as_str(),
+        block.title,
+        block.version,
+        block.knowledge_refs.join(","),
+        block.source_refs.join(","),
+        block.input_hash,
+        block.content_hash,
+        block.generated_content_hash.as_deref().unwrap_or_default(),
+        block.projection_digest_ref.as_deref().unwrap_or_default()
     );
-    let end = format!("{} id={} -->", MARKER_END_PREFIX, section_id);
-    if title.trim().is_empty() {
-        format!("{start}\n{body}\n{end}")
+    let end = format!("{} id={} -->", MARKER_END_PREFIX, block.section_id);
+    if block.title.trim().is_empty() {
+        format!("{start}\n{}\n{end}", block.body)
     } else {
-        format!("{start}\n## {title}\n\n{body}\n{end}")
+        format!("{start}\n## {}\n\n{}\n{end}", block.title, block.body)
     }
 }
 
-/// 把整页（标题 + 区段序列）组装成最终 Markdown。
 pub fn render_page_with_markers(title: &str, blocks: &[PageBlock]) -> String {
     let mut parts = vec![format!("# {title}")];
-
     for block in blocks {
         match block {
-            PageBlock::Managed(managed) => {
-                parts.push(render_managed_block(
-                    &managed.section_id,
-                    &managed.title,
-                    &managed.body,
-                ));
-            }
-            PageBlock::User(user) => {
-                parts.push(user.body.clone());
-            }
+            PageBlock::Managed(managed) => parts.push(render_managed_section_block(managed)),
+            PageBlock::User(user) => parts.push(user.body.clone()),
         }
     }
-
     parts.join("\n\n")
 }
 
@@ -139,28 +231,117 @@ pub fn render_page_with_markers(title: &str, blocks: &[PageBlock]) -> String {
 // Marker 解析
 // ---------------------------------------------------------------------------
 
-/// 从 marker 开始行中提取属性。
-/// 格式：`<!-- wiki:managed:start id=xxx title="yyy" version=1 -->`
-fn parse_start_marker(line: &str) -> Option<(String, String, u32)> {
+#[derive(Debug, Clone)]
+struct ManagedStartMarker {
+    section_id: String,
+    owner_kind: SectionOwnership,
+    title: String,
+    version: u32,
+    knowledge_refs: Vec<String>,
+    source_refs: Vec<String>,
+    input_hash: String,
+    content_hash: String,
+    generated_content_hash: Option<String>,
+    projection_digest_ref: Option<String>,
+}
+
+fn parse_start_marker(line: &str) -> Result<Option<ManagedStartMarker>, PageParseDiagnostic> {
     let trimmed = line.trim();
     if !trimmed.starts_with(MARKER_START_PREFIX) {
-        return None;
+        return Ok(None);
+    }
+    if !trimmed.ends_with("-->") {
+        return Err(PageParseDiagnostic::new(
+            PageParseDiagnosticKind::MarkerMalformed,
+            None,
+            "managed start marker 非法",
+        ));
     }
 
     let attrs = &trimmed[MARKER_START_PREFIX.len()..]
         .trim_end_matches("-->")
         .trim();
-    let id = extract_attr(attrs, "id")?;
-    let title = extract_quoted_attr(attrs, "title")?;
+    let id = extract_attr(attrs, "id").ok_or_else(|| {
+        PageParseDiagnostic::new(
+            PageParseDiagnosticKind::MarkerMissingId,
+            None,
+            "managed start marker 缺少 id",
+        )
+    })?;
+    let owner = extract_attr(attrs, "owner").ok_or_else(|| {
+        PageParseDiagnostic::new(
+            PageParseDiagnosticKind::MarkerMissingOwner,
+            Some(id.clone()),
+            "managed start marker 缺少 owner",
+        )
+    })?;
+    let owner_kind = parse_owner_kind(owner.as_str()).ok_or_else(|| {
+        PageParseDiagnostic::new(
+            PageParseDiagnosticKind::MarkerMalformed,
+            Some(id.clone()),
+            format!("unsupported section owner: {owner}"),
+        )
+    })?;
     let version = extract_attr(attrs, "version")
-        .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or(MARKER_VERSION);
+        .ok_or_else(|| {
+            PageParseDiagnostic::new(
+                PageParseDiagnosticKind::MarkerVersionUnsupported,
+                Some(id.clone()),
+                "managed start marker 缺少 version",
+            )
+        })?
+        .parse::<u32>()
+        .map_err(|_| {
+            PageParseDiagnostic::new(
+                PageParseDiagnosticKind::MarkerVersionUnsupported,
+                Some(id.clone()),
+                "managed start marker version 非法",
+            )
+        })?;
+    if version != MARKER_VERSION {
+        return Err(PageParseDiagnostic::new(
+            PageParseDiagnosticKind::MarkerVersionUnsupported,
+            Some(id.clone()),
+            format!("unsupported marker version: {version}"),
+        ));
+    }
 
-    Some((id, title, version))
+    Ok(Some(ManagedStartMarker {
+        section_id: id,
+        owner_kind,
+        title: extract_quoted_attr(attrs, "title").unwrap_or_default(),
+        version,
+        knowledge_refs: parse_list_attr(extract_quoted_attr(attrs, "knowledge")),
+        source_refs: parse_list_attr(extract_quoted_attr(attrs, "source")),
+        input_hash: extract_attr(attrs, "input-hash").unwrap_or_default(),
+        content_hash: extract_attr(attrs, "content-hash").unwrap_or_default(),
+        generated_content_hash: extract_attr(attrs, "generated-content-hash")
+            .filter(|value| !value.trim().is_empty()),
+        projection_digest_ref: extract_quoted_attr(attrs, "projection")
+            .filter(|value| !value.trim().is_empty()),
+    }))
 }
 
-/// 从 marker 结束行中提取 section ID。
-/// 格式：`<!-- wiki:managed:end id=xxx -->`
+fn parse_owner_kind(value: &str) -> Option<SectionOwnership> {
+    match value {
+        "declared_managed" => Some(SectionOwnership::DeclaredManaged),
+        "derived_managed" => Some(SectionOwnership::DerivedManaged),
+        "projection_static" => Some(SectionOwnership::ProjectionStatic),
+        "manual_unmanaged" => Some(SectionOwnership::ManualUnmanaged),
+        "external_ref" => Some(SectionOwnership::ExternalRef),
+        _ => None,
+    }
+}
+
+fn parse_list_attr(value: Option<String>) -> Vec<String> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
 fn parse_end_marker(line: &str) -> Option<String> {
     let trimmed = line.trim();
     if !trimmed.starts_with(MARKER_END_PREFIX) {
@@ -173,20 +354,16 @@ fn parse_end_marker(line: &str) -> Option<String> {
     extract_attr(attrs, "id")
 }
 
-/// 从属性字符串中提取简单 key=value。
 fn extract_attr(attrs: &str, key: &str) -> Option<String> {
     let prefix = format!("{key}=");
     for token in attrs.split_whitespace() {
         if let Some(value) = token.strip_prefix(&prefix) {
-            // 去掉可能的引号
-            let value = value.trim_matches('"');
-            return Some(value.to_string());
+            return Some(value.trim_matches('"').to_string());
         }
     }
     None
 }
 
-/// 从属性字符串中提取 key="quoted value"。
 fn extract_quoted_attr(attrs: &str, key: &str) -> Option<String> {
     let prefix = format!("{key}=\"");
     if let Some(start) = attrs.find(&prefix) {
@@ -198,28 +375,29 @@ fn extract_quoted_attr(attrs: &str, key: &str) -> Option<String> {
     None
 }
 
-/// 检测页面内容是否包含 managed marker。
 pub fn has_managed_markers(content: &str) -> bool {
     content.contains(MARKER_START_PREFIX)
 }
 
-/// 以 managed marker 模式解析页面。
 pub fn parse_with_markers(content: &str) -> ParsedWikiPage {
+    parse_with_markers_and_bindings(content, &SectionBindingIndex::default())
+}
+
+pub fn parse_with_markers_and_bindings(
+    content: &str,
+    binding_index: &SectionBindingIndex,
+) -> ParsedWikiPage {
     let lines: Vec<&str> = content.lines().collect();
     let mut title = String::new();
     let mut blocks: Vec<PageBlock> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
-
-    // 收集非 managed 内容的缓冲区
+    let mut diagnostics: Vec<PageParseDiagnostic> = Vec::new();
     let mut user_buf: Vec<&str> = Vec::new();
-    // 上一个 managed section ID，用于 user section 锚点
     let mut last_managed_id: Option<String> = None;
 
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
-
-        // 提取页面一级标题
         if title.is_empty() {
             if let Some(h1) = line.strip_prefix("# ") {
                 title = h1.trim().to_string();
@@ -228,46 +406,102 @@ pub fn parse_with_markers(content: &str) -> ParsedWikiPage {
             }
         }
 
-        // 尝试解析 managed start marker
-        if let Some((section_id, section_title, version)) = parse_start_marker(line) {
-            // 先把之前积累的 user 内容刷出去
+        let marker = match parse_start_marker(line) {
+            Ok(Some(marker)) => Some(marker),
+            Ok(None) => None,
+            Err(diagnostic) => {
+                warnings.push(diagnostic.message.clone());
+                diagnostics.push(diagnostic);
+                i += 1;
+                continue;
+            }
+        };
+
+        if let Some(marker) = marker {
             flush_user_buf(
                 &mut user_buf,
                 &mut blocks,
                 &last_managed_id,
-                &Some(section_id.clone()),
+                &Some(marker.section_id.clone()),
             );
 
-            // 收集 managed body 直到 end marker
             let mut body_lines: Vec<&str> = Vec::new();
             i += 1;
             let mut found_end = false;
             while i < lines.len() {
                 if let Some(end_id) = parse_end_marker(lines[i]) {
-                    if end_id == section_id {
-                        found_end = true;
-                        i += 1;
-                        break;
+                    found_end = true;
+                    if end_id != marker.section_id {
+                        let diagnostic = PageParseDiagnostic::new(
+                            PageParseDiagnosticKind::MarkerEndMismatch,
+                            Some(marker.section_id.clone()),
+                            format!(
+                                "managed section '{}' end marker id mismatch: {}",
+                                marker.section_id, end_id
+                            ),
+                        );
+                        warnings.push(diagnostic.message.clone());
+                        diagnostics.push(diagnostic);
                     }
+                    i += 1;
+                    break;
                 }
                 body_lines.push(lines[i]);
                 i += 1;
             }
-
             if !found_end {
-                warnings.push(format!("managed section '{section_id}' 缺少结束 marker"));
+                let diagnostic = PageParseDiagnostic::new(
+                    PageParseDiagnosticKind::MarkerEndMismatch,
+                    Some(marker.section_id.clone()),
+                    format!("managed section '{}' 缺少结束 marker", marker.section_id),
+                );
+                warnings.push(diagnostic.message.clone());
+                diagnostics.push(diagnostic);
             }
 
-            // body 中去掉开头的 ## 标题行（如果存在）
             let body = strip_leading_heading(&body_lines);
+            let computed_content_hash = content_hash(&body);
+            if !marker.content_hash.trim().is_empty()
+                && marker.content_hash != computed_content_hash
+            {
+                diagnostics.push(PageParseDiagnostic::new(
+                    PageParseDiagnosticKind::HashMismatch,
+                    Some(marker.section_id.clone()),
+                    format!("managed section '{}' content hash mismatch", marker.section_id),
+                ));
+            }
+            if let Some(binding) = binding_index.get(&marker.section_id) {
+                if binding.owner_kind != Some(marker.owner_kind) {
+                    diagnostics.push(PageParseDiagnostic::new(
+                        PageParseDiagnosticKind::MetadataBindingMismatch,
+                        Some(marker.section_id.clone()),
+                        format!(
+                            "managed section '{}' owner 与 metadata binding 不一致",
+                            marker.section_id
+                        ),
+                    ));
+                }
+            }
+            let content_hash = if marker.content_hash.trim().is_empty() {
+                computed_content_hash
+            } else {
+                marker.content_hash
+            };
 
             blocks.push(PageBlock::Managed(ManagedSectionBlock {
-                section_id: section_id.clone(),
-                title: section_title,
-                version,
+                section_id: marker.section_id.clone(),
+                owner_kind: marker.owner_kind,
+                title: marker.title,
+                version: marker.version,
                 body,
+                knowledge_refs: marker.knowledge_refs,
+                source_refs: marker.source_refs,
+                input_hash: marker.input_hash,
+                content_hash,
+                generated_content_hash: marker.generated_content_hash,
+                projection_digest_ref: marker.projection_digest_ref,
             }));
-            last_managed_id = Some(section_id);
+            last_managed_id = Some(marker.section_id);
             continue;
         }
 
@@ -275,7 +509,6 @@ pub fn parse_with_markers(content: &str) -> ParsedWikiPage {
         i += 1;
     }
 
-    // 刷出尾部 user 内容
     flush_user_buf(&mut user_buf, &mut blocks, &last_managed_id, &None);
 
     ParsedWikiPage {
@@ -283,131 +516,113 @@ pub fn parse_with_markers(content: &str) -> ParsedWikiPage {
         blocks,
         parse_mode: PageParseMode::ManagedMarkers,
         warnings,
+        diagnostics,
     }
 }
 
-/// 以 legacy heading 模式解析页面。
-/// `known_titles` 是该页面类型的已知 managed section 标题集合。
-pub fn parse_with_legacy_headings(content: &str, known_titles: &[&str]) -> ParsedWikiPage {
-    let lines: Vec<&str> = content.lines().collect();
-    let mut title = String::new();
-    let mut blocks: Vec<PageBlock> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
-
-    // 按 ## 标题切分区段
-    let mut current_heading: Option<String> = None;
-    let mut current_lines: Vec<&str> = Vec::new();
-    let mut last_managed_id: Option<String> = None;
-
-    let mut i = 0;
-    while i < lines.len() {
-        let line = lines[i];
-
-        // 提取页面一级标题
-        if title.is_empty() {
-            if let Some(h1) = line.strip_prefix("# ") {
-                title = h1.trim().to_string();
-                i += 1;
-                continue;
-            }
-        }
-
-        // 检测 ## 标题
-        if let Some(h2) = line.strip_prefix("## ") {
-            // 先刷出之前的区段
-            if !current_lines.is_empty() || current_heading.is_some() {
-                flush_legacy_section(
-                    &current_heading,
-                    &current_lines,
-                    known_titles,
-                    &mut blocks,
-                    &mut last_managed_id,
-                    &mut warnings,
-                );
-            }
-            current_heading = Some(h2.trim().to_string());
-            current_lines.clear();
-            i += 1;
-            continue;
-        }
-
-        current_lines.push(line);
-        i += 1;
-    }
-
-    // 刷出最后一个区段
-    if !current_lines.is_empty() || current_heading.is_some() {
-        flush_legacy_section(
-            &current_heading,
-            &current_lines,
-            known_titles,
-            &mut blocks,
-            &mut last_managed_id,
-            &mut warnings,
-        );
-    }
-
-    if !blocks.iter().any(|b| matches!(b, PageBlock::Managed(_))) && !content.trim().is_empty() {
-        warnings.push("legacy 页面无法识别任何 managed section 标题".to_string());
-    }
-
-    ParsedWikiPage {
-        title,
-        blocks,
-        parse_mode: PageParseMode::LegacyHeadings,
-        warnings,
-    }
+pub fn parse_wiki_page(content: &str, binding_index: &SectionBindingIndex) -> ParsedWikiPage {
+    parse_wiki_page_with_bindings(content, binding_index)
 }
 
-/// 统一解析入口：自动检测 marker 模式或 legacy 模式。
-pub fn parse_wiki_page(content: &str, known_titles: &[&str]) -> ParsedWikiPage {
+pub fn parse_wiki_page_with_bindings(
+    content: &str,
+    binding_index: &SectionBindingIndex,
+) -> ParsedWikiPage {
     if has_managed_markers(content) {
-        parse_with_markers(content)
+        parse_with_markers_and_bindings(content, binding_index)
     } else {
-        parse_with_legacy_headings(content, known_titles)
+        let title = content
+            .lines()
+            .find_map(|line| line.strip_prefix("# ").map(|h1| h1.trim().to_string()))
+            .unwrap_or_default();
+        let diagnostic = PageParseDiagnostic::new(
+            PageParseDiagnosticKind::MarkerMissing,
+            None,
+            "页面缺少 managed marker",
+        );
+        ParsedWikiPage {
+            title,
+            blocks: Vec::new(),
+            parse_mode: PageParseMode::UnmanagedOnly,
+            warnings: vec![diagnostic.message.clone()],
+            diagnostics: vec![diagnostic],
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Merge
+// Drift 分类与 Merge
 // ---------------------------------------------------------------------------
 
-/// 把新生成的 managed sections 与已有 user sections 合并成最终页面。
-///
-/// # 参数
-/// - `new_managed`：本次生成的 managed section 列表（按期望顺序）。
-/// - `old_parsed`：上一次 sync 后解析出的页面区段序列。
-///
-/// # 返回
-/// - 合并计划，包含最终区段序列和警告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionDriftClassification {
+    pub kind: SyncResultKind,
+    pub reasons: Vec<String>,
+}
+
+pub fn classify_section_drift(
+    parsed: &ManagedSectionBlock,
+    binding: &SectionBinding,
+) -> SectionDriftClassification {
+    if binding.owner_kind != Some(parsed.owner_kind) {
+        return SectionDriftClassification {
+            kind: SyncResultKind::Conflict,
+            reasons: vec![format!("section '{}' owner mismatch", parsed.section_id)],
+        };
+    }
+    if !binding.input_hash.is_empty() && parsed.input_hash != binding.input_hash {
+        return SectionDriftClassification {
+            kind: SyncResultKind::Stale,
+            reasons: vec![format!("section '{}' input hash stale", parsed.section_id)],
+        };
+    }
+    let current_hash = content_hash(&parsed.body);
+    match parsed.owner_kind {
+        SectionOwnership::DeclaredManaged if current_hash != binding.content_hash => {
+            SectionDriftClassification {
+                kind: SyncResultKind::DeclaredWriteback,
+                reasons: Vec::new(),
+            }
+        }
+        SectionOwnership::ManualUnmanaged => SectionDriftClassification {
+            kind: SyncResultKind::MetadataOnly,
+            reasons: Vec::new(),
+        },
+        SectionOwnership::DerivedManaged | SectionOwnership::ProjectionStatic
+            if current_hash != binding.content_hash =>
+        {
+            SectionDriftClassification {
+                kind: SyncResultKind::IllegalDrift,
+                reasons: vec![format!("section '{}' illegal generated drift", parsed.section_id)],
+            }
+        }
+        _ => SectionDriftClassification {
+            kind: SyncResultKind::MetadataOnly,
+            reasons: Vec::new(),
+        },
+    }
+}
+
 pub fn merge_sections(
     new_managed: &[ManagedSectionBlock],
     old_parsed: &ParsedWikiPage,
 ) -> PageMergePlan {
     let mut result_blocks: Vec<PageBlock> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
-
-    // 收集旧页面中的 user sections 及其锚点
     let user_sections: Vec<&UserSectionBlock> = old_parsed
         .blocks
         .iter()
         .filter_map(|b| match b {
             PageBlock::User(u) => Some(u),
-            _ => None,
+            PageBlock::Managed(_) => None,
         })
         .collect();
-
-    // 新 managed section ID 集合
     let new_managed_ids: Vec<&str> = new_managed.iter().map(|m| m.section_id.as_str()).collect();
 
-    // 按新 managed 顺序插入，在每个 managed section 之后检查是否有 user section 需要回插
     for managed in new_managed {
         result_blocks.push(PageBlock::Managed(managed.clone()));
-
-        // 找到 anchor_after_section_id == 当前 managed section 的 user sections
         for user in &user_sections {
             if user.anchor_after_section_id.as_deref() == Some(&managed.section_id) {
-                // 如果 before 锚点也存在于新 managed 集合中，确认位置正确
                 let before_ok = match &user.anchor_before_section_id {
                     Some(before_id) => new_managed_ids.contains(&before_id.as_str()),
                     None => true,
@@ -419,29 +634,23 @@ pub fn merge_sections(
         }
     }
 
-    // 处理只有 before 锚点的 user sections（插在对应 managed section 之前）
-    // 以及锚点都丢失的 user sections（追加到末尾）
     for user in &user_sections {
         let already_inserted = result_blocks.iter().any(|b| match b {
             PageBlock::User(u) => u.id == user.id,
-            _ => false,
+            PageBlock::Managed(_) => false,
         });
         if already_inserted {
             continue;
         }
-
-        // 尝试 before 锚点
         if let Some(before_id) = &user.anchor_before_section_id {
             if let Some(pos) = result_blocks.iter().position(|b| match b {
                 PageBlock::Managed(m) => m.section_id == *before_id,
-                _ => false,
+                PageBlock::User(_) => false,
             }) {
                 result_blocks.insert(pos, PageBlock::User((*user).clone()));
                 continue;
             }
         }
-
-        // 锚点都丢失，追加到末尾
         warnings.push(format!(
             "user section '{}' 的锚点已丢失，追加到页面末尾",
             user.id
@@ -455,7 +664,6 @@ pub fn merge_sections(
     }
 }
 
-/// 计算区段内容的 hash。
 pub fn content_hash(body: &str) -> String {
     fingerprint_bytes(body.as_bytes())
 }
@@ -464,22 +672,17 @@ pub fn content_hash(body: &str) -> String {
 // 内部辅助
 // ---------------------------------------------------------------------------
 
-/// 把 body 行中开头的 `## xxx` 标题行去掉，返回纯正文。
 fn strip_leading_heading(lines: &[&str]) -> String {
     let mut start = 0;
-    // 跳过空行
     while start < lines.len() && lines[start].trim().is_empty() {
         start += 1;
     }
-    // 跳过 ## 标题行
     if start < lines.len() && lines[start].starts_with("## ") {
         start += 1;
     }
-    // 跳过标题后的空行
     while start < lines.len() && lines[start].trim().is_empty() {
         start += 1;
     }
-    // 去掉尾部空行
     let mut end = lines.len();
     while end > start && lines[end - 1].trim().is_empty() {
         end -= 1;
@@ -487,7 +690,6 @@ fn strip_leading_heading(lines: &[&str]) -> String {
     lines[start..end].join("\n")
 }
 
-/// 把 user 缓冲区刷成 UserSectionBlock（如果非空）。
 fn flush_user_buf(
     buf: &mut Vec<&str>,
     blocks: &mut Vec<PageBlock>,
@@ -513,77 +715,6 @@ fn flush_user_buf(
     buf.clear();
 }
 
-/// legacy 模式下，把一个 heading + body 区段刷成 managed 或 user block。
-fn flush_legacy_section(
-    heading: &Option<String>,
-    lines: &[&str],
-    known_titles: &[&str],
-    blocks: &mut Vec<PageBlock>,
-    last_managed_id: &mut Option<String>,
-    _warnings: &mut Vec<String>,
-) {
-    let body = lines.join("\n").trim().to_string();
-
-    match heading {
-        Some(h) if known_titles.contains(&h.as_str()) => {
-            // 已知 managed 标题 → 转为 managed block
-            // 用标题生成临时 section ID（legacy 迁移后会被正式 ID 替换）
-            let section_id = format!(
-                "legacy-{}",
-                fingerprint_bytes(h.as_bytes())
-                    .chars()
-                    .take(12)
-                    .collect::<String>()
-            );
-            blocks.push(PageBlock::Managed(ManagedSectionBlock {
-                section_id: section_id.clone(),
-                title: h.clone(),
-                version: MARKER_VERSION,
-                body,
-            }));
-            *last_managed_id = Some(section_id);
-        }
-        Some(h) => {
-            // 未知标题 → user section
-            let full_body = if body.is_empty() {
-                format!("## {h}")
-            } else {
-                format!("## {h}\n\n{body}")
-            };
-            let id = format!(
-                "user-{}",
-                fingerprint_bytes(full_body.as_bytes())
-                    .chars()
-                    .take(8)
-                    .collect::<String>()
-            );
-            blocks.push(PageBlock::User(UserSectionBlock {
-                id,
-                body: full_body,
-                anchor_after_section_id: last_managed_id.clone(),
-                anchor_before_section_id: None,
-            }));
-        }
-        None => {
-            // 标题前的内容 → user section
-            if !body.is_empty() {
-                let id = format!(
-                    "user-{}",
-                    fingerprint_bytes(body.as_bytes())
-                        .chars()
-                        .take(8)
-                        .collect::<String>()
-                );
-                blocks.push(PageBlock::User(UserSectionBlock {
-                    id,
-                    body,
-                    anchor_after_section_id: last_managed_id.clone(),
-                    anchor_before_section_id: None,
-                }));
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -599,13 +730,13 @@ mod tests {
 
     #[test]
     fn parse_with_markers_preserves_empty_title_preamble() {
-        let page = "# 示例页\n\n<!-- wiki:managed:start id=section:preamble title=\"\" version=1 -->\n<cite>\nbody\n</cite>\n<!-- wiki:managed:end id=section:preamble -->";
+        let page = "# 示例页\n\n<!-- wiki:managed:start id=section:preamble owner=derived_managed title=\"\" version=2 knowledge=\"\" source=\"\" input-hash= content-hash= generated-content-hash= projection=\"\" -->\n<cite>\nbody\n</cite>\n<!-- wiki:managed:end id=section:preamble -->";
         let parsed = parse_with_markers(page);
 
         assert_eq!(parsed.blocks.len(), 1);
         let block = match &parsed.blocks[0] {
             super::PageBlock::Managed(block) => block,
-            _ => panic!("expected managed block"),
+            super::PageBlock::User(_) => panic!("expected managed block"),
         };
         assert!(block.title.is_empty());
         assert!(block.body.contains("<cite>"));

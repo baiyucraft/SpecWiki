@@ -28,7 +28,7 @@ use wiki_index::symbol_graph::GraphSummary;
 use wiki_knowledge::planning::{
     build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
 };
-use wiki_knowledge::{plan_pages_from_knowledge_tree, PlannedPage};
+use wiki_knowledge::{plan_pages_from_knowledge_tree, PagePlan};
 use wiki_model::domain::knowledge::{KnowledgeTree, KnowledgeUnit};
 use wiki_model::domain::update_scope::{
     AffectedKnowledgeScope, ScopeEscalation, ScopeEscalationLevel,
@@ -89,7 +89,7 @@ pub struct ChangePlan {
     /// 当前判定应使用的模块树；局部变化时可能直接复用旧树。
     pub module_tree: Option<ModuleTree>,
     /// 当前模块树和 planner 产出的最新页面计划。
-    pub planned_pages: Vec<PlannedPage>,
+    pub planned_pages: Vec<PagePlan>,
     /// 当前 facts/index 规划得到的最新 knowledge tree。
     pub knowledge_tree: Option<KnowledgeTree>,
     /// 当前仓库相对上一轮 runtime 的源码变化集合。
@@ -497,7 +497,7 @@ fn build_affected_knowledge_scope(
     current_module_tree: &ModuleTree,
     scan_report: &ScanReport,
     knowledge_tree: &KnowledgeTree,
-    planned_pages: &[PlannedPage],
+    planned_pages: &[PagePlan],
     change_set: &ChangeSet,
 ) -> AffectedKnowledgeScope {
     let dirty_source_paths = change_set
@@ -1036,7 +1036,7 @@ fn build_affected_set(
     previous_state: &WikiState,
     previous_artifacts: Option<&KnowledgeArtifactSnapshot>,
     knowledge_tree: &KnowledgeTree,
-    planned_pages: &[PlannedPage],
+    planned_pages: &[PagePlan],
     affected_knowledge_scope: &AffectedKnowledgeScope,
     change_set: &ChangeSet,
 ) -> AffectedSet {
@@ -1302,7 +1302,7 @@ fn path_matches_root(path: &str, root: &str) -> bool {
     path == root || path.starts_with(&format!("{root}/"))
 }
 
-fn predicted_section_ids_for_page(page: &PlannedPage) -> Vec<String> {
+fn predicted_section_ids_for_page(page: &PagePlan) -> Vec<String> {
     section_titles_for_page_type(&page.page_type)
         .into_iter()
         .map(|title| section_id_for_title(&page.id, title))
@@ -1311,7 +1311,7 @@ fn predicted_section_ids_for_page(page: &PlannedPage) -> Vec<String> {
 
 fn expand_affected_page_ancestors(
     previous_pages: &BTreeMap<String, &WikiPageState>,
-    current_pages: &BTreeMap<String, &PlannedPage>,
+    current_pages: &BTreeMap<String, &PagePlan>,
     affected_page_ids: &mut BTreeSet<String>,
 ) {
     let mut queue = affected_page_ids.iter().cloned().collect::<Vec<_>>();

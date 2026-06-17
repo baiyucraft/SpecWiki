@@ -182,7 +182,7 @@ pub struct ResearchPageSeed {
     pub positioning: String,
     #[serde(default)]
     /// research 产出的正式 section plan。
-    pub section_plan: Vec<PlannedSection>,
+    pub section_plan: Vec<SectionPlan>,
     #[serde(default)]
     /// 稳定骨架画像；用于高层页和 docs-backed 页保持章节身份。
     pub skeleton_profile: Option<SkeletonProfile>,
@@ -252,7 +252,7 @@ pub struct UnitResearch {
     pub research_profile: Option<ResearchProfile>,
     pub positioning: String,
     pub summary: String,
-    pub section_plan: Vec<PlannedSection>,
+    pub section_plan: Vec<SectionPlan>,
     #[serde(default)]
     pub skeleton_profile: Option<SkeletonProfile>,
     #[serde(default)]
@@ -288,12 +288,12 @@ impl UnitResearch {
     }
 }
 
-// ─── PlannedSection ─────────────────────────────────────────
+// ─── SectionPlan ─────────────────────────────────────────
 
 /// Research 层规划的节标题和预期内容方向。
-/// Compose 层消费 PlannedSection 来构造 SectionDraft。
+/// Compose 层消费 SectionPlan 来构造 SectionDraft。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PlannedSection {
+pub struct SectionPlan {
     pub section_key: String,
     pub title: String,
     pub intent: String,

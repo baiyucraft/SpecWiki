@@ -204,10 +204,16 @@ fn status_works_after_full_cache_deletion() {
     // 删除整个 .cache 目录
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    // status 应优先恢复 cache 并保持 fresh，而不是直接升级 needs_rebuild
+    // status 应优先恢复 runtime mirror，但不能把 Level 1 restore 伪装成 graph ready。
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "fresh");
-    assert!(status.facts_ready);
+    let payload = serde_json::to_value(&status).unwrap();
+    assert_eq!(payload["readiness"]["index"], "missing");
+    assert_eq!(payload["readiness"]["knowledge"], "ready");
+    assert_eq!(payload["readiness"]["projection"], "ready");
+    assert_eq!(payload["readiness"]["fusion"], "degraded");
+    assert_eq!(payload["readiness"]["restored_level"], "level1");
+    assert_eq!(payload["recommended_action"], "rebuild");
     assert!(repo_root.join(".wiki/.cache/wiki-cache.db").exists());
 }
 

@@ -8,7 +8,7 @@ use regex::Regex;
 use crate::domain::context::{ModuleContext, RepoContext};
 use crate::domain::research::{
     canonical_reference_outline_title, is_reference_outline_title, DiagramSuggestion,
-    DomainResearch, EvidenceCluster, KeySourceCluster, PageDigest, PlannedSection,
+    DomainResearch, EvidenceCluster, KeySourceCluster, PageDigest, SectionPlan,
     ResearchPageSeed, ResearchProfile, SectionGroundingRef, SkeletonProfile, SkeletonSection,
     SourceCitation, SystemResearch, UnitResearch,
 };
@@ -2001,7 +2001,7 @@ fn sanitize_path_segment(name: &str) -> String {
 
 fn build_skeleton_profile(
     profile_key: &str,
-    section_plan: &[PlannedSection],
+    section_plan: &[SectionPlan],
 ) -> Option<SkeletonProfile> {
     let seed_sections = section_plan
         .iter()
@@ -2046,7 +2046,7 @@ fn build_key_source_clusters(
 }
 
 fn build_section_grounding_refs(
-    section_plan: &[PlannedSection],
+    section_plan: &[SectionPlan],
     key_source_clusters: &[KeySourceCluster],
 ) -> Vec<SectionGroundingRef> {
     section_plan
@@ -2068,7 +2068,7 @@ fn build_section_grounding_refs(
 }
 
 fn suggested_key_source_cluster_keys_for_section(
-    section: &PlannedSection,
+    section: &SectionPlan,
     key_source_clusters: &[KeySourceCluster],
     section_index: usize,
     _section_count: usize,
@@ -2175,7 +2175,7 @@ fn build_page_seed(
     profile_key: &str,
     summary: &str,
     positioning: &str,
-    section_plan: &[PlannedSection],
+    section_plan: &[SectionPlan],
     key_sources: &[String],
     evidence_clusters: &[EvidenceCluster],
     diagram_suggestions: &[DiagramSuggestion],
@@ -2198,7 +2198,7 @@ fn build_docs_backed_section_plan(
     ds: &ResearchDataSource,
     research_profile: Option<&ResearchProfile>,
     child_digests: &[PageDigest],
-) -> Option<Vec<PlannedSection>> {
+) -> Option<Vec<SectionPlan>> {
     let primary_doc = unit.scope.docs_anchors.first()?.file_path.clone();
     let doc_path =
         Path::new(&ds.report.root).join(primary_doc.replace('/', std::path::MAIN_SEPARATOR_STR));
@@ -2222,7 +2222,7 @@ fn build_docs_backed_section_plan(
 
     let mut plan = Vec::new();
     if !lead.trim().is_empty() {
-        plan.push(PlannedSection {
+        plan.push(SectionPlan {
             section_key: "preamble".to_string(),
             title: String::new(),
             intent: String::new(),
@@ -2237,7 +2237,7 @@ fn build_docs_backed_section_plan(
         if body.trim().is_empty() {
             continue;
         }
-        plan.push(PlannedSection {
+        plan.push(SectionPlan {
             section_key: stable_id("section-plan", format!("{}:{index}:{title}", unit.id)),
             title,
             intent: String::new(),
@@ -2282,7 +2282,7 @@ fn build_reference_docs_section_plan(
     child_digests: &[PageDigest],
     lead: &str,
     sections: &[(String, String)],
-) -> Vec<PlannedSection> {
+) -> Vec<SectionPlan> {
     let raw_outline = sections
         .iter()
         .map(|(title, _)| title.clone())
@@ -2310,9 +2310,9 @@ fn build_reference_outline_section_plan(
     child_digests: &[PageDigest],
     lead_summary: &str,
     outline_summary: &str,
-) -> Vec<PlannedSection> {
+) -> Vec<SectionPlan> {
     let mut plan = vec![
-        PlannedSection {
+        SectionPlan {
             section_key: "preamble".to_string(),
             title: String::new(),
             intent: String::new(),
@@ -2321,7 +2321,7 @@ fn build_reference_outline_section_plan(
             child_digest_slot: false,
             preserve_source_markdown: false,
         },
-        PlannedSection {
+        SectionPlan {
             section_key: "toc".to_string(),
             title: "目录".to_string(),
             intent: "给出本页章节导航".to_string(),
@@ -2424,8 +2424,8 @@ fn build_reference_section(
     title: &str,
     intent: String,
     section_summary: String,
-) -> PlannedSection {
-    PlannedSection {
+) -> SectionPlan {
+    SectionPlan {
         section_key: section_key.to_string(),
         title: title.to_string(),
         intent,
@@ -2518,7 +2518,7 @@ fn build_default_section_plan(
     unit: &KnowledgeUnit,
     research_profile: Option<&ResearchProfile>,
     child_digests: &[PageDigest],
-) -> Vec<PlannedSection> {
+) -> Vec<SectionPlan> {
     if let Some(profile) = research_profile {
         if matches!(
             profile,
@@ -2663,7 +2663,7 @@ fn build_default_section_plan(
 fn build_profile_section_plan(
     unit: &KnowledgeUnit,
     profile: &ResearchProfile,
-) -> Vec<PlannedSection> {
+) -> Vec<SectionPlan> {
     let overview_intent = match profile {
         ResearchProfile::Runtime => format!("说明 {} 的运行时职责、边界和关键组件", unit.title),
         ResearchProfile::ApiSurface => format!("说明 {} 暴露的 API 面与调用入口", unit.title),
@@ -2686,7 +2686,7 @@ fn build_profile_section_plan(
         }
     };
 
-    let mut sections = vec![PlannedSection {
+    let mut sections = vec![SectionPlan {
         section_key: "overview".to_string(),
         title: "概述".to_string(),
         section_summary: structural_section_summary(unit, "概述", &overview_intent, false),
@@ -2815,11 +2815,11 @@ fn build_planned_section(
     title: impl Into<String>,
     intent: impl Into<String>,
     child_digest_slot: bool,
-) -> PlannedSection {
+) -> SectionPlan {
     let section_key = section_key.into();
     let title = title.into();
     let intent = intent.into();
-    PlannedSection {
+    SectionPlan {
         section_key,
         title: title.clone(),
         intent: intent.clone(),
@@ -3020,7 +3020,7 @@ fn build_evidence_clusters_from_scope(
 }
 
 fn seed_section_evidence_clusters(
-    section_plan: &mut [PlannedSection],
+    section_plan: &mut [SectionPlan],
     evidence_clusters: &[EvidenceCluster],
 ) {
     if evidence_clusters.is_empty() {
@@ -3059,7 +3059,7 @@ fn seed_section_evidence_clusters(
 }
 
 fn suggested_cluster_keys_for_section(
-    section: &PlannedSection,
+    section: &SectionPlan,
     evidence_clusters: &[EvidenceCluster],
 ) -> Vec<String> {
     let section_title =
@@ -3269,7 +3269,7 @@ mod tests {
     };
     use crate::domain::context::{ModuleContext, RepoContext};
     use crate::domain::research::{
-        KeySourceCluster, PlannedSection, ResearchProfile, SourceCitation,
+        KeySourceCluster, SectionPlan, ResearchProfile, SourceCitation,
     };
     use std::fs;
     use tempfile::tempdir;
@@ -3496,7 +3496,7 @@ Accessibility tests audit the rendered DOM.
     #[test]
     fn api_sections_ground_only_relevant_top_key_sources() {
         let mut section_plan = vec![
-            PlannedSection {
+            SectionPlan {
                 section_key: "overview".to_string(),
                 title: "概述".to_string(),
                 intent: String::new(),
@@ -3505,7 +3505,7 @@ Accessibility tests audit the rendered DOM.
                 child_digest_slot: false,
                 preserve_source_markdown: false,
             },
-            PlannedSection {
+            SectionPlan {
                 section_key: "api-surface".to_string(),
                 title: "API 概览".to_string(),
                 intent: String::new(),
@@ -3514,7 +3514,7 @@ Accessibility tests audit the rendered DOM.
                 child_digest_slot: false,
                 preserve_source_markdown: false,
             },
-            PlannedSection {
+            SectionPlan {
                 section_key: "usage-boundary".to_string(),
                 title: "使用边界".to_string(),
                 intent: String::new(),
@@ -3596,7 +3596,7 @@ Accessibility tests audit the rendered DOM.
     #[test]
     fn build_section_grounding_refs_distributes_fallback_key_sources_across_sections() {
         let section_plan = vec![
-            PlannedSection {
+            SectionPlan {
                 section_key: "intro".to_string(),
                 title: "简介".to_string(),
                 intent: String::new(),
@@ -3605,7 +3605,7 @@ Accessibility tests audit the rendered DOM.
                 child_digest_slot: false,
                 preserve_source_markdown: false,
             },
-            PlannedSection {
+            SectionPlan {
                 section_key: "components".to_string(),
                 title: "核心组件".to_string(),
                 intent: String::new(),
@@ -3614,7 +3614,7 @@ Accessibility tests audit the rendered DOM.
                 child_digest_slot: false,
                 preserve_source_markdown: false,
             },
-            PlannedSection {
+            SectionPlan {
                 section_key: "dependencies".to_string(),
                 title: "依赖关系分析".to_string(),
                 intent: String::new(),

@@ -1,24 +1,154 @@
 //! managed section parse / merge 内核的单元测试。
-//! 覆盖 marker 解析、legacy heading 迁移、user section 锚点恢复和 managed drift 检测。
+//! 覆盖 marker 解析、typed diagnostics、user section 锚点恢复和 managed drift 检测。
 
 use wiki_runtime::generation::managed_sections::*;
-use wiki_runtime::generation::sections::section_titles_for_page_type;
+use wiki_model::domain::projection::{
+    ProjectionDigestStatus, SectionBinding, SectionOwnership, SyncResultKind,
+};
+
+fn managed(section_id: &str, title: &str, body: &str) -> ManagedSectionBlock {
+    ManagedSectionBlock::generated(section_id.to_string(), title.to_string(), body.to_string())
+}
+
+fn binding_for(block: &ManagedSectionBlock) -> SectionBinding {
+    SectionBinding {
+        section_id: block.section_id.clone(),
+        owner_kind: Some(block.owner_kind),
+        knowledge_refs: block.knowledge_refs.clone(),
+        source_refs: block.source_refs.clone(),
+        input_hash: block.input_hash.clone(),
+        content_hash: block.content_hash.clone(),
+        projection_status: ProjectionDigestStatus::Ready,
+        projection_digest_ref: block.projection_digest_ref.clone(),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Marker 解析
 // ---------------------------------------------------------------------------
 
 #[test]
+fn parse_marker_without_owner_reports_typed_diagnostic() {
+    let content = r#"# Page
+
+<!-- wiki:managed:start id=section:intro title="Intro" version=2 -->
+## Intro
+
+body
+<!-- wiki:managed:end id=section:intro -->"#;
+
+    let parsed = parse_wiki_page(content, &SectionBindingIndex::default());
+
+    assert!(parsed.diagnostics.iter().any(|diagnostic| {
+        matches!(diagnostic.kind, PageParseDiagnosticKind::MarkerMissingOwner)
+    }));
+    assert!(parsed.managed_blocks().is_empty());
+}
+
+#[test]
+fn render_parse_roundtrip_preserves_section_binding() {
+    let body_hash = content_hash("generated body");
+    let block = ManagedSectionBlock {
+        section_id: "section:intro".to_string(),
+        owner_kind: SectionOwnership::DerivedManaged,
+        title: "简介".to_string(),
+        version: MARKER_VERSION,
+        body: "generated body".to_string(),
+        knowledge_refs: vec!["unit:repo".to_string()],
+        source_refs: vec!["src/lib.rs".to_string()],
+        input_hash: "input-hash".to_string(),
+        content_hash: body_hash.clone(),
+        generated_content_hash: Some(body_hash),
+        projection_digest_ref: Some("projection:repo".to_string()),
+    };
+
+    let rendered = render_page_with_markers("Repo", &[PageBlock::Managed(block.clone())]);
+    let parsed = parse_wiki_page(&rendered, &SectionBindingIndex::from_blocks(&[block.clone()]));
+    let roundtripped = parsed.managed_blocks();
+
+    assert!(parsed.diagnostics.is_empty());
+    assert_eq!(roundtripped.len(), 1);
+    assert_eq!(roundtripped[0].owner_kind, block.owner_kind);
+    assert_eq!(roundtripped[0].projection_digest_ref, block.projection_digest_ref);
+    assert_eq!(roundtripped[0].knowledge_refs, block.knowledge_refs);
+    assert_eq!(roundtripped[0].source_refs, block.source_refs);
+    assert_eq!(roundtripped[0].input_hash, block.input_hash);
+    assert_eq!(roundtripped[0].content_hash, block.content_hash);
+    assert_eq!(
+        roundtripped[0].generated_content_hash,
+        block.generated_content_hash
+    );
+}
+
+#[test]
+fn classify_section_drift_returns_all_contract_kinds() {
+    let declared = ManagedSectionBlock {
+        owner_kind: SectionOwnership::DeclaredManaged,
+        body: "edited declared body".to_string(),
+        content_hash: content_hash("baseline declared body"),
+        source_refs: vec!["manual".to_string()],
+        ..managed("section:declared", "Declared", "baseline declared body")
+    };
+    assert_eq!(
+        classify_section_drift(&declared, &binding_for(&declared)).kind,
+        SyncResultKind::DeclaredWriteback
+    );
+
+    let manual = ManagedSectionBlock {
+        owner_kind: SectionOwnership::ManualUnmanaged,
+        body: "manual edit".to_string(),
+        content_hash: content_hash("manual baseline"),
+        source_refs: vec!["manual".to_string()],
+        ..managed("section:manual", "Manual", "manual baseline")
+    };
+    assert_eq!(
+        classify_section_drift(&manual, &binding_for(&manual)).kind,
+        SyncResultKind::MetadataOnly
+    );
+
+    let derived = ManagedSectionBlock {
+        body: "edited derived body".to_string(),
+        content_hash: content_hash("generated derived body"),
+        source_refs: vec!["src/lib.rs".to_string()],
+        ..managed("section:derived", "Derived", "generated derived body")
+    };
+    assert_eq!(
+        classify_section_drift(&derived, &binding_for(&derived)).kind,
+        SyncResultKind::IllegalDrift
+    );
+
+    let owner_mismatch = managed("section:owner", "Owner", "body");
+    let mut mismatched_binding = binding_for(&owner_mismatch);
+    mismatched_binding.owner_kind = Some(SectionOwnership::DeclaredManaged);
+    assert_eq!(
+        classify_section_drift(&owner_mismatch, &mismatched_binding).kind,
+        SyncResultKind::Conflict
+    );
+
+    let stale = ManagedSectionBlock {
+        input_hash: "current-input".to_string(),
+        source_refs: vec!["src/lib.rs".to_string()],
+        ..managed("section:stale", "Stale", "body")
+    };
+    let mut stale_binding = binding_for(&stale);
+    stale_binding.input_hash = "previous-input".to_string();
+    assert_eq!(
+        classify_section_drift(&stale, &stale_binding).kind,
+        SyncResultKind::Stale
+    );
+}
+
+#[test]
 fn parse_page_with_managed_markers() {
     let content = r#"# 项目概述
 
-<!-- wiki:managed:start id=section-aaa title="简介" version=1 -->
+<!-- wiki:managed:start id=section-aaa owner=derived_managed title="简介" version=2 knowledge="" source="" input-hash= content-hash= generated-content-hash= projection="" -->
 ## 简介
 
 由 spec-wiki 自动生成的仓库概览。
 <!-- wiki:managed:end id=section-aaa -->
 
-<!-- wiki:managed:start id=section-bbb title="项目事实" version=1 -->
+<!-- wiki:managed:start id=section-bbb owner=derived_managed title="项目事实" version=2 knowledge="" source="" input-hash= content-hash= generated-content-hash= projection="" -->
 ## 项目事实
 
 - Rust 项目
@@ -52,7 +182,7 @@ fn parse_page_with_managed_markers() {
 fn parse_page_with_user_section_between_managed() {
     let content = r#"# 项目概述
 
-<!-- wiki:managed:start id=section-aaa title="简介" version=1 -->
+<!-- wiki:managed:start id=section-aaa owner=derived_managed title="简介" version=2 knowledge="" source="" input-hash= content-hash= generated-content-hash= projection="" -->
 ## 简介
 
 自动生成内容。
@@ -62,7 +192,7 @@ fn parse_page_with_user_section_between_managed() {
 
 这是用户手写的内容。
 
-<!-- wiki:managed:start id=section-bbb title="项目事实" version=1 -->
+<!-- wiki:managed:start id=section-bbb owner=derived_managed title="项目事实" version=2 knowledge="" source="" input-hash= content-hash= generated-content-hash= projection="" -->
 ## 项目事实
 
 - 事实 1
@@ -96,7 +226,7 @@ fn parse_page_with_user_section_between_managed() {
 fn parse_page_with_trailing_user_section() {
     let content = r#"# 测试
 
-<!-- wiki:managed:start id=section-aaa title="简介" version=1 -->
+<!-- wiki:managed:start id=section-aaa owner=derived_managed title="简介" version=2 knowledge="" source="" input-hash= content-hash= generated-content-hash= projection="" -->
 ## 简介
 
 内容。
@@ -123,7 +253,7 @@ fn parse_page_with_trailing_user_section() {
 fn parse_page_missing_end_marker_warns() {
     let content = r#"# 测试
 
-<!-- wiki:managed:start id=section-aaa title="简介" version=1 -->
+<!-- wiki:managed:start id=section-aaa owner=derived_managed title="简介" version=2 knowledge="" source="" input-hash= content-hash= generated-content-hash= projection="" -->
 ## 简介
 
 没有结束 marker 的内容。"#;
@@ -135,103 +265,6 @@ fn parse_page_missing_end_marker_warns() {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy heading 迁移
-// ---------------------------------------------------------------------------
-
-#[test]
-fn parse_legacy_overview_page() {
-    let content = r#"# 项目概述
-
-## 简介
-
-这是简介内容。
-
-## 项目事实
-
-- 事实 1
-- 事实 2
-
-## 关键信息
-
-关键信息内容。"#;
-
-    let known = section_titles_for_page_type("overview");
-    let known_ref: Vec<&str> = known.iter().copied().collect();
-    let parsed = parse_with_legacy_headings(content, &known_ref);
-
-    assert_eq!(parsed.title, "项目概述");
-    assert_eq!(parsed.parse_mode, PageParseMode::LegacyHeadings);
-    assert_eq!(parsed.blocks.len(), 3);
-
-    // 所有已知标题都应该被识别为 managed
-    for block in &parsed.blocks {
-        match block {
-            PageBlock::Managed(m) => {
-                assert!(known_ref.contains(&m.title.as_str()));
-            }
-            _ => panic!("expected all blocks to be managed for known titles"),
-        }
-    }
-}
-
-#[test]
-fn parse_legacy_page_with_user_section() {
-    let content = r#"# 项目概述
-
-## 简介
-
-简介内容。
-
-## 手工笔记
-
-用户手写的内容。
-
-## 项目事实
-
-- 事实 1
-
-## 关键信息
-
-关键信息。"#;
-
-    let known = section_titles_for_page_type("overview");
-    let known_ref: Vec<&str> = known.iter().copied().collect();
-    let parsed = parse_with_legacy_headings(content, &known_ref);
-
-    assert_eq!(parsed.blocks.len(), 4);
-
-    // 第二个应该是 user section（手工笔记）
-    match &parsed.blocks[1] {
-        PageBlock::User(u) => {
-            assert!(u.body.contains("手工笔记"));
-        }
-        _ => panic!("expected user block for unknown heading"),
-    }
-}
-
-#[test]
-fn parse_legacy_page_no_known_titles_warns() {
-    let content = r#"# 随便
-
-## 未知标题
-
-一些内容。"#;
-
-    let known = section_titles_for_page_type("overview");
-    let known_ref: Vec<&str> = known.iter().copied().collect();
-    let parsed = parse_with_legacy_headings(content, &known_ref);
-
-    // 没有匹配到任何 managed section，应该有 warning
-    let has_managed = parsed
-        .blocks
-        .iter()
-        .any(|b| matches!(b, PageBlock::Managed(_)));
-    if !has_managed {
-        assert!(!parsed.warnings.is_empty());
-    }
-}
-
-// ---------------------------------------------------------------------------
 // 统一解析入口
 // ---------------------------------------------------------------------------
 
@@ -239,26 +272,31 @@ fn parse_legacy_page_no_known_titles_warns() {
 fn parse_wiki_page_auto_detects_markers() {
     let with_markers = r#"# 测试
 
-<!-- wiki:managed:start id=section-aaa title="简介" version=1 -->
+<!-- wiki:managed:start id=section-aaa owner=derived_managed title="简介" version=2 knowledge="" source="" input-hash= content-hash= generated-content-hash= projection="" -->
 ## 简介
 
 内容。
 <!-- wiki:managed:end id=section-aaa -->"#;
 
-    let parsed = parse_wiki_page(with_markers, &["简介"]);
+    let parsed = parse_wiki_page(with_markers, &SectionBindingIndex::default());
     assert_eq!(parsed.parse_mode, PageParseMode::ManagedMarkers);
 }
 
 #[test]
-fn parse_wiki_page_auto_detects_legacy() {
+fn parse_wiki_page_without_markers_is_unmanaged_only() {
     let without_markers = r#"# 测试
 
 ## 简介
 
 内容。"#;
 
-    let parsed = parse_wiki_page(without_markers, &["简介"]);
-    assert_eq!(parsed.parse_mode, PageParseMode::LegacyHeadings);
+    let parsed = parse_wiki_page(without_markers, &SectionBindingIndex::default());
+    assert_eq!(parsed.parse_mode, PageParseMode::UnmanagedOnly);
+    assert!(parsed.blocks.is_empty());
+    assert!(parsed
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.kind == PageParseDiagnosticKind::MarkerMissing));
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +308,7 @@ fn merge_preserves_user_section_between_managed() {
     // 旧页面有 user section 在两个 managed 之间
     let old_content = r#"# 测试
 
-<!-- wiki:managed:start id=section-aaa title="简介" version=1 -->
+<!-- wiki:managed:start id=section-aaa owner=derived_managed title="简介" version=2 knowledge="" source="" input-hash= content-hash= generated-content-hash= projection="" -->
 ## 简介
 
 旧简介。
@@ -280,7 +318,7 @@ fn merge_preserves_user_section_between_managed() {
 
 用户内容。
 
-<!-- wiki:managed:start id=section-bbb title="事实" version=1 -->
+<!-- wiki:managed:start id=section-bbb owner=derived_managed title="事实" version=2 knowledge="" source="" input-hash= content-hash= generated-content-hash= projection="" -->
 ## 事实
 
 旧事实。
@@ -289,18 +327,8 @@ fn merge_preserves_user_section_between_managed() {
     let old_parsed = parse_with_markers(old_content);
 
     let new_managed = vec![
-        ManagedSectionBlock {
-            section_id: "section-aaa".to_string(),
-            title: "简介".to_string(),
-            version: 1,
-            body: "新简介内容。".to_string(),
-        },
-        ManagedSectionBlock {
-            section_id: "section-bbb".to_string(),
-            title: "事实".to_string(),
-            version: 1,
-            body: "新事实内容。".to_string(),
-        },
+        managed("section-aaa", "简介", "新简介内容。"),
+        managed("section-bbb", "事实", "新事实内容。"),
     ];
 
     let plan = merge_sections(&new_managed, &old_parsed);
@@ -331,7 +359,7 @@ fn merge_appends_orphan_user_section_with_warning() {
     // 旧页面有 user section 锚定在 section-ccc 之后，但新页面没有 section-ccc
     let old_content = r#"# 测试
 
-<!-- wiki:managed:start id=section-ccc title="旧区段" version=1 -->
+<!-- wiki:managed:start id=section-ccc owner=derived_managed title="旧区段" version=2 knowledge="" source="" input-hash= content-hash= generated-content-hash= projection="" -->
 ## 旧区段
 
 旧内容。
@@ -344,12 +372,7 @@ fn merge_appends_orphan_user_section_with_warning() {
     let old_parsed = parse_with_markers(old_content);
 
     // 新 managed 完全不同
-    let new_managed = vec![ManagedSectionBlock {
-        section_id: "section-ddd".to_string(),
-        title: "新区段".to_string(),
-        version: 1,
-        body: "新内容。".to_string(),
-    }];
+    let new_managed = vec![managed("section-ddd", "新区段", "新内容。")];
 
     let plan = merge_sections(&new_managed, &old_parsed);
 
@@ -369,7 +392,7 @@ fn merge_appends_orphan_user_section_with_warning() {
 fn merge_no_user_sections_returns_only_managed() {
     let old_content = r#"# 测试
 
-<!-- wiki:managed:start id=section-aaa title="简介" version=1 -->
+<!-- wiki:managed:start id=section-aaa owner=derived_managed title="简介" version=2 knowledge="" source="" input-hash= content-hash= generated-content-hash= projection="" -->
 ## 简介
 
 旧内容。
@@ -377,12 +400,7 @@ fn merge_no_user_sections_returns_only_managed() {
 
     let old_parsed = parse_with_markers(old_content);
 
-    let new_managed = vec![ManagedSectionBlock {
-        section_id: "section-aaa".to_string(),
-        title: "简介".to_string(),
-        version: 1,
-        body: "新内容。".to_string(),
-    }];
+    let new_managed = vec![managed("section-aaa", "简介", "新内容。")];
 
     let plan = merge_sections(&new_managed, &old_parsed);
     assert_eq!(plan.blocks.len(), 1);
@@ -405,24 +423,14 @@ fn render_managed_block_produces_valid_markers() {
 #[test]
 fn render_page_with_markers_roundtrips() {
     let blocks = vec![
-        PageBlock::Managed(ManagedSectionBlock {
-            section_id: "section-aaa".to_string(),
-            title: "简介".to_string(),
-            version: 1,
-            body: "内容 A。".to_string(),
-        }),
+        PageBlock::Managed(managed("section-aaa", "简介", "内容 A。")),
         PageBlock::User(UserSectionBlock {
             id: "user-001".to_string(),
             body: "## 手工笔记\n\n用户内容。".to_string(),
             anchor_after_section_id: Some("section-aaa".to_string()),
             anchor_before_section_id: Some("section-bbb".to_string()),
         }),
-        PageBlock::Managed(ManagedSectionBlock {
-            section_id: "section-bbb".to_string(),
-            title: "事实".to_string(),
-            version: 1,
-            body: "内容 B。".to_string(),
-        }),
+        PageBlock::Managed(managed("section-bbb", "事实", "内容 B。")),
     ];
 
     let rendered = render_page_with_markers("测试页面", &blocks);

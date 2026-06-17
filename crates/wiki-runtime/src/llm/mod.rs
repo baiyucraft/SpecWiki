@@ -38,7 +38,7 @@ use wiki_index::symbols::{ParsedSymbolsSnapshot, SymbolNode};
 use wiki_knowledge::domain::research::{
     PageResearchResult, ResearchSessionStats, ResearchStopReason,
 };
-use wiki_knowledge::PlannedPage;
+use wiki_knowledge::PagePlan;
 use wiki_knowledge::{ModuleContext, RepoContext};
 
 const FILE_PURPOSE_PROMPT_VERSION: &str = "file-purpose/v1";
@@ -742,7 +742,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 impl PageResearchInput {
-    pub fn from_page(page: &PlannedPage, context: &PageContext) -> Self {
+    pub fn from_page(page: &PagePlan, context: &PageContext) -> Self {
         Self {
             page_id: page.id.clone(),
             page_type: page.page_type.clone(),
@@ -789,7 +789,7 @@ impl PageResearchInput {
 
 /// 当前页面 research session 的工具执行环境。
 pub struct PageResearchRuntimeContext<'a> {
-    pub page: &'a PlannedPage,
+    pub page: &'a PagePlan,
     pub page_context: &'a PageContext,
     pub scan_report: &'a wiki_index::scanner::ScanReport,
     pub module_tree: &'a ModuleTree,

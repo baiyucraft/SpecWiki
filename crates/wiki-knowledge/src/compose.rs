@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::domain::compose::{ComposeSectionDraft, DiagramDraft, PageDraft};
 use crate::domain::research::{
     canonical_reference_outline_title, DiagramSuggestion, DomainResearch, EvidenceCluster,
-    KeySourceCluster, PageDiagramDigest, PageDigest, PageSectionDigest, PlannedSection,
+    KeySourceCluster, PageDiagramDigest, PageDigest, PageSectionDigest, SectionPlan,
     ProjectionDigestStatus, ProjectionDigestStatusReason, ProjectionDigestStatusReasonKind,
     ResearchPageSeed, ResearchProfile, SectionGroundingRef, SkeletonProfile, SourceCitation,
     SystemResearch, UnitResearch,
@@ -40,7 +40,7 @@ pub struct ComposePageContract {
     /// research 画像；影响 section 和 citation 风格。
     pub research_profile: Option<ResearchProfile>,
     /// 统一 section plan，所有页面类型都走这一入口。
-    pub section_plan: Vec<PlannedSection>,
+    pub section_plan: Vec<SectionPlan>,
     /// research 产出的稳定骨架画像。
     pub skeleton_profile: Option<SkeletonProfile>,
     /// section 级 grounding 合同。
@@ -81,7 +81,7 @@ pub struct ComposeChildReadiness {
 #[derive(Debug, Clone)]
 struct ComposePageSeedOverlay {
     summary: String,
-    section_plan: Vec<PlannedSection>,
+    section_plan: Vec<SectionPlan>,
     skeleton_profile: Option<SkeletonProfile>,
     section_grounding_refs: Vec<SectionGroundingRef>,
     key_source_clusters: Vec<KeySourceCluster>,
@@ -278,7 +278,7 @@ fn build_compose_page_contract_from_parts(
     summary: String,
     decomposition_profile: Option<DecompositionProfile>,
     research_profile: Option<ResearchProfile>,
-    section_plan: Vec<PlannedSection>,
+    section_plan: Vec<SectionPlan>,
     skeleton_profile: Option<SkeletonProfile>,
     section_grounding_refs: Vec<SectionGroundingRef>,
     key_source_clusters: Vec<KeySourceCluster>,
@@ -504,7 +504,7 @@ pub fn compose_knowledge_tree(
 
 fn compose_section_from_contract(
     contract: &ComposePageContract,
-    planned: &PlannedSection,
+    planned: &SectionPlan,
 ) -> (ComposeSectionDraft, usize) {
     let mut content_parts = Vec::new();
     let mut section_citations = Vec::new();
@@ -636,7 +636,7 @@ fn preserves_reference_markdown(content: &str) -> bool {
         || normalized.contains("图表来源")
 }
 
-fn uses_reference_outline_contract(planned: &PlannedSection) -> bool {
+fn uses_reference_outline_contract(planned: &SectionPlan) -> bool {
     planned.section_key == "preamble"
         || planned.section_key == "toc"
         || canonical_reference_outline_title(planned.title.as_str()).is_some()
@@ -657,9 +657,9 @@ fn primary_or_fallback_text(primary: &str, fallback: &str) -> String {
 }
 
 fn merge_planned_sections(
-    seed_sections: &[PlannedSection],
-    research_sections: &[PlannedSection],
-) -> Vec<PlannedSection> {
+    seed_sections: &[SectionPlan],
+    research_sections: &[SectionPlan],
+) -> Vec<SectionPlan> {
     let mut merged = seed_sections.to_vec();
     for section in research_sections {
         if let Some(existing) = merged.iter_mut().find(|candidate| {
@@ -809,7 +809,7 @@ where
 
 fn collect_section_evidence_clusters<'a>(
     contract: &'a ComposePageContract,
-    planned: &PlannedSection,
+    planned: &SectionPlan,
     grounding: Option<&SectionGroundingRef>,
 ) -> Vec<&'a EvidenceCluster> {
     let mut cluster_keys = planned.evidence_cluster_keys.clone();
@@ -924,7 +924,7 @@ fn collect_section_diagram_titles(
 
 fn collect_section_child_digests<'a>(
     contract: &'a ComposePageContract,
-    planned: &PlannedSection,
+    planned: &SectionPlan,
     grounding: Option<&SectionGroundingRef>,
 ) -> Vec<&'a PageDigest> {
     let references = grounding
@@ -952,7 +952,7 @@ fn collect_section_child_digests<'a>(
 
 fn collect_section_child_section_digests<'a>(
     contract: &'a ComposePageContract,
-    planned: &PlannedSection,
+    planned: &SectionPlan,
     grounding: Option<&SectionGroundingRef>,
 ) -> Vec<&'a PageSectionDigest> {
     let references = grounding
@@ -1478,7 +1478,7 @@ mod tests {
             positioning: "父页".to_string(),
             summary: "父模块摘要".to_string(),
             section_plan: vec![
-                PlannedSection {
+                SectionPlan {
                     section_key: "overview".to_string(),
                     title: "概述".to_string(),
                     intent: "说明父模块定位".to_string(),
@@ -1487,7 +1487,7 @@ mod tests {
                     child_digest_slot: false,
                     preserve_source_markdown: false,
                 },
-                PlannedSection {
+                SectionPlan {
                     section_key: "children".to_string(),
                     title: "子单元".to_string(),
                     intent: "汇总子页".to_string(),
@@ -1583,7 +1583,7 @@ mod tests {
                 summary: "围绕关键知识域建立总览。".to_string(),
                 positioning: String::new(),
                 section_plan: vec![
-                    PlannedSection {
+                    SectionPlan {
                         section_key: "domain-map".to_string(),
                         title: "知识域概览".to_string(),
                         intent: "用显式 child digest 收拢核心知识域".to_string(),
@@ -1592,7 +1592,7 @@ mod tests {
                         child_digest_slot: true,
                         preserve_source_markdown: false,
                     },
-                    PlannedSection {
+                    SectionPlan {
                         section_key: "domain-architecture".to_string(),
                         title: "架构焦点".to_string(),
                         intent: "说明高层关系图与关键实现入口".to_string(),
@@ -1768,7 +1768,7 @@ mod tests {
                 summary: "围绕核心模块建立域级导航。".to_string(),
                 positioning: String::new(),
                 section_plan: vec![
-                    PlannedSection {
+                    SectionPlan {
                         section_key: "domain-overview".to_string(),
                         title: "域概览".to_string(),
                         intent: "交代该域的范围与重点".to_string(),
@@ -1777,7 +1777,7 @@ mod tests {
                         child_digest_slot: false,
                         preserve_source_markdown: false,
                     },
-                    PlannedSection {
+                    SectionPlan {
                         section_key: "capability-rollup".to_string(),
                         title: "能力汇总".to_string(),
                         intent: "通过 child section digest 汇总关键能力".to_string(),
@@ -1902,7 +1902,7 @@ mod tests {
             positioning: "运行时定位".to_string(),
             summary: "运行时摘要".to_string(),
             section_plan: vec![
-                PlannedSection {
+                SectionPlan {
                     section_key: "overview".to_string(),
                     title: "概述".to_string(),
                     intent: "说明主线".to_string(),
@@ -1911,7 +1911,7 @@ mod tests {
                     child_digest_slot: false,
                     preserve_source_markdown: false,
                 },
-                PlannedSection {
+                SectionPlan {
                     section_key: "scheduler".to_string(),
                     title: "调度机制".to_string(),
                     intent: "说明关键调度入口".to_string(),
@@ -2007,7 +2007,7 @@ mod tests {
             research_profile: None,
             positioning: "运行时定位".to_string(),
             summary: "运行时摘要".to_string(),
-            section_plan: vec![PlannedSection {
+            section_plan: vec![SectionPlan {
                 section_key: "scheduler".to_string(),
                 title: "调度机制".to_string(),
                 intent: "说明关键调度入口".to_string(),
@@ -2074,7 +2074,7 @@ mod tests {
             title: "父页".to_string(),
             relative_path: "父页.md".to_string(),
             summary: "父页摘要".to_string(),
-            section_plan: vec![PlannedSection {
+            section_plan: vec![SectionPlan {
                 section_key: "overview".to_string(),
                 title: "概述".to_string(),
                 intent: String::new(),
@@ -2160,7 +2160,7 @@ mod tests {
             research_profile: None,
             positioning: "运行时定位".to_string(),
             summary: "运行时摘要".to_string(),
-            section_plan: vec![PlannedSection {
+            section_plan: vec![SectionPlan {
                 section_key: "overview".to_string(),
                 title: "概述".to_string(),
                 intent: "说明运行时主线".to_string(),
@@ -2221,7 +2221,7 @@ mod tests {
             research_profile: None,
             positioning: String::new(),
             summary: String::new(),
-            section_plan: vec![PlannedSection {
+            section_plan: vec![SectionPlan {
                 section_key: "preamble".to_string(),
                 title: String::new(),
                 intent: String::new(),
@@ -2264,7 +2264,7 @@ mod tests {
             positioning: String::new(),
             summary: String::new(),
             section_plan: vec![
-                PlannedSection {
+                SectionPlan {
                     section_key: "preamble".to_string(),
                     title: String::new(),
                     intent: String::new(),
@@ -2273,7 +2273,7 @@ mod tests {
                     child_digest_slot: false,
                     preserve_source_markdown: false,
                 },
-                PlannedSection {
+                SectionPlan {
                     section_key: "toc".to_string(),
                     title: "目录".to_string(),
                     intent: "给出本页章节导航".to_string(),
@@ -2282,7 +2282,7 @@ mod tests {
                     child_digest_slot: false,
                     preserve_source_markdown: false,
                 },
-                PlannedSection {
+                SectionPlan {
                     section_key: "intro".to_string(),
                     title: "简介".to_string(),
                     intent: "说明定位".to_string(),
@@ -2345,7 +2345,7 @@ mod tests {
             positioning: String::new(),
             summary: String::new(),
             section_plan: vec![
-                PlannedSection {
+                SectionPlan {
                     section_key: "preamble".to_string(),
                     title: String::new(),
                     intent: String::new(),
@@ -2354,7 +2354,7 @@ mod tests {
                     child_digest_slot: false,
                     preserve_source_markdown: false,
                 },
-                PlannedSection {
+                SectionPlan {
                     section_key: "toc".to_string(),
                     title: "目录".to_string(),
                     intent: "给出本页章节导航".to_string(),
@@ -2363,7 +2363,7 @@ mod tests {
                     child_digest_slot: false,
                     preserve_source_markdown: false,
                 },
-                PlannedSection {
+                SectionPlan {
                     section_key: "intro".to_string(),
                     title: "引言".to_string(),
                     intent: "说明定位".to_string(),
@@ -2372,7 +2372,7 @@ mod tests {
                     child_digest_slot: false,
                     preserve_source_markdown: false,
                 },
-                PlannedSection {
+                SectionPlan {
                     section_key: "dependencies".to_string(),
                     title: "依赖分析".to_string(),
                     intent: "说明依赖".to_string(),
@@ -2453,7 +2453,7 @@ mod tests {
             overview_seed: crate::domain::research::ResearchPageSeed {
                 summary: "项目总览".to_string(),
                 positioning: String::new(),
-                section_plan: vec![PlannedSection {
+                section_plan: vec![SectionPlan {
                     section_key: "domain-map".to_string(),
                     title: "知识域概览".to_string(),
                     intent: "总览知识域".to_string(),
@@ -2492,7 +2492,7 @@ mod tests {
                 compose_seed: crate::domain::research::ResearchPageSeed {
                     summary: "概念域".to_string(),
                     positioning: String::new(),
-                    section_plan: vec![PlannedSection {
+                    section_plan: vec![SectionPlan {
                         section_key: "child-rollup".to_string(),
                         title: "能力汇总".to_string(),
                         intent: "收拢叶子页面".to_string(),
@@ -2520,7 +2520,7 @@ mod tests {
                 research_profile: None,
                 positioning: "leaf".to_string(),
                 summary: "leaf summary".to_string(),
-                section_plan: vec![PlannedSection {
+                section_plan: vec![SectionPlan {
                     section_key: "overview".to_string(),
                     title: "概述".to_string(),
                     intent: "内容".to_string(),
@@ -2548,7 +2548,7 @@ mod tests {
                 research_profile: None,
                 positioning: "domain parent".to_string(),
                 summary: "domain summary".to_string(),
-                section_plan: vec![PlannedSection {
+                section_plan: vec![SectionPlan {
                     section_key: "child-rollup".to_string(),
                     title: "能力汇总".to_string(),
                     intent: "收拢叶子页面".to_string(),
@@ -2576,7 +2576,7 @@ mod tests {
                 research_profile: None,
                 positioning: "overview parent".to_string(),
                 summary: "overview summary".to_string(),
-                section_plan: vec![PlannedSection {
+                section_plan: vec![SectionPlan {
                     section_key: "domain-map".to_string(),
                     title: "知识域概览".to_string(),
                     intent: "总览知识域".to_string(),

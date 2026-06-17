@@ -11,7 +11,7 @@ use crate::generation::sections::{
     build_page_compose_plan, build_section_drafts_from_compose_plan, SectionDraft,
 };
 use wiki_knowledge::domain::compose::{ComposeSectionDraft, DiagramDraft, PageDraft};
-use wiki_knowledge::PlannedPage;
+use wiki_knowledge::PagePlan;
 
 /// `RenderedPage` 是页面渲染层的标准输出。
 /// 它同时返回 section 草稿和最终 Markdown，供缓存和状态层复用。
@@ -32,7 +32,7 @@ pub struct RenderedPage {
 ///
 /// # 返回
 /// - 返回可直接写入 `.wiki/*.md` 的 Markdown 文本。
-pub fn render_page(page: &PlannedPage, context: &PageContext) -> String {
+pub fn render_page(page: &PagePlan, context: &PageContext) -> String {
     render_page_bundle(page, context).content
 }
 
@@ -44,14 +44,14 @@ pub fn render_page(page: &PlannedPage, context: &PageContext) -> String {
 ///
 /// # 返回
 /// - 返回同时包含 section 草稿和整页 Markdown 的渲染结果。
-pub fn render_page_bundle(page: &PlannedPage, context: &PageContext) -> RenderedPage {
+pub fn render_page_bundle(page: &PagePlan, context: &PageContext) -> RenderedPage {
     let compose_plan = build_page_compose_plan(page, context);
     render_page_bundle_with_compose(page, context, &compose_plan)
 }
 
 /// 基于显式 compose plan 组装页面。
 pub fn render_page_bundle_with_compose(
-    page: &PlannedPage,
+    page: &PagePlan,
     context: &PageContext,
     compose_plan: &PageComposePlan,
 ) -> RenderedPage {
@@ -62,7 +62,7 @@ pub fn render_page_bundle_with_compose(
 
 /// 构建 compose plan 并直接渲染页面。
 pub fn render_page_bundle_via_compose(
-    page: &PlannedPage,
+    page: &PagePlan,
     context: &PageContext,
 ) -> (PageComposePlan, RenderedPage) {
     let compose_plan = build_page_compose_plan(page, context);
@@ -74,11 +74,12 @@ pub fn render_page_bundle_via_compose(
 pub fn drafts_to_managed_blocks(sections: &[SectionDraft]) -> Vec<ManagedSectionBlock> {
     sections
         .iter()
-        .map(|s| ManagedSectionBlock {
-            section_id: s.section_id.clone(),
-            title: s.title.clone(),
-            version: crate::generation::managed_sections::MARKER_VERSION,
-            body: s.content.clone(),
+        .map(|s| {
+            ManagedSectionBlock::generated(
+                s.section_id.clone(),
+                s.title.clone(),
+                s.content.clone(),
+            )
         })
         .collect()
 }
@@ -91,16 +92,15 @@ pub fn drafts_to_managed_blocks(sections: &[SectionDraft]) -> Vec<ManagedSection
 ///
 /// # 返回
 /// - 返回可直接写入页面文件的整页 Markdown（含 managed marker）。
-pub fn assemble_page(page: &PlannedPage, sections: &[SectionDraft]) -> String {
+pub fn assemble_page(page: &PagePlan, sections: &[SectionDraft]) -> String {
     let blocks: Vec<PageBlock> = sections
         .iter()
         .map(|s| {
-            PageBlock::Managed(ManagedSectionBlock {
-                section_id: s.section_id.clone(),
-                title: s.title.clone(),
-                version: crate::generation::managed_sections::MARKER_VERSION,
-                body: s.content.clone(),
-            })
+            PageBlock::Managed(ManagedSectionBlock::generated(
+                s.section_id.clone(),
+                s.title.clone(),
+                s.content.clone(),
+            ))
         })
         .collect();
 
@@ -979,12 +979,11 @@ fn assemble_page_from_sections(title: &str, sections: &[SectionDraft]) -> String
     let blocks: Vec<PageBlock> = sections
         .iter()
         .map(|s| {
-            PageBlock::Managed(ManagedSectionBlock {
-                section_id: s.section_id.clone(),
-                title: s.title.clone(),
-                version: crate::generation::managed_sections::MARKER_VERSION,
-                body: s.content.clone(),
-            })
+            PageBlock::Managed(ManagedSectionBlock::generated(
+                s.section_id.clone(),
+                s.title.clone(),
+                s.content.clone(),
+            ))
         })
         .collect();
     render_page_with_markers(title, &blocks)

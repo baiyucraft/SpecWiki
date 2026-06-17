@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::domain::module_tree::ModuleNode;
+use crate::domain::projection::SectionOwnership;
 use crate::domain::relation::WikiRelation;
 use crate::domain::wiki_item::WikiItem;
 
@@ -14,6 +16,36 @@ pub struct SourceFileRecord {
     pub wiki_item_ids: Vec<String>,
     #[serde(default)]
     pub module_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct MetadataSectionBinding {
+    pub section_id: String,
+    pub page_id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_kind: Option<SectionOwnership>,
+    #[serde(default)]
+    pub knowledge_refs: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    #[serde(default)]
+    pub input_hash: String,
+    pub content_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_content_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_digest_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct MetadataReverseRefs {
+    #[serde(default)]
+    pub knowledge_to_sections: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub source_to_sections: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub projection_to_sections: BTreeMap<String, Vec<String>>,
 }
 
 /// `DirtyState` 描述当前 Repo Wiki 是否过期，以及为什么过期。
@@ -30,6 +62,8 @@ pub struct DirtyState {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WikiMetadata {
     pub schema_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_snapshot_id: Option<String>,
     pub language: String,
     pub repo_root: String,
     pub branch: String,
@@ -40,6 +74,10 @@ pub struct WikiMetadata {
     pub wiki_items: Vec<WikiItem>,
     pub relations: Vec<WikiRelation>,
     pub source_files: Vec<SourceFileRecord>,
+    #[serde(default)]
+    pub sections: Vec<MetadataSectionBinding>,
+    #[serde(default)]
+    pub reverse_refs: MetadataReverseRefs,
     pub dirty_state: DirtyState,
 }
 
@@ -80,6 +118,7 @@ impl WikiMetadata {
     pub fn sample() -> Self {
         Self {
             schema_version: "1".to_string(),
+            current_snapshot_id: Some("snapshot-sample".to_string()),
             language: "zh".to_string(),
             repo_root: ".".to_string(),
             branch: "main".to_string(),
@@ -125,7 +164,15 @@ impl WikiMetadata {
                 wiki_item_ids: vec!["overview".to_string()],
                 module_ids: vec!["module-root".to_string()],
             }],
+            sections: Vec::new(),
+            reverse_refs: MetadataReverseRefs::default(),
             dirty_state: DirtyState::fresh(),
         }
+    }
+
+    pub fn section(&self, section_id: &str) -> Option<&MetadataSectionBinding> {
+        self.sections
+            .iter()
+            .find(|section| section.section_id == section_id)
     }
 }

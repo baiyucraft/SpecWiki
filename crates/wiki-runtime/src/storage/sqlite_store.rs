@@ -558,7 +558,7 @@ fn replace_state_rows_tx(tx: &Transaction<'_>, state: &WikiState) -> io::Result<
          DELETE FROM wiki_relations;
          DELETE FROM wiki_pages;
          DELETE FROM source_states;
-         DELETE FROM runtime_meta;
+         DELETE FROM runtime_meta WHERE key IN ('dirty_state', 'build_state');
          DELETE FROM wiki_pages_fts;",
     )
     .map_err(|e| io::Error::other(format!("clear state tables: {e}")))?;
@@ -1184,8 +1184,16 @@ pub fn load_state_rows(conn: &Connection, module_tree: &ModuleTree) -> io::Resul
                     section_id: row.get(1)?,
                     title: row.get(2)?,
                     managed: row.get::<_, i64>(3)? != 0,
+                    owner_kind: Some(if row.get::<_, i64>(3)? != 0 {
+                        wiki_model::domain::projection::SectionOwnership::DerivedManaged
+                    } else {
+                        wiki_model::domain::projection::SectionOwnership::ManualUnmanaged
+                    }),
+                    knowledge_refs: Vec::new(),
                     content_hash: row.get(4)?,
+                    input_hash: String::new(),
                     generated_content_hash: row.get(5)?,
+                    projection_digest_ref: None,
                     anchor_after_section_id: row.get(6)?,
                     anchor_before_section_id: row.get(7)?,
                     source_ids,

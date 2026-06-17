@@ -1,8 +1,8 @@
-use crate::domain::metadata::{SourceFileRecord, WikiMetadata};
+use crate::domain::metadata::{MetadataReverseRefs, MetadataSectionBinding, SourceFileRecord, WikiMetadata};
 use crate::domain::state::WikiState;
 use crate::domain::wiki_item::WikiItem;
 use crate::storage::wiki_fs::is_official_page_path;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// `ExportContext` 承载 WikiState 中不包含的外部展示字段。
 /// MetadataMapper 在导出时用它补齐 repo_root、branch 等信息。
@@ -57,9 +57,30 @@ pub fn export_metadata(state: &WikiState, context: &ExportContext) -> WikiMetada
             module_ids: source.module_ids.clone(),
         })
         .collect();
+    let sections = state
+        .pages
+        .iter()
+        .filter(|page| is_official_page_path(&page.path))
+        .flat_map(|page| {
+            page.sections.iter().map(|section| MetadataSectionBinding {
+                section_id: section.section_id.clone(),
+                page_id: page.page_id.clone(),
+                title: section.title.clone(),
+                owner_kind: section.owner_kind,
+                knowledge_refs: section.knowledge_refs.clone(),
+                source_refs: section.source_ids.clone(),
+                input_hash: section.input_hash.clone(),
+                content_hash: section.content_hash.clone(),
+                generated_content_hash: section.generated_content_hash.clone(),
+                projection_digest_ref: section.projection_digest_ref.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let reverse_refs = build_reverse_refs(&sections);
 
     WikiMetadata {
         schema_version: context.schema_version.clone(),
+        current_snapshot_id: None,
         language: context.language.clone(),
         repo_root: context.repo_root.clone(),
         branch: context.branch.clone(),
@@ -69,6 +90,50 @@ pub fn export_metadata(state: &WikiState, context: &ExportContext) -> WikiMetada
         wiki_items,
         relations: state.relations.clone(),
         source_files,
+        sections,
+        reverse_refs,
         dirty_state: state.dirty_state.clone(),
+    }
+}
+
+fn build_reverse_refs(sections: &[MetadataSectionBinding]) -> MetadataReverseRefs {
+    let mut knowledge_to_sections = BTreeMap::<String, Vec<String>>::new();
+    let mut source_to_sections = BTreeMap::<String, Vec<String>>::new();
+    let mut projection_to_sections = BTreeMap::<String, Vec<String>>::new();
+
+    for section in sections {
+        for knowledge_ref in &section.knowledge_refs {
+            knowledge_to_sections
+                .entry(knowledge_ref.clone())
+                .or_default()
+                .push(section.section_id.clone());
+        }
+        for source_ref in &section.source_refs {
+            source_to_sections
+                .entry(source_ref.clone())
+                .or_default()
+                .push(section.section_id.clone());
+        }
+        if let Some(projection_ref) = section.projection_digest_ref.as_ref() {
+            projection_to_sections
+                .entry(projection_ref.clone())
+                .or_default()
+                .push(section.section_id.clone());
+        }
+    }
+
+    for refs in knowledge_to_sections
+        .values_mut()
+        .chain(source_to_sections.values_mut())
+        .chain(projection_to_sections.values_mut())
+    {
+        refs.sort();
+        refs.dedup();
+    }
+
+    MetadataReverseRefs {
+        knowledge_to_sections,
+        source_to_sections,
+        projection_to_sections,
     }
 }

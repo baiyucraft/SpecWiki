@@ -40,7 +40,7 @@ use wiki_knowledge::planning::{
     build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
 };
 use wiki_knowledge::research::{ResearchDataSource, ResearchProvider};
-use wiki_knowledge::{plan_pages_from_knowledge_tree, PlannedPage};
+use wiki_knowledge::{plan_pages_from_knowledge_tree, PagePlan};
 use wiki_knowledge::{KnowledgeArtifactStore, KnowledgeSnapshotStore, ModuleContext, RepoContext};
 use wiki_model::domain::update_scope::AffectedKnowledgeScope;
 
@@ -49,7 +49,7 @@ pub struct ComposePipelineOutput {
     pub page_drafts: Vec<PageDraft>,
     pub digests: BTreeMap<String, PageDigest>,
     pub knowledge_tree: KnowledgeTree,
-    pub planned_pages: Vec<PlannedPage>,
+    pub planned_pages: Vec<PagePlan>,
     pub unit_researches: BTreeMap<String, UnitResearch>,
 }
 

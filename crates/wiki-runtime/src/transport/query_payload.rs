@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 
 use crate::domain::runtime_profile::{
-    AnswerEnvelope, QueryMode, QueryTrust, RecommendedAction,
+    AnswerEnvelope, QueryMode, QueryTrust, RecommendedAction, RuntimeReadiness,
 };
 use crate::workflows::query::QueryReport;
 
@@ -19,6 +19,7 @@ const FOCUS_LIMIT: usize = 6;
 pub struct ExternalQueryReport {
     pub term: String,
     pub runtime_state: String,
+    pub readiness: RuntimeReadiness,
     pub query_mode: QueryMode,
     pub query_trust: QueryTrust,
     pub recommended_action: RecommendedAction,
@@ -70,6 +71,7 @@ pub fn map_query_report(report: QueryReport) -> ExternalQueryReport {
     ExternalQueryReport {
         term: report.term,
         runtime_state: report.runtime_state,
+        readiness: report.readiness,
         query_mode: report.query_mode,
         query_trust: report.query_trust,
         recommended_action: report.recommended_action,

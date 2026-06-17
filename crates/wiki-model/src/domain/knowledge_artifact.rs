@@ -744,17 +744,30 @@ pub struct KnowledgeHealthSummary {
     pub recommended_action: KnowledgeHealthRecommendedAction,
 }
 
-/// `KnowledgeRecoveryManifest` 是 `.wiki/.knowledge/runtime/recovery-manifest.json` 的文件格式。
+/// `CommittedSnapshotManifest` 是 `.wiki/.knowledge/runtime/snapshots/<snapshot-id>/manifest.yaml` 的文件格式。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct KnowledgeRecoveryManifest {
+pub struct CommittedSnapshotManifest {
     pub schema_version: String,
+    pub snapshot_id: String,
     pub repo_root: String,
     pub workflow_action: String,
     pub generated_at: String,
     pub facts_input_hash: String,
+    #[serde(default)]
+    pub graph_snapshot_id: String,
     pub knowledge_snapshot_id: String,
     pub declared_snapshot_id: String,
+    #[serde(default)]
+    pub projection_snapshot_id: String,
     pub metadata_hash: String,
+    #[serde(default)]
+    pub page_hashes: BTreeMap<String, String>,
+    #[serde(default)]
+    pub projection_digest_refs: Vec<String>,
+    #[serde(default)]
+    pub runtime_gate_refs: Vec<String>,
+    #[serde(default)]
+    pub status: String,
     #[serde(default)]
     pub page_count: usize,
     #[serde(default)]

@@ -17,10 +17,9 @@ use crate::domain::state::{assemble_state, PageBuildResult};
 use crate::domain::steering::{load_steering_config_with_mode, SteeringLoadMode};
 use crate::generation::context::{build_module_contexts_with_graph, build_repo_context_with_graph};
 use crate::generation::managed_sections::{
-    merge_sections, parse_wiki_page, ManagedSectionBlock, PageBlock,
+    merge_sections, parse_wiki_page, ManagedSectionBlock, PageBlock, SectionBindingIndex,
 };
 use crate::generation::renderer::{assemble_page_from_merge, render_page_draft};
-use crate::generation::sections::section_titles_for_page_type;
 use crate::llm::{LlmRuntime, LlmService};
 use crate::repo::git::{current_branch, current_commit};
 use crate::storage::cache_store::{
@@ -28,7 +27,8 @@ use crate::storage::cache_store::{
     write_page_generation_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::knowledge_artifacts::{
-    load_knowledge_artifacts, persist_knowledge_artifacts, PersistKnowledgeArtifactsInput,
+    compute_committed_snapshot_id, load_knowledge_artifacts, persist_knowledge_artifacts,
+    PersistKnowledgeArtifactsInput,
 };
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite::runtime_store::SqliteRuntimeStore;
@@ -377,13 +377,14 @@ pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
         generated_at: generated_at.clone(),
         last_indexed_commit: current_commit(repo_root),
     };
-    let metadata = export_metadata(&state, &export_context);
+    let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
+    let mut metadata = export_metadata(&state, &export_context);
+    metadata.current_snapshot_id = Some(compute_committed_snapshot_id(&facts_input_hash));
     reporter.phase("write_metadata", "写入元数据");
     write_metadata(repo_root, &metadata)?;
     finalize_pipeline_runtime(repo_root, action, generated_pages.len())?;
     let conn = sqlite_store::open_db(repo_root)?;
     let runtime_store = SqliteRuntimeStore::new(&conn);
-    let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
     let research_summaries = knowledge_tree
         .units
         .values()
@@ -464,15 +465,13 @@ fn read_old_page_contents(repo_root: &Path) -> BTreeMap<String, String> {
 
 /// 从旧页面内容中解析 user sections，与新 managed sections 合并。
 fn merge_old_user_sections(
-    planned_page: &wiki_knowledge::PlannedPage,
+    planned_page: &wiki_knowledge::PagePlan,
     new_sections: &[crate::generation::sections::SectionDraft],
     new_content: &str,
     old_content: &str,
     warnings: &mut Vec<String>,
 ) -> String {
-    let known_titles = section_titles_for_page_type(&planned_page.page_type);
-    let known_titles_ref: Vec<&str> = known_titles.iter().copied().collect();
-    let old_parsed = parse_wiki_page(old_content, &known_titles_ref);
+    let old_parsed = parse_wiki_page(old_content, &SectionBindingIndex::default());
 
     let has_user_sections = old_parsed
         .blocks
@@ -485,11 +484,12 @@ fn merge_old_user_sections(
 
     let new_managed: Vec<ManagedSectionBlock> = new_sections
         .iter()
-        .map(|s| ManagedSectionBlock {
-            section_id: s.section_id.clone(),
-            title: s.title.clone(),
-            version: crate::generation::managed_sections::MARKER_VERSION,
-            body: s.content.clone(),
+        .map(|s| {
+            ManagedSectionBlock::generated(
+                s.section_id.clone(),
+                s.title.clone(),
+                s.content.clone(),
+            )
         })
         .collect();
 

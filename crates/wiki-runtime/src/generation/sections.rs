@@ -9,7 +9,7 @@ use wiki_knowledge::{
     section_contract_slots_for_page_type as knowledge_section_contract_slots_for_page_type,
     section_key_for_title as knowledge_section_key_for_title,
     section_title_for_key as knowledge_section_title_for_key,
-    section_titles_for_page_type as knowledge_section_titles_for_page_type, PlannedPage,
+    section_titles_for_page_type as knowledge_section_titles_for_page_type, PagePlan,
 };
 
 use crate::domain::stable_id::stable_id;
@@ -74,13 +74,13 @@ pub fn section_id_for_key(page_id: &str, section_key: &str) -> String {
 ///
 /// # 返回
 /// - 返回按稳定顺序排列的 section 草稿集合。
-pub fn build_section_drafts(page: &PlannedPage, context: &PageContext) -> Vec<SectionDraft> {
+pub fn build_section_drafts(page: &PagePlan, context: &PageContext) -> Vec<SectionDraft> {
     let compose_plan = build_page_compose_plan(page, context);
     build_section_drafts_from_compose_plan(page, context, &compose_plan)
 }
 
 /// 在 renderer 前显式生成 compose 计划。
-pub fn build_page_compose_plan(page: &PlannedPage, context: &PageContext) -> PageComposePlan {
+pub fn build_page_compose_plan(page: &PagePlan, context: &PageContext) -> PageComposePlan {
     let templates = section_templates_for_page(page.page_type.as_str(), context);
     let sections = ordered_section_templates(page.page_type.as_str(), &templates, context)
         .into_iter()
@@ -122,7 +122,7 @@ pub fn build_page_compose_plan(page: &PlannedPage, context: &PageContext) -> Pag
 
 /// 把 compose 计划转成稳定的 section 草稿。
 pub fn build_section_drafts_from_compose_plan(
-    page: &PlannedPage,
+    page: &PagePlan,
     context: &PageContext,
     compose_plan: &PageComposePlan,
 ) -> Vec<SectionDraft> {

@@ -96,10 +96,10 @@ fn status_reports_missing_before_init() {
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "missing");
-    assert!(!status.facts_ready);
+    assert_ne!(serde_json::to_value(&status).unwrap()["readiness"]["index"], "ready");
     assert_eq!(
-        serde_json::to_value(&status).unwrap()["query_readiness"],
-        "needs_init"
+        serde_json::to_value(&status).unwrap()["readiness"]["fusion"],
+        "blocked"
     );
     assert_eq!(
         serde_json::to_value(&status).unwrap()["recommended_action"],
@@ -123,21 +123,29 @@ fn status_restores_runtime_from_formal_artifacts_when_cache_is_missing() {
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "fresh");
-    assert!(status.facts_ready);
+    assert_eq!(serde_json::to_value(&status).unwrap()["readiness"]["index"], "missing");
     assert_eq!(
-        serde_json::to_value(&status).unwrap()["query_readiness"],
+        serde_json::to_value(&status).unwrap()["readiness"]["knowledge"],
         "ready"
     );
     assert_eq!(
+        serde_json::to_value(&status).unwrap()["readiness"]["projection"],
+        "ready"
+    );
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["readiness"]["fusion"],
+        "degraded"
+    );
+    assert_eq!(
         serde_json::to_value(&status).unwrap()["recommended_action"],
-        "none"
+        "rebuild"
     );
     assert!(repo_root.join(".wiki/.cache/wiki-cache.db").exists());
 }
 
 /// 场景：formal artifact 锚点与当前 metadata 不一致时，status 不得误恢复 runtime。
 #[test]
-fn status_keeps_restore_failure_explicit_when_recovery_manifest_is_stale() {
+fn status_keeps_restore_failure_explicit_when_snapshot_manifest_is_stale() {
     let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
@@ -146,30 +154,40 @@ fn status_keeps_restore_failure_explicit_when_recovery_manifest_is_stale() {
 
     run_init(repo_root).unwrap();
 
-    let manifest_path = repo_root.join(".wiki/.knowledge/runtime/recovery-manifest.json");
-    let mut manifest: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
-    manifest["metadata_hash"] = serde_json::Value::String("stale-metadata-hash".to_string());
-    fs::write(
-        &manifest_path,
-        serde_json::to_string_pretty(&manifest).unwrap(),
-    )
-    .unwrap();
+    let manifest_dir = repo_root.join(".wiki/.knowledge/runtime/snapshots");
+    let manifest_path = fs::read_dir(&manifest_dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path().join("manifest.yaml"))
+        .find(|path| path.exists())
+        .expect("snapshot manifest should exist");
+    let mut manifest: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["metadata_hash"] = serde_yaml::Value::String("stale-metadata-hash".to_string());
+    fs::write(&manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "needs_rebuild");
-    assert!(!status.facts_ready);
+    let status_json = serde_json::to_value(&status).unwrap();
+    assert_eq!(status_json["readiness"]["index"], "blocked");
+    assert_eq!(status_json["readiness"]["knowledge"], "blocked");
+    assert_eq!(status_json["readiness"]["projection"], "conflict");
+    assert!(status_json["readiness"]["reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason == "metadata_hash_mismatch"));
     assert_eq!(
         status.needs_rebuild_reason.as_deref(),
         Some("cache_missing")
     );
     assert_eq!(
-        serde_json::to_value(&status).unwrap()["query_readiness"],
+        status_json["readiness"]["fusion"],
         "blocked"
     );
     assert_eq!(
-        serde_json::to_value(&status).unwrap()["recommended_action"],
+        status_json["recommended_action"],
         "rebuild"
     );
 }
@@ -193,8 +211,8 @@ fn status_exposes_runtime_preflight_after_init() {
     let status = run_status(repo_root).unwrap();
     let status_json = serde_json::to_value(&status).unwrap();
     assert_eq!(status.state, "fresh");
-    assert!(status.facts_ready);
-    assert_eq!(status_json["query_readiness"], "ready");
+    assert_eq!(serde_json::to_value(&status).unwrap()["readiness"]["index"], "ready");
+    assert_eq!(status_json["readiness"]["fusion"], "ready");
     assert_eq!(status_json["recommended_action"], "none");
     assert_eq!(status_json["runtime_summary"]["runtime_state"], "completed");
     assert!(status.gate_summary.is_some());
@@ -457,9 +475,12 @@ fn init_persists_minimal_knowledge_artifacts() {
     assert!(knowledge_root.join("runtime/runtime-gates.jsonl").exists());
     assert!(knowledge_root.join("runtime/health-signals.jsonl").exists());
     assert!(knowledge_root.join("declared/records.jsonl").exists());
-    assert!(knowledge_root
-        .join("runtime/recovery-manifest.json")
-        .exists());
+    let snapshot_manifest_count = fs::read_dir(knowledge_root.join("runtime/snapshots"))
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().join("manifest.yaml").exists())
+        .count();
+    assert_eq!(snapshot_manifest_count, 1);
 }
 
 #[test]
@@ -488,8 +509,8 @@ fn status_keeps_readiness_ready_but_exposes_health_degradation_after_declared_wr
     let status_json = serde_json::to_value(&status).unwrap();
 
     assert_eq!(status.state, "fresh", "status = {}", status_json);
-    assert_eq!(status_json["query_readiness"], "ready");
-    assert_eq!(status_json["recommended_action"], "update");
+    assert_eq!(status_json["readiness"]["fusion"], "degraded");
+    assert_eq!(status_json["recommended_action"], "rebuild");
     assert_eq!(
         status_json["health_summary"]["counts_by_kind"]["declared_derived_divergence"],
         1
@@ -531,8 +552,8 @@ fn status_projects_governance_conflict_into_review_signal() {
     let status = run_status(repo_root).unwrap();
     let status_json = serde_json::to_value(&status).unwrap();
     assert_eq!(status.state, "fresh", "status = {}", status_json);
-    assert_eq!(status_json["query_readiness"], "ready");
-    assert_eq!(status_json["recommended_action"], "review");
+    assert_eq!(status_json["readiness"]["fusion"], "degraded");
+    assert_eq!(status_json["recommended_action"], "rebuild");
     assert_eq!(
         status_json["health_summary"]["counts_by_kind"]["governance_conflict"],
         1
@@ -576,7 +597,7 @@ fn status_projects_degraded_research_summary_into_unit_and_health() {
         repo_root,
         workflow_action: "update",
         generated_at: "2026-04-15T12:00:00Z",
-        facts_input_hash: &before.recovery_manifest.facts_input_hash,
+        facts_input_hash: &before.snapshot_manifest.facts_input_hash,
         metadata: &metadata,
         knowledge_tree: &before.knowledge_tree,
         declared_records: &before.declared_records,
@@ -652,7 +673,7 @@ fn status_projects_blocked_research_summary_into_unit_and_health() {
         repo_root,
         workflow_action: "update",
         generated_at: "2026-04-15T12:30:00Z",
-        facts_input_hash: &before.recovery_manifest.facts_input_hash,
+        facts_input_hash: &before.snapshot_manifest.facts_input_hash,
         metadata: &metadata,
         knowledge_tree: &before.knowledge_tree,
         declared_records: &before.declared_records,
@@ -728,7 +749,7 @@ fn status_projects_stale_projection_digest_into_unit_and_health() {
         repo_root,
         workflow_action: "update",
         generated_at: "2026-04-15T13:00:00Z",
-        facts_input_hash: &before.recovery_manifest.facts_input_hash,
+        facts_input_hash: &before.snapshot_manifest.facts_input_hash,
         metadata: &metadata,
         knowledge_tree: &before.knowledge_tree,
         declared_records: &before.declared_records,
@@ -804,7 +825,7 @@ fn status_projects_blocked_projection_digest_into_unit_and_health() {
         repo_root,
         workflow_action: "update",
         generated_at: "2026-04-15T13:30:00Z",
-        facts_input_hash: &before.recovery_manifest.facts_input_hash,
+        facts_input_hash: &before.snapshot_manifest.facts_input_hash,
         metadata: &metadata,
         knowledge_tree: &before.knowledge_tree,
         declared_records: &before.declared_records,
@@ -1002,7 +1023,7 @@ fn update_refreshes_stale_runtime_to_fresh() {
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "needs_update");
-    assert!(status.facts_ready);
+    assert_eq!(serde_json::to_value(&status).unwrap()["readiness"]["index"], "ready");
     assert_eq!(
         status.affected_knowledge_scope.escalation.level.as_str(),
         "local_refresh"
@@ -1012,8 +1033,8 @@ fn update_refreshes_stale_runtime_to_fresh() {
         "status should expose direct knowledge scope for stale sources"
     );
     assert_eq!(
-        serde_json::to_value(&status).unwrap()["query_readiness"],
-        "needs_update"
+        serde_json::to_value(&status).unwrap()["readiness"]["fusion"],
+        "degraded"
     );
     assert_eq!(
         serde_json::to_value(&status).unwrap()["recommended_action"],
@@ -1333,7 +1354,7 @@ fn production_mode_provider_blocker_surfaces_in_status() {
     let status = run_status_with_mode(repo_root, SteeringLoadMode::Production).unwrap();
     let status_json = serde_json::to_value(&status).unwrap();
     assert_eq!(status.state, "blocker");
-    assert_eq!(status_json["query_readiness"], "blocked");
+    assert_eq!(status_json["readiness"]["fusion"], "blocked");
     assert_eq!(status_json["recommended_action"], "rebuild");
     assert!(status.blocker_hint.is_some());
     assert!(status.runtime_summary.is_some());
@@ -1377,7 +1398,7 @@ fn production_mode_disabled_llm_surfaces_provider_blocker() {
     let status = run_status_with_mode(repo_root, SteeringLoadMode::Production).unwrap();
     let status_json = serde_json::to_value(&status).unwrap();
     assert_eq!(status.state, "blocker");
-    assert_eq!(status_json["query_readiness"], "blocked");
+    assert_eq!(status_json["readiness"]["fusion"], "blocked");
     assert_eq!(status_json["recommended_action"], "rebuild");
     assert!(status.blocker_hint.is_some());
     let gate_summary = status.gate_summary.expect("gate summary should exist");
@@ -1430,7 +1451,7 @@ fn production_mode_update_persists_provider_blocker_after_runtime_was_fresh() {
     let status = run_status_with_mode(repo_root, SteeringLoadMode::Production).unwrap();
     let status_json = serde_json::to_value(&status).unwrap();
     assert_eq!(status.state, "blocker");
-    assert_eq!(status_json["query_readiness"], "blocked");
+    assert_eq!(status_json["readiness"]["fusion"], "blocked");
     assert_eq!(status_json["recommended_action"], "rebuild");
     let runtime_summary = status
         .runtime_summary
@@ -1483,7 +1504,7 @@ fn production_mode_rebuild_persists_provider_blocker_after_runtime_was_fresh() {
     let status = run_status_with_mode(repo_root, SteeringLoadMode::Production).unwrap();
     let status_json = serde_json::to_value(&status).unwrap();
     assert_eq!(status.state, "blocker");
-    assert_eq!(status_json["query_readiness"], "blocked");
+    assert_eq!(status_json["readiness"]["fusion"], "blocked");
     assert_eq!(status_json["recommended_action"], "rebuild");
     let runtime_summary = status
         .runtime_summary
@@ -1550,7 +1571,7 @@ fn production_mode_provider_blocker_surfaces_after_update() {
     let status = run_status_with_mode(repo_root, SteeringLoadMode::Production).unwrap();
     let status_json = serde_json::to_value(&status).unwrap();
     assert_eq!(status.state, "blocker");
-    assert_eq!(status_json["query_readiness"], "blocked");
+    assert_eq!(status_json["readiness"]["fusion"], "blocked");
     assert_eq!(status_json["recommended_action"], "rebuild");
     let gate_summary = status.gate_summary.expect("gate summary should exist");
     assert!(gate_summary.total_units > 0);
@@ -1608,7 +1629,7 @@ fn production_mode_provider_blocker_surfaces_after_rebuild() {
     let status = run_status_with_mode(repo_root, SteeringLoadMode::Production).unwrap();
     let status_json = serde_json::to_value(&status).unwrap();
     assert_eq!(status.state, "blocker");
-    assert_eq!(status_json["query_readiness"], "blocked");
+    assert_eq!(status_json["readiness"]["fusion"], "blocked");
     assert_eq!(status_json["recommended_action"], "rebuild");
     let gate_summary = status.gate_summary.expect("gate summary should exist");
     assert!(gate_summary.total_units > 0);
@@ -1777,6 +1798,7 @@ fn clear_declared_blocks_for_status(repo_root: &Path) {
 
 fn set_declared_blocks_for_status(repo_root: &Path, declared_blocks: &str) {
     let overview_path = repo_root.join(".wiki/INDEX.md");
+    mark_first_managed_section_declared(&overview_path);
     let content = fs::read_to_string(&overview_path).unwrap();
     let marker = "<!-- wiki:managed:end";
     let pos = content
@@ -1787,6 +1809,26 @@ fn set_declared_blocks_for_status(repo_root: &Path, declared_blocks: &str) {
     new_content.push_str(declared_blocks);
     new_content.push_str(&content[pos..]);
     fs::write(&overview_path, &new_content).unwrap();
+}
+
+fn mark_first_managed_section_declared(page_path: &Path) {
+    let content = fs::read_to_string(page_path).unwrap();
+    let marker = "<!-- wiki:managed:start";
+    let start = content
+        .find(marker)
+        .expect("should have managed start marker");
+    let end = content[start..].find('\n').unwrap() + start;
+    let line = &content[start..end];
+    let declared_line = line.replace("owner=derived_managed", "owner=declared_managed");
+    if line == declared_line {
+        assert!(line.contains("owner=declared_managed"));
+        return;
+    }
+
+    let mut new_content = content[..start].to_string();
+    new_content.push_str(&declared_line);
+    new_content.push_str(&content[end..]);
+    fs::write(page_path, &new_content).unwrap();
 }
 
 #[test]
@@ -1806,9 +1848,9 @@ fn init_builds_formal_runtime_and_reports_v0_2_ready_state() {
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "fresh");
-    assert!(status.facts_ready);
+    assert_eq!(serde_json::to_value(&status).unwrap()["readiness"]["index"], "ready");
     assert_eq!(
-        serde_json::to_value(&status).unwrap()["query_readiness"],
+        serde_json::to_value(&status).unwrap()["readiness"]["fusion"],
         "ready"
     );
     assert_eq!(
@@ -1867,7 +1909,7 @@ fn update_keeps_formal_runtime_ready_after_source_change() {
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "fresh");
-    assert!(status.facts_ready);
+    assert_eq!(serde_json::to_value(&status).unwrap()["readiness"]["index"], "ready");
     assert_eq!(
         serde_json::to_value(&status).unwrap()["recommended_action"],
         "none"

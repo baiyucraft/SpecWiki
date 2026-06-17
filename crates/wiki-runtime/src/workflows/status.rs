@@ -9,14 +9,15 @@ use std::path::Path;
 use crate::domain::change_set::plan_runtime_changes_with_mode;
 use crate::domain::runtime_profile::{
     blocker_hint_from, merge_recommended_action, preflight_for_state, summarize_health_signals,
-    LlmModeHint, QueryReadiness, RecommendedAction, RuntimeGateSummary, RuntimeSummaryProjection,
+    FusionReadiness, LayerReadiness, LlmModeHint, RecommendedAction, RestoredLevel,
+    RuntimeGateSummary, RuntimeReadiness, RuntimeSummaryProjection,
 };
 use crate::domain::steering::{load_steering_config_with_mode, SteeringLoadMode};
 use crate::storage::cache_store::cache_dir;
 use crate::storage::knowledge_artifacts::{
     load_health_signals, restore_runtime_cache_from_artifacts,
 };
-use crate::storage::state_store::facts_snapshot_ready;
+use crate::storage::state_store::{index_graph_ready, runtime_mirror_ready};
 use crate::workflows::page_render::{
     load_runtime_gate_summary_for_repo, load_runtime_summary_for_repo,
 };
@@ -37,10 +38,8 @@ pub struct StatusReport {
     pub affected_knowledge_scope: AffectedKnowledgeScope,
     /// 当状态为 `needs_rebuild` 时，对外返回的原因说明。
     pub needs_rebuild_reason: Option<String>,
-    /// 当前仓库是否已经持有可供 query 兜底使用的 facts/runtime snapshot。
-    pub facts_ready: bool,
-    /// 当前阶段宿主是否适合直接发起 query。
-    pub query_readiness: QueryReadiness,
+    /// status/query 共享的分层 readiness 主合同。
+    pub readiness: RuntimeReadiness,
     /// 面向宿主的下一步建议动作。
     pub recommended_action: RecommendedAction,
     /// 当前阶段仅允许输出预判型 LLM 模式提示。
@@ -79,14 +78,19 @@ pub fn run_status_with_mode(
     steering_mode: SteeringLoadMode,
 ) -> io::Result<StatusReport> {
     let mut plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+    let mut restore_readiness = None;
     if plan.needs_rebuild_reason.as_deref() == Some("cache_missing")
         && !cache_dir(repo_root).exists()
-        && restore_runtime_cache_from_artifacts(repo_root)?
     {
-        plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+        let outcome = restore_runtime_cache_from_artifacts(repo_root)?;
+        restore_readiness = Some(outcome.readiness.clone());
+        if outcome.restored_cache {
+            plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+        }
     }
-    let facts_ready = facts_snapshot_ready(repo_root)?;
-    let projected_state = project_external_runtime_state(repo_root, plan.state(), facts_ready);
+    let mirror_ready = runtime_mirror_ready(repo_root)?;
+    let graph_ready = index_graph_ready(repo_root)?;
+    let projected_state = project_external_runtime_state(repo_root, plan.state(), mirror_ready);
     let runtime_summary = load_runtime_summary_for_repo(repo_root)
         .ok()
         .flatten()
@@ -100,9 +104,12 @@ pub fn run_status_with_mode(
         runtime_summary.as_ref(),
         gate_summary.as_ref(),
     );
-    let preflight = preflight_for_state(&external_state, facts_ready);
+    let readiness = restore_readiness.unwrap_or_else(|| {
+        readiness_from_state(&external_state, graph_ready, mirror_ready, plan.needs_rebuild_reason.as_deref())
+    });
+    let preflight = preflight_for_state(&external_state, graph_ready);
     let recommended_action =
-        merge_recommended_action(preflight.recommended_action, health_summary.as_ref());
+        merge_recommended_action(recommended_action_for_readiness(preflight.recommended_action, &readiness), health_summary.as_ref());
     let blocker_hint = blocker_hint_from(runtime_summary.as_ref(), gate_summary.as_ref());
     let llm_mode_hint = if load_steering_config_with_mode(repo_root, steering_mode)
         .llm
@@ -119,8 +126,7 @@ pub fn run_status_with_mode(
         dirty_pages: plan.dirty_page_paths(),
         affected_knowledge_scope: plan.affected_knowledge_scope,
         needs_rebuild_reason: plan.needs_rebuild_reason,
-        facts_ready: preflight.facts_ready,
-        query_readiness: preflight.query_readiness,
+        readiness,
         recommended_action,
         llm_mode_hint,
         health_summary,
@@ -128,6 +134,134 @@ pub fn run_status_with_mode(
         gate_summary,
         blocker_hint,
     })
+}
+
+pub(crate) fn readiness_from_state(
+    state: &str,
+    graph_ready: bool,
+    mirror_ready: bool,
+    needs_rebuild_reason: Option<&str>,
+) -> RuntimeReadiness {
+    match state {
+        "fresh" if graph_ready => RuntimeReadiness::ready(None),
+        "fresh" if mirror_ready => RuntimeReadiness {
+            index: LayerReadiness::Missing,
+            knowledge: LayerReadiness::Ready,
+            projection: LayerReadiness::Ready,
+            fusion: FusionReadiness::Degraded,
+            restored_level: RestoredLevel::Level1,
+            snapshot_id: None,
+            reasons: needs_rebuild_reason
+                .map(|reason| vec![reason.to_string()])
+                .unwrap_or_default(),
+        },
+        "stale" | "needs_update" => RuntimeReadiness {
+            index: if graph_ready {
+                LayerReadiness::Ready
+            } else {
+                LayerReadiness::Missing
+            },
+            knowledge: if mirror_ready {
+                LayerReadiness::Ready
+            } else {
+                LayerReadiness::Missing
+            },
+            projection: if mirror_ready {
+                LayerReadiness::Ready
+            } else {
+                LayerReadiness::Missing
+            },
+            fusion: FusionReadiness::Degraded,
+            restored_level: if mirror_ready {
+                RestoredLevel::Level1
+            } else {
+                RestoredLevel::None
+            },
+            snapshot_id: None,
+            reasons: needs_rebuild_reason
+                .map(|reason| vec![reason.to_string()])
+                .unwrap_or_else(|| vec!["runtime_stale".to_string()]),
+        },
+        "runtime_incomplete" if mirror_ready => RuntimeReadiness {
+            index: if graph_ready {
+                LayerReadiness::Ready
+            } else {
+                LayerReadiness::Missing
+            },
+            knowledge: LayerReadiness::Ready,
+            projection: LayerReadiness::Ready,
+            fusion: if graph_ready {
+                FusionReadiness::Degraded
+            } else {
+                FusionReadiness::Degraded
+            },
+            restored_level: if graph_ready {
+                RestoredLevel::Level2
+            } else {
+                RestoredLevel::Level1
+            },
+            snapshot_id: None,
+            reasons: needs_rebuild_reason
+                .map(|reason| vec![reason.to_string()])
+                .unwrap_or_else(|| vec!["runtime_incomplete".to_string()]),
+        },
+        "missing" => RuntimeReadiness::missing("runtime_missing"),
+        "blocker" => RuntimeReadiness::blocked("runtime_blocker"),
+        _ if mirror_ready => RuntimeReadiness {
+            index: if graph_ready {
+                LayerReadiness::Ready
+            } else {
+                LayerReadiness::Missing
+            },
+            knowledge: LayerReadiness::Ready,
+            projection: LayerReadiness::Ready,
+            fusion: if graph_ready {
+                FusionReadiness::Ready
+            } else {
+                FusionReadiness::Degraded
+            },
+            restored_level: if graph_ready {
+                RestoredLevel::Level2
+            } else {
+                RestoredLevel::Level1
+            },
+            snapshot_id: None,
+            reasons: needs_rebuild_reason
+                .map(|reason| vec![reason.to_string()])
+                .unwrap_or_default(),
+        },
+        _ => RuntimeReadiness {
+            index: LayerReadiness::Stale,
+            knowledge: LayerReadiness::Stale,
+            projection: LayerReadiness::Stale,
+            fusion: FusionReadiness::Degraded,
+            restored_level: RestoredLevel::None,
+            snapshot_id: None,
+            reasons: needs_rebuild_reason
+                .map(|reason| vec![reason.to_string()])
+                .unwrap_or_default(),
+        },
+    }
+}
+
+fn recommended_action_for_readiness(
+    current: RecommendedAction,
+    readiness: &RuntimeReadiness,
+) -> RecommendedAction {
+    if current == RecommendedAction::Init {
+        return current;
+    }
+    if readiness.index == LayerReadiness::Ready && readiness.fusion == FusionReadiness::Ready {
+        return current;
+    }
+    match readiness.fusion {
+        FusionReadiness::Ready => current,
+        FusionReadiness::Degraded => match current {
+            RecommendedAction::None => RecommendedAction::Rebuild,
+            action => action,
+        },
+        FusionReadiness::Blocked => RecommendedAction::Rebuild,
+    }
 }
 
 fn derive_runtime_state(

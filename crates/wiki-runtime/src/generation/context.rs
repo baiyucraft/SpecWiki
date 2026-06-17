@@ -14,7 +14,7 @@ use wiki_index::scanner::{FilePurpose, ScanReport};
 use wiki_index::symbol_graph::{GraphAnalysisSnapshot, GraphSummary};
 use wiki_index::symbols::{ParsedSymbolsSnapshot, SymbolNode};
 use wiki_index::TopicSeed;
-use wiki_knowledge::PlannedPage;
+use wiki_knowledge::PagePlan;
 use wiki_knowledge::{ModuleContext, RepoContext};
 
 /// 构建仓库级上下文。
@@ -505,7 +505,7 @@ fn is_test_source_path(path: &str) -> bool {
         .any(|seg| matches!(*seg, "tests" | "test" | "spec" | "__tests__" | "__test__"))
 }
 
-/// 把 `PlannedPage` 进一步转换成渲染器可直接消费的 `PageContext`。
+/// 把 `PagePlan` 进一步转换成渲染器可直接消费的 `PageContext`。
 /// 这里是“结构化事实 -> 页面输入”的最后一道转换层。
 ///
 /// # 参数
@@ -518,7 +518,7 @@ fn is_test_source_path(path: &str) -> bool {
 /// # 返回
 /// - 返回可直接交给渲染器使用的页面上下文。
 pub fn build_page_context(
-    page: &PlannedPage,
+    page: &PagePlan,
     report: &ScanReport,
     module_tree: &ModuleTree,
     repo_context: &RepoContext,
@@ -539,7 +539,7 @@ pub fn build_page_context(
 
 /// 构建带页面 hints 和 child summaries 的页面上下文。
 pub fn build_page_context_with_inputs(
-    page: &PlannedPage,
+    page: &PagePlan,
     report: &ScanReport,
     module_tree: &ModuleTree,
     repo_context: &RepoContext,
@@ -562,7 +562,7 @@ pub fn build_page_context_with_inputs(
 
 /// 构建带 symbol/graph analysis 辅助输入的页面上下文。
 pub fn build_page_context_with_graph_inputs(
-    page: &PlannedPage,
+    page: &PagePlan,
     report: &ScanReport,
     module_tree: &ModuleTree,
     repo_context: &RepoContext,

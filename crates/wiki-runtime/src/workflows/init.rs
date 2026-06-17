@@ -29,7 +29,7 @@ use crate::storage::cache_store::{
     write_page_generation_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::knowledge_artifacts::{
-    persist_knowledge_artifacts, PersistKnowledgeArtifactsInput,
+    compute_committed_snapshot_id, persist_knowledge_artifacts, PersistKnowledgeArtifactsInput,
 };
 use crate::storage::metadata_store::metadata_exists;
 use crate::storage::metadata_store::write_metadata;
@@ -379,13 +379,14 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
         generated_at: generated_at.clone(),
         last_indexed_commit: current_commit(repo_root),
     };
-    let metadata = export_metadata(&state, &export_context);
+    let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
+    let mut metadata = export_metadata(&state, &export_context);
+    metadata.current_snapshot_id = Some(compute_committed_snapshot_id(&facts_input_hash));
     reporter.phase("write_metadata", "写入元数据");
     write_metadata(repo_root, &metadata)?;
     finalize_pipeline_runtime(repo_root, action, generated_pages.len())?;
     let conn = sqlite_store::open_db(repo_root)?;
     let runtime_store = SqliteRuntimeStore::new(&conn);
-    let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
     let research_summaries = knowledge_tree
         .units
         .values()
@@ -510,7 +511,7 @@ pub(crate) fn source_paths_for_page(
 
 /// 页面祖先链会直接写入状态层，方便 query 和后续 runtime 读取。
 pub(crate) fn ancestor_ids_for_page(
-    page: &wiki_knowledge::PlannedPage,
+    page: &wiki_knowledge::PagePlan,
     ancestor_ids_by_page: &BTreeMap<String, Vec<String>>,
 ) -> Vec<String> {
     let Some(parent_id) = &page.parent_id else {
@@ -527,7 +528,7 @@ pub(crate) fn ancestor_ids_for_page(
 
 /// provenance 保留最小可追溯线索，供 query 和后续 runtime 使用。
 pub(crate) fn page_provenance(
-    page: &wiki_knowledge::PlannedPage,
+    page: &wiki_knowledge::PagePlan,
     page_context: &PageContext,
     scan_report: &wiki_index::scanner::ScanReport,
 ) -> Vec<String> {
@@ -564,18 +565,18 @@ pub(crate) fn page_provenance(
     provenance.into_keys().collect()
 }
 
-/// 从 pages_by_id 中查找对应的 PlannedPage。
+/// 从 pages_by_id 中查找对应的 PagePlan。
 pub(crate) fn find_or_build_planned_page(
     draft: &PageDraft,
-    pages_by_id: &BTreeMap<String, wiki_knowledge::PlannedPage>,
-) -> io::Result<wiki_knowledge::PlannedPage> {
+    pages_by_id: &BTreeMap<String, wiki_knowledge::PagePlan>,
+) -> io::Result<wiki_knowledge::PagePlan> {
     if let Some(page) = pages_by_id.get(&draft.page_id) {
         return Ok(page.clone());
     }
     Err(io::Error::new(
         io::ErrorKind::InvalidData,
         format!(
-            "PageDraft is not backed by a PlannedPage: page_id={}, relative_path={}",
+            "PageDraft is not backed by a PagePlan: page_id={}, relative_path={}",
             draft.page_id, draft.relative_path
         ),
     ))
@@ -585,7 +586,7 @@ pub(crate) fn find_or_build_planned_page(
 /// 新 pipeline 中 PageContext 主要承载 source_ids 供状态层持久化。
 pub(crate) fn build_minimal_page_context(
     draft: &PageDraft,
-    planned_page: &wiki_knowledge::PlannedPage,
+    planned_page: &wiki_knowledge::PagePlan,
     knowledge_tree: &crate::domain::knowledge::KnowledgeTree,
     digests: &BTreeMap<String, wiki_knowledge::domain::research::PageDigest>,
     unit_researches: &BTreeMap<String, wiki_knowledge::domain::research::UnitResearch>,
@@ -766,17 +767,22 @@ mod tests {
         tree.add_unit(child.clone());
         tree.processing_order = vec![child.id.clone(), parent.id.clone()];
 
-        let planned_page = plan_pages_from_knowledge_tree(&tree)
-            .into_iter()
-            .find(|page| {
-                page.id == crate::domain::stable_id::stable_id("page", &parent.relative_path)
-            })
+        let planned_pages = plan_pages_from_knowledge_tree(&tree);
+        let planned_page = planned_pages
+            .iter()
+            .find(|page| page.unit_id.as_deref() == Some(parent.id.as_str()))
+            .cloned()
             .expect("parent page should be planned");
+        let child_planned_page = planned_pages
+            .iter()
+            .find(|page| page.unit_id.as_deref() == Some(child.id.as_str()))
+            .cloned()
+            .expect("child page should be planned");
         let draft = PageDraft {
             page_id: planned_page.id.clone(),
             unit_id: parent.id.clone(),
             title: parent.title.clone(),
-            relative_path: parent.relative_path.clone(),
+            relative_path: planned_page.relative_path.clone(),
             sections: Vec::new(),
             diagrams: Vec::new(),
             citation_count: 0,
@@ -784,7 +790,7 @@ mod tests {
         let child_digest = PageDigest {
             digest_id: "digest-child-runtime".to_string(),
             unit_id: child.id.clone(),
-            page_id: crate::domain::stable_id::stable_id("page", &child.relative_path),
+            page_id: child_planned_page.id.clone(),
             title: child.title.clone(),
             summary: "负责主运行时流程。".to_string(),
             key_sources: vec!["src/runtime.rs".to_string()],
@@ -838,13 +844,7 @@ mod tests {
             Some(parent.domain_id.as_str())
         );
         assert_eq!(context.child_unit_ids, vec![child.id.clone()]);
-        assert_eq!(
-            context.child_page_ids,
-            vec![crate::domain::stable_id::stable_id(
-                "page",
-                &child.relative_path
-            )]
-        );
+        assert_eq!(context.child_page_ids, vec![child_planned_page.id]);
         assert_eq!(
             context.child_digest_ids,
             vec!["digest-child-runtime".to_string()]

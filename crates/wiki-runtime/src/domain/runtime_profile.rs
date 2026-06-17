@@ -59,6 +59,112 @@ pub enum QueryTrust {
     Blocked,
 }
 
+/// runtime 分层 readiness 的单层状态。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerReadiness {
+    Ready,
+    Stale,
+    Missing,
+    Rebuilding,
+    Conflict,
+    Blocked,
+    NotEnabled,
+}
+
+/// 跨层融合后的整体消费状态。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FusionReadiness {
+    Ready,
+    Degraded,
+    Blocked,
+}
+
+/// 当前 runtime 是否来自 restore，以及 restore 的可信层级。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RestoredLevel {
+    None,
+    Level1,
+    Level2,
+}
+
+/// status/query 共享的机器可读 readiness 主合同。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RuntimeReadiness {
+    pub index: LayerReadiness,
+    pub knowledge: LayerReadiness,
+    pub projection: LayerReadiness,
+    pub fusion: FusionReadiness,
+    pub restored_level: RestoredLevel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
+}
+
+impl RuntimeReadiness {
+    pub fn missing(reason: impl Into<String>) -> Self {
+        Self {
+            index: LayerReadiness::Missing,
+            knowledge: LayerReadiness::Missing,
+            projection: LayerReadiness::Missing,
+            fusion: FusionReadiness::Blocked,
+            restored_level: RestoredLevel::None,
+            snapshot_id: None,
+            reasons: vec![reason.into()],
+        }
+    }
+
+    pub fn ready(snapshot_id: Option<String>) -> Self {
+        Self {
+            index: LayerReadiness::Ready,
+            knowledge: LayerReadiness::Ready,
+            projection: LayerReadiness::Ready,
+            fusion: FusionReadiness::Ready,
+            restored_level: RestoredLevel::Level2,
+            snapshot_id,
+            reasons: Vec::new(),
+        }
+    }
+
+    pub fn level1(snapshot_id: Option<String>, mut reasons: Vec<String>) -> Self {
+        if reasons.is_empty() {
+            reasons.push("level1_restore_without_index_graph".to_string());
+        }
+        Self {
+            index: LayerReadiness::Missing,
+            knowledge: LayerReadiness::Ready,
+            projection: LayerReadiness::Ready,
+            fusion: FusionReadiness::Degraded,
+            restored_level: RestoredLevel::Level1,
+            snapshot_id,
+            reasons,
+        }
+    }
+
+    pub fn blocked(reason: impl Into<String>) -> Self {
+        Self {
+            index: LayerReadiness::Blocked,
+            knowledge: LayerReadiness::Blocked,
+            projection: LayerReadiness::Blocked,
+            fusion: FusionReadiness::Blocked,
+            restored_level: RestoredLevel::None,
+            snapshot_id: None,
+            reasons: vec![reason.into()],
+        }
+    }
+
+    pub fn query_trust(&self) -> QueryTrust {
+        match self.fusion {
+            FusionReadiness::Ready => QueryTrust::Ready,
+            FusionReadiness::Degraded => QueryTrust::StaleButQueryable,
+            FusionReadiness::Blocked => QueryTrust::Blocked,
+        }
+    }
+}
+
 /// `AnswerMode` 表示当前 answer assembly 的正式装配模式。
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

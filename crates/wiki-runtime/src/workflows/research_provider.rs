@@ -26,7 +26,7 @@ use wiki_knowledge::domain::research::{
     UnitResearch,
 };
 use wiki_knowledge::research::{ResearchDataSource, ResearchProvider, StructuralResearchProvider};
-use wiki_knowledge::PlannedPage;
+use wiki_knowledge::PagePlan;
 use wiki_model::domain::knowledge::official_wiki_relative_path;
 
 use serde_json::json;
@@ -298,7 +298,7 @@ impl ResearchProvider for ProviderBackedResearchProvider<'_, '_, '_> {
 }
 
 fn provider_allowed_sections(
-    section_plan: &[wiki_knowledge::domain::research::PlannedSection],
+    section_plan: &[wiki_knowledge::domain::research::SectionPlan],
 ) -> Vec<PageResearchSectionSlot> {
     section_plan
         .iter()
@@ -467,7 +467,7 @@ fn overlay_seed_diagram_inputs(mut context: PageContext, seed: &ResearchPageSeed
 }
 
 fn build_provider_page_context(
-    page: &PlannedPage,
+    page: &PagePlan,
     ds: &ResearchDataSource,
     hints: Vec<String>,
     child_summaries: Vec<String>,
@@ -493,7 +493,7 @@ fn build_provider_page_context(
 
 fn execute_provider_request(
     provider: &ProviderBackedResearchProvider<'_, '_, '_>,
-    page: &PlannedPage,
+    page: &PagePlan,
     page_context: &PageContext,
     input: PageResearchInput,
     pretrim_applied: bool,
@@ -741,13 +741,13 @@ fn apply_seed_to_unit_research(research: &mut UnitResearch, seed: ResearchPageSe
     research.key_sources = key_sources;
 }
 
-fn build_system_provider_page(page_type: &str, title: &str, relative_path: &str) -> PlannedPage {
+fn build_system_provider_page(page_type: &str, title: &str, relative_path: &str) -> PagePlan {
     let unit_type = match page_type {
         "architecture" => UnitType::Architecture,
         _ => UnitType::Overview,
     };
     let relative_path = official_wiki_relative_path(&unit_type, title, relative_path);
-    PlannedPage {
+    PagePlan {
         id: stable_id("page", &relative_path),
         title: title.to_string(),
         relative_path,
@@ -766,13 +766,13 @@ fn build_system_provider_page(page_type: &str, title: &str, relative_path: &str)
     }
 }
 
-fn build_domain_provider_page(domain: &crate::domain::knowledge::KnowledgeDomain) -> PlannedPage {
+fn build_domain_provider_page(domain: &crate::domain::knowledge::KnowledgeDomain) -> PagePlan {
     let relative_path = official_wiki_relative_path(
         &UnitType::DomainIndex,
         &domain.label,
         &format!("{0}/{0}.md", domain.id),
     );
-    PlannedPage {
+    PagePlan {
         id: stable_id("page", &relative_path),
         title: domain.label.clone(),
         relative_path,
@@ -994,7 +994,7 @@ pub fn select_runtime_research_provider<'a, 'cfg, 'svc>(
     }
 }
 
-fn build_provider_page(unit: &KnowledgeUnit, tree: &KnowledgeTree) -> PlannedPage {
+fn build_provider_page(unit: &KnowledgeUnit, tree: &KnowledgeTree) -> PagePlan {
     let page_type = match unit.unit_type {
         UnitType::Overview => "overview",
         UnitType::Architecture => "architecture",
@@ -1016,7 +1016,7 @@ fn build_provider_page(unit: &KnowledgeUnit, tree: &KnowledgeTree) -> PlannedPag
         })
     });
 
-    PlannedPage {
+    PagePlan {
         id: crate::domain::stable_id::stable_id("page", &relative_path),
         title: unit.title.clone(),
         relative_path,
@@ -1104,7 +1104,7 @@ fn merge_provider_research(
 }
 
 fn select_provider_section<'a>(
-    planned: &wiki_knowledge::domain::research::PlannedSection,
+    planned: &wiki_knowledge::domain::research::SectionPlan,
     provider_sections: &'a [PageResearchSectionPlan],
     matched_indexes: &BTreeSet<usize>,
 ) -> Option<(usize, &'a PageResearchSectionPlan)> {
@@ -1271,7 +1271,7 @@ mod tests {
     use wiki_index::symbols::ParsedSymbolsSnapshot;
     use wiki_knowledge::domain::research::{
         PageDigest, PageResearchDiagramRollup, PageResearchEvidenceGroup, PageResearchEvidenceItem,
-        PageResearchResult, PageResearchSectionPlan, PlannedSection, ProjectionDigestStatus,
+        PageResearchResult, PageResearchSectionPlan, SectionPlan, ProjectionDigestStatus,
         ResearchProfile, ResearchStopReason, UnitResearch,
     };
     use wiki_knowledge::research::{
@@ -1485,7 +1485,7 @@ mod tests {
             summary: "structural summary".to_string(),
             positioning: "structural positioning".to_string(),
             section_plan: vec![
-                PlannedSection {
+                SectionPlan {
                     section_key: "overview".to_string(),
                     title: "概述".to_string(),
                     intent: "old intent".to_string(),
@@ -1494,7 +1494,7 @@ mod tests {
                     child_digest_slot: false,
                     preserve_source_markdown: false,
                 },
-                PlannedSection {
+                SectionPlan {
                     section_key: "runtime-responsibility".to_string(),
                     title: "运行时职责".to_string(),
                     intent: "old runtime".to_string(),

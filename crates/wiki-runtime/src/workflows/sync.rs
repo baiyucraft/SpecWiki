@@ -11,16 +11,15 @@ use crate::domain::metadata_mapper::{export_metadata, ExportContext};
 use crate::domain::state::{WikiPageState, WikiSectionState};
 use crate::domain::steering::{load_steering_config_with_mode, SteeringLoadMode};
 use crate::generation::managed_sections::{
-    content_hash, parse_wiki_page, PageBlock, ParsedWikiPage,
+    content_hash, parse_wiki_page, PageBlock, ParsedWikiPage, SectionBindingIndex,
 };
-use crate::generation::sections::section_titles_for_page_type;
 use crate::repo::git::{current_branch, current_commit};
 use crate::storage::cache_store::{
     read_page_context_cache, read_page_generation_cache, write_module_tree_cache, write_scan_cache,
 };
 use crate::storage::knowledge_artifacts::{
-    knowledge_artifacts_exist, load_knowledge_artifacts, persist_knowledge_artifacts,
-    restore_runtime_cache_from_artifacts, PersistKnowledgeArtifactsInput,
+    compute_committed_snapshot_id, knowledge_artifacts_exist, load_knowledge_artifacts,
+    persist_knowledge_artifacts, restore_runtime_cache_from_artifacts, PersistKnowledgeArtifactsInput,
 };
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite_store;
@@ -30,33 +29,29 @@ use crate::workflows::init::current_timestamp;
 use wiki_index::fingerprint::fingerprint_bytes;
 use wiki_index::hierarchy::build_module_tree;
 use wiki_index::scanner::scan_repo_with_boundary;
+use wiki_knowledge::declared_writeback::{
+    validate_declared_writeback, DeclaredAuthoringCandidate, DeclaredSnapshot,
+    DeclaredWritebackDecision,
+};
 use wiki_model::domain::knowledge_artifact::{
     validate_declared_record_snapshot, DeclaredKnowledgeRecord, DeclaredKnowledgeRecordKind,
     DeclaredKnowledgeRecordStatus, DeclaredKnowledgeRelation, DeclaredKnowledgeRelationKind,
     DeclaredKnowledgeScope, DeclaredKnowledgeScopeKind, KnowledgeHealthRecommendedAction,
     KnowledgeHealthSeverity, KnowledgeHealthSignal, KnowledgeHealthSignalKind,
 };
+use wiki_model::domain::projection::{SectionOwnership, SyncResultKind};
 use wiki_model::domain::stable_id::stable_id;
 
 const DECLARED_START_PREFIX: &str = "<!-- wiki:declared";
 const DECLARED_END_MARKER: &str = "<!-- wiki:declared:end -->";
 
-/// `sync` 的分类结果。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SyncResultKind {
-    DeclaredWriteback,
-    MetadataOnly,
-    IllegalDrift,
-}
-
-impl SyncResultKind {
-    fn recommended_action(self) -> &'static str {
-        match self {
-            Self::DeclaredWriteback => "update",
-            Self::MetadataOnly => "none",
-            Self::IllegalDrift => "rebuild",
-        }
+fn recommended_action_for_sync_result(kind: SyncResultKind) -> &'static str {
+    match kind {
+        SyncResultKind::DeclaredWriteback => "update",
+        SyncResultKind::MetadataOnly => "none",
+        SyncResultKind::IllegalDrift => "rebuild",
+        SyncResultKind::Conflict => "resolve",
+        SyncResultKind::Stale => "update",
     }
 }
 
@@ -162,9 +157,7 @@ pub fn run_sync_with_mode(
             continue;
         }
 
-        let known_titles = section_titles_for_page_type(&page.page_type);
-        let known_titles_ref: Vec<&str> = known_titles.iter().copied().collect();
-        let parsed = parse_wiki_page(&content, &known_titles_ref);
+        let parsed = parse_wiki_page(&content, &SectionBindingIndex::default());
         let generated_hash_map = load_generated_hashes(repo_root, page);
         let unit_id = read_page_context_cache(repo_root, &page.page_id)
             .ok()
@@ -178,6 +171,7 @@ pub fn run_sync_with_mode(
             &parsed,
             &generated_hash_map,
             unit_id.as_deref(),
+            &previous_declared_records_by_page,
             previous_page_declared_records,
         );
         let new_sections = build_section_states_from_parsed(&parsed, &generated_hash_map);
@@ -213,7 +207,7 @@ pub fn run_sync_with_mode(
             stale_unit_ids: analysis.stale_unit_ids,
             stale_projection_ids: analysis.stale_projection_ids,
             reasons: analysis.reasons,
-            recommended_action: analysis.result_kind.recommended_action().to_string(),
+            recommended_action: recommended_action_for_sync_result(analysis.result_kind).to_string(),
         });
     }
 
@@ -230,7 +224,12 @@ pub fn run_sync_with_mode(
         generated_at: generated_at.clone(),
         last_indexed_commit: current_commit(repo_root),
     };
-    let metadata = export_metadata(&wiki_state, &export_context);
+    let mut metadata = export_metadata(&wiki_state, &export_context);
+    if let Ok(artifacts) = load_knowledge_artifacts(repo_root) {
+        metadata.current_snapshot_id = Some(compute_committed_snapshot_id(
+            &artifacts.snapshot_manifest.facts_input_hash,
+        ));
+    }
     write_metadata(repo_root, &metadata)?;
 
     let steering = load_steering_config_with_mode(repo_root, steering_mode);
@@ -284,7 +283,7 @@ fn persist_sync_artifacts(
         repo_root,
         workflow_action: "sync",
         generated_at,
-        facts_input_hash: &artifacts.recovery_manifest.facts_input_hash,
+        facts_input_hash: &artifacts.snapshot_manifest.facts_input_hash,
         metadata,
         knowledge_tree: &artifacts.knowledge_tree,
         declared_records: &declared_records,
@@ -300,6 +299,7 @@ fn analyze_sync_page(
     parsed: &ParsedWikiPage,
     generated_hash_map: &HashMap<String, String>,
     unit_id: Option<&str>,
+    declared_snapshot_records_by_page: &HashMap<String, Vec<DeclaredKnowledgeRecord>>,
     previous_page_declared_records: &[DeclaredKnowledgeRecord],
 ) -> SyncPageAnalysis {
     let mut reasons = parsed.warnings.clone();
@@ -321,6 +321,16 @@ fn analyze_sync_page(
             }
         };
 
+        if !declared_blocks.is_empty() && managed.owner_kind != SectionOwnership::DeclaredManaged {
+            reasons.push(format!(
+                "managed section '{}' owner={} 不允许 declared writeback",
+                managed.section_id,
+                managed.owner_kind.as_str()
+            ));
+            illegal_drift = true;
+            continue;
+        }
+
         let Some(generated_hash) = generated_hash_map.get(&managed.section_id) else {
             reasons.push(format!(
                 "managed section '{}' 缺少 generated baseline，无法确认 writeback 合法性",
@@ -341,11 +351,12 @@ fn analyze_sync_page(
         }
 
         for declared in declared_blocks {
-            match materialize_declared_record(
+            match validate_declared_candidate(
                 page,
-                managed.section_id.as_str(),
+                managed,
                 unit_id,
                 &declared,
+                declared_snapshot_records_by_page,
                 &mut seen_authoring_ids,
             ) {
                 Ok(record) => declared_records.push(record),
@@ -556,11 +567,12 @@ fn build_sync_health_signals(
     signals
 }
 
-fn materialize_declared_record(
+fn validate_declared_candidate(
     page: &WikiPageState,
-    section_id: &str,
+    managed: &crate::generation::managed_sections::ManagedSectionBlock,
     unit_id: Option<&str>,
     block: &DeclaredBlock,
+    declared_snapshot_records_by_page: &HashMap<String, Vec<DeclaredKnowledgeRecord>>,
     seen_authoring_ids: &mut BTreeSet<String>,
 ) -> io::Result<DeclaredKnowledgeRecord> {
     let authoring_id = match block.explicit_id.as_deref() {
@@ -568,7 +580,7 @@ fn materialize_declared_record(
         None => format!(
             "page:{}:section:{}:kind:{}:scope:{}",
             page.page_id,
-            section_id,
+            managed.section_id,
             block.record_kind.as_str(),
             block.scope.canonical_key()
         ),
@@ -580,29 +592,59 @@ fn materialize_declared_record(
         )));
     }
 
-    let mut record = DeclaredKnowledgeRecord {
-        record_id: DeclaredKnowledgeRecord::record_id_from_authoring_id(&authoring_id),
+    let snapshot = DeclaredSnapshot {
+        records: declared_snapshot_records_by_page
+            .values()
+            .flat_map(|records| records.iter().cloned())
+            .collect(),
+    };
+    let candidate = DeclaredAuthoringCandidate {
         authoring_id,
         record_kind: block.record_kind,
         scope: block.scope.clone(),
         status: block.status,
         relations: block.relations.clone(),
         source_ref: block.source_ref.clone(),
-        updated_at: current_timestamp(),
+        page_id: page.page_id.clone(),
+        section_id: managed.section_id.clone(),
+        body: block.body.clone(),
+        baseline_hash: managed
+            .generated_content_hash
+            .clone()
+            .unwrap_or_else(|| managed.content_hash.clone()),
+        current_hash: content_hash(&managed.body),
+        marker_version: managed.version,
+        metadata_binding_ref: managed.projection_digest_ref.clone(),
         unit_refs: unit_id
             .map(|value| vec![value.to_string()])
             .unwrap_or_default(),
-        projection_refs: vec![format!("page:{}:section:{}", page.page_id, section_id)],
-        page_id: page.page_id.clone(),
-        section_id: section_id.to_string(),
-        ordinal: 0,
-        body: block.body.clone(),
     };
-    record.canonicalize();
-    record
-        .validate_lifecycle()
-        .map_err(|error| io::Error::other(format!("declared lifecycle 非法: {error}")))?;
-    Ok(record)
+
+    match validate_declared_writeback(&candidate, &snapshot) {
+        DeclaredWritebackDecision::Accepted(patch) => {
+            let mut record = patch.record;
+            record.updated_at = current_timestamp();
+            record.ordinal = 0;
+            record.canonicalize();
+            Ok(record)
+        }
+        DeclaredWritebackDecision::Rejected {
+            reason,
+            evidence_refs,
+        } => Err(io::Error::other(format!(
+            "declared writeback rejected: {reason}; evidence={}",
+            evidence_refs.join(",")
+        ))),
+        DeclaredWritebackDecision::Conflict {
+            reason,
+            conflicting_record_refs,
+            evidence_refs,
+        } => Err(io::Error::other(format!(
+            "declared writeback conflict: {reason}; conflicts={}; evidence={}",
+            conflicting_record_refs.join(","),
+            evidence_refs.join(",")
+        ))),
+    }
 }
 
 fn parse_declared_blocks(body: &str) -> io::Result<(Vec<DeclaredBlock>, String)> {
@@ -948,8 +990,12 @@ fn build_section_states_from_parsed(
                 section_id: managed.section_id.clone(),
                 title: managed.title.clone(),
                 managed: true,
+                owner_kind: Some(managed.owner_kind),
+                knowledge_refs: managed.knowledge_refs.clone(),
                 content_hash: content_hash(&managed.body),
+                input_hash: managed.input_hash.clone(),
                 generated_content_hash: gen_hash_map.get(&managed.section_id).cloned(),
+                projection_digest_ref: managed.projection_digest_ref.clone(),
                 anchor_after_section_id: None,
                 anchor_before_section_id: None,
                 source_ids: Vec::new(),
@@ -959,8 +1005,12 @@ fn build_section_states_from_parsed(
                 section_id: user.id.clone(),
                 title: String::new(),
                 managed: false,
+                owner_kind: Some(wiki_model::domain::projection::SectionOwnership::ManualUnmanaged),
+                knowledge_refs: Vec::new(),
                 content_hash: content_hash(&user.body),
+                input_hash: String::new(),
                 generated_content_hash: None,
+                projection_digest_ref: None,
                 anchor_after_section_id: user.anchor_after_section_id.clone(),
                 anchor_before_section_id: user.anchor_before_section_id.clone(),
                 source_ids: Vec::new(),

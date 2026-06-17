@@ -6,7 +6,7 @@ use std::path::Path;
 
 use tempfile::tempdir;
 use wiki_runtime::storage::sqlite_store;
-use wiki_runtime::storage::state_store::facts_snapshot_ready;
+use wiki_runtime::storage::state_store::{facts_snapshot_ready, index_graph_ready};
 use wiki_runtime::storage::state_store::read_state;
 use wiki_runtime::workflows::{
     init::run_init, query::run_query, rebuild::run_rebuild, status::run_status, sync::run_sync,
@@ -64,6 +64,7 @@ fn write_graph_query_repo(repo_root: &Path) {
 
 fn set_declared_blocks_for_query(repo_root: &Path, declared_blocks: &str) {
     let overview_path = official_overview_path(repo_root);
+    mark_first_managed_section_declared(&overview_path);
     let content = fs::read_to_string(&overview_path).unwrap();
     let marker = "<!-- wiki:managed:end";
     let pos = content
@@ -76,6 +77,26 @@ fn set_declared_blocks_for_query(repo_root: &Path, declared_blocks: &str) {
     new_content.push_str(declared_blocks);
     new_content.push_str(&content[pos..]);
     fs::write(&overview_path, &new_content).unwrap();
+}
+
+fn mark_first_managed_section_declared(page_path: &Path) {
+    let content = fs::read_to_string(page_path).unwrap();
+    let marker = "<!-- wiki:managed:start";
+    let start = content
+        .find(marker)
+        .expect("should have managed start marker");
+    let end = content[start..].find('\n').unwrap() + start;
+    let line = &content[start..end];
+    let declared_line = line.replace("owner=derived_managed", "owner=declared_managed");
+    if line == declared_line {
+        assert!(line.contains("owner=declared_managed"));
+        return;
+    }
+
+    let mut new_content = content[..start].to_string();
+    new_content.push_str(&declared_line);
+    new_content.push_str(&content[end..]);
+    fs::write(page_path, &new_content).unwrap();
 }
 
 fn official_overview_path(repo_root: &Path) -> std::path::PathBuf {
@@ -572,8 +593,8 @@ fn query_stays_available_when_facts_snapshot_outlives_downstream_state() {
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "missing");
     assert_eq!(
-        serde_json::to_value(&status).unwrap()["query_readiness"],
-        "needs_init"
+        serde_json::to_value(&status).unwrap()["readiness"]["fusion"],
+        "blocked"
     );
     assert_eq!(
         serde_json::to_value(&status).unwrap()["recommended_action"],
@@ -622,8 +643,19 @@ fn query_restores_runtime_cache_from_formal_artifacts() {
     let query = run_query(repo_root, "项目概述").unwrap();
     assert!(repo_root.join(".wiki/.cache/wiki-cache.db").exists());
     assert!(facts_snapshot_ready(repo_root).unwrap());
+    assert!(!index_graph_ready(repo_root).unwrap());
     assert!(!query.matches.is_empty());
     assert_eq!(query.runtime_state, "fresh");
+    let payload = serde_json::to_value(&query).unwrap();
+    assert_eq!(payload["readiness"]["index"], "missing");
+    assert_eq!(payload["readiness"]["knowledge"], "ready");
+    assert_eq!(payload["readiness"]["projection"], "ready");
+    assert_eq!(payload["readiness"]["fusion"], "degraded");
+    assert_eq!(payload["readiness"]["restored_level"], "level1");
+    assert!(query.matched_modules.is_empty());
+    assert!(query.matched_sources.is_empty());
+    assert!(query.matched_symbols.is_empty());
+    assert!(query.matched_symbol_edges.is_empty());
 }
 
 #[test]
@@ -650,7 +682,7 @@ fn query_marks_governance_conflict_answer_as_degraded() {
 
     assert_eq!(payload["answer"]["answer_mode"], "degraded");
     assert_eq!(payload["answer"]["answer_trust"], "constrained");
-    assert_eq!(payload["answer"]["recommended_action"], "review");
+    assert_eq!(payload["answer"]["recommended_action"], "rebuild");
     assert!(query
         .answer
         .provenance

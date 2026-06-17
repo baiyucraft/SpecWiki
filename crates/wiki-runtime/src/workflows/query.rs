@@ -10,9 +10,9 @@ use std::path::Path;
 use crate::domain::change_set::plan_runtime_changes_with_mode;
 use crate::domain::module_tree::ModuleNode;
 use crate::domain::runtime_profile::{
-    merge_recommended_action, preflight_for_state, query_trust_for, summarize_health_signals,
-    AnswerEnvelope, AnswerMode, AnswerSupportingRef, AnswerTrust, QueryMode, QueryTrust,
-    RecommendedAction,
+    merge_recommended_action, query_trust_for, summarize_health_signals, AnswerEnvelope,
+    AnswerMode, AnswerSupportingRef, AnswerTrust, FusionReadiness, LayerReadiness, QueryMode,
+    QueryTrust, RecommendedAction, RuntimeReadiness,
 };
 use crate::domain::state::{WikiPageState, WikiState};
 use crate::domain::steering::SteeringLoadMode;
@@ -21,7 +21,7 @@ use crate::storage::knowledge_artifacts::{
     load_health_signals, load_knowledge_artifacts, restore_runtime_cache_from_artifacts,
 };
 use crate::storage::sqlite::index_store::SqliteIndexStore;
-use crate::storage::state_store::{facts_snapshot_ready, load_or_rebuild_state};
+use crate::storage::state_store::{index_graph_ready, load_or_rebuild_state, runtime_mirror_ready};
 use crate::storage::wiki_fs::{is_official_page_path, resolve_page_path};
 use crate::workflows::release_scope::project_external_runtime_state;
 use wiki_index::query::{self as index_query, IndexQueryRequest, MatchBasis};
@@ -201,6 +201,8 @@ pub struct QueryReport {
     pub term: String,
     /// 当前 query 时 runtime 的外部状态。
     pub runtime_state: String,
+    /// status/query 共享的分层 readiness 主合同。
+    pub readiness: RuntimeReadiness,
     /// 当前结果主要来自结构化 facts/index 还是 page fallback。
     pub query_mode: QueryMode,
     /// 当前阶段宿主可消费的 query trust。
@@ -250,34 +252,66 @@ pub fn run_query_with_mode(
     steering_mode: SteeringLoadMode,
 ) -> io::Result<QueryReport> {
     let mut plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
-    let mut facts_ready = facts_snapshot_ready(repo_root)?;
-    if !facts_ready
+    let mut mirror_ready = runtime_mirror_ready(repo_root)?;
+    let mut graph_ready = index_graph_ready(repo_root)?;
+    let mut restore_readiness = None;
+    if !mirror_ready
         && plan.needs_rebuild_reason.as_deref() == Some("cache_missing")
         && !cache_dir(repo_root).exists()
-        && restore_runtime_cache_from_artifacts(repo_root)?
     {
-        plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
-        facts_ready = facts_snapshot_ready(repo_root)?;
+        let outcome = restore_runtime_cache_from_artifacts(repo_root)?;
+        restore_readiness = Some(outcome.readiness.clone());
+        if outcome.restored_cache {
+            plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+            mirror_ready = runtime_mirror_ready(repo_root)?;
+            graph_ready = index_graph_ready(repo_root)?;
+        }
     }
-    let runtime_state = project_external_runtime_state(repo_root, plan.state(), facts_ready);
-    let preflight = preflight_for_state(&runtime_state, facts_ready);
+    let runtime_state = project_external_runtime_state(repo_root, plan.state(), mirror_ready);
+    let readiness = restore_readiness.unwrap_or_else(|| {
+        crate::workflows::status::readiness_from_state(
+            &runtime_state,
+            graph_ready,
+            mirror_ready,
+            plan.needs_rebuild_reason.as_deref(),
+        )
+    });
     let health_signals = load_health_signals(repo_root).unwrap_or_default();
     let health_summary = summarize_health_signals(&health_signals);
-    let recommended_action =
-        merge_recommended_action(preflight.recommended_action, health_summary.as_ref());
+    let base_action = if readiness.fusion == FusionReadiness::Ready {
+        RecommendedAction::None
+    } else if readiness.index == LayerReadiness::Missing {
+        RecommendedAction::Rebuild
+    } else {
+        RecommendedAction::Update
+    };
+    let recommended_action = merge_recommended_action(base_action, health_summary.as_ref());
     let needle = term.trim().to_lowercase();
 
     if needle.is_empty() {
         return Ok(empty_query_report(
             term,
             &runtime_state,
+            readiness.clone(),
             recommended_action,
-            effective_query_trust(&runtime_state, facts_ready, recommended_action, false),
+            effective_query_trust(&runtime_state, graph_ready, recommended_action, false),
         ));
     }
 
-    if !facts_ready {
+    if !mirror_ready {
         return Err(index_not_ready_error());
+    }
+
+    if !graph_ready {
+        return degraded_query_without_index(
+            repo_root,
+            term,
+            &needle,
+            &runtime_state,
+            readiness,
+            recommended_action,
+            &health_signals,
+        );
     }
 
     let index_result = index_query::run_query(
@@ -331,7 +365,7 @@ pub fn run_query_with_mode(
         (false, true, false) => QueryMode::KnowledgeFirst,
         _ => QueryMode::IndexFirst,
     };
-    let query_trust = match query_trust_for(&runtime_state, facts_ready) {
+    let query_trust = match query_trust_for(&runtime_state, graph_ready) {
         QueryTrust::Blocked if has_index_hits || !matches.is_empty() => {
             QueryTrust::StaleButQueryable
         }
@@ -368,6 +402,7 @@ pub fn run_query_with_mode(
     Ok(QueryReport {
         term: term.to_string(),
         runtime_state: runtime_state.clone(),
+        readiness,
         query_mode,
         query_trust,
         recommended_action,
@@ -388,6 +423,7 @@ pub fn run_query_with_mode(
 fn empty_query_report(
     term: &str,
     runtime_state: &str,
+    readiness: RuntimeReadiness,
     recommended_action: RecommendedAction,
     query_trust: QueryTrust,
 ) -> QueryReport {
@@ -407,6 +443,7 @@ fn empty_query_report(
     QueryReport {
         term: term.to_string(),
         runtime_state: runtime_state.to_string(),
+        readiness,
         query_mode: QueryMode::IndexFirst,
         query_trust,
         recommended_action,
@@ -422,6 +459,83 @@ fn empty_query_report(
         provenance_summary,
         answer,
     }
+}
+
+fn degraded_query_without_index(
+    repo_root: &Path,
+    term: &str,
+    needle: &str,
+    runtime_state: &str,
+    readiness: RuntimeReadiness,
+    recommended_action: RecommendedAction,
+    health_signals: &[KnowledgeHealthSignal],
+) -> io::Result<QueryReport> {
+    let fallback_state = load_or_rebuild_state(repo_root).ok();
+    let empty_symbols = BTreeMap::new();
+    let knowledge_matches =
+        collect_knowledge_matches(repo_root, needle, fallback_state.as_ref(), &empty_symbols);
+    let page_fallback_matches = if knowledge_matches.is_empty() {
+        fallback_state
+            .as_ref()
+            .map(|state| collect_page_fallback_matches(repo_root, state, needle, &empty_symbols))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let has_knowledge_hits = !knowledge_matches.is_empty();
+    let has_page_fallback = page_fallback_matches
+        .iter()
+        .any(is_textual_page_fallback_match);
+    let matches = if has_knowledge_hits {
+        knowledge_matches
+    } else {
+        page_fallback_matches
+    };
+    let query_mode = if has_page_fallback {
+        QueryMode::PageFallback
+    } else if has_knowledge_hits {
+        QueryMode::KnowledgeFirst
+    } else {
+        QueryMode::KnowledgeFirst
+    };
+    let query_trust = if matches.is_empty() && readiness.fusion == FusionReadiness::Blocked {
+        QueryTrust::Blocked
+    } else {
+        QueryTrust::StaleButQueryable
+    };
+    let provenance_summary = build_provenance_summary(false, has_knowledge_hits, has_page_fallback);
+    let answer = build_answer_envelope(
+        term,
+        query_trust,
+        recommended_action,
+        &provenance_summary,
+        &matches,
+        &[],
+        &[],
+        &[],
+        &[],
+        health_signals,
+    );
+
+    Ok(QueryReport {
+        term: term.to_string(),
+        runtime_state: runtime_state.to_string(),
+        readiness,
+        query_mode,
+        query_trust,
+        recommended_action,
+        matched_pages: matches.iter().map(|page| page.path.clone()).collect(),
+        matched_modules: Vec::new(),
+        matched_sources: Vec::new(),
+        matched_relations: Vec::new(),
+        matched_symbols: Vec::new(),
+        matched_symbol_edges: Vec::new(),
+        matched_processes: Vec::new(),
+        matched_communities: Vec::new(),
+        provenance_summary,
+        answer,
+        matches,
+    })
 }
 
 fn effective_query_trust(
@@ -860,7 +974,7 @@ fn build_context_pack(
 }
 
 fn build_knowledge_context_pack(
-    page: &wiki_knowledge::PlannedPage,
+    page: &wiki_knowledge::PagePlan,
     state: Option<&WikiState>,
     module_index: &BTreeMap<String, &ModuleNode>,
     matched_symbols_by_file: &BTreeMap<String, Vec<String>>,

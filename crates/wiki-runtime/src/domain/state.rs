@@ -13,7 +13,7 @@ use crate::generation::sections::SectionDraft;
 use crate::storage::wiki_fs::is_official_page_path;
 use wiki_index::fingerprint::fingerprint_bytes;
 use wiki_index::scanner::ScanReport;
-use wiki_knowledge::PlannedPage;
+use wiki_knowledge::PagePlan;
 
 pub use wiki_model::domain::state::{
     BuildState, SourceState, WikiPageState, WikiSectionState, WikiState,
@@ -21,7 +21,7 @@ pub use wiki_model::domain::state::{
 /// 单个页面的构建产物，用于装配 WikiState。
 pub struct PageBuildResult {
     /// planner 产出的页面定义。
-    pub page: PlannedPage,
+    pub page: PagePlan,
     /// 当前页面的上下文输入。
     pub context: PageContext,
     /// 当前页面对外暴露的摘要文本。
@@ -184,7 +184,7 @@ pub fn rebuild_state_from_metadata(metadata: &WikiMetadata) -> WikiState {
 /// # 返回
 /// - 返回页面输入事实的稳定 hash。
 pub fn compute_page_input_hash(
-    page: &PlannedPage,
+    page: &PagePlan,
     context: &PageContext,
     scan_report: &ScanReport,
 ) -> String {
@@ -269,12 +269,20 @@ pub fn build_page_state(result: &PageBuildResult) -> WikiPageState {
             section_id: section.section_id.clone(),
             title: section.title.clone(),
             managed: section.managed,
+            owner_kind: Some(if section.managed {
+                wiki_model::domain::projection::SectionOwnership::DerivedManaged
+            } else {
+                wiki_model::domain::projection::SectionOwnership::ManualUnmanaged
+            }),
+            knowledge_refs: Vec::new(),
             content_hash: fingerprint_bytes(section.content.as_bytes()),
+            input_hash: result.input_hash.clone(),
             generated_content_hash: if section.managed {
                 Some(fingerprint_bytes(section.content.as_bytes()))
             } else {
                 None
             },
+            projection_digest_ref: Some(format!("projection:{}", result.page.id)),
             anchor_after_section_id: None,
             anchor_before_section_id: None,
             source_ids: section.source_ids.clone(),

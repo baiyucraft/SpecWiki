@@ -8,9 +8,12 @@ use serde::Serialize;
 use crate::domain::checkpoint::{PipelineRuntimeSummary, UnitRuntimeGate};
 use crate::domain::context::PageContext;
 use crate::domain::metadata::WikiMetadata;
+use crate::domain::runtime_profile::{
+    FusionReadiness, LayerReadiness, RestoredLevel, RuntimeReadiness,
+};
 use crate::domain::state::{rebuild_state_from_metadata, WikiSectionState, WikiState};
 use crate::generation::managed_sections::{content_hash, parse_wiki_page, PageBlock};
-use crate::generation::sections::{section_titles_for_page_type, SectionDraft};
+use crate::generation::sections::SectionDraft;
 use crate::storage::cache_store::{
     ensure_cache_dir, ensure_page_cache_dirs, write_module_tree_cache, write_page_context_cache,
     write_page_generation_cache, write_scan_cache, PageContextCacheEntry, PageGenerationCacheEntry,
@@ -18,7 +21,7 @@ use crate::storage::cache_store::{
 use crate::storage::metadata_store::{metadata_exists, metadata_path, read_metadata};
 use crate::storage::sqlite::runtime_store::SqliteRuntimeStore;
 use crate::storage::sqlite_store;
-use crate::storage::state_store::write_state;
+use crate::storage::state_store::{mark_level1_restored_mirror, write_state};
 use crate::storage::wiki_fs::{remove_cache_db, resolve_page_path, wiki_root};
 use wiki_index::fingerprint::fingerprint_bytes;
 use wiki_index::scanner::{FilePurpose, ScanReport, ScannedFile};
@@ -34,9 +37,13 @@ use wiki_model::domain::knowledge_artifact::{
     validate_conflict_record_snapshot, validate_declared_record_snapshot,
     validate_research_summary_snapshot, DeclaredKnowledgeRecord, DeclaredKnowledgeRecordStatus,
     DeclaredKnowledgeRelationKind, KnowledgeConflictKind, KnowledgeConflictRecord,
-    KnowledgeConflictStatus, KnowledgeHealthRecommendedAction, KnowledgeHealthSeverity,
-    KnowledgeHealthSignal, KnowledgeHealthSignalKind, KnowledgeRecoveryManifest,
+    CommittedSnapshotManifest, KnowledgeConflictStatus, KnowledgeHealthRecommendedAction,
+    KnowledgeHealthSeverity, KnowledgeHealthSignal, KnowledgeHealthSignalKind,
     KnowledgeResearchSummary, KnowledgeResearchSummaryStatus, KnowledgeRuntimeGateRecord,
+};
+use wiki_model::domain::projection::{
+    ProjectionDigest, ProjectionDigestStatus as ModelProjectionDigestStatus,
+    ProjectionStatusReason, ProjectionStatusReasonKind,
 };
 use wiki_model::domain::module_tree::ModuleTree;
 use wiki_model::domain::source_citation::SourceCitation;
@@ -54,9 +61,65 @@ pub struct KnowledgeArtifactSnapshot {
     pub conflict_records: Vec<KnowledgeConflictRecord>,
     pub research_summaries: Vec<KnowledgeResearchSummary>,
     pub page_digests: Vec<PageDigest>,
+    pub projection_digests: Vec<ProjectionDigest>,
     pub runtime_gates: Vec<KnowledgeRuntimeGateRecord>,
     pub health_signals: Vec<KnowledgeHealthSignal>,
-    pub recovery_manifest: KnowledgeRecoveryManifest,
+    pub snapshot_manifest: CommittedSnapshotManifest,
+}
+
+#[derive(Debug, Clone)]
+pub struct RestoreOutcome {
+    pub attempted: bool,
+    pub restored_cache: bool,
+    pub restored_level: RestoredLevel,
+    pub readiness: RuntimeReadiness,
+    pub reason: Option<String>,
+    pub snapshot_id: Option<String>,
+}
+
+impl RestoreOutcome {
+    fn not_attempted(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            attempted: false,
+            restored_cache: false,
+            restored_level: RestoredLevel::None,
+            readiness: RuntimeReadiness::missing(reason.clone()),
+            reason: Some(reason),
+            snapshot_id: None,
+        }
+    }
+
+    fn blocked(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            attempted: true,
+            restored_cache: false,
+            restored_level: RestoredLevel::None,
+            readiness: RuntimeReadiness {
+                index: LayerReadiness::Blocked,
+                knowledge: LayerReadiness::Blocked,
+                projection: LayerReadiness::Conflict,
+                fusion: FusionReadiness::Blocked,
+                restored_level: RestoredLevel::None,
+                snapshot_id: None,
+                reasons: vec![reason.clone()],
+            },
+            reason: Some(reason),
+            snapshot_id: None,
+        }
+    }
+
+    fn restored(snapshot_id: Option<String>) -> Self {
+        Self {
+            attempted: true,
+            restored_cache: true,
+            restored_level: RestoredLevel::Level1,
+            readiness: RuntimeReadiness::level1(snapshot_id.clone(), Vec::new()),
+            reason: None,
+            snapshot_id,
+        }
+    }
 }
 
 pub struct PersistKnowledgeArtifactsInput<'a> {
@@ -113,6 +176,10 @@ fn page_digests_path(repo_root: &Path) -> PathBuf {
     runtime_root(repo_root).join("page-digests.jsonl")
 }
 
+fn projection_digests_path(repo_root: &Path) -> PathBuf {
+    runtime_root(repo_root).join("projection-digests.jsonl")
+}
+
 fn conflict_records_path(repo_root: &Path) -> PathBuf {
     runtime_root(repo_root).join("conflict-records.jsonl")
 }
@@ -125,8 +192,26 @@ fn health_signals_path(repo_root: &Path) -> PathBuf {
     runtime_root(repo_root).join("health-signals.jsonl")
 }
 
-fn recovery_manifest_path(repo_root: &Path) -> PathBuf {
-    runtime_root(repo_root).join("recovery-manifest.json")
+fn snapshots_root(repo_root: &Path) -> PathBuf {
+    runtime_root(repo_root).join("snapshots")
+}
+
+fn snapshot_manifest_path(repo_root: &Path, snapshot_id: &str) -> PathBuf {
+    snapshots_root(repo_root)
+        .join(snapshot_id)
+        .join("manifest.yaml")
+}
+
+fn latest_snapshot_manifest_path(repo_root: &Path) -> Option<PathBuf> {
+    let root = snapshots_root(repo_root);
+    let entries = fs::read_dir(root).ok()?;
+    let mut manifests = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("manifest.yaml"))
+        .filter(|path| path.exists())
+        .collect::<Vec<_>>();
+    manifests.sort();
+    manifests.pop()
 }
 
 pub fn knowledge_artifacts_exist(repo_root: &Path) -> bool {
@@ -136,10 +221,11 @@ pub fn knowledge_artifacts_exist(repo_root: &Path) -> bool {
         && declared_records_path(repo_root).exists()
         && research_summaries_path(repo_root).exists()
         && page_digests_path(repo_root).exists()
+        && projection_digests_path(repo_root).exists()
         && conflict_records_path(repo_root).exists()
         && runtime_gates_path(repo_root).exists()
         && health_signals_path(repo_root).exists()
-        && recovery_manifest_path(repo_root).exists()
+        && latest_snapshot_manifest_path(repo_root).is_some()
 }
 
 pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) -> io::Result<()> {
@@ -194,6 +280,7 @@ pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) ->
     validate_page_digests_match_metadata(input.metadata, input.page_digests).map_err(|error| {
         io::Error::other(format!("validate page digest metadata binding: {error}"))
     })?;
+    let projection_digests = build_projection_digests_from_page_digests(input.page_digests)?;
     let mut health_signals = build_minimal_health_signals(
         &domains,
         &units,
@@ -221,15 +308,42 @@ pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) ->
         &health_signals,
         input.facts_input_hash,
     )?;
-    let manifest = KnowledgeRecoveryManifest {
+    let snapshot_id = compute_committed_snapshot_id(input.facts_input_hash);
+    let page_hashes = input
+        .metadata
+        .wiki_items
+        .iter()
+        .map(|item| (item.id.clone(), item.content_hash.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let projection_digest_refs = projection_digests
+        .iter()
+        .map(|digest| digest.projection_id.clone())
+        .collect::<Vec<_>>();
+    let runtime_gate_refs = runtime_gates
+        .iter()
+        .map(|gate| gate.unit_id.clone())
+        .collect::<Vec<_>>();
+    let projection_snapshot_id = fingerprint_bytes(
+        serde_json::to_vec(&projection_digests)
+            .map_err(|error| io::Error::other(format!("serialize projection snapshot: {error}")))?
+            .as_slice(),
+    );
+    let manifest = CommittedSnapshotManifest {
         schema_version: ARTIFACT_SCHEMA_VERSION.to_string(),
+        snapshot_id: snapshot_id.clone(),
         repo_root: input.repo_root.to_string_lossy().to_string(),
         workflow_action: input.workflow_action.to_string(),
         generated_at: input.generated_at.to_string(),
         facts_input_hash: input.facts_input_hash.to_string(),
+        graph_snapshot_id: input.facts_input_hash.to_string(),
         knowledge_snapshot_id,
         declared_snapshot_id,
+        projection_snapshot_id,
         metadata_hash,
+        page_hashes,
+        projection_digest_refs,
+        runtime_gate_refs,
+        status: "committed".to_string(),
         page_count: input.metadata.wiki_items.len(),
         unit_count: units.len(),
     };
@@ -246,10 +360,11 @@ pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) ->
         input.research_summaries,
     )?;
     write_json_lines(&page_digests_path(input.repo_root), input.page_digests)?;
+    write_json_lines(&projection_digests_path(input.repo_root), &projection_digests)?;
     write_json_lines(&conflict_records_path(input.repo_root), &conflict_records)?;
     write_json_lines(&runtime_gates_path(input.repo_root), &runtime_gates)?;
     write_json_lines(&health_signals_path(input.repo_root), &health_signals)?;
-    write_json(&recovery_manifest_path(input.repo_root), &manifest)
+    write_yaml(&snapshot_manifest_path(input.repo_root, &snapshot_id), &manifest)
 }
 
 pub fn load_knowledge_artifacts(repo_root: &Path) -> io::Result<KnowledgeArtifactSnapshot> {
@@ -261,9 +376,10 @@ pub fn load_knowledge_artifacts(repo_root: &Path) -> io::Result<KnowledgeArtifac
         conflict_records: read_json_lines(&conflict_records_path(repo_root))?,
         research_summaries: read_json_lines(&research_summaries_path(repo_root))?,
         page_digests: read_json_lines(&page_digests_path(repo_root))?,
+        projection_digests: read_json_lines(&projection_digests_path(repo_root))?,
         runtime_gates: read_json_lines(&runtime_gates_path(repo_root))?,
         health_signals: read_json_lines(&health_signals_path(repo_root))?,
-        recovery_manifest: read_json(&recovery_manifest_path(repo_root))?,
+        snapshot_manifest: read_snapshot_manifest(repo_root)?,
     })
 }
 
@@ -275,42 +391,150 @@ pub fn load_health_signals(repo_root: &Path) -> io::Result<Vec<KnowledgeHealthSi
     read_json_lines(&health_signals_path(repo_root))
 }
 
+fn build_projection_digests_from_page_digests(
+    page_digests: &[PageDigest],
+) -> io::Result<Vec<ProjectionDigest>> {
+    let mut projection_digests = Vec::new();
+    for page_digest in page_digests {
+        let status = match page_digest.projection_status {
+            ProjectionDigestStatus::Ready => ModelProjectionDigestStatus::Ready,
+            ProjectionDigestStatus::Stale => ModelProjectionDigestStatus::Stale,
+            ProjectionDigestStatus::Blocked => ModelProjectionDigestStatus::Blocked,
+        };
+        let status_reasons = page_digest
+            .status_reasons
+            .iter()
+            .map(|reason| ProjectionStatusReason {
+                reason_kind: reason.reason_kind.map(|kind| match kind {
+                    wiki_knowledge::domain::research::ProjectionDigestStatusReasonKind::MissingPageOutput => {
+                        ProjectionStatusReasonKind::PageSnapshotMismatch
+                    }
+                    wiki_knowledge::domain::research::ProjectionDigestStatusReasonKind::PageSnapshotMismatch => {
+                        ProjectionStatusReasonKind::PageSnapshotMismatch
+                    }
+                    wiki_knowledge::domain::research::ProjectionDigestStatusReasonKind::DeclaredOrDerivedChanged => {
+                        ProjectionStatusReasonKind::SectionHashMismatch
+                    }
+                    wiki_knowledge::domain::research::ProjectionDigestStatusReasonKind::BlockedByResearch => {
+                        ProjectionStatusReasonKind::KnowledgeRefMissing
+                    }
+                }),
+                reason_message: reason.reason_message.clone(),
+                upstream_ref: reason.upstream_ref.clone(),
+            })
+            .collect::<Vec<_>>();
+        let mut projection_digest = ProjectionDigest {
+            projection_id: page_digest.digest_id.clone(),
+            page_id: page_digest.page_id.clone(),
+            section_ids: page_digest
+                .section_digests
+                .iter()
+                .map(|section| section.section_key.clone())
+                .collect(),
+            knowledge_refs: vec![page_digest.unit_id.clone()],
+            source_refs: page_digest.key_sources.clone(),
+            input_hash: page_digest.digest_id.clone(),
+            renderer_version: if page_digest.readiness_stage.trim().is_empty() {
+                "page-compose-digest-derived".to_string()
+            } else {
+                page_digest.readiness_stage.clone()
+            },
+            content_digest: page_digest.digest_id.clone(),
+            section_hashes: page_digest
+                .section_digests
+                .iter()
+                .map(|section| (section.section_key.clone(), section.digest_id.clone()))
+                .collect(),
+            status,
+            status_reasons,
+        };
+        projection_digest.canonicalize();
+        projection_digest.validate().map_err(|error| {
+            io::Error::other(format!(
+                "validate projection digest '{}': {:?}",
+                projection_digest.projection_id, error
+            ))
+        })?;
+        projection_digests.push(projection_digest);
+    }
+    Ok(projection_digests)
+}
+
+fn validate_projection_digest_snapshot_binding(
+    artifacts: &KnowledgeArtifactSnapshot,
+) -> io::Result<()> {
+    for digest in &artifacts.projection_digests {
+        digest.validate().map_err(|error| {
+            io::Error::other(format!(
+                "validate model projection digest '{}': {:?}",
+                digest.projection_id, error
+            ))
+        })?;
+    }
+    let refs = artifacts
+        .projection_digests
+        .iter()
+        .map(|digest| digest.projection_id.clone())
+        .collect::<Vec<_>>();
+    if artifacts.snapshot_manifest.projection_digest_refs != refs {
+        return Err(io::Error::other("projection digest refs mismatch"));
+    }
+    let projection_snapshot_id = fingerprint_bytes(
+        serde_json::to_vec(&artifacts.projection_digests)
+            .map_err(|error| {
+                io::Error::other(format!("serialize model projection digests: {error}"))
+            })?
+            .as_slice(),
+    );
+    if artifacts.snapshot_manifest.projection_snapshot_id != projection_snapshot_id {
+        return Err(io::Error::other("projection snapshot id mismatch"));
+    }
+    Ok(())
+}
+
 pub fn load_conflict_records(repo_root: &Path) -> io::Result<Vec<KnowledgeConflictRecord>> {
     read_json_lines(&conflict_records_path(repo_root))
 }
 
-pub fn restore_runtime_cache_from_artifacts(repo_root: &Path) -> io::Result<bool> {
+pub fn restore_runtime_cache_from_artifacts(repo_root: &Path) -> io::Result<RestoreOutcome> {
     if !metadata_exists(repo_root) || !knowledge_artifacts_exist(repo_root) {
-        return Ok(false);
+        return Ok(RestoreOutcome::not_attempted("restore_artifacts_missing"));
     }
 
     let metadata = read_metadata(repo_root)?;
     let metadata_json = fs::read(metadata_path(repo_root))?;
     let artifacts = load_knowledge_artifacts(repo_root)?;
     let metadata_hash = fingerprint_bytes(&metadata_json);
-    if artifacts.recovery_manifest.metadata_hash != metadata_hash {
-        return Ok(false);
+    if artifacts.snapshot_manifest.metadata_hash != metadata_hash {
+        return Ok(RestoreOutcome::blocked("metadata_hash_mismatch"));
     }
     if !pages_match_metadata_snapshot(repo_root, &metadata)? {
-        return Ok(false);
+        return Ok(RestoreOutcome::blocked("page_hash_mismatch"));
     }
     let declared_snapshot_id = compute_declared_snapshot_id(&artifacts.declared_records)?;
-    if artifacts.recovery_manifest.declared_snapshot_id != declared_snapshot_id {
-        return Ok(false);
+    if artifacts.snapshot_manifest.declared_snapshot_id != declared_snapshot_id {
+        return Ok(RestoreOutcome::blocked("declared_snapshot_mismatch"));
     }
     if validate_research_summary_snapshot(&artifacts.research_summaries).is_err() {
-        return Ok(false);
+        return Ok(RestoreOutcome::blocked("research_summary_mismatch"));
     }
     if validate_conflict_record_snapshot(&artifacts.conflict_records, &artifacts.declared_records)
         .is_err()
     {
-        return Ok(false);
+        return Ok(RestoreOutcome::blocked("conflict_snapshot_mismatch"));
     }
     if validate_page_digest_snapshot(&artifacts.page_digests).is_err() {
-        return Ok(false);
+        return Ok(RestoreOutcome::blocked("projection_digest_mismatch"));
     }
     if validate_page_digests_match_metadata(&metadata, &artifacts.page_digests).is_err() {
-        return Ok(false);
+        return Ok(RestoreOutcome::blocked(
+            "projection_digest_metadata_mismatch",
+        ));
+    }
+    if validate_projection_digest_snapshot_binding(&artifacts).is_err() {
+        return Ok(RestoreOutcome::blocked(
+            "model_projection_digest_mismatch",
+        ));
     }
     let knowledge_snapshot_id = compute_knowledge_snapshot_id(
         &artifacts.knowledge_tree,
@@ -320,10 +544,10 @@ pub fn restore_runtime_cache_from_artifacts(repo_root: &Path) -> io::Result<bool
         &artifacts.page_digests,
         &artifacts.runtime_gates,
         &artifacts.health_signals,
-        &artifacts.recovery_manifest.facts_input_hash,
+        &artifacts.snapshot_manifest.facts_input_hash,
     )?;
-    if artifacts.recovery_manifest.knowledge_snapshot_id != knowledge_snapshot_id {
-        return Ok(false);
+    if artifacts.snapshot_manifest.knowledge_snapshot_id != knowledge_snapshot_id {
+        return Ok(RestoreOutcome::blocked("knowledge_snapshot_mismatch"));
     }
 
     let preserved_llm_cache = sqlite_store::load_all_llm_cache(repo_root).unwrap_or_default();
@@ -386,6 +610,7 @@ pub fn restore_runtime_cache_from_artifacts(repo_root: &Path) -> io::Result<bool
         &serde_json::to_string(&runtime_summary)
             .map_err(|error| io::Error::other(format!("serialize runtime summary: {error}")))?,
     )?;
+    mark_level1_restored_mirror(repo_root, &artifacts.snapshot_manifest.snapshot_id)?;
 
     restore_page_caches(
         repo_root,
@@ -395,7 +620,9 @@ pub fn restore_runtime_cache_from_artifacts(repo_root: &Path) -> io::Result<bool
         &artifacts.research_summaries,
     )?;
 
-    Ok(true)
+    Ok(RestoreOutcome::restored(Some(
+        artifacts.snapshot_manifest.snapshot_id.clone(),
+    )))
 }
 
 fn rebuild_runtime_summary(artifacts: &KnowledgeArtifactSnapshot) -> PipelineRuntimeSummary {
@@ -420,8 +647,8 @@ fn rebuild_runtime_summary(artifacts: &KnowledgeArtifactSnapshot) -> PipelineRun
         "runtime_incomplete".to_string()
     };
     PipelineRuntimeSummary {
-        facts_input_hash: artifacts.recovery_manifest.facts_input_hash.clone(),
-        workflow_action: artifacts.recovery_manifest.workflow_action.clone(),
+        facts_input_hash: artifacts.snapshot_manifest.facts_input_hash.clone(),
+        workflow_action: artifacts.snapshot_manifest.workflow_action.clone(),
         runtime_state,
         researched_units: artifacts
             .runtime_gates
@@ -891,6 +1118,10 @@ fn compute_declared_snapshot_id(records: &[DeclaredKnowledgeRecord]) -> io::Resu
     Ok(fingerprint_bytes(&snapshot))
 }
 
+pub fn compute_committed_snapshot_id(facts_input_hash: &str) -> String {
+    fingerprint_bytes(format!("committed-snapshot:{facts_input_hash}").as_bytes())
+}
+
 fn compute_knowledge_snapshot_id(
     knowledge_tree: &KnowledgeTree,
     declared_records: &[DeclaredKnowledgeRecord],
@@ -1203,7 +1434,7 @@ fn restore_page_caches(
 
 fn build_restored_page_context(
     unit: &KnowledgeUnit,
-    planned_page: &wiki_knowledge::PlannedPage,
+    planned_page: &wiki_knowledge::PagePlan,
     draft: &PageDraft,
     knowledge_tree: &KnowledgeTree,
     digest_by_unit: &BTreeMap<String, PageDigest>,
@@ -1327,9 +1558,11 @@ fn rebuild_state_with_sections(repo_root: &Path, metadata: &WikiMetadata) -> io:
 }
 
 fn parse_page_sections(page_type: &str, content: &str) -> Vec<WikiSectionState> {
-    let known_titles = section_titles_for_page_type(page_type);
-    let known_titles_ref = known_titles.iter().copied().collect::<Vec<_>>();
-    let parsed = parse_wiki_page(content, &known_titles_ref);
+    let _ = page_type;
+    let parsed = parse_wiki_page(
+        content,
+        &crate::generation::managed_sections::SectionBindingIndex::default(),
+    );
 
     parsed
         .blocks
@@ -1339,12 +1572,16 @@ fn parse_page_sections(page_type: &str, content: &str) -> Vec<WikiSectionState> 
                 section_id: managed.section_id.clone(),
                 title: managed.title.clone(),
                 managed: true,
+                owner_kind: Some(managed.owner_kind),
+                knowledge_refs: managed.knowledge_refs.clone(),
                 content_hash: content_hash(&managed.body),
+                input_hash: managed.input_hash.clone(),
                 // restore 后写回的 generated baseline 必须剥离 declared block，
                 // 否则后续 sync 会把 authoring surface 误当成 managed truth。
                 generated_content_hash: Some(content_hash(
                     strip_declared_blocks_from_managed_body(&managed.body).as_str(),
                 )),
+                projection_digest_ref: managed.projection_digest_ref.clone(),
                 anchor_after_section_id: None,
                 anchor_before_section_id: None,
                 source_ids: Vec::new(),
@@ -1354,8 +1591,12 @@ fn parse_page_sections(page_type: &str, content: &str) -> Vec<WikiSectionState> 
                 section_id: user.id.clone(),
                 title: String::new(),
                 managed: false,
+                owner_kind: Some(wiki_model::domain::projection::SectionOwnership::ManualUnmanaged),
+                knowledge_refs: Vec::new(),
                 content_hash: content_hash(&user.body),
+                input_hash: String::new(),
                 generated_content_hash: None,
+                projection_digest_ref: None,
                 anchor_after_section_id: user.anchor_after_section_id.clone(),
                 anchor_before_section_id: user.anchor_before_section_id.clone(),
                 source_ids: Vec::new(),
@@ -1392,9 +1633,10 @@ fn load_managed_sections(
     page: &wiki_model::domain::state::WikiPageState,
 ) -> io::Result<Vec<SectionDraft>> {
     let content = fs::read_to_string(resolve_page_path(repo_root, &page.path))?;
-    let known_titles = section_titles_for_page_type(page.page_type.as_str());
-    let known_titles_ref = known_titles.iter().copied().collect::<Vec<_>>();
-    let parsed = parse_wiki_page(&content, &known_titles_ref);
+    let parsed = parse_wiki_page(
+        &content,
+        &crate::generation::managed_sections::SectionBindingIndex::default(),
+    );
 
     Ok(parsed
         .blocks
@@ -1565,10 +1807,35 @@ fn write_json_lines<T: Serialize>(path: &Path, values: &[T]) -> io::Result<()> {
     fs::write(path, output)
 }
 
+fn write_yaml<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let yaml = serde_yaml::to_string(value)
+        .map_err(|error| io::Error::other(format!("serialize yaml {}: {error}", path.display())))?;
+    fs::write(path, yaml)
+}
+
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<T> {
     let raw = fs::read_to_string(path)?;
     serde_json::from_str(&raw)
         .map_err(|error| io::Error::other(format!("parse {}: {error}", path.display())))
+}
+
+fn read_yaml<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<T> {
+    let raw = fs::read_to_string(path)?;
+    serde_yaml::from_str(&raw)
+        .map_err(|error| io::Error::other(format!("parse yaml {}: {error}", path.display())))
+}
+
+fn read_snapshot_manifest(repo_root: &Path) -> io::Result<CommittedSnapshotManifest> {
+    let path = latest_snapshot_manifest_path(repo_root).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "committed snapshot manifest not found",
+        )
+    })?;
+    read_yaml(&path)
 }
 
 fn read_json_lines<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<Vec<T>> {

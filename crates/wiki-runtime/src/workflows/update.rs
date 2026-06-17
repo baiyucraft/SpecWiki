@@ -20,9 +20,10 @@ use crate::domain::runtime_profile::{LlmExecutionMode, RuntimeSummaryProjection}
 use crate::domain::state::{assemble_state_from_pages, build_page_state, PageBuildResult};
 use crate::domain::steering::{load_steering_config_with_mode, SteeringLoadMode};
 use crate::generation::context::{build_module_contexts_with_graph, build_repo_context_with_graph};
-use crate::generation::managed_sections::{merge_sections, parse_wiki_page, ManagedSectionBlock};
+use crate::generation::managed_sections::{
+    merge_sections, parse_wiki_page, ManagedSectionBlock, SectionBindingIndex,
+};
 use crate::generation::renderer::{assemble_page_from_merge, render_page_draft};
-use crate::generation::sections::section_titles_for_page_type;
 use crate::llm::{LlmRuntime, LlmService};
 use crate::repo::git::{current_branch, current_commit};
 use crate::storage::cache_store::{
@@ -30,8 +31,8 @@ use crate::storage::cache_store::{
     PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::knowledge_artifacts::{
-    load_knowledge_artifacts, persist_knowledge_artifacts, restore_runtime_cache_from_artifacts,
-    KnowledgeArtifactSnapshot, PersistKnowledgeArtifactsInput,
+    compute_committed_snapshot_id, load_knowledge_artifacts, persist_knowledge_artifacts,
+    restore_runtime_cache_from_artifacts, KnowledgeArtifactSnapshot, PersistKnowledgeArtifactsInput,
 };
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite::{index_store::SqliteIndexStore, runtime_store::SqliteRuntimeStore};
@@ -158,12 +159,13 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
     WorkflowReporter::from_started_at(action, progress_sink, started_at)
         .phase("plan_changes", "规划增量变更");
     let mut plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
-    if plan.needs_rebuild_reason.as_deref() == Some("cache_missing")
-        && restore_runtime_cache_from_artifacts(repo_root)?
-    {
-        WorkflowReporter::from_started_at(action, progress_sink, started_at)
-            .phase("plan_changes", "基于正式产物恢复 runtime cache");
-        plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+    if plan.needs_rebuild_reason.as_deref() == Some("cache_missing") {
+        let outcome = restore_runtime_cache_from_artifacts(repo_root)?;
+        if outcome.restored_cache {
+            WorkflowReporter::from_started_at(action, progress_sink, started_at)
+                .phase("plan_changes", "基于正式产物恢复 runtime cache");
+            plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
+        }
     }
     let previous_state =
         project_external_runtime_state(repo_root, plan.state(), facts_snapshot_ready(repo_root)?);
@@ -803,13 +805,14 @@ fn apply_incremental_update<'a>(
         generated_at: generated_at.clone(),
         last_indexed_commit: current_commit(repo_root),
     };
-    let metadata = export_metadata(&next_state, &export_context);
+    let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
+    let mut metadata = export_metadata(&next_state, &export_context);
+    metadata.current_snapshot_id = Some(compute_committed_snapshot_id(&facts_input_hash));
     reporter.phase("write_metadata", "写入元数据");
     write_metadata(repo_root, &metadata)?;
     finalize_pipeline_runtime(repo_root, action, next_pages.len())?;
     let conn = sqlite_store::open_db(repo_root)?;
     let runtime_store = SqliteRuntimeStore::new(&conn);
-    let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
     let page_digests = digests.values().cloned().collect::<Vec<_>>();
     let runtime_gates = runtime_store.read_unit_runtime_gates()?;
     let health_signals = Vec::new();
@@ -843,7 +846,7 @@ fn apply_incremental_update<'a>(
 fn merge_user_sections_into_page(
     repo_root: &Path,
     previous_page_path: Option<&str>,
-    planned_page: &wiki_knowledge::PlannedPage,
+    planned_page: &wiki_knowledge::PagePlan,
     new_sections: &[crate::generation::sections::SectionDraft],
     new_content: &str,
 ) -> String {
@@ -856,9 +859,7 @@ fn merge_user_sections_into_page(
         Err(_) => return new_content.to_string(),
     };
 
-    let known_titles = section_titles_for_page_type(&planned_page.page_type);
-    let known_titles_ref: Vec<&str> = known_titles.iter().copied().collect();
-    let old_parsed = parse_wiki_page(&old_content, &known_titles_ref);
+    let old_parsed = parse_wiki_page(&old_content, &SectionBindingIndex::default());
 
     // 检查旧页面是否有 user sections
     let has_user_sections = old_parsed
@@ -873,11 +874,12 @@ fn merge_user_sections_into_page(
     // 把新 section drafts 转成 ManagedSectionBlock
     let new_managed: Vec<ManagedSectionBlock> = new_sections
         .iter()
-        .map(|s| ManagedSectionBlock {
-            section_id: s.section_id.clone(),
-            title: s.title.clone(),
-            version: crate::generation::managed_sections::MARKER_VERSION,
-            body: s.content.clone(),
+        .map(|s| {
+            ManagedSectionBlock::generated(
+                s.section_id.clone(),
+                s.title.clone(),
+                s.content.clone(),
+            )
         })
         .collect();
 

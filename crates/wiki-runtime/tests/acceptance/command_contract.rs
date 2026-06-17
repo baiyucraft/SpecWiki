@@ -329,7 +329,7 @@ fn blocker_transport_contract_never_looks_like_success() {
         .data
         .expect("status transport should include payload");
     assert_eq!(status_payload["state"], "blocker");
-    assert_eq!(status_payload["query_readiness"], "blocked");
+    assert_eq!(status_payload["readiness"]["fusion"], "blocked");
     assert_eq!(status_payload["recommended_action"], "rebuild");
     assert!(status_payload.get("blocker_hint").is_some());
 }

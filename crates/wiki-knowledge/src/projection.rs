@@ -1,5 +1,5 @@
 //! `projection` 定义 KnowledgeTree 到页面投影决策的稳定合同。
-//! 这里产出的 `PlannedPage` 属于 knowledge 侧，不代表 runtime 持久化真相。
+//! 这里产出的 `PagePlan` 属于 knowledge 侧，不代表 runtime 持久化真相。
 
 use serde::{Deserialize, Serialize};
 use wiki_model::domain::knowledge::{
@@ -8,10 +8,10 @@ use wiki_model::domain::knowledge::{
 };
 use wiki_model::domain::stable_id::stable_id;
 
-/// `PlannedPage` 描述“要生成什么页面”的稳定投影决策。
+/// `PagePlan` 描述“要生成什么页面”的稳定投影决策。
 /// 它只负责页面结构和依赖范围，不承载 runtime 写盘状态。
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct PlannedPage {
+pub struct PagePlan {
     /// 页面稳定 ID，会被状态层、缓存层和关系层引用。
     pub id: String,
     /// 页面标题，最终渲染为一级标题。
@@ -50,7 +50,7 @@ pub struct PlannedPage {
 
 /// 从 KnowledgeTree 生成稳定页面投影列表。
 /// 这是 KnowledgeUnit 主线上的正式 projection decision 入口。
-pub fn plan_pages_from_knowledge_tree(tree: &KnowledgeTree) -> Vec<PlannedPage> {
+pub fn plan_pages_from_knowledge_tree(tree: &KnowledgeTree) -> Vec<PagePlan> {
     tree.processing_order
         .iter()
         .filter_map(|unit_id| tree.get_unit(unit_id))
@@ -58,7 +58,7 @@ pub fn plan_pages_from_knowledge_tree(tree: &KnowledgeTree) -> Vec<PlannedPage> 
         .collect()
 }
 
-fn knowledge_unit_to_planned_page(unit: &KnowledgeUnit, tree: &KnowledgeTree) -> PlannedPage {
+fn knowledge_unit_to_planned_page(unit: &KnowledgeUnit, tree: &KnowledgeTree) -> PagePlan {
     let page_type = unit_type_to_page_type(&unit.unit_type);
     let scope = unit_type_to_scope(&unit.unit_type);
 
@@ -83,7 +83,7 @@ fn knowledge_unit_to_planned_page(unit: &KnowledgeUnit, tree: &KnowledgeTree) ->
         })
     });
 
-    PlannedPage {
+    PagePlan {
         id: stable_id("page", &relative_path),
         title: unit.title.clone(),
         relative_path,

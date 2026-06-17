@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::metadata::DirtyState;
 use crate::domain::module_tree::ModuleNode;
+use crate::domain::projection::SectionOwnership;
 use crate::domain::relation::WikiRelation;
 
 /// `WikiSectionState` 记录页面内部每个章节的稳定状态。
@@ -10,9 +11,17 @@ pub struct WikiSectionState {
     pub section_id: String,
     pub title: String,
     pub managed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_kind: Option<SectionOwnership>,
+    #[serde(default)]
+    pub knowledge_refs: Vec<String>,
     pub content_hash: String,
+    #[serde(default)]
+    pub input_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generated_content_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_digest_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor_after_section_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

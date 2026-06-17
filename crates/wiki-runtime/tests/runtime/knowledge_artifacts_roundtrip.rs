@@ -5,6 +5,7 @@ use wiki_knowledge::domain::research::{
     ProjectionDigestStatus, ProjectionDigestStatusReason, ProjectionDigestStatusReasonKind,
 };
 use wiki_model::domain::knowledge_artifact::KnowledgeResearchSummaryStatus;
+use wiki_model::domain::projection::ProjectionDigest;
 use wiki_runtime::storage::knowledge_artifacts::{
     knowledge_artifacts_exist, load_conflict_records, load_declared_records, load_health_signals,
     load_knowledge_artifacts, persist_knowledge_artifacts, restore_runtime_cache_from_artifacts,
@@ -12,9 +13,61 @@ use wiki_runtime::storage::knowledge_artifacts::{
 };
 use wiki_runtime::storage::metadata_store::read_metadata;
 use wiki_runtime::storage::sqlite_store;
-use wiki_runtime::workflows::init::run_init;
+use wiki_runtime::workflows::{init::run_init, sync::run_sync};
 
 use super::test_support::force_full_runtime;
+
+const DECLARED_RUNTIME_BLOCK: &str = concat!(
+    "\n<!-- wiki:declared id=repo-runtime-contract kind=policy scope=repo status=active source=manual -->\n",
+    "当前仓库必须先写 formal artifact，再谈 query。\n",
+    "<!-- wiki:declared:end -->\n"
+);
+
+const DECLARED_RUNTIME_CHANGED_BLOCK: &str = concat!(
+    "\n<!-- wiki:declared id=repo-runtime-contract kind=policy scope=repo status=deprecated deprecated=true source=manual -->\n",
+    "当前仓库必须先写 formal artifact，再谈 query。\n",
+    "<!-- wiki:declared:end -->\n"
+);
+
+fn set_declared_blocks_in_first_managed_section(
+    repo_root: &std::path::Path,
+    declared_blocks: &str,
+) {
+    let overview_path = repo_root.join(".wiki/INDEX.md");
+    mark_first_managed_section_declared(&overview_path);
+    let content = fs::read_to_string(&overview_path).unwrap();
+    let marker = "<!-- wiki:managed:end";
+    let pos = content
+        .find(marker)
+        .expect("should have managed end marker");
+
+    let mut new_content = content[..pos]
+        .replace(DECLARED_RUNTIME_BLOCK, "")
+        .replace(DECLARED_RUNTIME_CHANGED_BLOCK, "");
+    new_content.push_str(declared_blocks);
+    new_content.push_str(&content[pos..]);
+    fs::write(&overview_path, &new_content).unwrap();
+}
+
+fn mark_first_managed_section_declared(page_path: &std::path::Path) {
+    let content = fs::read_to_string(page_path).unwrap();
+    let marker = "<!-- wiki:managed:start";
+    let start = content
+        .find(marker)
+        .expect("should have managed start marker");
+    let end = content[start..].find('\n').unwrap() + start;
+    let line = &content[start..end];
+    let declared_line = line.replace("owner=derived_managed", "owner=declared_managed");
+    if line == declared_line {
+        assert!(line.contains("owner=declared_managed"));
+        return;
+    }
+
+    let mut new_content = content[..start].to_string();
+    new_content.push_str(&declared_line);
+    new_content.push_str(&content[end..]);
+    fs::write(page_path, &new_content).unwrap();
+}
 
 #[test]
 fn knowledge_artifacts_roundtrip_preserves_declared_and_health_records() {
@@ -85,7 +138,7 @@ fn knowledge_artifacts_roundtrip_preserves_declared_and_health_records() {
         repo_root,
         workflow_action: "update",
         generated_at: &generated_at,
-        facts_input_hash: &before.recovery_manifest.facts_input_hash,
+        facts_input_hash: &before.snapshot_manifest.facts_input_hash,
         metadata: &metadata,
         knowledge_tree: &before.knowledge_tree,
         declared_records: &declared_records,
@@ -99,6 +152,29 @@ fn knowledge_artifacts_roundtrip_preserves_declared_and_health_records() {
     assert!(knowledge_artifacts_exist(repo_root));
 
     let after = load_knowledge_artifacts(repo_root).unwrap();
+    assert!(!after.projection_digests.is_empty());
+    assert!(after
+        .projection_digests
+        .iter()
+        .all(|digest: &ProjectionDigest| digest.validate().is_ok()));
+    assert!(repo_root
+        .join(".wiki/.knowledge/runtime/projection-digests.jsonl")
+        .exists());
+    let projection_refs = after
+        .projection_digests
+        .iter()
+        .map(|digest| digest.projection_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(after.snapshot_manifest.projection_digest_refs, projection_refs);
+    let projection_snapshot_id = wiki_index::fingerprint::fingerprint_bytes(
+        serde_json::to_vec(&after.projection_digests)
+            .unwrap()
+            .as_slice(),
+    );
+    assert_eq!(
+        after.snapshot_manifest.projection_snapshot_id,
+        projection_snapshot_id
+    );
     assert_eq!(after.declared_records, declared_records);
     assert_eq!(after.health_signals, health_signals);
     assert_eq!(load_declared_records(repo_root).unwrap(), declared_records);
@@ -154,7 +230,7 @@ fn knowledge_artifacts_roundtrip_preserves_declared_and_health_records() {
 
     drop(conn);
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
-    assert!(restore_runtime_cache_from_artifacts(repo_root).unwrap());
+    assert!(restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
 }
 
 #[test]
@@ -176,7 +252,47 @@ fn restore_refuses_page_snapshot_drift_even_when_artifacts_exist() {
     fs::write(&overview_path, format!("{original}\n<!-- drift -->\n")).unwrap();
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap());
+    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
+}
+
+#[test]
+fn restore_refuses_declared_page_drift_instead_of_rebuilding_truth_from_page() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"artifact-declared-page-drift-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const restore = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+    set_declared_blocks_in_first_managed_section(repo_root, DECLARED_RUNTIME_BLOCK);
+    let sync = run_sync(repo_root).unwrap();
+    assert_eq!(
+        serde_json::to_value(sync).unwrap()["page_outcomes"][0]["result_kind"],
+        "declared_writeback"
+    );
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(artifacts.declared_records.len(), 1);
+    assert_eq!(
+        artifacts.declared_records[0].status,
+        wiki_model::domain::knowledge_artifact::DeclaredKnowledgeRecordStatus::Active
+    );
+
+    set_declared_blocks_in_first_managed_section(repo_root, DECLARED_RUNTIME_CHANGED_BLOCK);
+    fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
+
+    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
+
+    let persisted = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(
+        persisted.declared_records[0].status,
+        wiki_model::domain::knowledge_artifact::DeclaredKnowledgeRecordStatus::Active
+    );
 }
 
 #[test]
@@ -212,7 +328,7 @@ fn restore_refuses_invalid_research_summary_snapshot() {
     fs::write(&research_path, format!("{research_jsonl}\n")).unwrap();
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap());
+    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
 }
 
 #[test]
@@ -248,7 +364,45 @@ fn restore_refuses_invalid_projection_digest_snapshot() {
     fs::write(&digest_path, format!("{digest_jsonl}\n")).unwrap();
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap());
+    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
+}
+
+#[test]
+fn restore_refuses_invalid_model_projection_digest_snapshot() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"artifact-invalid-model-projection-digest-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const restore = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+
+    let mut artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    let target = artifacts
+        .projection_digests
+        .first_mut()
+        .expect("init should persist at least one model projection digest");
+    target.status = wiki_model::domain::projection::ProjectionDigestStatus::Blocked;
+    target.status_reasons = Vec::new();
+
+    let digest_path = repo_root.join(".wiki/.knowledge/runtime/projection-digests.jsonl");
+    let digest_jsonl = artifacts
+        .projection_digests
+        .iter()
+        .map(|digest| serde_json::to_string(digest).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&digest_path, format!("{digest_jsonl}\n")).unwrap();
+    fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
+
+    assert!(!restore_runtime_cache_from_artifacts(repo_root)
+        .unwrap()
+        .restored_cache);
 }
 
 #[test]
@@ -289,7 +443,7 @@ fn restore_refuses_projection_digest_metadata_mismatch() {
     fs::write(&digest_path, format!("{digest_jsonl}\n")).unwrap();
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap());
+    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
 }
 
 #[test]
@@ -371,7 +525,7 @@ fn artifact_roundtrip_persists_declared_conflict_records() {
         repo_root,
         workflow_action: "update",
         generated_at: &generated_at,
-        facts_input_hash: &before.recovery_manifest.facts_input_hash,
+        facts_input_hash: &before.snapshot_manifest.facts_input_hash,
         metadata: &metadata,
         knowledge_tree: &before.knowledge_tree,
         declared_records: &declared_records,
@@ -389,7 +543,7 @@ fn artifact_roundtrip_persists_declared_conflict_records() {
         conflicts[0].conflict_kind.as_str(),
         "parallel_active_declared"
     );
-    assert!(restore_runtime_cache_from_artifacts(repo_root).unwrap());
+    assert!(restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
 }
 
 #[test]
@@ -464,7 +618,7 @@ fn restore_refuses_invalid_conflict_snapshot() {
         repo_root,
         workflow_action: "update",
         generated_at: &generated_at,
-        facts_input_hash: &before.recovery_manifest.facts_input_hash,
+        facts_input_hash: &before.snapshot_manifest.facts_input_hash,
         metadata: &metadata,
         knowledge_tree: &before.knowledge_tree,
         declared_records: &declared_records,
@@ -495,5 +649,5 @@ fn restore_refuses_invalid_conflict_snapshot() {
     fs::write(&conflict_path, format!("{conflict_jsonl}\n")).unwrap();
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap());
+    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
 }
