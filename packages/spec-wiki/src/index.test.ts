@@ -139,8 +139,14 @@ test("parseResult parses status preflight payload", () => {
         dirty_sources: ["src/app.ts"],
         dirty_pages: [".wiki/项目概述.md"],
         needs_rebuild_reason: null,
-        facts_ready: true,
-        query_readiness: "needs_update",
+        readiness: {
+          index: "missing",
+          knowledge: "ready",
+          projection: "ready",
+          fusion: "degraded",
+          restored_level: "level1",
+          reasons: ["runtime_incomplete"],
+        },
         recommended_action: "update",
         llm_mode_hint: "provider_configured",
         runtime_summary: {
@@ -171,8 +177,15 @@ test("parseResult parses status preflight payload", () => {
       dirty_sources: ["src/app.ts"],
       dirty_pages: [".wiki/项目概述.md"],
       needs_rebuild_reason: null,
-      facts_ready: true,
-      query_readiness: "needs_update",
+      readiness: {
+        index: "missing",
+        knowledge: "ready",
+        projection: "ready",
+        fusion: "degraded",
+        restored_level: "level1",
+        snapshot_id: undefined,
+        reasons: ["runtime_incomplete"],
+      },
       recommended_action: "update",
       llm_mode_hint: "provider_configured",
       runtime_summary: {
@@ -195,6 +208,51 @@ test("parseResult parses status preflight payload", () => {
         blockers: [],
       },
     },
+  });
+});
+
+test("parseResult parses query payload readiness contract", () => {
+  const parsed = parseResult(
+    JSON.stringify({
+      ok: true,
+      data: {
+        term: "wiki",
+        runtime_state: "fresh",
+        readiness: {
+          index: "ready",
+          knowledge: "ready",
+          projection: "ready",
+          fusion: "ready",
+          restored_level: "level2",
+          snapshot_id: "snapshot-1",
+          reasons: [],
+        },
+        query_mode: "mixed",
+        query_trust: "ready",
+        recommended_action: "none",
+        matched_pages: [],
+        provenance_summary: "index_hit",
+      },
+    }),
+  );
+
+  expect(parsed.data).toEqual({
+    term: "wiki",
+    runtime_state: "fresh",
+    readiness: {
+      index: "ready",
+      knowledge: "ready",
+      projection: "ready",
+      fusion: "ready",
+      restored_level: "level2",
+      snapshot_id: "snapshot-1",
+      reasons: [],
+    },
+    query_mode: "mixed",
+    query_trust: "ready",
+    recommended_action: "none",
+    matched_pages: [],
+    provenance_summary: "index_hit",
   });
 });
 

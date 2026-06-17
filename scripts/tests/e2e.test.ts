@@ -79,8 +79,8 @@ test("spec-wiki wiki init, status, update, and query keep v0.2 knowledge runtime
     expect(statusResult.exitCode).toBe(0);
     const statusJson = parseJsonLine(statusResult.stdout);
     expect(statusJson.data.state).toBe("fresh");
-    expect(statusJson.data.facts_ready).toBe(true);
-    expect(statusJson.data.query_readiness).toBe("ready");
+    expect(statusJson.data.readiness.index).toBe("ready");
+    expect(statusJson.data.readiness.fusion).toBe("ready");
     expect(statusJson.data.recommended_action).toBe("none");
     expect(statusJson.data.runtime_summary ?? null).not.toBeNull();
 

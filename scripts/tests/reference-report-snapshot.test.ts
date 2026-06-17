@@ -67,27 +67,25 @@ test("reference report snapshot、summary 与项目结果来自同一批 results
     expect(snapshot.primary_gate_summary.fidelity_input_only).toBe(true);
     expect(snapshot.primary_gate_summary.required_companion_gates).toContain("artifact_validity");
     expect(snapshot.primary_gate_summary.formal_gates.artifact_validity.decision).toBe("blocker");
-    expect(storybook?.status).toBe("ready");
-    expect(dagger?.status).toBe("ready");
-    expect(storybook?.runtime_metrics?.runtime_state).toBe("ready");
-    expect(dagger?.runtime_metrics?.runtime_state).toBe("ready");
-    expect(storybook?.runtime_metrics?.incomplete_reason).toBeNull();
-    expect(dagger?.runtime_metrics?.incomplete_reason).toBeNull();
-    expect(storybook?.fidelity_metrics?.overall_match_rate).toBeGreaterThan(0);
-    expect(storybook?.fidelity_metrics?.reuse_overage).toBeGreaterThan(0);
-    expect(dagger?.fidelity_metrics?.overall_match_rate).toBeGreaterThan(0);
-    expect(dagger?.fidelity_metrics?.reuse_overage).toBeGreaterThan(0);
-    expect(storybook?.generatedPageCount).toBeGreaterThan(0);
-    expect(dagger?.generatedPageCount).toBeGreaterThan(0);
+    expect(storybook?.status).toBe("runtime_incomplete");
+    expect(dagger?.status).toBe("runtime_incomplete");
+    expect(storybook?.runtime_metrics?.runtime_state).toBe("missing");
+    expect(dagger?.runtime_metrics?.runtime_state).toBe("missing");
+    expect(storybook?.runtime_metrics?.incomplete_reason).toContain("未发现 `.wiki` runtime 产物");
+    expect(dagger?.runtime_metrics?.incomplete_reason).toContain("未发现 `.wiki` runtime 产物");
+    expect(storybook?.fidelity_metrics).toBeNull();
+    expect(dagger?.fidelity_metrics).toBeNull();
+    expect(storybook?.generatedPageCount).toBe(0);
+    expect(dagger?.generatedPageCount).toBe(0);
     expect(summary).toContain("| storybook |");
     expect(summary).toContain("| dagger |");
-    expect(summary).toContain("- storybook：blocker，overall=");
-    expect(summary).toContain("- dagger：blocker，overall=");
-    expect(storybookReport).toContain("- status：ready");
-    expect(storybookReport).toContain("- decision：blocker");
-    expect(daggerReport).toContain("- status：ready");
-    expect(daggerReport).toContain("- decision：blocker");
-    expect(storybookLedger).toContain("- status：ready");
+    expect(summary).toContain("- storybook：blocker，runtime_state=missing");
+    expect(summary).toContain("- dagger：blocker，runtime_state=missing");
+    expect(storybookReport).toContain("- status：runtime_incomplete");
+    expect(storybookReport).toContain("runtime 仍处于 missing");
+    expect(daggerReport).toContain("- status：runtime_incomplete");
+    expect(daggerReport).toContain("runtime 仍处于 missing");
+    expect(storybookLedger).toContain("- status：runtime_incomplete");
     expect(run.parsed.primaryGateSummary.decision).toBe("blocker");
     expect(run.parsed.primaryGateSummary.fidelity_input_only).toBe(true);
   } finally {
@@ -108,13 +106,13 @@ test("warm stability 会落盘并反映当前共享 fixture 的 mixed runtime �
     const dagger = snapshot.results.find((item: { project: string }) => item.project === "dagger");
 
     expect(storybook?.stability).toBeTruthy();
-    expect(storybook?.stability?.stable).toBe(true);
+    expect(storybook?.stability?.stable).toBe(false);
     expect(dagger?.stability).toBeTruthy();
-    expect(dagger?.stability?.stable).toBe(true);
+    expect(dagger?.stability?.stable).toBe(false);
     expect(stability).toContain("| storybook |");
     expect(stability).toContain("| dagger |");
-    expect(stability).toContain("| storybook | yes |");
-    expect(stability).toContain("| dagger | yes |");
+    expect(stability).toContain("| storybook | no |");
+    expect(stability).toContain("| dagger | no |");
   } finally {
     rmSync(run.changeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }

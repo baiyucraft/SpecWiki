@@ -13,7 +13,8 @@ import {
 test("warm restore preflight 仅在 formal artifact 存在且 cache 缺失时触发", () => {
   const wikiDir = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-lifecycle-"));
   mkdirSync(path.join(wikiDir, ".knowledge", "runtime"), { recursive: true });
-  writeFileSync(path.join(wikiDir, ".knowledge", "runtime", "recovery-manifest.json"), "{}\n");
+  mkdirSync(path.join(wikiDir, ".knowledge", "runtime", "snapshots", "snapshot-1"), { recursive: true });
+  writeFileSync(path.join(wikiDir, ".knowledge", "runtime", "snapshots", "snapshot-1", "manifest.yaml"), "snapshot_id: snapshot-1\n");
 
   const ctx = {
     isRealRepo: false,

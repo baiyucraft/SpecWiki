@@ -131,7 +131,7 @@ function renderHostActionSteps(action: WikiAction): string[] {
 
   if (action === "status") {
     items.push(
-      "Prefer `state`, `query_readiness`, and `recommended_action` from runtime output when explaining whether the wiki is queryable, stale, and what should happen next.",
+      "Prefer `state`, `readiness`, and `recommended_action` from runtime output when explaining whether the wiki is queryable, stale, and what should happen next.",
     );
   }
 

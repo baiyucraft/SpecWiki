@@ -161,7 +161,14 @@ test("lifecycle 会把磁盘诊断快照提升为可消费的 diagnostic state",
       error: null,
       data: {
         state: "missing",
-        query_readiness: "needs_init",
+        readiness: {
+          index: "missing",
+          knowledge: "blocked",
+          projection: "blocked",
+          fusion: "blocked",
+          restored_level: "none",
+          reasons: ["runtime_incomplete_without_summary"],
+        },
         recommended_action: "init",
       },
     },
@@ -173,7 +180,7 @@ test("lifecycle 会把磁盘诊断快照提升为可消费的 diagnostic state",
   );
 
   expect(coerced.data.state).toBe("runtime_incomplete");
-  expect(coerced.data.query_readiness).toBe("needs_init");
+  expect(coerced.data.readiness.fusion).toBe("blocked");
   expect(coerced.data.recommended_action).toBe("init");
 });
 test("瞬态错误识别会覆盖 os error 32", () => {

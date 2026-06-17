@@ -3,7 +3,16 @@
  * `spec-wiki` 只消费稳定的宿主字段，不在这里重写 Wiki 业务语义。
  */
 
-export type QueryReadiness = "ready" | "needs_init" | "needs_update" | "blocked";
+export type LayerReadiness
+  = | "ready"
+    | "stale"
+    | "missing"
+    | "rebuilding"
+    | "conflict"
+    | "blocked"
+    | "not_enabled";
+export type FusionReadiness = "ready" | "degraded" | "blocked";
+export type RestoredLevel = "none" | "level1" | "level2";
 export type RecommendedAction = "none" | "init" | "update" | "rebuild" | "sync";
 export type LlmModeHint = "provider_configured" | "deterministic_default";
 export type QueryMode = "index_first" | "knowledge_first" | "page_fallback" | "mixed";
@@ -55,6 +64,16 @@ export type RuntimeGateSummary = {
   blockers: RuntimeGateBlocker[];
 };
 
+export type RuntimeReadiness = {
+  index: LayerReadiness;
+  knowledge: LayerReadiness;
+  projection: LayerReadiness;
+  fusion: FusionReadiness;
+  restored_level: RestoredLevel;
+  snapshot_id?: string | null;
+  reasons: string[];
+};
+
 export type WorkflowTerminalData = {
   runtime_summary?: RuntimeSummaryProjection | null;
   llm_execution_mode?: LlmExecutionMode | null;
@@ -67,8 +86,7 @@ export type WikiStatusData = {
   dirty_sources: string[];
   dirty_pages: string[];
   needs_rebuild_reason?: string | null;
-  facts_ready: boolean;
-  query_readiness: QueryReadiness;
+  readiness: RuntimeReadiness;
   recommended_action: RecommendedAction;
   llm_mode_hint: LlmModeHint;
   runtime_summary?: RuntimeSummaryProjection | null;
@@ -81,6 +99,7 @@ export type StatusPreflightData = WikiStatusData;
 export type WikiQueryData = {
   term: string;
   runtime_state: string;
+  readiness: RuntimeReadiness;
   query_mode: QueryMode;
   query_trust: QueryTrust;
   recommended_action: RecommendedAction;
@@ -338,6 +357,44 @@ function parseGateSummary(value: unknown): RuntimeGateSummary {
   };
 }
 
+function parseRuntimeReadiness(value: unknown): RuntimeReadiness {
+  const parsed = value as Partial<RuntimeReadiness>;
+
+  if (!isRecord(parsed)) {
+    throw new Error("invalid wiki-runtime readiness");
+  }
+
+  return {
+    index: parseLiteral(
+      parsed.index,
+      ["ready", "stale", "missing", "rebuilding", "conflict", "blocked", "not_enabled"] as const,
+      "readiness.index",
+    ),
+    knowledge: parseLiteral(
+      parsed.knowledge,
+      ["ready", "stale", "missing", "rebuilding", "conflict", "blocked", "not_enabled"] as const,
+      "readiness.knowledge",
+    ),
+    projection: parseLiteral(
+      parsed.projection,
+      ["ready", "stale", "missing", "rebuilding", "conflict", "blocked", "not_enabled"] as const,
+      "readiness.projection",
+    ),
+    fusion: parseLiteral(
+      parsed.fusion,
+      ["ready", "degraded", "blocked"] as const,
+      "readiness.fusion",
+    ),
+    restored_level: parseLiteral(
+      parsed.restored_level,
+      ["none", "level1", "level2"] as const,
+      "readiness.restored_level",
+    ),
+    snapshot_id: parseNullableString(parsed.snapshot_id, "readiness.snapshot_id"),
+    reasons: parseStringArray(parsed.reasons ?? [], "readiness.reasons"),
+  };
+}
+
 function parseWorkflowTerminalData(value: Record<string, unknown>): WorkflowTerminalData {
   return {
     ...value,
@@ -358,7 +415,7 @@ function parseWorkflowTerminalData(value: Record<string, unknown>): WorkflowTerm
 function parseStatusData(value: Record<string, unknown>): WikiStatusData {
   if (
     typeof value.state !== "string"
-    || typeof value.facts_ready !== "boolean"
+    || !isRecord(value.readiness)
     || typeof value.llm_mode_hint !== "string"
   ) {
     throw new TypeError("invalid wiki-runtime status payload");
@@ -372,12 +429,7 @@ function parseStatusData(value: Record<string, unknown>): WikiStatusData {
       value.needs_rebuild_reason,
       "needs_rebuild_reason",
     ),
-    facts_ready: value.facts_ready,
-    query_readiness: parseLiteral(
-      value.query_readiness,
-      ["ready", "needs_init", "needs_update", "blocked"] as const,
-      "query_readiness",
-    ),
+    readiness: parseRuntimeReadiness(value.readiness),
     recommended_action: parseLiteral(
       value.recommended_action,
       ["none", "init", "update", "rebuild", "sync"] as const,
@@ -399,6 +451,7 @@ function parseQueryData(value: Record<string, unknown>): WikiQueryData {
   if (
     typeof value.term !== "string"
     || typeof value.runtime_state !== "string"
+    || !isRecord(value.readiness)
     || typeof value.provenance_summary !== "string"
   ) {
     throw new TypeError("invalid wiki-runtime query payload");
@@ -408,6 +461,7 @@ function parseQueryData(value: Record<string, unknown>): WikiQueryData {
     ...value,
     term: value.term,
     runtime_state: value.runtime_state,
+    readiness: parseRuntimeReadiness(value.readiness),
     query_mode: parseLiteral(
       value.query_mode,
       ["index_first", "knowledge_first", "page_fallback", "mixed"] as const,
@@ -435,8 +489,7 @@ function parseKnownData(value: unknown): CoreKnownData {
 
   if (
     typeof value.state === "string"
-    && typeof value.facts_ready === "boolean"
-    && "query_readiness" in value
+    && "readiness" in value
   ) {
     return parseStatusData(value);
   }
@@ -444,6 +497,7 @@ function parseKnownData(value: unknown): CoreKnownData {
   if (
     typeof value.term === "string"
     && typeof value.runtime_state === "string"
+    && "readiness" in value
     && "query_mode" in value
     && "query_trust" in value
   ) {

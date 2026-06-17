@@ -237,6 +237,18 @@ function isDiagnosticRuntimeState(state) {
   return DIAGNOSTIC_RUNTIME_STATES.has(String(state ?? ""));
 }
 
+function buildLifecycleReadiness({ index = "missing", fusion = "blocked", restoredLevel = "none", reasons = [] } = {}) {
+  const layer = fusion === "blocked" ? "blocked" : "stale";
+  return {
+    index,
+    knowledge: layer,
+    projection: layer,
+    fusion,
+    restored_level: restoredLevel,
+    reasons,
+  };
+}
+
 export function coerceLifecycleStatusResult(statusResult, runtimeSnapshot) {
   if (!isDiagnosticRuntimeState(runtimeSnapshot?.runtimeState)) {
     return statusResult;
@@ -252,7 +264,11 @@ export function coerceLifecycleStatusResult(statusResult, runtimeSnapshot) {
   };
 
   if (runtimeSnapshot.runtimeState === "blocker") {
-    data.query_readiness = "blocked";
+    data.readiness = buildLifecycleReadiness({
+      index: "blocked",
+      fusion: "blocked",
+      reasons: ["runtime_blocker"],
+    });
     data.recommended_action = "rebuild";
     data.blocker_hint ??= runtimeSnapshot.incompleteReason ?? "runtime blocker captured on disk";
   } else if (runtimeSnapshot.runtimeState === "runtime_incomplete") {
@@ -260,10 +276,16 @@ export function coerceLifecycleStatusResult(statusResult, runtimeSnapshot) {
       data.runtime_summary = runtimeSnapshot.runtimeSummary;
     }
     if (data.runtime_summary) {
-      data.query_readiness = "needs_update";
+      data.readiness = buildLifecycleReadiness({
+        index: "stale",
+        fusion: "degraded",
+        reasons: ["runtime_incomplete"],
+      });
       data.recommended_action = "update";
     } else {
-      data.query_readiness ??= "needs_init";
+      data.readiness ??= buildLifecycleReadiness({
+        reasons: ["runtime_incomplete_without_summary"],
+      });
       data.recommended_action ??= "init";
     }
   }
@@ -277,11 +299,16 @@ export function coerceLifecycleStatusResult(statusResult, runtimeSnapshot) {
 }
 
 export function shouldAttemptWarmRestorePreflight(ctx, runtimeSnapshot) {
+  const snapshotRoot = path.join(ctx.wikiDir, ".knowledge", "runtime", "snapshots");
+  const hasSnapshotManifest = existsSync(snapshotRoot)
+    && readdirSync(snapshotRoot).some((entry) =>
+      existsSync(path.join(snapshotRoot, entry, "manifest.yaml")),
+    );
   return !ctx.isRealRepo
     && ctx.cacheMode === "preserve"
     && runtimeSnapshot?.metadataExists === true
     && runtimeSnapshot?.cacheDbExists === false
-    && existsSync(path.join(ctx.wikiDir, ".knowledge", "runtime", "recovery-manifest.json"));
+    && hasSnapshotManifest;
 }
 
 export function shouldSkipInitAfterWarmRestore(statusResult) {
@@ -394,7 +421,7 @@ function assertDiagnosticRuntimeState(ctx, t, label, statusResult, runtimeSnapsh
 
   if (state === "runtime_incomplete") {
     if (statusResult.data?.runtime_summary) {
-      t.assertContains(`${label} query remains stale-but-usable`, statusResult.data, "query_readiness", "needs_update");
+      t.assertContains(`${label} query remains stale-but-usable`, statusResult.data.readiness, "fusion", "degraded");
       t.pass(`${label} runtime summary present`);
     } else {
       t.pass(`${label} snapshot-backed runtime incomplete captured`);
@@ -405,7 +432,7 @@ function assertDiagnosticRuntimeState(ctx, t, label, statusResult, runtimeSnapsh
     return;
   }
 
-  t.assertContains(`${label} query is blocked`, statusResult.data, "query_readiness", "blocked");
+  t.assertContains(`${label} query is blocked`, statusResult.data.readiness, "fusion", "blocked");
   statusResult.data?.blocker_hint
     ? t.pass(`${label} blocker hint present`)
     : t.fail(`${label} blocker hint present`, "missing blocker_hint");
@@ -1052,7 +1079,7 @@ function runSyncNoChange(ctx, t) {
 
 function runQuery(ctx, t) {
   console.log("  [query]");
-  if (ctx.lifecycleMode === "diagnostic" && ctx.latestStatusResult?.data?.query_readiness !== "ready") {
+  if (ctx.lifecycleMode === "diagnostic" && ctx.latestStatusResult?.data?.readiness?.fusion !== "ready") {
     t.skip(`query skipped (runtime state ${ctx.runtimeState} is not query-ready)`);
     return;
   }
