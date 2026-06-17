@@ -23,7 +23,7 @@
 - `.spec/changes/<change-id>/meta.yaml`
 - review scope：`full` 或 `partial`
 - 代码 diff、changed files、相关文件、测试结果和验证证据
-- `.spec/config.yaml` 顶层 `playwright` 对 UI / browser 验证方式的约束；测试执行明细由 test verifier 和 `unispec-review` 处理
+- UI / browser 验证证据的充分性；测试执行明细由 test verifier 和 `unispec-review` 处理
 - standards directory：`.agents/skills/unispec-review/references/`
 - available standards file list
 - report template：`.agents/skills/unispec-review/references/review-report-template.md`
@@ -90,6 +90,6 @@ draft 可以在标题或结论摘要中标注 Draft，但必须满足以下兼�
 
 - 不把 lint / formatter / type checker 可稳定发现的问题当作人工 review 主体；除非它已经造成行为、安全、兼容性或工作流风险。
 - 不输出整个 change 的最终通过结论；只输出可供 `unispec-review` 汇总和签发的审查发现。
-- 不写测试执行明细；测试证据由 `unispec-review` 写入 `test-report.md`。`playwright: true` 时如关键 UI 交互缺少 Playwright evidence 且缺少明确替代证据，可记录为 review 风险或 evidence gap；`playwright: false`、缺失或无效时，不因缺少 Playwright evidence 记录风险，应检查手工验证或替代证据是否足够。
+- 不写测试执行明细；测试证据由 `unispec-review` 写入 `test-report.md`。关键 UI 交互缺少 Playwright evidence 时不自动判风险；只有同时缺少组件测试、E2E、手工验证、项目自动化或明确替代证据，才记录 review 风险或 evidence gap。
 - 除 `review-report.draft.md` 外，不自行创建、更新或删除任何文件。
 - 第三方库代码、明确标注的生成代码默认跳过；测试代码适当放宽风格类要求，但必须审查测试价值、隔离性和失败路径。

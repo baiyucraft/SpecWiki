@@ -22,10 +22,9 @@
 - `.spec/changes/<change-id>/tasks.md`
 - `.spec/changes/<change-id>/meta.yaml`
 - `.spec/changes/<change-id>/review-report.draft.md`
-- `.spec/config.yaml`（读取顶层 `playwright` 和 `imageAnalysis`；缺失按 `false`）
 - review scope：`full` 或 `partial`
 - 单元测试命令、框架输出、覆盖率报告、系统测试命令、手工验证记录和替代验证证据
-- Playwright evidence：host Playwright availability、入口 URL、浏览器 / viewport、动作摘要、断言点、截图 / trace / video / 日志 / report 路径、fallback reason
+- 浏览器交互 evidence：verification mode、tool availability、入口 URL、浏览器 / viewport、动作摘要、断言点、截图 / trace / video / 日志 / report 路径、manual verification、fallback reason
 - optional evidence directory：`.spec/changes/<change-id>/evidence/`，仅保存被 `test-report.md` 采用且需要随 change 保留的附件
 - report template：`.agents/skills/unispec-review/references/test-report-template.md`
 
@@ -42,18 +41,16 @@
 3. **整理系统测试证据**
    - 识别 E2E、CLI、API、浏览器、手工验证或替代系统验证证据。
    - 提取测试环境、执行命令或动作、用例结果、失败详情和证据路径。
-   - 读取 `.spec/config.yaml` 的顶层 `playwright`。配置缺失、未解析到配置、缺少该键或无效时按 `false` 处理，并记录 configuration issue 或 evidence gap。
-   - `playwright: true` 且宿主 Playwright 可用、已授权、项目可启动、数据 / 登录态齐备、操作风险可接受时，可以执行非破坏性 Playwright 自动化验证，并记录入口 URL、浏览器 / viewport、动作摘要、断言点、结果和证据路径。
-   - `playwright: false`、缺失或无效时，不执行 Playwright；涉及 UI、前端页面或浏览器交互的 `ST-*` 走手工验证、项目已有非 Playwright 自动化或替代证据，记录验证步骤、人工断言、执行者 / 时间、证据路径或未保留证据原因。
-   - 不得因为 `playwright: false` 缺少 Playwright evidence 判失败；只判断 `ST-*` 是否被足够证据覆盖。
-   - Playwright 被允许但不可用、未授权、项目无法启动、缺少登录态 / 测试数据或操作风险超出授权时，记录 fallback reason、未覆盖的 `ST-*`、影响和替代证据；不能把未覆盖项写成 pass。
+   - UI、前端页面或浏览器交互类 `ST-*` 可以使用 Playwright、项目已有 E2E / browser 自动化、手工验证、CLI / API / 单元测试可覆盖部分或替代证据。
+   - 只有在目标项目已有工具或用户明确授权、宿主 Playwright 可用、项目可启动、数据 / 登录态齐备且操作风险可接受时，才执行非破坏性 Playwright 自动化验证，并记录入口 URL、浏览器 / viewport、动作摘要、断言点、结果和证据路径。
+   - Playwright 不可用、未授权、项目无法启动、缺少登录态 / 测试数据或操作风险超出授权时，记录 fallback reason、未覆盖的 `ST-*`、影响和替代证据；不能把未覆盖项写成 pass。
+   - 不得因为缺少 Playwright evidence 直接判失败；只判断 `ST-*` 是否被足够的自动化、手工或替代证据覆盖。
    - 将系统测试证据映射到 `ST-*` 系统测试用例和成功标准；无法映射时写 evidence gap。
 4. **处理图片分析策略**
-   - 读取 `.spec/config.yaml` 的顶层 `imageAnalysis`。配置缺失、未解析到配置或缺少该键时按 `false` 处理。
-   - `imageAnalysis` 必须是 boolean；无效值记录 configuration issue 或 evidence gap，并按 `false` 的禁止语义处理，不得静默启用截图图片分析。
-   - `false` 时禁止读取、解释、描述或比较截图 / 图片内容；不得写“截图看起来正确”“视觉上符合预期”作为 pass 证据。仍可保存截图文件并引用路径。
-   - `true` 仅作为目标项目或用户显式 opt-in；图片内容分析只能作为辅助证据，不能作为某个 `ST-*` 或成功标准通过的唯一依据，仍需 DOM / text / URL / state / console / network / trace / log / accessibility snapshot、手工说明或替代证据覆盖。
-   - 在 draft 中记录 configured imageAnalysis、actual image analysis、evidence paths、assertion points 和 fallback reason。
+   - 截图、图片、trace 或 video 可以作为附件路径、复现材料或辅助说明，但不得把“截图看起来正确”“视觉上符合预期”作为 pass 证据。
+   - 不以 `.spec/config.yaml` 顶层键作为图片内容分析门禁；是否分析图片内容必须来自当前任务明确授权，并且只能作为辅助证据。
+   - 相关 `ST-*` 或成功标准仍需 DOM / text / URL / state / console / network / trace / log / accessibility snapshot、手工断言或替代证据覆盖。
+   - 在 draft 中记录 evidence paths、assertion points、manual verification 和 fallback reason。
 5. **检查系统测试用例覆盖**
    - 对照 `system-tests.md` 检查每个 `ST-*` 系统测试用例是否有明确验证方式和结果。
    - 未覆盖或无法验证的系统测试用例写入未验证项。
@@ -91,6 +88,6 @@ draft 可以在标题或结论摘要中标注 Draft，但必须满足以下兼�
 - 不把框架输出当作 UniSpec 覆盖判断的替代品；必须映射到 `UT-*` / Task、`ST-*` 系统测试用例或成功标准。
 - 不把 partial review 或 skipped verification 当作归档证据。
 - 不直接运行未知破坏性命令；需要用户确认时输出 evidence gap。
-- 不写正式 `test-report.md`；Playwright evidence 只有在 `playwright: true` 且实际采用时才能进入 draft，正式报告由 `unispec-review` 校验后签发。
+- 不写正式 `test-report.md`；Playwright evidence 只有在实际执行、断言点明确且被验证采用时才能进入 draft，正式报告由 `unispec-review` 校验后签发。
 - 不把 `.spec/changes/<change-id>/evidence/` 当作 required artifact；它只是可选附件目录，正式 verification evidence 的 SSOT 是 `test-report.md`。
 - 除 `test-report.draft.md` 外，不自行创建、更新或删除任何文件。

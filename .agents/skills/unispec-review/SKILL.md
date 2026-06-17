@@ -43,7 +43,6 @@ unispec-review -> review-report.md + test-report.md
 .agents/skills/unispec-review/references/test-report-template.md
 代码 diff 或实现证据
 测试结果和验证记录
-.spec/config.yaml（读取顶层 playwright 和 imageAnalysis；缺失按 false）
 必要时读取 research/ 中被引用的报告
 ```
 
@@ -109,9 +108,8 @@ artifacts: proposal / design / system-tests / tasks / meta
 scope: full | partial
 reviewDraft: .spec/changes/<change-id>/review-report.draft.md
 tests: unit test outputs, framework reports, coverage reports, system test evidence, manual verification evidence
-playwrightPolicy: .spec/config.yaml top-level playwright boolean value, missing-as-false, invalid-as-false with configuration issue
-browserInteractionEvidence: configured playwright, verification mode, Playwright availability when enabled, entry URL, browser / viewport, actions, assertion points, evidence paths, manual verification steps, fallback reason
-imageAnalysisPolicy: .spec/config.yaml top-level imageAnalysis boolean value, missing-as-false, invalid-as-false with configuration issue
+browserInteractionEvidence: verification mode, tool availability, Playwright availability when used, entry URL, browser / viewport, actions, assertion points, evidence paths, manual verification steps, fallback reason
+imageEvidencePolicy: screenshots, trace, video, and images are attachment evidence only; image-content analysis requires explicit task authorization and cannot be sole pass evidence
 evidenceDirectory: optional .spec/changes/<change-id>/evidence/ for attachments referenced by test-report.md
 reportTemplate: .agents/skills/unispec-review/references/test-report-template.md
 ```
@@ -131,11 +129,11 @@ reportTemplate: .agents/skills/unispec-review/references/test-report-template.md
 - tasks 是否仍能追溯到 design 和 system-tests。
 - `review-report.draft.md` 是否可映射到 `review-report-template.md` 的正文结构，且包含 `采用的审查规范`、阻塞问题、非阻塞问题、Artifact 同步问题、Wiki 同步问题和证据缺口。
 - `test-report.draft.md` 是否可映射到 `test-report-template.md` 的正文结构，且包含验证建议、执行信息、测试结果汇总、单元测试报告、系统测试报告、浏览器交互验证 evidence、测试命令结果、系统测试用例覆盖、成功标准覆盖、失败项、未验证项和证据缺口。
-- 浏览器交互验证 evidence 是否记录 configured playwright、verification mode、`playwright: true` 时的 host Playwright availability、入口 URL、浏览器 / viewport、动作摘要、断言点、证据路径、configured imageAnalysis、actual image analysis 和 fallback reason。
-- 当顶层 `playwright` 缺失、无效或为 `false` 时，draft 是否避免规划或执行 Playwright，且没有因为缺少 Playwright evidence 判风险；涉及 UI / browser 的 `ST-*` 是否记录手工验证步骤、人工断言、替代证据、证据路径或 fallback reason。
-- 当顶层 `playwright: true` 时，关键 UI / browser 用例没有 Playwright 且缺少充分替代证据，才记录 evidence gap。
-- 当顶层 `imageAnalysis` 缺失、无效或为 `false` 时，draft 是否避免读取、解释、描述或比较截图 / 图片内容，且没有把“截图看起来正确”作为 pass 证据。
-- 当顶层 `imageAnalysis: true` 时，draft 是否仍包含覆盖相关 `ST-*` / 成功标准的非图片断言或替代证据。
+- 浏览器交互验证 evidence 是否记录 verification mode、tool availability、使用 Playwright 时的 host Playwright availability、入口 URL、浏览器 / viewport、动作摘要、断言点、证据路径、manual verification 和 fallback reason。
+- 涉及 UI / browser 的 `ST-*` 是否由 Playwright、项目自动化、手工验证、CLI / API / 单元测试可覆盖部分或替代证据覆盖，并记录步骤、断言、结果和证据路径。
+- 关键 UI / browser 用例没有 Playwright evidence 时，是否仍有充分替代证据；缺少任何充分证据时才记录 evidence gap。
+- 截图、trace、video 或图片是否只作为附件路径或辅助说明，没有把“截图看起来正确”作为 pass 证据。
+- 若 draft 使用图片内容分析，是否有当前任务明确授权，且仍包含覆盖相关 `ST-*` / 成功标准的非图片断言或替代证据。
 - 是否存在实现已改变长期知识、公开契约、模块职责或流程规则但尚未沉淀到 `.wiki` 的 wiki-sync issues。
 
 发现 task 误勾、证据不足、draft 缺字段、draft 写了正式 frontmatter 或无法映射模板时，不签发正式报告，保留 draft 并要求补齐。

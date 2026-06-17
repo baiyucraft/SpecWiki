@@ -23,7 +23,7 @@
 - UI 反馈：loading、empty、error、disabled、未实现动作、批量未选中、删除确认、操作成功 / 失败提示和可恢复路径必须可见。
 - 安全：禁止未消毒的 `dangerouslySetInnerHTML`，URL 参数必须编码，token 和敏感数据不能明文放入 localStorage/sessionStorage，日志和错误提示不得泄露敏感信息。
 - 前端验证：关键用户行为、错误态、空状态、提交防重入、请求失败和成功标准必须有组件测试、端到端验证或明确替代证据。
-- 浏览器交互验证：涉及 UI / browser 交互的验证方式必须服从 `.spec/config.yaml` 顶层 `playwright`。`playwright: true` 时，Playwright 是优先候选证据；`playwright: false`、缺失或无效时，手工验证或项目已有非 Playwright 自动化是合法路径，审查重点是步骤、断言、结果和证据是否足够。
+- 浏览器交互验证：涉及 UI / browser 交互的验证方式可以使用 Playwright、项目已有自动化、组件测试、手工验证或替代证据。审查重点是步骤、断言、结果和证据是否足够，而不是是否存在某个配置开关。
 
 ## Non-blocking / P1/P2
 
@@ -34,7 +34,7 @@
 
 ## 建议工具化
 
-- 配置 TypeScript strict、ESLint、Prettier、eslint-plugin-react-hooks、import 规则、accessibility scan、coverage、按 `.spec/config.yaml` 顶层 `playwright` 启用的 Playwright 验证、E2E smoke 和 visual regression。
+- 配置 TypeScript strict、ESLint、Prettier、eslint-plugin-react-hooks、import 规则、accessibility scan、coverage、项目已有或用户授权的 Playwright 验证、E2E smoke 和 visual regression。
 - Hooks deps、基础 no-any、JSX / CSS 格式、导入排序、命名、未使用变量、简单 a11y 属性和覆盖率阈值优先交给工具。
 - React Testing Library 应优先测试用户行为和可见结果；API 请求使用 MSW / mock，不连接真实后端。
 
@@ -49,4 +49,4 @@
 - 仅看到 `package.json`、`tsconfig.json` 或 `.ts` 文件就判定为前端。
 - 把 Hooks lint 可稳定发现的问题逐条人工列为主 findings，而没有说明真实生命周期风险。
 - 对内部状态测试实现细节提出强要求，而不是关注用户行为和可见结果。
-- 在 `playwright: false`、缺失或无效时，因没有 Playwright evidence 机械判风险；应检查手工验证或替代证据是否覆盖相关 `ST-*` 和成功标准。
+- 因没有 Playwright evidence 机械判风险；应检查组件测试、E2E、手工验证、项目自动化或替代证据是否覆盖相关 `ST-*` 和成功标准。

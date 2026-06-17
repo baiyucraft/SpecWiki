@@ -4,16 +4,17 @@
 
 本文档只指导目标项目如何规划 Playwright 验证方式。UniSpec CLI 不执行 Playwright、不安装 Playwright、不提供内置 runner、不新增 workflow stage，也不要求目标项目新增 `dependencies` / `devDependencies`。
 
-## 配置前置条件
+## 使用前置条件
 
-使用本文档前，先读取目标项目 `.spec/config.yaml` 的顶层 `playwright`：
+使用本文档前，先确认目标项目事实和授权边界：
 
-- `playwright: true`：允许 UI / browser `ST-*` 优先规划 Playwright；实际执行仍取决于用户授权、宿主 Playwright 可用、项目可启动、数据 / 登录态齐备和操作风险可接受。
-- `playwright: false`、缺失或无效：不规划、不执行 Playwright；涉及浏览器操作但无法由 CLI / API / 单元测试覆盖的 `ST-*`，应写为手工验证或项目已有非 Playwright 自动化验证，并记录人工步骤、人工断言、替代证据和 evidence gap / fallback。
+- 目标项目已有 Playwright / E2E / browser 测试脚本，或用户明确授权临时使用宿主 Playwright。
+- 项目可启动，入口 URL、测试数据、登录态、feature flag 和外部依赖可准备。
+- 操作是非破坏性的，或破坏性影响已被用户明确授权和隔离。
 
-本 reference 仅在 `playwright: true` 时适用。`playwright: false`、缺失或无效时，即使用户临时提到浏览器自动化，也不以本文档作为系统测试规划依据；应先由用户确认更新目标项目配置。
+不满足前置条件时，不强行规划或执行 Playwright；涉及浏览器操作但无法由 CLI / API / 单元测试覆盖的 `ST-*`，应写为手工验证、项目已有自动化或替代验证，并记录人工步骤、人工断言、替代证据和 evidence gap / fallback。
 
-`playwright` 与 `imageAnalysis` 相互独立：`playwright: true` 不表示允许图片内容分析；`imageAnalysis: true` 也不表示允许使用 Playwright。
+Playwright 使用权限与图片内容分析无绑定关系。截图、trace、video 可以作为附件路径，图片内容判断只能在当前任务明确授权下作为辅助证据，不能替代非图片断言。
 
 ## 适用场景
 
@@ -34,7 +35,7 @@
 | 需要 headed 调试 | 使用 `playwright test --headed` 或项目等价命令 |
 | 只跑 Chromium | 使用 `playwright test --project chromium` 或项目等价命令 |
 | 需要 trace | 使用 `playwright test --trace on` 或项目等价命令 |
-| 项目未安装且用户授权临时验证 | 仅在没有项目脚本、没有项目内 Playwright、且 `playwright: true` 已配置时，fallback 使用 `npx playwright test`、`npx playwright --help` 等 `npx playwright ...` 命令 |
+| 项目未安装且用户授权临时验证 | 仅在没有项目脚本、没有项目内 Playwright、且用户授权临时验证时，fallback 使用 `npx playwright test`、`npx playwright --help` 等 `npx playwright ...` 命令 |
 | 缺少浏览器二进制 | 可由执行者按目标项目约束运行 `npx playwright install chromium` 或项目等价命令 |
 
 如果目标项目已有包管理器、workspace、测试脚本或 CI 约定，以项目事实为准。不要在 `system-tests.md` 中要求修改依赖文件。
@@ -45,7 +46,7 @@
 
 本节用于规划“打开真实浏览器并按步骤操作页面”的验证方式。以下命令属于 `@playwright/cli` / `playwright-cli` 交互式 CLI，不是 `@playwright/test` 的 test runner。
 
-以下命令只用于已配置 `playwright: true` 的目标项目。
+以下命令只用于目标项目已有工具或用户明确授权的验证场景。
 
 先确定命令前缀：
 
@@ -235,12 +236,9 @@ npx playwright test --trace on
 
 ## 图片分析规则
 
-读取目标项目 `.spec/config.yaml` 的顶层 `imageAnalysis`：
+截图、trace、video 或图片可以保存、附加并按路径引用。默认通过证据必须来自 DOM/text、URL、aria / accessibility 状态、network、console、storage、API 响应、数据库状态、日志、手工断言或明确的替代证据。
 
-- 缺失、无效或 `imageAnalysis: false`：禁止读取、解释、描述或比较截图 / 图片内容；不得把“截图看起来正确”“视觉上符合预期”作为 pass 证据。
-- `imageAnalysis: true`：仅表示目标项目或用户显式允许图片内容分析；图片分析只能作为辅助证据，不能作为某个 `ST-*` 或成功标准通过的唯一依据。
-
-`imageAnalysis: false` 不禁止 Playwright 保存截图、trace 或 video，也不禁止报告引用附件路径。它只禁止模型用图片内容本身做判断。通过证据必须来自非图片断言或明确的替代证据。
+只有当前任务明确授权时，才可以读取、解释、描述或比较图片内容；即便使用图片内容分析，也只能作为辅助证据，不能作为某个 `ST-*` 或成功标准通过的唯一依据。不得把“截图看起来正确”“视觉上符合预期”作为 pass 证据。
 
 ## 失败与 fallback
 

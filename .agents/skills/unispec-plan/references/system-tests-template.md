@@ -9,9 +9,9 @@
 - `system-tests.md` 必须使用本文档中的固定二级标题。
 - 每条成功标准至少有一个系统测试用例覆盖；无法覆盖时必须写入 `未覆盖项`。
 - 系统测试用例必须可验证，并能作为后续任务拆分的验收依据。
-- 规划 UI、前端页面或浏览器交互系统测试前，读取 `.spec/config.yaml` 的顶层 `playwright`；缺失、无效或 `false` 按不使用 Playwright 处理。
-- 仅当 `playwright: true` 时，UI / browser `ST-*` 才可优先规划 Playwright，并参考 `references/playwright-usage.md` 写明验证入口、动作和断言点；本阶段只定义验证方式，不执行 Playwright。
-- 当 `playwright: false`、缺失或无效时，不规划或执行 Playwright；需要浏览器操作的 `ST-*` 应写为手工验证、项目已有非 Playwright 自动化、CLI / API / 单元测试可覆盖部分，并记录人工步骤、人工断言、替代证据和 evidence gap / fallback。
+- 规划 UI、前端页面或浏览器交互系统测试时，可根据目标项目已有工具、用户授权、环境可启动性和操作风险选择 Playwright、项目已有自动化、手工验证、CLI / API / 单元测试可覆盖部分或替代证据。
+- 计划使用 Playwright 时，参考 `references/playwright-usage.md` 写明验证入口、动作和断言点；本阶段只定义验证方式，不执行 Playwright。
+- 未使用或无法使用 Playwright 时，需要浏览器操作的 `ST-*` 应写为手工验证、项目已有自动化、CLI / API / 单元测试可覆盖部分，并记录人工步骤、人工断言、替代证据和 evidence gap / fallback。
 - 不适用的小节可以写 `无`，不要保留空表格、空标题或占位文本。
 
 ## 固定结构
@@ -71,7 +71,7 @@
 - 用例描述验收结果，不描述代码实现步骤。
 - `操作 / 触发` 可以是用户操作、CLI 命令、API 调用、系统事件或状态变化。
 - `验证方式` 写后续如何验证，不要求此阶段执行验证。
-- 当 `验证方式` 使用 Playwright 自动化验证时，必须先确认 `.spec/config.yaml` 顶层 `playwright: true`，再参考 `references/playwright-usage.md`，写清入口 URL、viewport、前置数据、操作步骤、非图片断言点、预期证据类型和 fallback reason；Playwright 不表示 UniSpec CLI 内置 runner，也不表示必须新增依赖。
-- 当 `playwright` 缺失、无效或为 `false` 时，浏览器交互用例不能写成 Playwright 计划；手工验证必须写清操作步骤、人工断言、验证结果记录方式、证据路径或未保留证据原因。
+- 当 `验证方式` 使用 Playwright 自动化验证时，必须确认目标项目工具或用户授权、宿主可用、项目可启动、数据 / 登录态齐备且操作风险可接受，再参考 `references/playwright-usage.md`，写清入口 URL、viewport、前置数据、操作步骤、非图片断言点、预期证据类型和 fallback reason；Playwright 不表示 UniSpec CLI 内置 runner，也不表示必须新增依赖。
+- 浏览器交互用例未采用 Playwright 时，手工验证或项目已有自动化必须写清操作步骤、人工断言、验证结果记录方式、证据路径或未保留证据原因。
 - `覆盖矩阵` 只确认 success criteria、系统测试用例和计划验证方式的覆盖关系；系统测试用例 / task 映射只写入 `tasks.md`。
 - `未覆盖项` 必须说明原因和后续处理，不写空泛提醒。

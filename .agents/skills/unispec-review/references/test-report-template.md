@@ -112,8 +112,8 @@ scope: full
 | 测试方式 | <E2E / CLI / API / 浏览器 / 手工 / 替代验证 / 不适用> |
 | 测试环境 | <服务地址、浏览器、数据库、外部依赖等；不适用写“无”> |
 | 工具 | <Playwright / 手工验证 / 替代验证 / 不适用> |
-| configured playwright | <true / false / missing-as-false / invalid-as-false> |
 | verification mode | <playwright / manual / project automation / CLI/API / unit / skipped> |
+| tool availability | <available / unavailable / unknown / not-applicable> |
 | 入口 URL | <URL；不适用写“无”> |
 | 浏览器 / viewport | <browser、viewport；未记录写“未记录”> |
 | 执行命令或动作 | <命令、脚本或手工动作> |
@@ -126,15 +126,12 @@ scope: full
 
 | 字段 | 值 |
 | --- | --- |
-| configured playwright | <true / false / missing-as-false / invalid-as-false> |
 | verification mode | <playwright / manual / project automation / CLI/API / unit / skipped> |
 | host Playwright availability | <available / unavailable / unknown / not-applicable> |
 | manual verification | <手工验证步骤、人工断言、执行者 / 时间；不适用写“无”> |
-| configured imageAnalysis | <true / false / missing-as-false / invalid-as-false> |
-| actual image analysis | <used / not-used> |
 | evidence paths | <被 test-report.md 采用的截图、trace、video、日志或报告路径；没有则写“无”> |
 | assertion points | <支撑 ST-* / 成功标准的非图片断言或替代证据> |
-| fallback reason | <configured playwright false、无法执行 Playwright、无法读取配置、配置无效、手工验证原因或未覆盖用例的原因；没有则写“无”> |
+| fallback reason | <无法执行 Playwright、未授权、项目无法启动、手工验证原因或未覆盖用例的原因；没有则写“无”> |
 
 ### 系统测试结果汇总
 
@@ -198,13 +195,11 @@ scope: full
 - 测试报告可以包含自动化测试、手工验证、命令输出摘要和替代验证证据。
 - 单元测试报告部分记录 Vitest、Jest、pytest、go test、JUnit 等框架输出摘要、覆盖率摘要和失败用例；框架原始报告只记录路径或摘要，不整段复制。
 - 系统测试报告部分记录端到端、CLI、API、浏览器或手工验证的执行环境、用例结果、失败详情和证据路径。
-- `.spec/config.yaml` 的顶层 `playwright` 必须是 boolean；缺失按 `false` 处理，无效值记录 configuration issue 或 evidence gap，并按 `false` 处理。
-- `playwright: true` 时，涉及 UI / browser 交互的系统测试可以优先使用 Playwright 作为候选证据；实际执行仍需要用户授权、宿主可用、项目可启动、测试数据齐备和操作风险可接受。
-- `playwright: false`、缺失或无效时，不规划或执行 Playwright；浏览器交互验证应记录手工验证、项目已有非 Playwright 自动化、CLI / API / 单元测试可覆盖部分、替代证据和 evidence gap / fallback。
-- 不得因为 `playwright: false` 缺少 Playwright evidence 判失败；只判断 `ST-*` 和成功标准是否被足够证据覆盖。
-- `.spec/config.yaml` 的顶层 `imageAnalysis` 必须是 boolean；缺失按 `false` 处理，无效值记录 configuration issue 或 evidence gap，并按 `false` 的禁止语义处理。
-- `imageAnalysis: false` 或缺失时，禁止读取、解释、描述或比较截图 / 图片内容；不得使用“截图看起来正确”“视觉上符合预期”作为 pass 证据。仍可保存截图文件并引用路径。
-- `imageAnalysis: true` 仅表示目标项目或用户显式 opt-in；图片内容分析只能作为辅助证据，不能作为某个 `ST-*` 或成功标准通过的唯一依据，仍需非图片断言或替代证据覆盖。
+- 涉及 UI / browser 交互的系统测试可以使用 Playwright、项目已有自动化、手工验证、CLI / API / 单元测试可覆盖部分或替代证据。
+- Playwright 只有在目标项目已有工具或用户明确授权、宿主可用、项目可启动、测试数据齐备且操作风险可接受时才执行；不可用或未采用时记录 fallback reason。
+- 不得因为缺少 Playwright evidence 直接判失败；只判断 `ST-*` 和成功标准是否被足够证据覆盖。
+- 截图、trace、video 或图片可以保存并引用路径，但不得使用“截图看起来正确”“视觉上符合预期”作为 pass 证据。
+- 图片内容分析只能作为当前任务明确授权下的辅助证据，不能作为某个 `ST-*` 或成功标准通过的唯一依据，仍需非图片断言或替代证据覆盖。
 - 框架输出不能替代 UniSpec 覆盖判断；必须继续映射到 UT-* / Task、ST-* 系统测试用例和成功标准。
 - 命令结果必须写清命令、结果和证据；无法运行时说明原因。
 - 不写整体代码审查结论；整体 review 写入 `review-report.md`。
