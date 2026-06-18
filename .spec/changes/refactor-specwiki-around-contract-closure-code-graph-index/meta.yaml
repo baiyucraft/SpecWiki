@@ -1,5 +1,5 @@
 id: refactor-specwiki-around-contract-closure-code-graph-index
-stage: exploration
+stage: proposal
 deliveryShape: single-change
 multiChange:
   role: child
@@ -10,6 +10,6 @@ multiChange:
     - refactor-specwiki-around-contract-closure-query-route-readiness
 artifacts:
   proposal:
-    status: missing
+    status: present
   metadata:
     status: present
