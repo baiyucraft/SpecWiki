@@ -439,23 +439,40 @@ symbol first
 
 ## 当前 query 边界与演进方向
 
-### `v0.1.0` 当前 query 边界
+### 当前 query 边界
 
-当前收敛版发布里，外部 query 合同仍保持：
+当前外部 query 输入仍保持 `term-only`，但返回合同已经收口为 `route_groups` / `results` 主合同：
 
 ```text
 term only
 -> runtime route
--> index-first result
--> page fallback only if needed
+-> route_groups / results
+-> readiness / trust / recommended_action
+-> answer / compact hits
 ```
 
 这意味着：
 
 - 当前外部正式输入仍是 `term`
 - runtime 当前优先把 query 路由到 facts/index substrate
-- page 仍然只是 fallback 或补充投影，不是 query 主体
+- `results` 中每条结果必须携带 `route_tag / ref_kind / ref_id / label / score / provenance / confidence / recommended_action / source_refs`
+- `route_groups` 用来表达不同 route 内部的相对 score；跨 route 不强行混成单一排序
+- page fallback 必须显式标记为 `rendered_page_debug_fallback`，并降低 query/answer trust
+- `provenance_summary` 只保留为只读派生摘要，不再作为 query 主合同
+- governance 当前只暴露 `governance_readiness: not_enabled` 占位，不扫描 `.spec` evidence，也不阻断普通 query
 - process / community 当前虽然属于 Layer A facts，可作为后续 query 扩展依据，但不应被误写成 `v0.1.0` 已正式承诺的稳定命中层
+
+当前稳定 route tag 闭集包括：
+
+- `index_symbol_hit`
+- `index_path_hit`
+- `index_graph_hit`
+- `knowledge_declared_hit`
+- `knowledge_derived_hit`
+- `governance_evidence_ref`
+- `governance_summary_hit`
+- `projection_ref`
+- `rendered_page_debug_fallback`
 
 ### GitNexus 对 query 的参考边界
 
@@ -492,14 +509,14 @@ GitNexus 对当前系统的 query 演进有明确参考价值，但参考面主�
 
 1. 先补清晰的 query routing / result shaping 规则
 2. 再定义 process / community 的命中语义、排序规则、截断策略和 provenance
-3. 再把 richer graph projection 正式提升到 transport / DTO 合同
+3. 再把更完整的 graph projection 正式提升到 transport / DTO 合同
 4. 最后再考虑 semantic search 作为可选增强层，而不是当前主链前提
 
 具体约束：
 
 - 短期内外部可继续保持 `term-only` 合同稳定
 - 内部可以继续演进 intent routing、graph projection 和 result shaping
-- 当前内部已经存在 `callers / callees / impact slice` 一类 graph substrate；后续应明确哪些升级为正式输出，哪些仍保持内部能力
+- 当前内部已经存在 `index_graph_hit` 基础输出；更完整的 `callers / callees / impact slice` 仍需明确哪些升级为正式输出，哪些保持内部能力
 - process grouping 不应压过 `symbol -> graph -> declared knowledge -> derived knowledge -> page` 这条查询主线
 - 一旦 query 同时返回 facts、knowledge、process 和 page，多层结果必须有统一 ranking 与 provenance，避免宿主消费失真
 
@@ -514,7 +531,7 @@ GitNexus 对当前系统的 query 演进有明确参考价值，但参考面主�
   - 当前 index/graph 内部已经有一部分 substrate，但还没有形成稳定 transport 字段、排序规则与置信度解释
   - 后续只有在字段定义、ranking、provenance 和截断策略稳定后，才适合提升为正式 query contract
 - 更完整的 query 质量信号模型
-  - 当前外部只正式暴露 `runtime_state / query_mode / query_trust / recommended_action`
+  - 当前外部已经正式暴露 `readiness / query_trust / recommended_action / route_groups / results`
   - 后续若要补 richer quality signal，应统一回答“结果是否完整、是否来自 fallback、是否需要 rebuild、覆盖面有多大”，避免宿主继续自己拼状态机
 
 ## Workflow 生命周期

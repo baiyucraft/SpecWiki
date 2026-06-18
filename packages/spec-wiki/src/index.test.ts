@@ -232,6 +232,52 @@ test("parseResult parses query payload readiness contract", () => {
         recommended_action: "none",
         matched_pages: [],
         provenance_summary: "index_hit",
+        governance_readiness: "not_enabled",
+        route_groups: [
+          {
+            route_tag: "index_symbol_hit",
+            results: [
+              {
+                route_tag: "index_symbol_hit",
+                ref_kind: "source_symbol",
+                ref_id: "symbol:handleCheckout",
+                label: "handleCheckout",
+                score: 0.9,
+                provenance: { layer: "index", state: "ready" },
+                confidence: "high",
+                recommended_action: "open_source_ref",
+                source_refs: [
+                  {
+                    ref_kind: "source_path",
+                    ref_id: "src/controller.ts",
+                    label: "src/controller.ts",
+                  },
+                ],
+                extra_field: "keep-me",
+              },
+            ],
+          },
+        ],
+        results: [
+          {
+            route_tag: "index_symbol_hit",
+            ref_kind: "source_symbol",
+            ref_id: "symbol:handleCheckout",
+            label: "handleCheckout",
+            score: 0.9,
+            provenance: { layer: "index", state: "ready" },
+            confidence: "high",
+            recommended_action: "open_source_ref",
+            source_refs: [
+              {
+                ref_kind: "source_path",
+                ref_id: "src/controller.ts",
+                label: "src/controller.ts",
+              },
+            ],
+            extra_field: "keep-me",
+          },
+        ],
       },
     }),
   );
@@ -253,7 +299,83 @@ test("parseResult parses query payload readiness contract", () => {
     recommended_action: "none",
     matched_pages: [],
     provenance_summary: "index_hit",
+    governance_readiness: "not_enabled",
+    route_groups: [
+      {
+        route_tag: "index_symbol_hit",
+        results: [
+          {
+            route_tag: "index_symbol_hit",
+            ref_kind: "source_symbol",
+            ref_id: "symbol:handleCheckout",
+            label: "handleCheckout",
+            score: 0.9,
+            provenance: { layer: "index", state: "ready" },
+            confidence: "high",
+            recommended_action: "open_source_ref",
+            source_refs: [
+              {
+                ref_kind: "source_path",
+                ref_id: "src/controller.ts",
+                label: "src/controller.ts",
+              },
+            ],
+            extra_field: "keep-me",
+          },
+        ],
+      },
+    ],
+    results: [
+      {
+        route_tag: "index_symbol_hit",
+        ref_kind: "source_symbol",
+        ref_id: "symbol:handleCheckout",
+        label: "handleCheckout",
+        score: 0.9,
+        provenance: { layer: "index", state: "ready" },
+        confidence: "high",
+        recommended_action: "open_source_ref",
+        source_refs: [
+          {
+            ref_kind: "source_path",
+            ref_id: "src/controller.ts",
+            label: "src/controller.ts",
+          },
+        ],
+        extra_field: "keep-me",
+      },
+    ],
   });
+});
+
+test("parseResult rejects unknown query route tags", () => {
+  expect(() =>
+    parseResult(
+      JSON.stringify({
+        ok: true,
+        data: {
+          term: "wiki",
+          runtime_state: "fresh",
+          readiness: {
+            index: "ready",
+            knowledge: "ready",
+            projection: "ready",
+            fusion: "ready",
+            restored_level: "level2",
+            reasons: [],
+          },
+          query_mode: "mixed",
+          query_trust: "ready",
+          recommended_action: "none",
+          matched_pages: [],
+          provenance_summary: "index_hit",
+          governance_readiness: "not_enabled",
+          route_groups: [{ route_tag: "index_hit", results: [] }],
+          results: [],
+        },
+      }),
+    ),
+  ).toThrow(/query route tag/i);
 });
 
 test("parseEventLine validates progress events with usage", () => {

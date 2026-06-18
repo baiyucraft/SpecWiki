@@ -175,6 +175,9 @@ fn query_transport_returns_slim_payload_but_internal_query_stays_rich() {
     assert!(payload.get("query_trust").is_some());
     assert!(payload.get("recommended_action").is_some());
     assert!(payload.get("provenance_summary").is_some());
+    assert!(payload.get("route_groups").is_some());
+    assert!(payload.get("results").is_some());
+    assert_eq!(payload["governance_readiness"], "not_enabled");
     assert!(payload.get("answer").is_some());
     assert!(payload.get("summary").is_some());
     assert!(payload.get("hits").is_some());
@@ -187,6 +190,11 @@ fn query_transport_returns_slim_payload_but_internal_query_stays_rich() {
     assert!(payload.get("matched_modules").is_none());
     assert!(payload.get("matched_symbol_edges").is_none());
     assert!(payload.get("matches").is_none());
+    assert!(payload["results"].as_array().is_some_and(|results| {
+        results.iter().any(|result| {
+            result["route_tag"] == "index_symbol_hit" && result["source_refs"].is_array()
+        })
+    }));
 
     let hits = payload["hits"]
         .as_array()

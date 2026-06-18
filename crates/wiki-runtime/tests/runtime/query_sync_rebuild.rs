@@ -12,6 +12,7 @@ use wiki_runtime::workflows::{
     init::run_init, query::run_query, rebuild::run_rebuild, status::run_status, sync::run_sync,
     update::run_update,
 };
+use wiki_model::domain::query::QueryRouteTag;
 
 const DECLARED_RUNTIME_BLOCK: &str = concat!(
     "\n<!-- wiki:declared id=repo-runtime-contract kind=policy scope=repo status=active source=manual -->\n",
@@ -257,6 +258,11 @@ fn query_keeps_textual_page_fallback_degraded_even_with_graph_hits() {
         .provenance
         .iter()
         .any(|item| item == "page_fallback"));
+    assert!(query
+        .results
+        .iter()
+        .all(|result| result.route_tag != QueryRouteTag::RenderedPageDebugFallback
+            || result.ref_kind == wiki_model::domain::query::QueryRefKind::RenderedPage));
 }
 
 /// 场景：显式 rebuild 必须能补回缺失的 page-level cache。
@@ -486,6 +492,44 @@ fn query_returns_graph_context_for_symbol_hits() {
 }
 
 #[test]
+fn query_fusion_outputs_route_groups_and_results() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    write_graph_query_repo(repo_root);
+
+    run_init(repo_root).unwrap();
+
+    let query = run_query(repo_root, "handleCheckout").unwrap();
+    assert!(
+        query
+            .route_groups
+            .iter()
+            .any(|group| group.route_tag == QueryRouteTag::IndexSymbolHit),
+        "expected index symbol route group, got {:#?}",
+        query.route_groups
+    );
+    assert!(
+        query
+            .route_groups
+            .iter()
+            .any(|group| group.route_tag == QueryRouteTag::IndexGraphHit),
+        "expected index graph route group, got {:#?}",
+        query.route_groups
+    );
+    assert!(
+        query.results.iter().any(|result| {
+            result.route_tag == QueryRouteTag::IndexSymbolHit && !result.source_refs.is_empty()
+        }),
+        "expected query results with source refs, got {:#?}",
+        query.results
+    );
+    assert!(
+        query.provenance_summary.contains("index_hit"),
+        "provenance_summary should remain as a derived summary"
+    );
+}
+
+#[test]
 fn query_expands_inbound_impact_range_for_terminal_symbol() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
@@ -659,6 +703,39 @@ fn query_restores_runtime_cache_from_formal_artifacts() {
 }
 
 #[test]
+fn query_does_not_emit_index_routes_when_index_is_not_ready() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    fs::write(repo_root.join("package.json"), r#"{"name":"demo"}"#).unwrap();
+
+    run_init(repo_root).unwrap();
+    fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
+
+    let query = run_query(repo_root, "项目概述").unwrap();
+    let payload = serde_json::to_value(&query).unwrap();
+
+    assert_eq!(payload["readiness"]["index"], "missing");
+    assert_eq!(payload["query_trust"], "stale_but_queryable");
+    assert_eq!(payload["recommended_action"], "rebuild");
+    assert!(
+        query
+            .results
+            .iter()
+            .all(|result| !result.route_tag.is_index_route()),
+        "index route must not be emitted when index is not ready: {:#?}",
+        query.results
+    );
+    assert!(
+        query
+            .route_groups
+            .iter()
+            .all(|group| !group.route_tag.is_index_route()),
+        "index route group must not be emitted when index is not ready: {:#?}",
+        query.route_groups
+    );
+}
+
+#[test]
 fn query_marks_governance_conflict_answer_as_degraded() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
@@ -695,4 +772,63 @@ fn query_marks_governance_conflict_answer_as_degraded() {
                 .iter()
                 .any(|item| item == "health:governance_conflict")
     }));
+}
+
+#[test]
+fn query_emits_declared_knowledge_route_for_declared_records() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"query-declared-route-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const runtime = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+    set_declared_blocks_for_query(repo_root, DECLARED_RUNTIME_BLOCK);
+    run_sync(repo_root).unwrap();
+
+    let query = run_query(repo_root, "formal artifact").unwrap();
+
+    assert!(
+        query
+            .results
+            .iter()
+            .any(|result| result.route_tag == QueryRouteTag::KnowledgeDeclaredHit
+                && result.ref_kind == wiki_model::domain::query::QueryRefKind::KnowledgeRecord
+                && !result.source_refs.is_empty()),
+        "declared knowledge route should be emitted from formal declared records: {:#?}",
+        query.results
+    );
+    assert!(
+        query
+            .route_groups
+            .iter()
+            .any(|group| group.route_tag == QueryRouteTag::KnowledgeDeclaredHit),
+        "declared knowledge route group should be emitted: {:#?}",
+        query.route_groups
+    );
+}
+
+#[test]
+fn query_reports_governance_not_enabled_without_blocking_query() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("package.json"), r#"{"name":"demo"}"#).unwrap();
+    run_init(repo_root).unwrap();
+
+    let query = run_query(repo_root, "项目概述").unwrap();
+    let payload = serde_json::to_value(&query).unwrap();
+
+    assert_eq!(payload["governance_readiness"], "not_enabled");
+    assert!(!query.results.iter().any(|result| {
+        matches!(
+            result.route_tag,
+            QueryRouteTag::GovernanceEvidenceRef | QueryRouteTag::GovernanceSummaryHit
+        )
+    }));
+    assert!(!query.matches.is_empty());
 }

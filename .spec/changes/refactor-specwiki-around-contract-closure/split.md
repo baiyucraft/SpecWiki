@@ -40,7 +40,7 @@
 - 目标: 统一 query route tags、query result DTO、readiness、trust 和人类可解释输出。
 - 依赖: refactor-specwiki-around-contract-closure-truth-restore-snapshot。
 - 关键验收: 输出区分 `index_symbol_hit / index_path_hit / index_graph_hit / knowledge_* / governance_* / projection_ref / fallback`。
-- 归档状态: [ ] pending
+- 归档状态：[x] archived
 
 ### 5. refactor-specwiki-around-contract-closure-code-graph-index
 

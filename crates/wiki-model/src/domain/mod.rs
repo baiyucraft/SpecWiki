@@ -3,6 +3,7 @@ pub mod knowledge_artifact;
 pub mod metadata;
 pub mod module_tree;
 pub mod projection;
+pub mod query;
 pub mod relation;
 pub mod source_citation;
 pub mod stable_id;

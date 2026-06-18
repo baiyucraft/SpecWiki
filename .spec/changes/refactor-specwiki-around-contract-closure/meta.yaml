@@ -28,6 +28,9 @@ multiChange:
       order: 4
       dependsOn:
         - refactor-specwiki-around-contract-closure-truth-restore-snapshot
+      archiveStatus: archived
+      archivedAt: 2026-06-18T03:45:02.356Z
+      archivedTo: .spec/archive/2026-06-18-refactor-specwiki-around-contract-closure-query-route-readiness
     - id: refactor-specwiki-around-contract-closure-code-graph-index
       order: 5
       dependsOn:

@@ -14,7 +14,9 @@ crates/wiki-runtime/tests/fixtures/**/.wiki/
 wiki.dev.yaml
 
 参考/
-DESIGN*.md
+/DESIGN*.md
+!.spec/changes/**/design.md
+!.spec/archive/**/design.md
 AGENTS.md
 COMMENTING.md
 SCENE-*.md

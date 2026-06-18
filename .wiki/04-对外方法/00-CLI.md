@@ -82,8 +82,12 @@ spec-wiki trace [--repo-root <path>]
 `query` 的公开合同以 README、release 文档、CLI 源码和测试为事实来源。本页只记录长期使用边界：
 
 - 查询词通过位置参数传入。
-- 输出面向 Agent 快速定位文件、模块、符号、knowledge pages 和调用路径。
-- 查询结果应保留可解释的路径、标题、命中摘要和相关性线索。
+- 输出面向 Agent 快速定位文件、模块、符号、knowledge pages、projection refs、调用路径和 fallback 结果。
+- JSON 主合同包含 `readiness`、`query_trust`、`recommended_action`、`route_groups`、`results`、`answer`、`summary` 和 `hits`。
+- `results` 中每条结果携带 `route_tag / ref_kind / ref_id / label / score / provenance / confidence / recommended_action / source_refs`。
+- `route_tag` 是闭集；宿主不得在 CLI/Skill 层自造私有 route tag。
+- `provenance_summary` 是只读派生摘要，不能替代 `route_groups` / `results` 主合同。
+- `governance_readiness` 当前为 `not_enabled` 占位；未启用治理 evidence index 不阻断普通 query。
 - 查询不是通用聊天接口，也不替代 runtime 初始化、同步或更新。
 
 ## 限制与边界

@@ -18,6 +18,68 @@ export type LlmModeHint = "provider_configured" | "deterministic_default";
 export type QueryMode = "index_first" | "knowledge_first" | "page_fallback" | "mixed";
 export type QueryTrust = "ready" | "stale_but_queryable" | "blocked";
 export type LlmExecutionMode = "provider_direct" | "agent_bridge" | "deterministic_only";
+export type QueryRouteTag
+  = | "index_symbol_hit"
+    | "index_path_hit"
+    | "index_graph_hit"
+    | "knowledge_declared_hit"
+    | "knowledge_derived_hit"
+    | "governance_evidence_ref"
+    | "governance_summary_hit"
+    | "projection_ref"
+    | "rendered_page_debug_fallback";
+export type QueryRefKind
+  = | "source_path"
+    | "source_symbol"
+    | "index_graph_edge"
+    | "knowledge_page"
+    | "knowledge_record"
+    | "projection_page"
+    | "projection_section"
+    | "governance_change"
+    | "governance_artifact"
+    | "rendered_page";
+export type QueryConfidence = "high" | "medium" | "low";
+export type QueryResultRecommendedAction
+  = | "none"
+    | "open_reference"
+    | "open_source_ref"
+    | "open_knowledge_ref"
+    | "open_projection_ref"
+    | "review_governance"
+    | "rebuild_index"
+    | "update_knowledge"
+    | "rebuild"
+    | "update"
+    | "sync";
+export type QueryProvenance = {
+  layer: string;
+  state?: string | null;
+  reason?: string | null;
+};
+export type QuerySourceRef = {
+  ref_kind: QueryRefKind;
+  ref_id: string;
+  label?: string | null;
+};
+export type QueryResultDto = {
+  route_tag: QueryRouteTag;
+  ref_kind: QueryRefKind;
+  ref_id: string;
+  label: string;
+  score: number;
+  provenance: QueryProvenance;
+  confidence: QueryConfidence;
+  recommended_action: QueryResultRecommendedAction;
+  source_refs: QuerySourceRef[];
+  [key: string]: unknown;
+};
+export type QueryRouteGroup = {
+  route_tag: QueryRouteTag;
+  results: QueryResultDto[];
+  score_basis?: string | null;
+  [key: string]: unknown;
+};
 
 export type CoreUsageBucket = {
   key: string;
@@ -105,6 +167,9 @@ export type WikiQueryData = {
   recommended_action: RecommendedAction;
   matched_pages: string[];
   provenance_summary: string;
+  governance_readiness: "not_enabled";
+  route_groups: QueryRouteGroup[];
+  results: QueryResultDto[];
   [key: string]: unknown;
 };
 
@@ -234,6 +299,136 @@ function parseNullableString(value: unknown, field: string): string | null | und
     return value;
   }
   throw new Error(`invalid wiki-runtime ${field}`);
+}
+
+function parseQueryRouteTag(value: unknown): QueryRouteTag {
+  return parseLiteral(
+    value,
+    [
+      "index_symbol_hit",
+      "index_path_hit",
+      "index_graph_hit",
+      "knowledge_declared_hit",
+      "knowledge_derived_hit",
+      "governance_evidence_ref",
+      "governance_summary_hit",
+      "projection_ref",
+      "rendered_page_debug_fallback",
+    ] as const,
+    "query route tag",
+  );
+}
+
+function parseQueryRefKind(value: unknown): QueryRefKind {
+  return parseLiteral(
+    value,
+    [
+      "source_path",
+      "source_symbol",
+      "index_graph_edge",
+      "knowledge_page",
+      "knowledge_record",
+      "projection_page",
+      "projection_section",
+      "governance_change",
+      "governance_artifact",
+      "rendered_page",
+    ] as const,
+    "query ref kind",
+  );
+}
+
+function parseQueryConfidence(value: unknown): QueryConfidence {
+  return parseLiteral(value, ["high", "medium", "low"] as const, "query confidence");
+}
+
+function parseQueryResultRecommendedAction(value: unknown): QueryResultRecommendedAction {
+  return parseLiteral(
+    value,
+    [
+      "none",
+      "open_reference",
+      "open_source_ref",
+      "open_knowledge_ref",
+      "open_projection_ref",
+      "review_governance",
+      "rebuild_index",
+      "update_knowledge",
+      "rebuild",
+      "update",
+      "sync",
+    ] as const,
+    "query_result.recommended_action",
+  );
+}
+
+function parseQueryProvenance(value: unknown): QueryProvenance {
+  const parsed = value as Partial<QueryProvenance>;
+  if (!isRecord(parsed) || typeof parsed.layer !== "string") {
+    throw new Error("invalid wiki-runtime query provenance");
+  }
+  return {
+    layer: parsed.layer,
+    state: parseNullableString(parsed.state, "query_provenance.state"),
+    reason: parseNullableString(parsed.reason, "query_provenance.reason"),
+  };
+}
+
+function parseQuerySourceRef(value: unknown): QuerySourceRef {
+  const parsed = value as Partial<QuerySourceRef>;
+  if (!isRecord(parsed) || !("ref_kind" in parsed) || typeof parsed.ref_id !== "string") {
+    throw new Error("invalid wiki-runtime query source ref");
+  }
+  return {
+    ref_kind: parseQueryRefKind(parsed.ref_kind),
+    ref_id: parsed.ref_id,
+    label: parseNullableString(parsed.label, "query_source_ref.label"),
+  };
+}
+
+function parseQueryResult(value: unknown): QueryResultDto {
+  const parsed = value as Partial<QueryResultDto>;
+  if (
+    !isRecord(parsed)
+    || !("route_tag" in parsed)
+    || !("ref_kind" in parsed)
+    || typeof parsed.ref_id !== "string"
+    || typeof parsed.label !== "string"
+    || typeof parsed.score !== "number"
+    || !("provenance" in parsed)
+    || !("confidence" in parsed)
+    || !("recommended_action" in parsed)
+    || !Array.isArray(parsed.source_refs)
+  ) {
+    throw new Error("invalid wiki-runtime query result");
+  }
+
+  return {
+    ...parsed,
+    route_tag: parseQueryRouteTag(parsed.route_tag),
+    ref_kind: parseQueryRefKind(parsed.ref_kind),
+    ref_id: parsed.ref_id,
+    label: parsed.label,
+    score: parsed.score,
+    provenance: parseQueryProvenance(parsed.provenance),
+    confidence: parseQueryConfidence(parsed.confidence),
+    recommended_action: parseQueryResultRecommendedAction(parsed.recommended_action),
+    source_refs: parsed.source_refs.map(parseQuerySourceRef),
+  };
+}
+
+function parseQueryRouteGroup(value: unknown): QueryRouteGroup {
+  const parsed = value as Partial<QueryRouteGroup>;
+  if (!isRecord(parsed) || !("route_tag" in parsed) || !Array.isArray(parsed.results)) {
+    throw new Error("invalid wiki-runtime query route group");
+  }
+
+  return {
+    ...parsed,
+    route_tag: parseQueryRouteTag(parsed.route_tag),
+    results: parsed.results.map(parseQueryResult),
+    score_basis: parseNullableString(parsed.score_basis, "query_route_group.score_basis"),
+  };
 }
 
 function parseUsageBucket(value: unknown): CoreUsageBucket {
@@ -479,6 +674,17 @@ function parseQueryData(value: Record<string, unknown>): WikiQueryData {
     ),
     matched_pages: parseStringArray(value.matched_pages ?? [], "matched_pages"),
     provenance_summary: value.provenance_summary,
+    governance_readiness: parseLiteral(
+      value.governance_readiness,
+      ["not_enabled"] as const,
+      "governance_readiness",
+    ),
+    route_groups: Array.isArray(value.route_groups)
+      ? value.route_groups.map(parseQueryRouteGroup)
+      : [],
+    results: Array.isArray(value.results)
+      ? value.results.map(parseQueryResult)
+      : [],
   };
 }
 

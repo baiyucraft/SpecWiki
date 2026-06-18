@@ -26,7 +26,13 @@ use crate::storage::wiki_fs::{is_official_page_path, resolve_page_path};
 use crate::workflows::release_scope::project_external_runtime_state;
 use wiki_index::query::{self as index_query, IndexQueryRequest, MatchBasis};
 use wiki_knowledge::plan_pages_from_knowledge_tree;
-use wiki_model::domain::knowledge_artifact::KnowledgeHealthSignal;
+use wiki_model::domain::knowledge_artifact::{
+    DeclaredKnowledgeRecordStatus, KnowledgeHealthSignal,
+};
+use wiki_model::domain::query::{
+    QueryConfidence, QueryProvenance, QueryRefKind, QueryResultDto, QueryRouteGroup,
+    QueryRouteTag, QuerySourceRef, RecommendedAction as QueryRecommendedAction,
+};
 
 const ANSWER_SUPPORTING_REF_LIMIT: usize = 8;
 
@@ -228,6 +234,14 @@ pub struct QueryReport {
     /// community 命中。
     #[serde(default)]
     pub matched_communities: Vec<QueryCommunityMatch>,
+    /// governance 占位读iness，当前阶段固定为 not_enabled。
+    pub governance_readiness: QueryGovernanceReadiness,
+    /// 按公开 route 分组后的主合同结果。
+    #[serde(default)]
+    pub route_groups: Vec<QueryRouteGroup>,
+    /// 扁平化公开 query result 主合同。
+    #[serde(default)]
+    pub results: Vec<QueryResultDto>,
     /// Agent 直接消费的页面级结果。
     pub matches: Vec<QueryMatch>,
     /// provenance 汇总文本，方便测试和日志检查。
@@ -235,6 +249,13 @@ pub struct QueryReport {
     pub provenance_summary: String,
     /// 当前 query 可直接附带的最小 answer contract。
     pub answer: AnswerEnvelope,
+}
+
+/// `governance_readiness` 当前只承诺 not_enabled 占位，不引入治理扫描状态机。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryGovernanceReadiness {
+    NotEnabled,
 }
 
 /// 执行关键词查询。
@@ -386,6 +407,15 @@ pub fn run_query_with_mode(
         .unwrap_or_default();
     let provenance_summary =
         build_provenance_summary(has_index_hits, has_knowledge_hits, has_page_fallback);
+    let results = build_query_results(
+        &matches,
+        &matched_sources,
+        &matched_symbols,
+        &matched_symbol_edges,
+        query_trust,
+        recommended_action,
+    );
+    let route_groups = build_route_groups(&results);
     let answer = build_answer_envelope(
         term,
         query_trust,
@@ -414,6 +444,9 @@ pub fn run_query_with_mode(
         matched_symbol_edges,
         matched_processes: Vec::new(),
         matched_communities: Vec::new(),
+        governance_readiness: QueryGovernanceReadiness::NotEnabled,
+        route_groups,
+        results,
         provenance_summary,
         answer,
         matches,
@@ -455,6 +488,9 @@ fn empty_query_report(
         matched_symbol_edges: Vec::new(),
         matched_processes: Vec::new(),
         matched_communities: Vec::new(),
+        governance_readiness: QueryGovernanceReadiness::NotEnabled,
+        route_groups: Vec::new(),
+        results: Vec::new(),
         matches: Vec::new(),
         provenance_summary,
         answer,
@@ -504,6 +540,15 @@ fn degraded_query_without_index(
         QueryTrust::StaleButQueryable
     };
     let provenance_summary = build_provenance_summary(false, has_knowledge_hits, has_page_fallback);
+    let results = build_query_results(
+        &matches,
+        &[],
+        &[],
+        &[],
+        query_trust,
+        recommended_action,
+    );
+    let route_groups = build_route_groups(&results);
     let answer = build_answer_envelope(
         term,
         query_trust,
@@ -532,6 +577,9 @@ fn degraded_query_without_index(
         matched_symbol_edges: Vec::new(),
         matched_processes: Vec::new(),
         matched_communities: Vec::new(),
+        governance_readiness: QueryGovernanceReadiness::NotEnabled,
+        route_groups,
+        results,
         provenance_summary,
         answer,
         matches,
@@ -758,12 +806,74 @@ fn collect_knowledge_matches(
             })
         })
         .collect::<Vec<_>>();
+    matches.extend(collect_declared_knowledge_matches(
+        &artifacts.declared_records,
+        needle,
+        &page_index,
+    ));
     matches.sort_by(|left, right| {
         left.path
             .cmp(&right.path)
             .then(left.page_id.cmp(&right.page_id))
     });
     matches
+}
+
+fn collect_declared_knowledge_matches(
+    records: &[wiki_model::domain::knowledge_artifact::DeclaredKnowledgeRecord],
+    needle: &str,
+    page_index: &BTreeMap<String, &WikiPageState>,
+) -> Vec<QueryMatch> {
+    records
+        .iter()
+        .filter(|record| record.status == DeclaredKnowledgeRecordStatus::Active)
+        .filter_map(|record| {
+            let mut reasons = Vec::new();
+            if contains_case_insensitive(&record.record_id, needle)
+                || contains_case_insensitive(&record.authoring_id, needle)
+            {
+                reasons.push("声明知识标识匹配".to_string());
+            }
+            if contains_case_insensitive(&record.body, needle) {
+                reasons.push("声明知识正文匹配".to_string());
+            }
+            if contains_case_insensitive(&record.source_ref, needle) {
+                reasons.push("声明知识来源匹配".to_string());
+            }
+            if reasons.is_empty() {
+                return None;
+            }
+
+            let page_state = page_index.get(&record.page_id).copied();
+            let path = page_state
+                .map(|page| page.path.clone())
+                .or_else(|| record.projection_refs.first().cloned())
+                .unwrap_or_else(|| record.source_ref.clone());
+            let title = if record.authoring_id.is_empty() {
+                record.record_id.clone()
+            } else {
+                record.authoring_id.clone()
+            };
+
+            Some(QueryMatch {
+                page_id: record.record_id.clone(),
+                title,
+                path,
+                item_type: record.record_kind.as_str().to_string(),
+                module_ids: Vec::new(),
+                source_files: Vec::new(),
+                reasons: reasons.clone(),
+                provenance: vec!["knowledge:declared".to_string()],
+                summary: if record.body.trim().is_empty() {
+                    reasons.join("、")
+                } else {
+                    record.body.clone()
+                },
+                match_mode: "knowledge_declared".to_string(),
+                context_pack: QueryContextPack::default(),
+            })
+        })
+        .collect()
 }
 
 fn project_symbol_matches(
@@ -1061,6 +1171,232 @@ fn build_provenance_summary(
         tags.push("page_fallback");
     }
     tags.join(",")
+}
+
+fn build_query_results(
+    matches: &[QueryMatch],
+    matched_sources: &[QuerySourceMatch],
+    matched_symbols: &[QuerySymbolMatch],
+    matched_symbol_edges: &[QueryGraphEdgeMatch],
+    query_trust: QueryTrust,
+    recommended_action: RecommendedAction,
+) -> Vec<QueryResultDto> {
+    let mut results = Vec::new();
+
+    for symbol in matched_symbols {
+        push_query_result(
+            &mut results,
+            QueryResultDto {
+                route_tag: QueryRouteTag::IndexSymbolHit,
+                ref_kind: QueryRefKind::SourceSymbol,
+                ref_id: symbol.symbol_id.clone(),
+                label: format!("{} {}", symbol.label, symbol.name),
+                score: symbol.score,
+                provenance: QueryProvenance {
+                    layer: "index".to_string(),
+                    state: Some(match query_trust {
+                        QueryTrust::Ready => "ready".to_string(),
+                        QueryTrust::StaleButQueryable => "degraded".to_string(),
+                        QueryTrust::Blocked => "blocked".to_string(),
+                    }),
+                    reason: symbol.reasons.first().cloned(),
+                },
+                confidence: if symbol.score >= 0.8 {
+                    QueryConfidence::High
+                } else if symbol.score >= 0.5 {
+                    QueryConfidence::Medium
+                } else {
+                    QueryConfidence::Low
+                },
+                recommended_action: map_recommended_action(recommended_action),
+                source_refs: vec![QuerySourceRef {
+                    ref_kind: QueryRefKind::SourcePath,
+                    ref_id: symbol.file_path.clone(),
+                    label: Some(symbol.file_path.clone()),
+                }],
+            },
+        );
+    }
+
+    for source in matched_sources {
+        push_query_result(
+            &mut results,
+            QueryResultDto {
+                route_tag: QueryRouteTag::IndexPathHit,
+                ref_kind: QueryRefKind::SourcePath,
+                ref_id: source.path.clone(),
+                label: source.path.clone(),
+                score: 0.75,
+                provenance: QueryProvenance {
+                    layer: "index".to_string(),
+                    state: Some("ready".to_string()),
+                    reason: source.reasons.first().cloned(),
+                },
+                confidence: QueryConfidence::Medium,
+                recommended_action: map_recommended_action(recommended_action),
+                source_refs: vec![QuerySourceRef {
+                    ref_kind: QueryRefKind::SourcePath,
+                    ref_id: source.path.clone(),
+                    label: Some(source.path.clone()),
+                }],
+            },
+        );
+    }
+
+    for edge in matched_symbol_edges {
+        push_query_result(
+            &mut results,
+            QueryResultDto {
+                route_tag: QueryRouteTag::IndexGraphHit,
+                ref_kind: QueryRefKind::IndexGraphEdge,
+                ref_id: edge.edge_id.clone(),
+                label: format!("{} -> {}", edge.source_symbol, edge.target_symbol),
+                score: edge.confidence,
+                provenance: QueryProvenance {
+                    layer: "index".to_string(),
+                    state: Some("ready".to_string()),
+                    reason: Some(edge.reason.clone()),
+                },
+                confidence: if edge.confidence >= 0.8 {
+                    QueryConfidence::High
+                } else if edge.confidence >= 0.5 {
+                    QueryConfidence::Medium
+                } else {
+                    QueryConfidence::Low
+                },
+                recommended_action: map_recommended_action(recommended_action),
+                source_refs: vec![
+                    QuerySourceRef {
+                        ref_kind: QueryRefKind::SourceSymbol,
+                        ref_id: edge.source_symbol_id.clone(),
+                        label: Some(edge.source_symbol.clone()),
+                    },
+                    QuerySourceRef {
+                        ref_kind: QueryRefKind::SourceSymbol,
+                        ref_id: edge.target_symbol_id.clone(),
+                        label: Some(edge.target_symbol.clone()),
+                    },
+                ],
+            },
+        );
+    }
+
+    for page in matches {
+        let route_tag = if page.match_mode == "knowledge_declared" {
+            QueryRouteTag::KnowledgeDeclaredHit
+        } else if page.match_mode == "knowledge_digest" {
+            QueryRouteTag::ProjectionRef
+        } else if page.match_mode == "fallback_markdown" {
+            QueryRouteTag::RenderedPageDebugFallback
+        } else {
+            QueryRouteTag::KnowledgeDerivedHit
+        };
+        push_query_result(
+            &mut results,
+            QueryResultDto {
+                route_tag,
+                ref_kind: if page.match_mode == "knowledge_declared" {
+                    QueryRefKind::KnowledgeRecord
+                } else if page.match_mode == "fallback_markdown" {
+                    QueryRefKind::RenderedPage
+                } else if page.match_mode == "knowledge_digest" {
+                    QueryRefKind::ProjectionPage
+                } else {
+                    QueryRefKind::ProjectionPage
+                },
+                ref_id: page.page_id.clone(),
+                label: page.title.clone(),
+                score: 0.6,
+                provenance: QueryProvenance {
+                    layer: if page.match_mode == "fallback_markdown" {
+                        "fallback".to_string()
+                    } else if page.match_mode == "knowledge_declared" {
+                        "knowledge".to_string()
+                    } else if page.match_mode == "knowledge_digest" {
+                        "projection".to_string()
+                    } else {
+                        "projection".to_string()
+                    },
+                    state: Some(if page.match_mode == "knowledge_declared" {
+                        "declared".to_string()
+                    } else {
+                        "derived".to_string()
+                    }),
+                    reason: page.reasons.first().cloned(),
+                },
+                confidence: QueryConfidence::Low,
+                recommended_action: map_recommended_action(recommended_action),
+                source_refs: if page.match_mode == "knowledge_declared" {
+                    vec![QuerySourceRef {
+                        ref_kind: QueryRefKind::KnowledgeRecord,
+                        ref_id: page.page_id.clone(),
+                        label: Some(page.title.clone()),
+                    }]
+                } else {
+                    page.source_files
+                        .iter()
+                        .map(|source_path| QuerySourceRef {
+                            ref_kind: QueryRefKind::SourcePath,
+                            ref_id: source_path.clone(),
+                            label: Some(source_path.clone()),
+                        })
+                        .collect()
+                },
+            },
+        );
+    }
+
+    results
+}
+
+fn build_route_groups(results: &[QueryResultDto]) -> Vec<QueryRouteGroup> {
+    let mut groups = Vec::<QueryRouteGroup>::new();
+    for route_tag in [
+        QueryRouteTag::IndexSymbolHit,
+        QueryRouteTag::IndexPathHit,
+        QueryRouteTag::IndexGraphHit,
+        QueryRouteTag::KnowledgeDeclaredHit,
+        QueryRouteTag::KnowledgeDerivedHit,
+        QueryRouteTag::ProjectionRef,
+        QueryRouteTag::RenderedPageDebugFallback,
+    ] {
+        let grouped_results = results
+            .iter()
+            .filter(|result| result.route_tag == route_tag)
+            .cloned()
+            .collect::<Vec<_>>();
+        if grouped_results.is_empty() {
+            continue;
+        }
+        groups.push(QueryRouteGroup {
+            route_tag,
+            score_basis: Some("route_group".to_string()),
+            results: grouped_results,
+        });
+    }
+    groups
+}
+
+fn push_query_result(results: &mut Vec<QueryResultDto>, result: QueryResultDto) {
+    if results.iter().any(|existing| {
+        existing.route_tag == result.route_tag
+            && existing.ref_kind == result.ref_kind
+            && existing.ref_id == result.ref_id
+    }) {
+        return;
+    }
+    results.push(result);
+}
+
+fn map_recommended_action(action: RecommendedAction) -> QueryRecommendedAction {
+    match action {
+        RecommendedAction::None => QueryRecommendedAction::None,
+        RecommendedAction::Init => QueryRecommendedAction::OpenReference,
+        RecommendedAction::Review => QueryRecommendedAction::ReviewGovernance,
+        RecommendedAction::Update => QueryRecommendedAction::Update,
+        RecommendedAction::Rebuild => QueryRecommendedAction::Rebuild,
+        RecommendedAction::Sync => QueryRecommendedAction::Sync,
+    }
 }
 
 fn is_textual_page_fallback_match(query_match: &QueryMatch) -> bool {
