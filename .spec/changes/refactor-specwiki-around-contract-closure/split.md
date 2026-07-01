@@ -47,7 +47,7 @@
 - 目标: 按 code graph/index 设计重构 `wiki-index` 的 graph schema、raw captures、phase DAG、GraphStore / IndexQueryStore 和 index query adapter。
 - 依赖: refactor-specwiki-around-contract-closure-truth-restore-snapshot、refactor-specwiki-around-contract-closure-query-route-readiness。
 - 关键验收: raw imports / calls / heritage 持久化；`SymbolNode` 扩展；`.spec` 不进入 code graph facts。
-- 归档状态: [ ] pending
+- 归档状态：[x] archived
 
 ### 6. refactor-specwiki-around-contract-closure-cli-product-surface
 

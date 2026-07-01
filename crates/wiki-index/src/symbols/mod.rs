@@ -7,8 +7,9 @@ mod queries;
 mod registry;
 
 pub use models::{
-    ParsedFileSymbols, ParsedSymbolsSnapshot, RawCallCapture, RawHeritageCapture, RawImportCapture,
-    SymbolNode, SymbolParseDiagnostic, SymbolTable,
+    GraphPhase, ParsedFileSymbols, ParsedSymbolsSnapshot, RawCallCapture, RawCaptureBase,
+    RawCaptureKind, RawHeritageCapture, RawImportCapture, ReferenceKind, SourceRange, SymbolNode,
+    SymbolParseDiagnostic, SymbolProvenance, SymbolSourceKind, SymbolTable, UnresolvedRef,
 };
 pub use pipeline::{parse_symbols, parse_symbols_for_paths, CHUNK_BYTE_BUDGET, MAX_FILE_BYTES};
 pub use pipeline::{

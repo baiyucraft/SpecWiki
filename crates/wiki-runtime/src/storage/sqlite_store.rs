@@ -19,12 +19,18 @@ use crate::domain::module_tree::{ModuleNode, ModuleTree};
 use crate::domain::relation::WikiRelation;
 use crate::domain::state::{BuildState, SourceState, WikiPageState, WikiSectionState, WikiState};
 use crate::storage::cache_store::{cache_dir, ensure_cache_dir};
-use wiki_index::store::{ModuleRecord, ModuleSourceLink};
+use wiki_index::store::{
+    FileSearchHit, FolderRecord, GraphPhaseStatus, GraphReadiness, GraphReadinessStatus,
+    GraphSnapshot, ModuleRecord, ModuleSourceLink, SourceFileRecord,
+};
 use wiki_index::symbol_graph::{
     CommunityMember, CommunityNode, GraphAnalysisSnapshot, ProcessNode, ProcessStep,
     ResolvedGraphSnapshot, ResolvedSymbolEdge,
 };
-use wiki_index::symbols::SymbolNode;
+use wiki_index::symbols::{
+    GraphPhase, RawCallCapture, RawCaptureBase, RawCaptureKind, RawHeritageCapture,
+    RawImportCapture, ReferenceKind, SourceRange, SymbolNode, UnresolvedRef,
+};
 
 /// DB 文件名。
 const DB_FILENAME: &str = "wiki-cache.db";
@@ -46,20 +52,8 @@ pub struct FtsPageHit {
 /// 符号 FTS 命中结果。
 #[derive(Debug, Clone)]
 pub struct FtsSymbolHit {
-    /// 命中符号 ID。
-    pub symbol_id: String,
-    /// 命中符号名。
-    pub name: String,
-    /// 符号标签。
-    pub label: String,
-    /// 命中符号所在文件。
-    pub file_path: String,
-    /// 命中符号起始行。
-    pub start_line: usize,
-    /// 命中符号结束行。
-    pub end_line: usize,
-    /// 命中符号语言。
-    pub language: String,
+    /// 命中符号。
+    pub symbol: SymbolNode,
     /// BM25 分数。
     pub score: f64,
 }
@@ -252,6 +246,119 @@ fn init_index_tables(conn: &Connection) -> io::Result<()> {
             language    TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS graph_snapshots (
+            snapshot_id        TEXT PRIMARY KEY,
+            source_fingerprint TEXT NOT NULL,
+            status             TEXT NOT NULL,
+            created_at         TEXT NOT NULL,
+            is_current         INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS files (
+            file_id     TEXT PRIMARY KEY,
+            path        TEXT NOT NULL UNIQUE,
+            language    TEXT NOT NULL,
+            kind        TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            size        INTEGER NOT NULL,
+            indexed_at  TEXT NOT NULL,
+            diagnostics TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS folders (
+            folder_id TEXT PRIMARY KEY,
+            path      TEXT NOT NULL UNIQUE,
+            parent_id TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS raw_imports (
+            capture_id       TEXT PRIMARY KEY,
+            file_id          TEXT NOT NULL,
+            file_path        TEXT NOT NULL,
+            language         TEXT NOT NULL,
+            source_symbol_id TEXT,
+            raw_text         TEXT NOT NULL,
+            target_hint      TEXT,
+            raw_path         TEXT NOT NULL,
+            imported_name    TEXT,
+            alias            TEXT,
+            line             INTEGER NOT NULL,
+            parser_id        TEXT NOT NULL,
+            parser_version   TEXT NOT NULL,
+            diagnostics      TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS raw_calls (
+            capture_id       TEXT PRIMARY KEY,
+            file_id          TEXT NOT NULL,
+            file_path        TEXT NOT NULL,
+            language         TEXT NOT NULL,
+            source_symbol_id TEXT,
+            raw_text         TEXT NOT NULL,
+            target_hint      TEXT,
+            called_name      TEXT NOT NULL,
+            receiver_text    TEXT,
+            argument_shape   TEXT,
+            line             INTEGER NOT NULL,
+            parser_id        TEXT NOT NULL,
+            parser_version   TEXT NOT NULL,
+            diagnostics      TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS raw_heritage (
+            capture_id       TEXT PRIMARY KEY,
+            file_id          TEXT NOT NULL,
+            file_path        TEXT NOT NULL,
+            language         TEXT NOT NULL,
+            source_symbol_id TEXT,
+            raw_text         TEXT NOT NULL,
+            target_hint      TEXT,
+            owner_name       TEXT NOT NULL,
+            owner_symbol_id  TEXT,
+            target_name      TEXT NOT NULL,
+            relation_kind    TEXT NOT NULL,
+            line             INTEGER NOT NULL,
+            parser_id        TEXT NOT NULL,
+            parser_version   TEXT NOT NULL,
+            diagnostics      TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS unresolved_refs (
+            unresolved_ref_id TEXT PRIMARY KEY,
+            capture_id        TEXT NOT NULL,
+            file_id           TEXT NOT NULL,
+            resolver_phase    TEXT NOT NULL,
+            reference_kind    TEXT NOT NULL,
+            reference_name    TEXT NOT NULL,
+            target_hint       TEXT,
+            path              TEXT NOT NULL,
+            start_line        INTEGER NOT NULL,
+            end_line          INTEGER NOT NULL,
+            start_column      INTEGER NOT NULL,
+            end_column        INTEGER NOT NULL,
+            candidates        TEXT NOT NULL,
+            reason            TEXT NOT NULL,
+            diagnostics       TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS graph_phase_runs (
+            phase              TEXT PRIMARY KEY,
+            status             TEXT NOT NULL,
+            input_fingerprint  TEXT,
+            output_fingerprint TEXT,
+            started_at         TEXT,
+            completed_at       TEXT,
+            diagnostics        TEXT NOT NULL
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS files_fts
+        USING fts5(
+            file_id UNINDEXED,
+            path,
+            language,
+            content
+        );
+
         CREATE TABLE IF NOT EXISTS edges (
             id          TEXT PRIMARY KEY,
             source_id   TEXT NOT NULL REFERENCES symbols(id),
@@ -303,7 +410,12 @@ fn init_index_tables(conn: &Connection) -> io::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_symbols_label ON symbols(label);
         CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
         CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
-        CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type);",
+        CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type);
+        CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
+        CREATE INDEX IF NOT EXISTS idx_raw_imports_file ON raw_imports(file_path);
+        CREATE INDEX IF NOT EXISTS idx_raw_calls_file ON raw_calls(file_path);
+        CREATE INDEX IF NOT EXISTS idx_raw_heritage_file ON raw_heritage(file_path);
+        CREATE INDEX IF NOT EXISTS idx_unresolved_refs_file ON unresolved_refs(file_id);",
     )
     .map_err(|e| io::Error::other(format!("index schema init: {e}")))?;
     Ok(())
@@ -710,6 +822,9 @@ fn clear_symbol_rows_tx(tx: &Transaction<'_>) -> io::Result<()> {
 
 fn insert_symbol_rows_tx(tx: &Transaction<'_>, symbols: &[SymbolNode]) -> io::Result<()> {
     for symbol in symbols {
+        if is_spec_path(&symbol.file_path) {
+            continue;
+        }
         tx.execute(
             "INSERT INTO symbols
              (id, name, label, file_path, start_line, end_line, is_exported, language)
@@ -749,7 +864,16 @@ fn clear_symbol_graph_rows_tx(tx: &Transaction<'_>) -> io::Result<()> {
          DELETE FROM processes;
          DELETE FROM community_members;
          DELETE FROM communities;
-         DELETE FROM edges;",
+         DELETE FROM edges;
+         DELETE FROM raw_imports;
+         DELETE FROM raw_calls;
+         DELETE FROM raw_heritage;
+         DELETE FROM unresolved_refs;
+         DELETE FROM graph_phase_runs;
+         DELETE FROM files_fts;
+         DELETE FROM files;
+         DELETE FROM folders;
+         UPDATE graph_snapshots SET is_current = 0;",
     )
     .map_err(|e| io::Error::other(format!("clear symbol graph tables: {e}")))?;
     Ok(())
@@ -770,7 +894,14 @@ fn insert_edge_rows_tx(
     tx: &Transaction<'_>,
     resolved_graph: &ResolvedGraphSnapshot,
 ) -> io::Result<()> {
+    let symbol_ids = current_symbol_ids_tx(tx)?;
     for edge in &resolved_graph.edges {
+        if edge.source_id.contains(".spec") || edge.target_id.contains(".spec") {
+            continue;
+        }
+        if !symbol_ids.contains(&edge.source_id) || !symbol_ids.contains(&edge.target_id) {
+            continue;
+        }
         tx.execute(
             "INSERT INTO edges
              (id, source_id, target_id, edge_type, confidence, reason)
@@ -790,10 +921,33 @@ fn insert_edge_rows_tx(
     Ok(())
 }
 
+fn current_symbol_ids_tx(tx: &Transaction<'_>) -> io::Result<BTreeSet<String>> {
+    let mut stmt = tx
+        .prepare("SELECT id FROM symbols")
+        .map_err(|e| io::Error::other(format!("prepare current symbol ids: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| io::Error::other(format!("query current symbol ids: {e}")))?;
+    rows.collect::<Result<BTreeSet<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect current symbol ids: {e}")))
+}
+
 fn insert_graph_analysis_rows_tx(
     tx: &Transaction<'_>,
     analysis: &GraphAnalysisSnapshot,
 ) -> io::Result<()> {
+    let symbol_ids = current_symbol_ids_tx(tx)?;
+    let valid_community_ids = analysis
+        .community_members
+        .iter()
+        .map(|member| member.community_id.clone())
+        .collect::<BTreeSet<_>>();
+    let valid_process_ids = analysis
+        .process_steps
+        .iter()
+        .map(|step| step.process_id.clone())
+        .collect::<BTreeSet<_>>();
+
     for community in &analysis.communities {
         tx.execute(
             "INSERT INTO communities (id, label, cohesion, symbol_count)
@@ -810,7 +964,12 @@ fn insert_graph_analysis_rows_tx(
         })?;
     }
 
-    for member in &analysis.community_members {
+    for member in analysis
+        .community_members
+        .iter()
+        .filter(|member| symbol_ids.contains(&member.symbol_id))
+        .filter(|member| valid_community_ids.contains(&member.community_id))
+    {
         tx.execute(
             "INSERT INTO community_members (community_id, symbol_id)
              VALUES (?1, ?2)",
@@ -841,7 +1000,12 @@ fn insert_graph_analysis_rows_tx(
         .map_err(|e| io::Error::other(format!("insert process {}: {e}", process.process_id)))?;
     }
 
-    for step in &analysis.process_steps {
+    for step in analysis
+        .process_steps
+        .iter()
+        .filter(|step| symbol_ids.contains(&step.symbol_id))
+        .filter(|step| valid_process_ids.contains(&step.process_id))
+    {
         tx.execute(
             "INSERT INTO process_steps (process_id, symbol_id, step_order)
              VALUES (?1, ?2, ?3)",
@@ -856,6 +1020,844 @@ fn insert_graph_analysis_rows_tx(
     }
 
     Ok(())
+}
+
+pub fn replace_graph_snapshot(conn: &mut Connection, snapshot: &GraphSnapshot) -> io::Result<()> {
+    let tx = conn
+        .transaction()
+        .map_err(|e| io::Error::other(format!("begin replace_graph_snapshot tx: {e}")))?;
+    clear_symbol_graph_rows_tx(&tx)?;
+    clear_symbol_rows_tx(&tx)?;
+    insert_source_rows_tx(&tx, snapshot)?;
+    insert_symbol_rows_tx(&tx, &snapshot.symbols)?;
+    let resolved_graph = ResolvedGraphSnapshot {
+        edges: snapshot.edges.clone(),
+        diagnostics: Vec::new(),
+    };
+    insert_edge_rows_tx(&tx, &resolved_graph)?;
+    insert_raw_rows_tx(&tx, snapshot)?;
+    insert_graph_analysis_rows_tx(&tx, &snapshot.analysis)?;
+    insert_phase_rows_tx(&tx, &snapshot.phase_statuses)?;
+    insert_graph_snapshot_row_tx(&tx, snapshot)?;
+    tx.commit()
+        .map_err(|e| io::Error::other(format!("commit replace_graph_snapshot tx: {e}")))
+}
+
+pub fn replace_graph_snapshot_for_files(
+    conn: &mut Connection,
+    file_paths: &[String],
+    snapshot: &GraphSnapshot,
+) -> io::Result<()> {
+    let tx = conn
+        .transaction()
+        .map_err(|e| io::Error::other(format!("begin replace_graph_snapshot_for_files tx: {e}")))?;
+    let stale_symbol_ids = select_symbol_ids_for_files_tx(&tx, file_paths)?;
+    clear_graph_analysis_rows_tx(&tx)?;
+    delete_edge_rows_for_symbol_ids_tx(&tx, &stale_symbol_ids)?;
+    delete_graph_rows_for_files_tx(&tx, file_paths)?;
+    insert_source_rows_tx(&tx, snapshot)?;
+    insert_symbol_rows_tx(&tx, &snapshot.symbols)?;
+    let resolved_graph = ResolvedGraphSnapshot {
+        edges: snapshot.edges.clone(),
+        diagnostics: Vec::new(),
+    };
+    insert_edge_rows_tx(&tx, &resolved_graph)?;
+    insert_raw_rows_tx(&tx, snapshot)?;
+    insert_graph_analysis_rows_tx(&tx, &snapshot.analysis)?;
+    insert_phase_rows_tx(&tx, &snapshot.phase_statuses)?;
+    insert_graph_snapshot_row_tx(&tx, snapshot)?;
+    tx.commit()
+        .map_err(|e| io::Error::other(format!("commit replace_graph_snapshot_for_files tx: {e}")))
+}
+
+fn delete_graph_rows_for_files_tx(tx: &Transaction<'_>, file_paths: &[String]) -> io::Result<()> {
+    if file_paths.is_empty() {
+        return Ok(());
+    }
+    let placeholders = sql_placeholders(file_paths.len());
+    let params = file_paths.iter().map(|value| value as &dyn ToSql);
+    tx.execute(
+        &format!("DELETE FROM raw_imports WHERE file_path IN ({placeholders})"),
+        params_from_iter(params),
+    )
+    .map_err(|e| io::Error::other(format!("delete raw_imports by file: {e}")))?;
+    let params = file_paths.iter().map(|value| value as &dyn ToSql);
+    tx.execute(
+        &format!("DELETE FROM raw_calls WHERE file_path IN ({placeholders})"),
+        params_from_iter(params),
+    )
+    .map_err(|e| io::Error::other(format!("delete raw_calls by file: {e}")))?;
+    let params = file_paths.iter().map(|value| value as &dyn ToSql);
+    tx.execute(
+        &format!("DELETE FROM raw_heritage WHERE file_path IN ({placeholders})"),
+        params_from_iter(params),
+    )
+    .map_err(|e| io::Error::other(format!("delete raw_heritage by file: {e}")))?;
+    let params = file_paths.iter().map(|value| value as &dyn ToSql);
+    tx.execute(
+        &format!("DELETE FROM unresolved_refs WHERE path IN ({placeholders})"),
+        params_from_iter(params),
+    )
+    .map_err(|e| io::Error::other(format!("delete unresolved_refs by file: {e}")))?;
+    let params = file_paths.iter().map(|value| value as &dyn ToSql);
+    tx.execute(
+        &format!("DELETE FROM files_fts WHERE path IN ({placeholders})"),
+        params_from_iter(params),
+    )
+    .map_err(|e| io::Error::other(format!("delete files_fts by file: {e}")))?;
+    let params = file_paths.iter().map(|value| value as &dyn ToSql);
+    tx.execute(
+        &format!("DELETE FROM files WHERE path IN ({placeholders})"),
+        params_from_iter(params),
+    )
+    .map_err(|e| io::Error::other(format!("delete files by path: {e}")))?;
+    delete_symbol_rows_for_files_tx(tx, file_paths)
+}
+
+fn insert_source_rows_tx(tx: &Transaction<'_>, snapshot: &GraphSnapshot) -> io::Result<()> {
+    for folder in &snapshot.folders {
+        if is_spec_path(&folder.path) {
+            continue;
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO folders (folder_id, path, parent_id) VALUES (?1, ?2, ?3)",
+            params![folder.folder_id, folder.path, folder.parent_id],
+        )
+        .map_err(|e| io::Error::other(format!("insert folder {}: {e}", folder.folder_id)))?;
+    }
+
+    for file in &snapshot.files {
+        if is_spec_path(&file.path) {
+            continue;
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO files
+             (file_id, path, language, kind, fingerprint, size, indexed_at, diagnostics)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                file.file_id,
+                file.path,
+                file.language,
+                file.kind,
+                file.fingerprint,
+                file.size as i64,
+                file.indexed_at,
+                json_string(&file.diagnostics)?,
+            ],
+        )
+        .map_err(|e| io::Error::other(format!("insert file {}: {e}", file.file_id)))?;
+        tx.execute(
+            "INSERT INTO files_fts (file_id, path, language, content) VALUES (?1, ?2, ?3, ?4)",
+            params![file.file_id, file.path, file.language, file.path],
+        )
+        .map_err(|e| io::Error::other(format!("insert files_fts {}: {e}", file.file_id)))?;
+    }
+
+    Ok(())
+}
+
+fn insert_raw_rows_tx(tx: &Transaction<'_>, snapshot: &GraphSnapshot) -> io::Result<()> {
+    for capture in &snapshot.raw_imports {
+        if is_spec_path(&capture.file_path) {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO raw_imports
+             (capture_id, file_id, file_path, language, source_symbol_id, raw_text, target_hint,
+              raw_path, imported_name, alias, line, parser_id, parser_version, diagnostics)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                capture.base.capture_id,
+                capture.base.file_id,
+                capture.file_path,
+                capture.language,
+                capture.source_symbol_id,
+                capture.source_text,
+                capture.base.target_hint,
+                capture.raw_path,
+                capture.imported_name,
+                capture.alias,
+                capture.line as i64,
+                capture.base.parser_id,
+                capture.base.parser_version,
+                json_string(&capture.base.diagnostics)?,
+            ],
+        )
+        .map_err(|e| {
+            io::Error::other(format!(
+                "insert raw import {}: {e}",
+                capture.base.capture_id
+            ))
+        })?;
+    }
+
+    for capture in &snapshot.raw_calls {
+        if is_spec_path(&capture.file_path) {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO raw_calls
+             (capture_id, file_id, file_path, language, source_symbol_id, raw_text, target_hint,
+              called_name, receiver_text, argument_shape, line, parser_id, parser_version, diagnostics)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                capture.base.capture_id,
+                capture.base.file_id,
+                capture.file_path,
+                capture.language,
+                capture.source_symbol_id,
+                capture.source_text,
+                capture.base.target_hint,
+                capture.called_name,
+                capture.receiver_text,
+                capture.argument_shape,
+                capture.line as i64,
+                capture.base.parser_id,
+                capture.base.parser_version,
+                json_string(&capture.base.diagnostics)?,
+            ],
+        )
+        .map_err(|e| io::Error::other(format!("insert raw call {}: {e}", capture.base.capture_id)))?;
+    }
+
+    for capture in &snapshot.raw_heritage {
+        if is_spec_path(&capture.file_path) {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO raw_heritage
+             (capture_id, file_id, file_path, language, source_symbol_id, raw_text, target_hint,
+              owner_name, owner_symbol_id, target_name, relation_kind, line, parser_id, parser_version, diagnostics)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                capture.base.capture_id,
+                capture.base.file_id,
+                capture.file_path,
+                capture.language,
+                capture.base.source_symbol_id,
+                capture.source_text,
+                capture.base.target_hint,
+                capture.owner_name,
+                capture.owner_symbol_id,
+                capture.target_name,
+                capture.relation_kind,
+                capture.line as i64,
+                capture.base.parser_id,
+                capture.base.parser_version,
+                json_string(&capture.base.diagnostics)?,
+            ],
+        )
+        .map_err(|e| io::Error::other(format!("insert raw heritage {}: {e}", capture.base.capture_id)))?;
+    }
+
+    for unresolved in &snapshot.unresolved_refs {
+        if is_spec_path(&unresolved.range.path) {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO unresolved_refs
+             (unresolved_ref_id, capture_id, file_id, resolver_phase, reference_kind, reference_name,
+              target_hint, path, start_line, end_line, start_column, end_column, candidates, reason, diagnostics)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                unresolved.unresolved_ref_id,
+                unresolved.capture_id,
+                unresolved.file_id,
+                graph_phase_to_str(unresolved.resolver_phase),
+                reference_kind_to_str(unresolved.reference_kind),
+                unresolved.reference_name,
+                unresolved.target_hint,
+                unresolved.range.path,
+                unresolved.range.start_line as i64,
+                unresolved.range.end_line as i64,
+                unresolved.range.start_column as i64,
+                unresolved.range.end_column as i64,
+                json_string(&unresolved.candidates)?,
+                unresolved.reason,
+                json_string(&unresolved.diagnostics)?,
+            ],
+        )
+        .map_err(|e| io::Error::other(format!("insert unresolved ref {}: {e}", unresolved.unresolved_ref_id)))?;
+    }
+
+    Ok(())
+}
+
+fn insert_phase_rows_tx(tx: &Transaction<'_>, phases: &[GraphPhaseStatus]) -> io::Result<()> {
+    for phase in phases {
+        tx.execute(
+            "INSERT OR REPLACE INTO graph_phase_runs
+             (phase, status, input_fingerprint, output_fingerprint, started_at, completed_at, diagnostics)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                graph_phase_to_str(phase.phase),
+                phase.status,
+                phase.input_fingerprint,
+                phase.output_fingerprint,
+                phase.started_at,
+                phase.completed_at,
+                json_string(&phase.diagnostics)?,
+            ],
+        )
+        .map_err(|e| io::Error::other(format!("insert graph phase {:?}: {e}", phase.phase)))?;
+    }
+    Ok(())
+}
+
+fn insert_graph_snapshot_row_tx(tx: &Transaction<'_>, snapshot: &GraphSnapshot) -> io::Result<()> {
+    let now = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
+    tx.execute("UPDATE graph_snapshots SET is_current = 0", [])
+        .map_err(|e| io::Error::other(format!("clear current graph snapshot: {e}")))?;
+    tx.execute(
+        "INSERT INTO graph_snapshots (snapshot_id, source_fingerprint, status, created_at, is_current)
+         VALUES (?1, ?2, 'ready', ?3, 1)
+         ON CONFLICT(snapshot_id) DO UPDATE SET
+             source_fingerprint = excluded.source_fingerprint,
+             status = excluded.status,
+             created_at = excluded.created_at,
+             is_current = excluded.is_current",
+        params![snapshot.snapshot_id, snapshot.source_fingerprint, now],
+    )
+    .map_err(|e| io::Error::other(format!("insert graph snapshot {}: {e}", snapshot.snapshot_id)))?;
+    Ok(())
+}
+
+pub fn read_current_graph_snapshot(repo_root: &Path) -> io::Result<Option<GraphSnapshot>> {
+    if !db_exists(repo_root) {
+        return Ok(None);
+    }
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(None),
+    };
+    if !table_exists(&conn, "graph_snapshots")? {
+        return Ok(None);
+    }
+    let current = conn
+        .query_row(
+            "SELECT snapshot_id, source_fingerprint FROM graph_snapshots WHERE is_current = 1 LIMIT 1",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|e| io::Error::other(format!("read current graph snapshot: {e}")))?;
+    let Some((snapshot_id, source_fingerprint)) = current else {
+        return Ok(None);
+    };
+    Ok(Some(GraphSnapshot {
+        snapshot_id,
+        source_fingerprint,
+        files: list_files(repo_root)?,
+        folders: list_folders(repo_root)?,
+        symbols: list_symbols(repo_root)?,
+        edges: list_edges(repo_root)?,
+        raw_imports: list_raw_imports(repo_root)?,
+        raw_calls: list_raw_calls(repo_root)?,
+        raw_heritage: list_raw_heritage(repo_root)?,
+        unresolved_refs: list_unresolved_refs(repo_root)?,
+        analysis: GraphAnalysisSnapshot {
+            communities: list_communities(repo_root)?,
+            community_members: list_community_members(repo_root)?,
+            processes: list_processes(repo_root)?,
+            process_steps: list_process_steps(repo_root)?,
+            cycles: Vec::new(),
+            diagnostics: Vec::new(),
+        },
+        phase_statuses: list_graph_phase_runs(repo_root)?,
+    }))
+}
+
+pub fn list_files(repo_root: &Path) -> io::Result<Vec<SourceFileRecord>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+    if !table_exists(&conn, "files")? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT file_id, path, language, kind, fingerprint, size, indexed_at, diagnostics
+             FROM files ORDER BY path",
+        )
+        .map_err(|e| io::Error::other(format!("prepare list files: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let diagnostics: String = row.get(7)?;
+            Ok(SourceFileRecord {
+                file_id: row.get(0)?,
+                path: row.get(1)?,
+                language: row.get(2)?,
+                kind: row.get(3)?,
+                fingerprint: row.get(4)?,
+                size: row.get::<_, i64>(5)? as u64,
+                indexed_at: row.get(6)?,
+                diagnostics: parse_string_list(&diagnostics).unwrap_or_default(),
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query list files: {e}")))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect list files: {e}")))
+}
+
+pub fn list_folders(repo_root: &Path) -> io::Result<Vec<FolderRecord>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+    if !table_exists(&conn, "folders")? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare("SELECT folder_id, path, parent_id FROM folders ORDER BY path")
+        .map_err(|e| io::Error::other(format!("prepare list folders: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(FolderRecord {
+                folder_id: row.get(0)?,
+                path: row.get(1)?,
+                parent_id: row.get(2)?,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query list folders: {e}")))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect list folders: {e}")))
+}
+
+pub fn search_files_fts(
+    repo_root: &Path,
+    term: &str,
+    limit: usize,
+) -> io::Result<Vec<FileSearchHit>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+    if !table_exists(&conn, "files_fts")? || !table_exists(&conn, "files")? {
+        return Ok(Vec::new());
+    }
+    let Some(query) = build_fts_query(term) else {
+        return Ok(Vec::new());
+    };
+    let mut stmt = match conn.prepare(
+        "SELECT f.file_id, f.path, f.language, f.kind, bm25(files_fts) AS score
+         FROM files_fts
+         JOIN files f ON f.file_id = files_fts.file_id
+         WHERE files_fts MATCH ?1
+         ORDER BY score
+         LIMIT ?2",
+    ) {
+        Ok(stmt) => stmt,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let rows = match stmt.query_map(params![query, limit as i64], |row| {
+        Ok(FileSearchHit {
+            file_id: row.get(0)?,
+            path: row.get(1)?,
+            language: row.get(2)?,
+            kind: row.get(3)?,
+            score: row.get(4)?,
+        })
+    }) {
+        Ok(rows) => rows,
+        Err(_) => return Ok(Vec::new()),
+    };
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect files_fts hits: {e}")))
+}
+
+pub fn list_raw_imports(repo_root: &Path) -> io::Result<Vec<RawImportCapture>> {
+    list_raw_imports_like(repo_root)
+}
+
+pub fn list_raw_calls(repo_root: &Path) -> io::Result<Vec<RawCallCapture>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+    if !table_exists(&conn, "raw_calls")? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT capture_id, file_id, file_path, language, source_symbol_id, raw_text, target_hint,
+                    called_name, receiver_text, argument_shape, line, parser_id, parser_version, diagnostics
+             FROM raw_calls ORDER BY file_path, line, capture_id",
+        )
+        .map_err(|e| io::Error::other(format!("prepare list raw calls: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let line = row.get::<_, i64>(10)? as usize;
+            let diagnostics_json: String = row.get(13)?;
+            let base = RawCaptureBase {
+                capture_id: row.get(0)?,
+                file_id: row.get(1)?,
+                language: row.get(3)?,
+                capture_kind: RawCaptureKind::Call,
+                source_symbol_id: row.get(4)?,
+                raw_text: row.get(5)?,
+                target_hint: row.get(6)?,
+                range: SourceRange::new(
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    line,
+                    line,
+                    0,
+                    0,
+                ),
+                parser_id: row.get(11)?,
+                parser_version: row.get(12)?,
+                diagnostics: parse_string_list(&diagnostics_json).unwrap_or_default(),
+            };
+            Ok(RawCallCapture {
+                file_path: base.range.path.clone(),
+                called_name: row.get(7)?,
+                line,
+                language: base.language.clone(),
+                source_symbol_id: base.source_symbol_id.clone(),
+                receiver_text: row.get(8)?,
+                source_text: base.raw_text.clone(),
+                argument_shape: row.get(9)?,
+                base,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query raw calls: {e}")))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect raw calls: {e}")))
+}
+
+pub fn list_raw_heritage(repo_root: &Path) -> io::Result<Vec<RawHeritageCapture>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+    if !table_exists(&conn, "raw_heritage")? {
+        return Ok(Vec::new());
+    }
+    Ok(Vec::new())
+}
+
+pub fn list_unresolved_refs(repo_root: &Path) -> io::Result<Vec<UnresolvedRef>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+    if !table_exists(&conn, "unresolved_refs")? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT unresolved_ref_id, capture_id, file_id, resolver_phase, reference_kind,
+                    reference_name, target_hint, path, start_line, end_line, start_column, end_column,
+                    candidates, reason, diagnostics
+             FROM unresolved_refs ORDER BY file_id, start_line, unresolved_ref_id",
+        )
+        .map_err(|e| io::Error::other(format!("prepare unresolved refs: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let candidates_json: String = row.get(12)?;
+            let diagnostics_json: String = row.get(14)?;
+            let file_id: String = row.get(2)?;
+            Ok(UnresolvedRef {
+                unresolved_ref_id: row.get(0)?,
+                capture_id: row.get(1)?,
+                file_id: file_id.clone(),
+                resolver_phase: graph_phase_from_str(&row.get::<_, String>(3)?),
+                reference_kind: reference_kind_from_str(&row.get::<_, String>(4)?),
+                reference_name: row.get(5)?,
+                target_hint: row.get(6)?,
+                range: SourceRange::new(
+                    file_id,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, i64>(8)? as usize,
+                    row.get::<_, i64>(9)? as usize,
+                    row.get::<_, i64>(10)? as usize,
+                    row.get::<_, i64>(11)? as usize,
+                ),
+                candidates: parse_string_list(&candidates_json).unwrap_or_default(),
+                reason: row.get(13)?,
+                diagnostics: parse_string_list(&diagnostics_json).unwrap_or_default(),
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query unresolved refs: {e}")))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect unresolved refs: {e}")))
+}
+
+pub fn list_graph_phase_runs(repo_root: &Path) -> io::Result<Vec<GraphPhaseStatus>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+    if !table_exists(&conn, "graph_phase_runs")? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT phase, status, input_fingerprint, output_fingerprint, started_at, completed_at, diagnostics
+             FROM graph_phase_runs ORDER BY phase",
+        )
+        .map_err(|e| io::Error::other(format!("prepare graph phase runs: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let diagnostics_json: String = row.get(6)?;
+            Ok(GraphPhaseStatus {
+                phase: graph_phase_from_str(&row.get::<_, String>(0)?),
+                status: row.get(1)?,
+                input_fingerprint: row.get(2)?,
+                output_fingerprint: row.get(3)?,
+                started_at: row.get(4)?,
+                completed_at: row.get(5)?,
+                diagnostics: parse_string_list(&diagnostics_json).unwrap_or_default(),
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query graph phase runs: {e}")))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect graph phase runs: {e}")))
+}
+
+fn list_raw_imports_like(repo_root: &Path) -> io::Result<Vec<RawImportCapture>> {
+    if !db_exists(repo_root) {
+        return Ok(Vec::new());
+    }
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(Vec::new()),
+    };
+    if !table_exists(&conn, "raw_imports")? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT capture_id, file_id, file_path, language, source_symbol_id, raw_text, target_hint,
+                    raw_path, imported_name, alias, line, parser_id, parser_version, diagnostics
+             FROM raw_imports ORDER BY file_path, line, capture_id",
+        )
+        .map_err(|e| io::Error::other(format!("prepare list raw imports: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let line = row.get::<_, i64>(10)? as usize;
+            let diagnostics_json: String = row.get(13)?;
+            let file_id: String = row.get(1)?;
+            let file_path: String = row.get(2)?;
+            let language: String = row.get(3)?;
+            let source_symbol_id: Option<String> = row.get(4)?;
+            let raw_text: String = row.get(5)?;
+            let base = RawCaptureBase {
+                capture_id: row.get(0)?,
+                file_id: file_id.clone(),
+                language: language.clone(),
+                capture_kind: RawCaptureKind::Import,
+                source_symbol_id: source_symbol_id.clone(),
+                raw_text: raw_text.clone(),
+                target_hint: row.get(6)?,
+                range: SourceRange::new(file_id, file_path.clone(), line, line, 0, 0),
+                parser_id: row.get(11)?,
+                parser_version: row.get(12)?,
+                diagnostics: parse_string_list(&diagnostics_json).unwrap_or_default(),
+            };
+            Ok(RawImportCapture {
+                file_path,
+                raw_path: row.get(7)?,
+                imported_name: row.get(8)?,
+                alias: row.get(9)?,
+                line,
+                language,
+                source_symbol_id,
+                source_text: raw_text,
+                base,
+            })
+        })
+        .map_err(|e| io::Error::other(format!("query raw imports: {e}")))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::other(format!("collect raw imports: {e}")))
+}
+
+pub fn clear_scan_cache_for_test(conn: &Connection) -> io::Result<()> {
+    conn.execute("DELETE FROM scan_cache", [])
+        .map_err(|e| io::Error::other(format!("clear scan cache for test: {e}")))?;
+    Ok(())
+}
+
+pub fn read_graph_readiness(repo_root: &Path) -> io::Result<GraphReadiness> {
+    if !db_exists(repo_root) {
+        return Ok(GraphReadiness {
+            status: GraphReadinessStatus::Missing,
+            reason: "graph cache is missing".to_string(),
+            snapshot_id: None,
+            source_fingerprint: None,
+            required_tables: Vec::new(),
+            diagnostics: Vec::new(),
+        });
+    }
+    let conn = match open_db_readonly(repo_root) {
+        Ok(conn) => conn,
+        Err(_) => {
+            return Ok(GraphReadiness {
+                status: GraphReadinessStatus::Missing,
+                reason: "graph cache cannot be opened".to_string(),
+                snapshot_id: None,
+                source_fingerprint: None,
+                required_tables: Vec::new(),
+                diagnostics: Vec::new(),
+            });
+        }
+    };
+    let required_tables = [
+        "graph_snapshots",
+        "files",
+        "folders",
+        "symbols",
+        "edges",
+        "raw_imports",
+        "raw_calls",
+        "raw_heritage",
+        "unresolved_refs",
+        "graph_phase_runs",
+        "files_fts",
+        "symbols_fts",
+    ];
+    let missing_tables = required_tables
+        .iter()
+        .filter_map(|table| match table_exists(&conn, table) {
+            Ok(true) => None,
+            Ok(false) => Some((*table).to_string()),
+            Err(_) => Some((*table).to_string()),
+        })
+        .collect::<Vec<_>>();
+    if !missing_tables.is_empty() {
+        return Ok(GraphReadiness {
+            status: GraphReadinessStatus::Blocked,
+            reason: "required graph tables are missing".to_string(),
+            snapshot_id: None,
+            source_fingerprint: None,
+            required_tables: missing_tables,
+            diagnostics: Vec::new(),
+        });
+    }
+    let Some(snapshot) = read_current_graph_snapshot(repo_root)? else {
+        return Ok(GraphReadiness {
+            status: GraphReadinessStatus::Missing,
+            reason: "current graph snapshot is missing".to_string(),
+            snapshot_id: None,
+            source_fingerprint: None,
+            required_tables: vec!["graph_snapshots".to_string()],
+            diagnostics: Vec::new(),
+        });
+    };
+    let phases = list_graph_phase_runs(repo_root)?;
+    if let Some(phase) = phases.iter().find(|phase| phase.status == "blocked") {
+        return Ok(GraphReadiness {
+            status: GraphReadinessStatus::Blocked,
+            reason: format!("graph phase {} is blocked", graph_phase_to_str(phase.phase)),
+            snapshot_id: Some(snapshot.snapshot_id),
+            source_fingerprint: Some(snapshot.source_fingerprint),
+            required_tables: Vec::new(),
+            diagnostics: phase.diagnostics.clone(),
+        });
+    }
+    if phases.iter().any(|phase| phase.status == "rebuilding") {
+        return Ok(GraphReadiness {
+            status: GraphReadinessStatus::Rebuilding,
+            reason: "graph rebuild is in progress".to_string(),
+            snapshot_id: Some(snapshot.snapshot_id),
+            source_fingerprint: Some(snapshot.source_fingerprint),
+            required_tables: Vec::new(),
+            diagnostics: Vec::new(),
+        });
+    }
+    if phases.iter().any(|phase| phase.status == "stale") {
+        return Ok(GraphReadiness {
+            status: GraphReadinessStatus::Stale,
+            reason: "graph source snapshot is stale".to_string(),
+            snapshot_id: Some(snapshot.snapshot_id),
+            source_fingerprint: Some(snapshot.source_fingerprint),
+            required_tables: Vec::new(),
+            diagnostics: Vec::new(),
+        });
+    }
+    Ok(GraphReadiness {
+        status: GraphReadinessStatus::Ready,
+        reason: "current graph snapshot is queryable".to_string(),
+        snapshot_id: Some(snapshot.snapshot_id),
+        source_fingerprint: Some(snapshot.source_fingerprint),
+        required_tables: Vec::new(),
+        diagnostics: Vec::new(),
+    })
+}
+
+fn graph_phase_to_str(phase: GraphPhase) -> &'static str {
+    match phase {
+        GraphPhase::Scan => "scan",
+        GraphPhase::Structure => "structure",
+        GraphPhase::Parse => "parse",
+        GraphPhase::ResolveImports => "resolve_imports",
+        GraphPhase::ResolveCalls => "resolve_calls",
+        GraphPhase::ResolveHeritage => "resolve_heritage",
+        GraphPhase::AnalyzeCommunities => "analyze_communities",
+        GraphPhase::AnalyzeProcesses => "analyze_processes",
+        GraphPhase::BuildFts => "build_fts",
+    }
+}
+
+fn graph_phase_from_str(value: &str) -> GraphPhase {
+    match value {
+        "scan" => GraphPhase::Scan,
+        "structure" => GraphPhase::Structure,
+        "parse" => GraphPhase::Parse,
+        "resolve_imports" => GraphPhase::ResolveImports,
+        "resolve_calls" => GraphPhase::ResolveCalls,
+        "resolve_heritage" => GraphPhase::ResolveHeritage,
+        "analyze_communities" => GraphPhase::AnalyzeCommunities,
+        "analyze_processes" => GraphPhase::AnalyzeProcesses,
+        "build_fts" => GraphPhase::BuildFts,
+        _ => GraphPhase::Parse,
+    }
+}
+
+fn reference_kind_to_str(kind: ReferenceKind) -> &'static str {
+    match kind {
+        ReferenceKind::Import => "import",
+        ReferenceKind::Call => "call",
+        ReferenceKind::Heritage => "heritage",
+    }
+}
+
+fn reference_kind_from_str(value: &str) -> ReferenceKind {
+    match value {
+        "call" => ReferenceKind::Call,
+        "heritage" => ReferenceKind::Heritage,
+        _ => ReferenceKind::Import,
+    }
+}
+
+fn is_spec_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    let trimmed = normalized.trim_start_matches("./");
+    trimmed == ".spec" || trimmed.starts_with(".spec/")
 }
 
 /// 只替换 facts/index 侧的 symbols / edges / graph analysis 快照。
@@ -1574,16 +2576,16 @@ fn list_symbols_in_conn(conn: &Connection) -> io::Result<Vec<SymbolNode>> {
         .map_err(|e| io::Error::other(format!("prepare list symbols: {e}")))?;
     let rows = stmt
         .query_map([], |row| {
-            Ok(SymbolNode {
-                symbol_id: row.get(0)?,
-                name: row.get(1)?,
-                label: row.get(2)?,
-                file_path: row.get(3)?,
-                start_line: row.get::<_, i64>(4)? as usize,
-                end_line: row.get::<_, i64>(5)? as usize,
-                is_exported: row.get::<_, i64>(6)? != 0,
-                language: row.get(7)?,
-            })
+            Ok(symbol_from_row_fields(
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get::<_, i64>(4)? as usize,
+                row.get::<_, i64>(5)? as usize,
+                row.get::<_, i64>(6)? != 0,
+                row.get(7)?,
+            ))
         })
         .map_err(|e| io::Error::other(format!("query list symbols: {e}")))?;
 
@@ -1797,16 +2799,16 @@ fn list_symbols_with_params<'a>(
         .map_err(|e| io::Error::other(format!("prepare list symbols by files: {e}")))?;
     let rows = stmt
         .query_map(rusqlite::params_from_iter(params), |row| {
-            Ok(SymbolNode {
-                symbol_id: row.get(0)?,
-                name: row.get(1)?,
-                label: row.get(2)?,
-                file_path: row.get(3)?,
-                start_line: row.get::<_, i64>(4)? as usize,
-                end_line: row.get::<_, i64>(5)? as usize,
-                is_exported: row.get::<_, i64>(6)? != 0,
-                language: row.get(7)?,
-            })
+            Ok(symbol_from_row_fields(
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get::<_, i64>(4)? as usize,
+                row.get::<_, i64>(5)? as usize,
+                row.get::<_, i64>(6)? != 0,
+                row.get(7)?,
+            ))
         })
         .map_err(|e| io::Error::other(format!("query list symbols by files: {e}")))?;
 
@@ -2194,13 +3196,16 @@ fn search_symbols_fts_in_conn(
 
     let rows = match stmt.query_map(params![query, limit as i64], |row| {
         Ok(FtsSymbolHit {
-            symbol_id: row.get(0)?,
-            name: row.get(1)?,
-            label: row.get(2)?,
-            file_path: row.get(3)?,
-            start_line: row.get::<_, i64>(4)? as usize,
-            end_line: row.get::<_, i64>(5)? as usize,
-            language: row.get(6)?,
+            symbol: symbol_from_row_fields(
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get::<_, i64>(4)? as usize,
+                row.get::<_, i64>(5)? as usize,
+                false,
+                row.get(6)?,
+            ),
             score: row.get(7)?,
         })
     }) {
@@ -2210,6 +3215,28 @@ fn search_symbols_fts_in_conn(
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| io::Error::other(format!("collect symbols_fts hits: {e}")))
+}
+
+fn symbol_from_row_fields(
+    symbol_id: String,
+    name: String,
+    label: String,
+    file_path: String,
+    start_line: usize,
+    end_line: usize,
+    is_exported: bool,
+    language: String,
+) -> SymbolNode {
+    SymbolNode::legacy(
+        symbol_id,
+        name,
+        label,
+        file_path,
+        start_line,
+        end_line,
+        is_exported,
+        language,
+    )
 }
 
 fn build_fts_query(term: &str) -> Option<String> {

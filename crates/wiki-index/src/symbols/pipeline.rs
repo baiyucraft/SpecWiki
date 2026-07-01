@@ -13,8 +13,8 @@ use crate::scanner::{ScanReport, ScannedFile};
 use wiki_model::domain::stable_id::stable_id;
 
 use super::models::{
-    ParsedFileSymbols, ParsedSymbolsSnapshot, RawCallCapture, RawHeritageCapture, RawImportCapture,
-    SymbolNode, SymbolParseDiagnostic, SymbolTable,
+    ParsedFileSymbols, ParsedSymbolsSnapshot, RawCallCapture, RawCaptureBase, RawCaptureKind,
+    RawHeritageCapture, RawImportCapture, SymbolNode, SymbolParseDiagnostic, SymbolTable,
 };
 use super::registry::{resolve_embedded_language, resolve_symbol_language, ResolvedSymbolLanguage};
 
@@ -632,9 +632,21 @@ fn collect_raw_captures(
                 if raw_path.is_empty() {
                     continue;
                 }
+                let base = RawCaptureBase::new(
+                    RawCaptureKind::Import,
+                    file_path,
+                    language.to_string(),
+                    line,
+                    source_text.clone(),
+                    Some(raw_path.clone()),
+                    source_symbol_id.clone(),
+                );
                 imports.push(RawImportCapture {
+                    base,
                     file_path: file_path.to_string(),
                     raw_path,
+                    imported_name: None,
+                    alias: None,
                     line,
                     language: language.to_string(),
                     source_symbol_id: source_symbol_id.clone(),
@@ -651,21 +663,35 @@ fn collect_raw_captures(
                 .unwrap_or_default();
             if !called_name.is_empty() {
                 let line = call_node.start_position().row + line_offset + 1;
+                let source_symbol_id = find_enclosing_symbol_id(symbols, line);
+                let receiver_text = call_receiver
+                    .and_then(|node| node.utf8_text(source).ok())
+                    .map(normalize_symbol_name)
+                    .filter(|text| !text.is_empty());
+                let source_text = call_node
+                    .utf8_text(source)
+                    .ok()
+                    .map(normalize_symbol_name)
+                    .unwrap_or_default();
+                let base = RawCaptureBase::new(
+                    RawCaptureKind::Call,
+                    file_path,
+                    language.to_string(),
+                    line,
+                    source_text.clone(),
+                    Some(called_name.clone()),
+                    source_symbol_id.clone(),
+                );
                 calls.push(RawCallCapture {
+                    base,
                     file_path: file_path.to_string(),
                     called_name,
                     line,
                     language: language.to_string(),
-                    source_symbol_id: find_enclosing_symbol_id(symbols, line),
-                    receiver_text: call_receiver
-                        .and_then(|node| node.utf8_text(source).ok())
-                        .map(normalize_symbol_name)
-                        .filter(|text| !text.is_empty()),
-                    source_text: call_node
-                        .utf8_text(source)
-                        .ok()
-                        .map(normalize_symbol_name)
-                        .unwrap_or_default(),
+                    source_symbol_id,
+                    receiver_text,
+                    source_text,
+                    argument_shape: None,
                 });
             }
         }
@@ -696,7 +722,17 @@ fn collect_raw_captures(
                 if target_name.is_empty() {
                     continue;
                 }
+                let base = RawCaptureBase::new(
+                    RawCaptureKind::Heritage,
+                    file_path,
+                    language.to_string(),
+                    line,
+                    source_text.clone(),
+                    Some(target_name.clone()),
+                    owner_symbol_id.clone(),
+                );
                 heritage.push(RawHeritageCapture {
+                    base,
                     file_path: file_path.to_string(),
                     line,
                     language: language.to_string(),
@@ -753,16 +789,16 @@ fn build_symbol_from_match(
     let seed = format!("{file_path}:{label}:{name}:{start_line}");
     let symbol_id = stable_id("symbol", seed);
 
-    Some(SymbolNode {
+    Some(SymbolNode::legacy(
         symbol_id,
-        name: name.clone(),
-        label: label.to_string(),
-        file_path: file_path.to_string(),
+        name.clone(),
+        label.to_string(),
+        file_path.to_string(),
         start_line,
         end_line,
-        is_exported: detect_exported(language, &name, definition_node, source),
-        language: language.to_string(),
-    })
+        detect_exported(language, &name, definition_node, source),
+        language.to_string(),
+    ))
 }
 
 fn normalize_symbol_name(text: &str) -> String {

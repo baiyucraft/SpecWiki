@@ -185,7 +185,10 @@ fn heritage_diagnostic(capture: &RawHeritageCapture, kind: &str, message: &str) 
     GraphDiagnostic {
         stage: "resolve_heritage".to_string(),
         kind: kind.to_string(),
-        message: format!("{}:{} -> {}", capture.file_path, capture.line, message),
+        message: format!(
+            "{}:{}:{} -> {}",
+            capture.file_path, capture.line, capture.target_name, message
+        ),
         file_path: Some(capture.file_path.clone()),
         symbol_id: capture.owner_symbol_id.clone(),
     }

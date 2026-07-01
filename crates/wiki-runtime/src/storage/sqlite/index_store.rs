@@ -6,14 +6,17 @@ use std::path::{Path, PathBuf};
 
 use wiki_index::scanner::ScanReport;
 use wiki_index::store::{
-    CallTraceHit, EntrypointRecord, IndexQueryStore, IndexSnapshotStore, ModuleRecord,
-    ModuleSourceLink, SourceRecord, SymbolSearchHit,
+    CallTraceHit, EntrypointRecord, FileSearchHit, FolderRecord, GraphPhaseStatus, GraphReadiness,
+    GraphSnapshot, IndexQueryStore, IndexSnapshotStore, ModuleRecord, ModuleSourceLink,
+    SourceFileRecord, SourceRecord, SymbolSearchHit,
 };
 use wiki_index::symbol_graph::{
     CommunityMember, CommunityNode, GraphAnalysisSnapshot, ProcessNode, ProcessStep,
     ResolvedGraphSnapshot, ResolvedSymbolEdge,
 };
-use wiki_index::symbols::SymbolNode;
+use wiki_index::symbols::{
+    RawCallCapture, RawHeritageCapture, RawImportCapture, SymbolNode, UnresolvedRef,
+};
 use wiki_model::domain::module_tree::ModuleTree;
 
 use crate::storage::sqlite_store;
@@ -77,6 +80,20 @@ impl IndexSnapshotStore for SqliteIndexStore {
     }
 
     fn list_sources(&self) -> io::Result<Vec<SourceRecord>> {
+        let graph_files = sqlite_store::list_files(&self.repo_root)?;
+        if !graph_files.is_empty() {
+            return Ok(graph_files
+                .into_iter()
+                .map(|file| SourceRecord {
+                    source_id: file.file_id,
+                    path: file.path,
+                    language: file.language,
+                    kind: file.kind,
+                    tags: Vec::new(),
+                })
+                .collect());
+        }
+
         Ok(self
             .read_scan_report()?
             .map(|report| {
@@ -163,6 +180,20 @@ impl IndexSnapshotStore for SqliteIndexStore {
             resolved_graph,
         )
     }
+
+    fn replace_graph_snapshot(&self, snapshot: &GraphSnapshot) -> io::Result<()> {
+        let mut conn = sqlite_store::open_db(&self.repo_root)?;
+        sqlite_store::replace_graph_snapshot(&mut conn, snapshot)
+    }
+
+    fn replace_graph_snapshot_for_files(
+        &self,
+        _file_paths: &[String],
+        snapshot: &GraphSnapshot,
+    ) -> io::Result<()> {
+        let mut conn = sqlite_store::open_db(&self.repo_root)?;
+        sqlite_store::replace_graph_snapshot(&mut conn, snapshot)
+    }
 }
 
 impl IndexQueryStore for SqliteIndexStore {
@@ -182,13 +213,17 @@ impl IndexQueryStore for SqliteIndexStore {
         sqlite_store::search_symbols_fts(&self.repo_root, term, limit).map(|hits| {
             hits.into_iter()
                 .map(|hit| SymbolSearchHit {
-                    symbol_id: hit.symbol_id,
-                    name: hit.name,
-                    label: hit.label,
-                    file_path: hit.file_path,
-                    start_line: hit.start_line,
-                    end_line: hit.end_line,
-                    language: hit.language,
+                    symbol_id: hit.symbol.symbol_id,
+                    name: hit.symbol.name,
+                    label: hit.symbol.label,
+                    symbol_kind: hit.symbol.symbol_kind,
+                    file_path: hit.symbol.file_path,
+                    file_id: hit.symbol.file_id,
+                    start_line: hit.symbol.start_line,
+                    end_line: hit.symbol.end_line,
+                    range: hit.symbol.range,
+                    language: hit.symbol.language,
+                    provenance: hit.symbol.provenance,
                     score: hit.score,
                 })
                 .collect()
@@ -272,5 +307,41 @@ impl IndexQueryStore for SqliteIndexStore {
                 .filter(|step| step.process_id == process_id)
                 .collect()
         })
+    }
+
+    fn list_files(&self) -> io::Result<Vec<SourceFileRecord>> {
+        sqlite_store::list_files(&self.repo_root)
+    }
+
+    fn list_folders(&self) -> io::Result<Vec<FolderRecord>> {
+        sqlite_store::list_folders(&self.repo_root)
+    }
+
+    fn search_files(&self, term: &str, limit: usize) -> io::Result<Vec<FileSearchHit>> {
+        sqlite_store::search_files_fts(&self.repo_root, term, limit)
+    }
+
+    fn list_raw_imports(&self) -> io::Result<Vec<RawImportCapture>> {
+        sqlite_store::list_raw_imports(&self.repo_root)
+    }
+
+    fn list_raw_calls(&self) -> io::Result<Vec<RawCallCapture>> {
+        sqlite_store::list_raw_calls(&self.repo_root)
+    }
+
+    fn list_raw_heritage(&self) -> io::Result<Vec<RawHeritageCapture>> {
+        sqlite_store::list_raw_heritage(&self.repo_root)
+    }
+
+    fn list_unresolved_refs(&self) -> io::Result<Vec<UnresolvedRef>> {
+        sqlite_store::list_unresolved_refs(&self.repo_root)
+    }
+
+    fn list_graph_phase_runs(&self) -> io::Result<Vec<GraphPhaseStatus>> {
+        sqlite_store::list_graph_phase_runs(&self.repo_root)
+    }
+
+    fn read_graph_readiness(&self) -> io::Result<GraphReadiness> {
+        sqlite_store::read_graph_readiness(&self.repo_root)
     }
 }

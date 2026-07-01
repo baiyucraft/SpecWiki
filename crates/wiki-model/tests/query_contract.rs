@@ -1,6 +1,6 @@
 use wiki_model::domain::query::{
-    QueryConfidence, QueryProvenance, QueryRefKind, QueryResultDto, QueryRouteTag,
-    QuerySourceRef, RecommendedAction,
+    QueryConfidence, QueryProvenance, QueryRefKind, QueryResultDto, QueryRouteTag, QuerySourceRef,
+    RecommendedAction,
 };
 
 #[test]
@@ -22,6 +22,11 @@ fn query_result_dto_serializes_public_contract_fields() {
             ref_kind: QueryRefKind::SourcePath,
             ref_id: "src/lib.rs".to_string(),
             label: Some("src/lib.rs".to_string()),
+            path: Some("src/lib.rs".to_string()),
+            start_line: Some(1),
+            end_line: Some(3),
+            provenance: vec!["index:files_fts".to_string()],
+            diagnostics: Vec::new(),
         }],
     };
 
@@ -37,6 +42,10 @@ fn query_result_dto_serializes_public_contract_fields() {
     assert_eq!(value["recommended_action"], "open_source_ref");
     assert_eq!(value["source_refs"][0]["ref_kind"], "source_path");
     assert_eq!(value["source_refs"][0]["ref_id"], "src/lib.rs");
+    assert_eq!(value["source_refs"][0]["path"], "src/lib.rs");
+    assert_eq!(value["source_refs"][0]["start_line"], 1);
+    assert_eq!(value["source_refs"][0]["end_line"], 3);
+    assert_eq!(value["source_refs"][0]["provenance"][0], "index:files_fts");
 }
 
 #[test]

@@ -1,7 +1,7 @@
 ---
 title: CLI
 description: spec-wiki 对外 CLI 命令和使用边界
-updated: 2026-05-25
+updated: 2026-07-01
 owner: docs
 ---
 
@@ -85,6 +85,8 @@ spec-wiki trace [--repo-root <path>]
 - 输出面向 Agent 快速定位文件、模块、符号、knowledge pages、projection refs、调用路径和 fallback 结果。
 - JSON 主合同包含 `readiness`、`query_trust`、`recommended_action`、`route_groups`、`results`、`answer`、`summary` 和 `hits`。
 - `results` 中每条结果携带 `route_tag / ref_kind / ref_id / label / score / provenance / confidence / recommended_action / source_refs`。
+- index route 的 `source_refs` 可携带源码路径、行号范围、provenance 和 diagnostics，供宿主直接打开代码或解释命中来源。
+- `index_symbol_hit`、`index_path_hit` 和 `index_graph_hit` 只在 graph readiness 为 ready 时生成；missing、stale、blocked 或 rebuilding 时不得用 page fallback 伪装 index 命中。
 - `route_tag` 是闭集；宿主不得在 CLI/Skill 层自造私有 route tag。
 - `provenance_summary` 是只读派生摘要，不能替代 `route_groups` / `results` 主合同。
 - `governance_readiness` 当前为 `not_enabled` 占位；未启用治理 evidence index 不阻断普通 query。

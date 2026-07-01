@@ -36,6 +36,9 @@ multiChange:
       dependsOn:
         - refactor-specwiki-around-contract-closure-truth-restore-snapshot
         - refactor-specwiki-around-contract-closure-query-route-readiness
+      archiveStatus: archived
+      archivedAt: 2026-07-01T17:35:53.297Z
+      archivedTo: .spec/archive/2026-07-01-refactor-specwiki-around-contract-closure-code-graph-index
     - id: refactor-specwiki-around-contract-closure-cli-product-surface
       order: 6
       dependsOn:

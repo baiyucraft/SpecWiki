@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::store::{
     CallTraceHit, EntrypointRecord, IndexQueryStore, IndexSnapshotStore, ModuleRecord,
-    ModuleSourceLink, SourceRecord,
+    ModuleSourceLink, SourceFileRecord, SourceRecord,
 };
-use crate::symbols::SymbolNode;
+use crate::symbols::{SourceRange, SymbolNode, SymbolProvenance};
 
 const INDEX_NOT_READY_MESSAGE: &str = "index not ready: facts snapshot missing";
 const DEFAULT_LOOKUP_LIMIT: usize = 8;
@@ -70,12 +70,16 @@ impl Default for IndexQueryRequest {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct SymbolHit {
     pub symbol_id: String,
+    pub file_id: String,
     pub name: String,
     pub label: String,
+    pub symbol_kind: String,
     pub file_path: String,
     pub start_line: usize,
     pub end_line: usize,
+    pub range: SourceRange,
     pub language: String,
+    pub provenance: SymbolProvenance,
     pub module_ids: Vec<String>,
     pub match_basis: MatchBasis,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,12 +90,16 @@ pub struct SymbolHit {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct SourceHit {
     pub source_id: String,
+    pub file_id: String,
     pub path: String,
     pub language: String,
+    pub kind: String,
     pub module_ids: Vec<String>,
     pub match_basis: MatchBasis,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
 }
 
 /// module lookup 的正式命中结果。
@@ -129,6 +137,10 @@ pub struct CallEdgeHitView {
     pub match_basis: MatchBasis,
     pub confidence: f64,
     pub reason: String,
+    #[serde(default)]
+    pub provenance: Vec<String>,
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
 }
 
 /// `impact_slice` 的最小正式结果。
@@ -188,7 +200,7 @@ where
         }),
         IndexQueryIntent::SourceLookup => Ok(IndexQueryResult {
             intent: request.intent,
-            sources: lookup_sources(&facts, &needle, limit),
+            sources: lookup_sources(store, &facts, &needle, limit)?,
             ..IndexQueryResult::default()
         }),
         IndexQueryIntent::ModuleLookup => Ok(IndexQueryResult {
@@ -237,6 +249,7 @@ where
 #[derive(Debug)]
 struct FactsContext {
     sources: Vec<SourceRecord>,
+    files: Vec<SourceFileRecord>,
     modules: Vec<ModuleRecord>,
     entrypoints: Vec<EntrypointRecord>,
     source_id_by_path: BTreeMap<String, String>,
@@ -251,6 +264,7 @@ impl FactsContext {
         let scan_report = store.read_scan_report()?.ok_or_else(index_not_ready)?;
         let module_tree = store.read_module_tree()?.ok_or_else(index_not_ready)?;
         let sources = store.list_sources()?;
+        let files = store.list_files()?;
         let modules = store.list_modules()?;
         let entrypoints = store.list_entrypoints()?;
         let links = store.list_module_source_links()?;
@@ -270,6 +284,7 @@ impl FactsContext {
 
         Ok(Self {
             sources,
+            files,
             modules,
             entrypoints,
             source_id_by_path,
@@ -290,7 +305,7 @@ where
     S: IndexSnapshotStore + IndexQueryStore,
 {
     let symbols = lookup_symbols(store, facts, needle, limit)?;
-    let sources = lookup_sources(facts, needle, limit);
+    let sources = lookup_sources(store, facts, needle, limit)?;
     let modules = lookup_modules(facts, needle, limit);
     let entrypoints = lookup_entrypoints(facts, needle, limit);
     let graph = build_graph_projection(
@@ -371,12 +386,16 @@ where
                     .cloned()
                     .unwrap_or_default(),
                 symbol_id: hit.symbol_id,
+                file_id: hit.file_id,
                 name: hit.name,
                 label: hit.label,
+                symbol_kind: hit.symbol_kind,
                 file_path: hit.file_path,
                 start_line: hit.start_line,
                 end_line: hit.end_line,
+                range: hit.range,
                 language: hit.language,
+                provenance: hit.provenance,
                 match_basis: MatchBasis::SymbolFts,
                 score: Some(hit.score),
             })
@@ -384,29 +403,76 @@ where
     })
 }
 
-fn lookup_sources(facts: &FactsContext, needle: &str, limit: usize) -> Vec<SourceHit> {
-    let mut hits = facts
-        .sources
-        .iter()
-        .filter_map(|source| match source_match_basis(source, needle) {
-            Some(match_basis) => Some(SourceHit {
-                source_id: source.source_id.clone(),
-                path: source.path.clone(),
-                language: source.language.clone(),
+fn lookup_sources<S>(
+    store: &S,
+    facts: &FactsContext,
+    needle: &str,
+    limit: usize,
+) -> io::Result<Vec<SourceHit>>
+where
+    S: IndexQueryStore,
+{
+    let mut hits = store
+        .search_files(needle, limit)?
+        .into_iter()
+        .map(|hit| {
+            let source_id = facts
+                .source_id_by_path
+                .get(&hit.path)
+                .cloned()
+                .unwrap_or_else(|| hit.file_id.clone());
+            SourceHit {
+                source_id: source_id.clone(),
+                file_id: hit.file_id,
+                path: hit.path,
+                language: hit.language,
+                kind: hit.kind,
                 module_ids: facts
                     .module_ids_by_source_id
-                    .get(&source.source_id)
+                    .get(&source_id)
                     .cloned()
                     .unwrap_or_default(),
-                match_basis,
-                score: None,
-            }),
-            None => None,
+                match_basis: MatchBasis::SourcePath,
+                score: Some(hit.score),
+                diagnostics: Vec::new(),
+            }
         })
         .collect::<Vec<_>>();
+    if hits.is_empty() {
+        hits = facts
+            .files
+            .iter()
+            .filter_map(|file| source_file_match_basis(file, needle).map(|basis| (file, basis)))
+            .map(|(file, match_basis)| map_source_file_hit(facts, file, match_basis, None))
+            .collect::<Vec<_>>();
+    }
+    if hits.is_empty() {
+        hits = facts
+            .sources
+            .iter()
+            .filter_map(|source| match source_match_basis(source, needle) {
+                Some(match_basis) => Some(SourceHit {
+                    source_id: source.source_id.clone(),
+                    file_id: source.source_id.clone(),
+                    path: source.path.clone(),
+                    language: source.language.clone(),
+                    kind: source.kind.clone(),
+                    module_ids: facts
+                        .module_ids_by_source_id
+                        .get(&source.source_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    match_basis,
+                    score: None,
+                    diagnostics: Vec::new(),
+                }),
+                None => None,
+            })
+            .collect::<Vec<_>>();
+    }
     hits.sort_by(|left, right| left.path.cmp(&right.path));
     hits.truncate(limit);
-    hits
+    Ok(hits)
 }
 
 fn lookup_modules(facts: &FactsContext, needle: &str, limit: usize) -> Vec<ModuleHit> {
@@ -517,6 +583,8 @@ fn map_call_edge_hit(
         match_basis: MatchBasis::CallTrace,
         confidence: edge.confidence,
         reason: edge.reason,
+        provenance: vec!["index:call_trace".to_string()],
+        diagnostics: Vec::new(),
     }
 }
 
@@ -548,6 +616,47 @@ fn source_match_basis(source: &SourceRecord, needle: &str) -> Option<MatchBasis>
     contains_case_insensitive(&source.path, needle).then_some(MatchBasis::SourcePath)
 }
 
+fn source_file_match_basis(source: &SourceFileRecord, needle: &str) -> Option<MatchBasis> {
+    if source
+        .path
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| contains_case_insensitive(name, needle))
+    {
+        return Some(MatchBasis::SourceFilename);
+    }
+
+    contains_case_insensitive(&source.path, needle).then_some(MatchBasis::SourcePath)
+}
+
+fn map_source_file_hit(
+    facts: &FactsContext,
+    source: &SourceFileRecord,
+    match_basis: MatchBasis,
+    score: Option<f64>,
+) -> SourceHit {
+    let source_id = facts
+        .source_id_by_path
+        .get(&source.path)
+        .cloned()
+        .unwrap_or_else(|| source.file_id.clone());
+    SourceHit {
+        source_id: source_id.clone(),
+        file_id: source.file_id.clone(),
+        path: source.path.clone(),
+        language: source.language.clone(),
+        kind: source.kind.clone(),
+        module_ids: facts
+            .module_ids_by_source_id
+            .get(&source_id)
+            .cloned()
+            .unwrap_or_default(),
+        match_basis,
+        score,
+        diagnostics: source.diagnostics.clone(),
+    }
+}
+
 fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().contains(needle)
 }
@@ -561,8 +670,8 @@ mod tests {
     use super::{run_query, IndexQueryIntent, IndexQueryRequest, MatchBasis};
     use crate::scanner::{FilePurpose, ScanReport, ScannedFile};
     use crate::store::{
-        CallTraceHit, EntrypointRecord, IndexQueryStore, IndexSnapshotStore, ModuleRecord,
-        ModuleSourceLink, SourceRecord, SymbolSearchHit,
+        CallTraceHit, EntrypointRecord, FileSearchHit, IndexQueryStore, IndexSnapshotStore,
+        ModuleRecord, ModuleSourceLink, SourceFileRecord, SourceRecord, SymbolSearchHit,
     };
     use crate::symbol_graph::{
         CommunityMember, CommunityNode, GraphAnalysisSnapshot, ProcessNode, ProcessStep,
@@ -579,6 +688,8 @@ mod tests {
         modules: Vec<ModuleRecord>,
         module_source_links: Vec<ModuleSourceLink>,
         sources: Vec<SourceRecord>,
+        files: Vec<SourceFileRecord>,
+        file_hits: Vec<FileSearchHit>,
         entrypoints: Vec<EntrypointRecord>,
         symbols: Vec<SymbolNode>,
         symbol_hits: Vec<SymbolSearchHit>,
@@ -662,6 +773,14 @@ mod tests {
             Ok(self.symbol_hits.iter().take(limit).cloned().collect())
         }
 
+        fn list_files(&self) -> io::Result<Vec<SourceFileRecord>> {
+            Ok(self.files.clone())
+        }
+
+        fn search_files(&self, _term: &str, limit: usize) -> io::Result<Vec<FileSearchHit>> {
+            Ok(self.file_hits.iter().take(limit).cloned().collect())
+        }
+
         fn list_edges(&self) -> io::Result<Vec<ResolvedSymbolEdge>> {
             Ok(Vec::new())
         }
@@ -739,10 +858,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(source_result.sources.len(), 1);
-        assert_eq!(
-            source_result.sources[0].match_basis,
-            MatchBasis::SourceFilename
-        );
+        assert_eq!(source_result.sources[0].match_basis, MatchBasis::SourcePath);
+        assert_eq!(source_result.sources[0].score, Some(0.81));
         assert_eq!(source_result.sources[0].module_ids, vec!["app".to_string()]);
 
         let module_result = run_query(
@@ -833,6 +950,43 @@ mod tests {
     }
 
     #[test]
+    fn index_query_returns_enriched_symbol_path_and_graph_hits() {
+        let store = sample_store();
+        let result = run_query(
+            &store,
+            &IndexQueryRequest {
+                intent: IndexQueryIntent::Auto,
+                text: "handleCheckout".to_string(),
+                ..IndexQueryRequest::default()
+            },
+        )
+        .unwrap();
+
+        assert!(result.symbols.iter().any(|hit| {
+            hit.symbol_id == "symbol:handleCheckout"
+                && hit.file_id == hit.range.file_id
+                && hit.symbol_kind == "function"
+                && hit.range.path == "src/main.ts"
+                && hit.provenance.parser_id == "tree-sitter"
+        }));
+        assert!(result.sources.iter().any(|hit| {
+            hit.file_id == "file:src/main.ts"
+                && hit.path == "src/main.ts"
+                && hit.kind == "source"
+                && hit.score == Some(0.81)
+        }));
+        assert!(result.call_edges.iter().any(|edge| {
+            edge.edge_id == "edge:caller"
+                && edge.confidence > 0.0
+                && edge.hop_distance >= 1
+                && edge
+                    .provenance
+                    .iter()
+                    .any(|item| item == "index:call_trace")
+        }));
+    }
+
+    #[test]
     fn missing_snapshot_returns_index_not_ready() {
         let error = run_query(
             &MemoryStore::default(),
@@ -884,27 +1038,29 @@ mod tests {
             architecture_hints: Vec::new(),
         };
         let symbols = vec![
-            SymbolNode {
-                symbol_id: "symbol:handleCheckout".to_string(),
-                name: "handleCheckout".to_string(),
-                label: "function".to_string(),
-                file_path: "src/main.ts".to_string(),
-                start_line: 1,
-                end_line: 4,
-                is_exported: true,
-                language: "typescript".to_string(),
-            },
-            SymbolNode {
-                symbol_id: "symbol:runPayment".to_string(),
-                name: "runPayment".to_string(),
-                label: "function".to_string(),
-                file_path: "src/main.ts".to_string(),
-                start_line: 6,
-                end_line: 9,
-                is_exported: false,
-                language: "typescript".to_string(),
-            },
+            SymbolNode::legacy(
+                "symbol:handleCheckout".to_string(),
+                "handleCheckout".to_string(),
+                "function".to_string(),
+                "src/main.ts".to_string(),
+                1,
+                4,
+                true,
+                "typescript".to_string(),
+            ),
+            SymbolNode::legacy(
+                "symbol:runPayment".to_string(),
+                "runPayment".to_string(),
+                "function".to_string(),
+                "src/main.ts".to_string(),
+                6,
+                9,
+                false,
+                "typescript".to_string(),
+            ),
         ];
+
+        let symbol_hit_source = symbols[0].clone();
 
         MemoryStore {
             scan_report: Some(scan_report),
@@ -930,6 +1086,23 @@ mod tests {
                 kind: "source".to_string(),
                 tags: vec!["entry-point".to_string()],
             }],
+            files: vec![SourceFileRecord {
+                file_id: "file:src/main.ts".to_string(),
+                path: "src/main.ts".to_string(),
+                language: "typescript".to_string(),
+                kind: "source".to_string(),
+                fingerprint: "fp-main".to_string(),
+                size: 64,
+                indexed_at: "test".to_string(),
+                diagnostics: Vec::new(),
+            }],
+            file_hits: vec![FileSearchHit {
+                file_id: "file:src/main.ts".to_string(),
+                path: "src/main.ts".to_string(),
+                language: "typescript".to_string(),
+                kind: "source".to_string(),
+                score: 0.81,
+            }],
             entrypoints: vec![EntrypointRecord {
                 path: "src/main.ts".to_string(),
                 source_id: Some("source:src/main.ts".to_string()),
@@ -940,10 +1113,14 @@ mod tests {
                 symbol_id: "symbol:handleCheckout".to_string(),
                 name: "handleCheckout".to_string(),
                 label: "function".to_string(),
+                symbol_kind: symbol_hit_source.symbol_kind.clone(),
                 file_path: "src/main.ts".to_string(),
+                file_id: symbol_hit_source.file_id.clone(),
                 start_line: 1,
                 end_line: 4,
+                range: symbol_hit_source.range.clone(),
                 language: "typescript".to_string(),
+                provenance: symbol_hit_source.provenance.clone(),
                 score: 0.92,
             }],
             call_trace_hits: vec![

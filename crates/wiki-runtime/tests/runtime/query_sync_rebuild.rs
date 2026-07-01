@@ -5,14 +5,14 @@ use std::fs;
 use std::path::Path;
 
 use tempfile::tempdir;
+use wiki_model::domain::query::QueryRouteTag;
 use wiki_runtime::storage::sqlite_store;
-use wiki_runtime::storage::state_store::{facts_snapshot_ready, index_graph_ready};
 use wiki_runtime::storage::state_store::read_state;
+use wiki_runtime::storage::state_store::{facts_snapshot_ready, index_graph_ready};
 use wiki_runtime::workflows::{
     init::run_init, query::run_query, rebuild::run_rebuild, status::run_status, sync::run_sync,
     update::run_update,
 };
-use wiki_model::domain::query::QueryRouteTag;
 
 const DECLARED_RUNTIME_BLOCK: &str = concat!(
     "\n<!-- wiki:declared id=repo-runtime-contract kind=policy scope=repo status=active source=manual -->\n",
@@ -258,11 +258,9 @@ fn query_keeps_textual_page_fallback_degraded_even_with_graph_hits() {
         .provenance
         .iter()
         .any(|item| item == "page_fallback"));
-    assert!(query
-        .results
-        .iter()
-        .all(|result| result.route_tag != QueryRouteTag::RenderedPageDebugFallback
-            || result.ref_kind == wiki_model::domain::query::QueryRefKind::RenderedPage));
+    assert!(query.results.iter().all(|result| result.route_tag
+        != QueryRouteTag::RenderedPageDebugFallback
+        || result.ref_kind == wiki_model::domain::query::QueryRefKind::RenderedPage));
 }
 
 /// 场景：显式 rebuild 必须能补回缺失的 page-level cache。
@@ -530,6 +528,56 @@ fn query_fusion_outputs_route_groups_and_results() {
 }
 
 #[test]
+fn query_projects_symbol_range_and_graph_refs_into_public_results() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    write_graph_query_repo(repo_root);
+
+    run_init(repo_root).unwrap();
+
+    let query = run_query(repo_root, "handleCheckout").unwrap();
+    let symbol_result = query
+        .results
+        .iter()
+        .find(|result| result.route_tag == QueryRouteTag::IndexSymbolHit)
+        .expect("expected index symbol result");
+    assert!(symbol_result.source_refs.iter().any(|source_ref| {
+        source_ref.path.as_deref() == Some("src/controller.ts")
+            && source_ref.start_line.is_some()
+            && source_ref.end_line.is_some()
+            && source_ref
+                .provenance
+                .iter()
+                .any(|item| item.starts_with("parser:"))
+    }));
+
+    let path_query = run_query(repo_root, "controller.ts").unwrap();
+    let path_result = path_query
+        .results
+        .iter()
+        .find(|result| result.route_tag == QueryRouteTag::IndexPathHit)
+        .expect("expected index path result");
+    assert_ne!(path_result.score, 0.75);
+    assert!(path_result
+        .source_refs
+        .iter()
+        .any(|source_ref| source_ref.path.as_deref() == Some("src/controller.ts")));
+
+    let graph_result = query
+        .results
+        .iter()
+        .find(|result| result.route_tag == QueryRouteTag::IndexGraphHit)
+        .expect("expected index graph result");
+    assert!(graph_result.source_refs.iter().any(|source_ref| {
+        source_ref.path.as_deref() == Some("src/controller.ts")
+            && source_ref
+                .provenance
+                .iter()
+                .any(|item| item == "index:call_trace")
+    }));
+}
+
+#[test]
 fn query_expands_inbound_impact_range_for_terminal_symbol() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
@@ -736,6 +784,88 @@ fn query_does_not_emit_index_routes_when_index_is_not_ready() {
 }
 
 #[test]
+fn query_suppresses_index_routes_for_non_ready_graph_phase_states() {
+    for phase_status in ["stale", "rebuilding", "blocked"] {
+        let fixture = tempdir().unwrap();
+        let repo_root = fixture.path();
+        write_graph_query_repo(repo_root);
+        run_init(repo_root).unwrap();
+
+        {
+            let conn = sqlite_store::open_db(repo_root).unwrap();
+            conn.execute(
+                "INSERT OR REPLACE INTO graph_phase_runs
+                 (phase, status, input_fingerprint, output_fingerprint, started_at, completed_at, diagnostics)
+                 VALUES ('build_fts', ?1, NULL, NULL, NULL, NULL, '[]')",
+                [phase_status],
+            )
+            .unwrap();
+        }
+
+        let query = run_query(repo_root, "handleCheckout").unwrap();
+        assert!(
+            query
+                .results
+                .iter()
+                .all(|result| !result.route_tag.is_index_route()),
+            "index route must not be emitted for {phase_status}: {:#?}",
+            query.results
+        );
+        assert!(
+            query
+                .route_groups
+                .iter()
+                .all(|group| !group.route_tag.is_index_route()),
+            "index route group must not be emitted for {phase_status}: {:#?}",
+            query.route_groups
+        );
+    }
+}
+
+#[test]
+fn workflows_write_graph_phase_diagnostics_and_unresolved_refs() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    fs::write(repo_root.join("package.json"), r#"{"name":"phase-demo"}"#).unwrap();
+    write_repo_file(
+        repo_root,
+        "src/service.ts",
+        concat!(
+            "import { missing } from './missing';\n",
+            "export function run() {\n",
+            "  return missing();\n",
+            "}\n",
+        ),
+    );
+
+    run_init(repo_root).unwrap();
+
+    let phases = sqlite_store::list_graph_phase_runs(repo_root).unwrap();
+    assert!(phases
+        .iter()
+        .any(|phase| phase.phase == wiki_index::symbols::GraphPhase::ResolveImports));
+    assert!(phases
+        .iter()
+        .any(|phase| phase.phase == wiki_index::symbols::GraphPhase::ResolveCalls));
+
+    let unresolved = sqlite_store::list_unresolved_refs(repo_root).unwrap();
+    assert!(unresolved.iter().any(|item| {
+        item.reference_name == "missing"
+            && item.file_id.starts_with("file:")
+            && matches!(
+                item.resolver_phase,
+                wiki_index::symbols::GraphPhase::ResolveImports
+                    | wiki_index::symbols::GraphPhase::ResolveCalls
+            )
+    }));
+
+    let snapshot = sqlite_store::read_current_graph_snapshot(repo_root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.source_fingerprint.is_empty(), false);
+}
+
+#[test]
 fn query_marks_governance_conflict_answer_as_degraded() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
@@ -793,12 +923,11 @@ fn query_emits_declared_knowledge_route_for_declared_records() {
     let query = run_query(repo_root, "formal artifact").unwrap();
 
     assert!(
-        query
-            .results
-            .iter()
-            .any(|result| result.route_tag == QueryRouteTag::KnowledgeDeclaredHit
+        query.results.iter().any(
+            |result| result.route_tag == QueryRouteTag::KnowledgeDeclaredHit
                 && result.ref_kind == wiki_model::domain::query::QueryRefKind::KnowledgeRecord
-                && !result.source_refs.is_empty()),
+                && !result.source_refs.is_empty()
+        ),
         "declared knowledge route should be emitted from formal declared records: {:#?}",
         query.results
     );

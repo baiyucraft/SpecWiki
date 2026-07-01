@@ -30,8 +30,8 @@ use wiki_model::domain::knowledge_artifact::{
     DeclaredKnowledgeRecordStatus, KnowledgeHealthSignal,
 };
 use wiki_model::domain::query::{
-    QueryConfidence, QueryProvenance, QueryRefKind, QueryResultDto, QueryRouteGroup,
-    QueryRouteTag, QuerySourceRef, RecommendedAction as QueryRecommendedAction,
+    QueryConfidence, QueryProvenance, QueryRefKind, QueryResultDto, QueryRouteGroup, QueryRouteTag,
+    QuerySourceRef, RecommendedAction as QueryRecommendedAction,
 };
 
 const ANSWER_SUPPORTING_REF_LIMIT: usize = 8;
@@ -99,12 +99,24 @@ pub struct QueryModuleMatch {
 pub struct QuerySourceMatch {
     /// 源码稳定 ID。
     pub source_id: String,
+    /// Graph source authority 的文件 ID。
+    #[serde(default)]
+    pub file_id: String,
     /// 相对仓库根目录的源码路径。
     pub path: String,
+    /// 源码类别。
+    #[serde(default)]
+    pub kind: String,
     /// 所属模块 ID。
     pub module_ids: Vec<String>,
     /// 源码命中原因。
     pub reasons: Vec<String>,
+    /// FTS 返回的原始分数，供排序和公开 result 使用。
+    #[serde(default)]
+    pub score: f64,
+    /// source authority 诊断。
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
 }
 
 /// `QueryRelationMatch` 预留给后续知识/关系消费迭代。
@@ -122,16 +134,28 @@ pub struct QueryRelationMatch {
 pub struct QuerySymbolMatch {
     /// 命中符号的稳定 ID。
     pub symbol_id: String,
+    /// 符号所属文件 ID。
+    #[serde(default)]
+    pub file_id: String,
     /// 符号名。
     pub name: String,
     /// 符号标签，例如 function / class / method。
     pub label: String,
+    /// 正式 symbol kind。
+    #[serde(default)]
+    pub symbol_kind: String,
     /// 符号所在源码路径。
     pub file_path: String,
     /// 符号起始行。
     pub start_line: usize,
     /// 符号结束行。
     pub end_line: usize,
+    /// 源码范围起始列。
+    #[serde(default)]
+    pub start_column: usize,
+    /// 源码范围结束列。
+    #[serde(default)]
+    pub end_column: usize,
     /// 符号所属语言。
     pub language: String,
     /// 由源码映射回来的页面 ID。
@@ -142,6 +166,12 @@ pub struct QuerySymbolMatch {
     pub reasons: Vec<String>,
     /// FTS 返回的原始分数，供排序和调试使用。
     pub score: f64,
+    /// parser / graph provenance。
+    #[serde(default)]
+    pub provenance: Vec<String>,
+    /// parser / graph diagnostics。
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
 }
 
 /// `QueryGraphEdgeMatch` 是 query 返回的 graph edge 视图。
@@ -159,6 +189,12 @@ pub struct QueryGraphEdgeMatch {
     pub target_symbol_id: String,
     /// edge 终点 symbol 名称。
     pub target_symbol: String,
+    /// edge 起点源码路径。
+    #[serde(default)]
+    pub source_path: String,
+    /// edge 终点源码路径。
+    #[serde(default)]
+    pub target_path: String,
     /// edge 置信度。
     pub confidence: f64,
     /// resolve 阶段留下的解释文本。
@@ -173,6 +209,9 @@ pub struct QueryGraphEdgeMatch {
     pub reasons: Vec<String>,
     /// graph 命中 provenance。
     pub provenance: Vec<String>,
+    /// graph diagnostics。
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
 }
 
 /// `QueryProcessMatch` 预留给后续图消费迭代。
@@ -540,14 +579,7 @@ fn degraded_query_without_index(
         QueryTrust::StaleButQueryable
     };
     let provenance_summary = build_provenance_summary(false, has_knowledge_hits, has_page_fallback);
-    let results = build_query_results(
-        &matches,
-        &[],
-        &[],
-        &[],
-        query_trust,
-        recommended_action,
-    );
+    let results = build_query_results(&matches, &[], &[], &[], query_trust, recommended_action);
     let route_groups = build_route_groups(&results);
     let answer = build_answer_envelope(
         term,
@@ -621,9 +653,13 @@ fn project_source_matches(index_result: &index_query::IndexQueryResult) -> Vec<Q
         .iter()
         .map(|source| QuerySourceMatch {
             source_id: source.source_id.clone(),
+            file_id: source.file_id.clone(),
             path: source.path.clone(),
+            kind: source.kind.clone(),
             module_ids: source.module_ids.clone(),
             reasons: vec![match_basis_reason(source.match_basis)],
+            score: source.score.unwrap_or(0.75),
+            diagnostics: source.diagnostics.clone(),
         })
         .collect()
 }
@@ -885,11 +921,15 @@ fn project_symbol_matches(
         .iter()
         .map(|symbol| QuerySymbolMatch {
             symbol_id: symbol.symbol_id.clone(),
+            file_id: symbol.file_id.clone(),
             name: symbol.name.clone(),
             label: symbol.label.clone(),
+            symbol_kind: symbol.symbol_kind.clone(),
             file_path: symbol.file_path.clone(),
             start_line: symbol.start_line,
             end_line: symbol.end_line,
+            start_column: symbol.range.start_column,
+            end_column: symbol.range.end_column,
             language: symbol.language.clone(),
             page_ids: page_ids_by_source_path
                 .get(&symbol.file_path)
@@ -898,6 +938,11 @@ fn project_symbol_matches(
             module_ids: symbol.module_ids.clone(),
             reasons: vec![match_basis_reason(symbol.match_basis)],
             score: symbol.score.unwrap_or_default(),
+            provenance: vec![
+                format!("parser:{}", symbol.provenance.parser_id),
+                format!("source:{:?}", symbol.provenance.source_kind),
+            ],
+            diagnostics: symbol.provenance.diagnostics.clone(),
         })
         .collect()
 }
@@ -915,12 +960,15 @@ fn project_graph_edge_matches(
             source_symbol: edge.source_name.clone(),
             target_symbol_id: edge.target_id.clone(),
             target_symbol: edge.target_name.clone(),
+            source_path: edge.source_path.clone(),
+            target_path: edge.target_path.clone(),
             confidence: edge.confidence,
             reason: edge.reason.clone(),
             hop_distance: edge.hop_distance,
             traversal_modes: vec![edge.traversal_direction.clone()],
             reasons: vec![match_basis_reason(edge.match_basis)],
-            provenance: vec!["index:call_trace".to_string()],
+            provenance: edge.provenance.clone(),
+            diagnostics: edge.diagnostics.clone(),
         })
         .collect()
 }
@@ -1209,11 +1257,16 @@ fn build_query_results(
                     QueryConfidence::Low
                 },
                 recommended_action: map_recommended_action(recommended_action),
-                source_refs: vec![QuerySourceRef {
-                    ref_kind: QueryRefKind::SourcePath,
-                    ref_id: symbol.file_path.clone(),
-                    label: Some(symbol.file_path.clone()),
-                }],
+                source_refs: vec![source_ref(
+                    QueryRefKind::SourcePath,
+                    symbol.file_path.clone(),
+                    Some(symbol.file_path.clone()),
+                    Some(symbol.file_path.clone()),
+                    Some(symbol.start_line),
+                    Some(symbol.end_line),
+                    symbol.provenance.clone(),
+                    symbol.diagnostics.clone(),
+                )],
             },
         );
     }
@@ -1226,7 +1279,7 @@ fn build_query_results(
                 ref_kind: QueryRefKind::SourcePath,
                 ref_id: source.path.clone(),
                 label: source.path.clone(),
-                score: 0.75,
+                score: source.score,
                 provenance: QueryProvenance {
                     layer: "index".to_string(),
                     state: Some("ready".to_string()),
@@ -1234,11 +1287,16 @@ fn build_query_results(
                 },
                 confidence: QueryConfidence::Medium,
                 recommended_action: map_recommended_action(recommended_action),
-                source_refs: vec![QuerySourceRef {
-                    ref_kind: QueryRefKind::SourcePath,
-                    ref_id: source.path.clone(),
-                    label: Some(source.path.clone()),
-                }],
+                source_refs: vec![source_ref(
+                    QueryRefKind::SourcePath,
+                    source.path.clone(),
+                    Some(source.path.clone()),
+                    Some(source.path.clone()),
+                    None,
+                    None,
+                    Vec::new(),
+                    source.diagnostics.clone(),
+                )],
             },
         );
     }
@@ -1266,16 +1324,26 @@ fn build_query_results(
                 },
                 recommended_action: map_recommended_action(recommended_action),
                 source_refs: vec![
-                    QuerySourceRef {
-                        ref_kind: QueryRefKind::SourceSymbol,
-                        ref_id: edge.source_symbol_id.clone(),
-                        label: Some(edge.source_symbol.clone()),
-                    },
-                    QuerySourceRef {
-                        ref_kind: QueryRefKind::SourceSymbol,
-                        ref_id: edge.target_symbol_id.clone(),
-                        label: Some(edge.target_symbol.clone()),
-                    },
+                    source_ref(
+                        QueryRefKind::SourceSymbol,
+                        edge.source_symbol_id.clone(),
+                        Some(edge.source_symbol.clone()),
+                        (!edge.source_path.is_empty()).then(|| edge.source_path.clone()),
+                        None,
+                        None,
+                        edge.provenance.clone(),
+                        edge.diagnostics.clone(),
+                    ),
+                    source_ref(
+                        QueryRefKind::SourceSymbol,
+                        edge.target_symbol_id.clone(),
+                        Some(edge.target_symbol.clone()),
+                        (!edge.target_path.is_empty()).then(|| edge.target_path.clone()),
+                        None,
+                        None,
+                        edge.provenance.clone(),
+                        edge.diagnostics.clone(),
+                    ),
                 ],
             },
         );
@@ -1327,18 +1395,30 @@ fn build_query_results(
                 confidence: QueryConfidence::Low,
                 recommended_action: map_recommended_action(recommended_action),
                 source_refs: if page.match_mode == "knowledge_declared" {
-                    vec![QuerySourceRef {
-                        ref_kind: QueryRefKind::KnowledgeRecord,
-                        ref_id: page.page_id.clone(),
-                        label: Some(page.title.clone()),
-                    }]
+                    vec![source_ref(
+                        QueryRefKind::KnowledgeRecord,
+                        page.page_id.clone(),
+                        Some(page.title.clone()),
+                        None,
+                        None,
+                        None,
+                        Vec::new(),
+                        Vec::new(),
+                    )]
                 } else {
                     page.source_files
                         .iter()
-                        .map(|source_path| QuerySourceRef {
-                            ref_kind: QueryRefKind::SourcePath,
-                            ref_id: source_path.clone(),
-                            label: Some(source_path.clone()),
+                        .map(|source_path| {
+                            source_ref(
+                                QueryRefKind::SourcePath,
+                                source_path.clone(),
+                                Some(source_path.clone()),
+                                Some(source_path.clone()),
+                                None,
+                                None,
+                                Vec::new(),
+                                Vec::new(),
+                            )
                         })
                         .collect()
                 },
@@ -1347,6 +1427,28 @@ fn build_query_results(
     }
 
     results
+}
+
+fn source_ref(
+    ref_kind: QueryRefKind,
+    ref_id: String,
+    label: Option<String>,
+    path: Option<String>,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+    provenance: Vec<String>,
+    diagnostics: Vec<String>,
+) -> QuerySourceRef {
+    QuerySourceRef {
+        ref_kind,
+        ref_id,
+        label,
+        path,
+        start_line,
+        end_line,
+        provenance,
+        diagnostics,
+    }
 }
 
 fn build_route_groups(results: &[QueryResultDto]) -> Vec<QueryRouteGroup> {

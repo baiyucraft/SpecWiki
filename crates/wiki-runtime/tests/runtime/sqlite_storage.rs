@@ -6,11 +6,17 @@ use std::path::Path;
 
 use rusqlite::Connection;
 use tempfile::TempDir;
+use wiki_index::store::{
+    FolderRecord, GraphPhaseStatus, GraphReadinessStatus, GraphSnapshot, SourceFileRecord,
+};
 use wiki_index::symbol_graph::{
     CommunityMember, CommunityNode, GraphAnalysisSnapshot, ProcessNode, ProcessStep,
     ResolvedGraphSnapshot, ResolvedSymbolEdge,
 };
-use wiki_index::symbols::SymbolNode;
+use wiki_index::symbols::{
+    GraphPhase, RawCallCapture, RawCaptureBase, RawCaptureKind, RawImportCapture, ReferenceKind,
+    SourceRange, SymbolNode, UnresolvedRef,
+};
 use wiki_runtime::domain::metadata::DirtyState;
 use wiki_runtime::domain::module_tree::ModuleTree;
 use wiki_runtime::domain::state::{BuildState, WikiState};
@@ -46,26 +52,26 @@ fn empty_state() -> WikiState {
 
 fn sample_symbols() -> Vec<SymbolNode> {
     vec![
-        SymbolNode {
-            symbol_id: "symbol-service".to_string(),
-            name: "PaymentService".to_string(),
-            label: "class".to_string(),
-            file_path: "src/service.ts".to_string(),
-            start_line: 1,
-            end_line: 12,
-            is_exported: true,
-            language: "typescript".to_string(),
-        },
-        SymbolNode {
-            symbol_id: "symbol-helper".to_string(),
-            name: "runHelper".to_string(),
-            label: "function".to_string(),
-            file_path: "src/helper.ts".to_string(),
-            start_line: 1,
-            end_line: 3,
-            is_exported: true,
-            language: "typescript".to_string(),
-        },
+        SymbolNode::legacy(
+            "symbol-service".to_string(),
+            "PaymentService".to_string(),
+            "class".to_string(),
+            "src/service.ts".to_string(),
+            1,
+            12,
+            true,
+            "typescript".to_string(),
+        ),
+        SymbolNode::legacy(
+            "symbol-helper".to_string(),
+            "runHelper".to_string(),
+            "function".to_string(),
+            "src/helper.ts".to_string(),
+            1,
+            3,
+            true,
+            "typescript".to_string(),
+        ),
     ]
 }
 
@@ -122,6 +128,239 @@ fn sample_graph() -> (ResolvedGraphSnapshot, GraphAnalysisSnapshot) {
         diagnostics: Vec::new(),
     };
     (resolved, analysis)
+}
+
+fn sample_graph_snapshot_with_raw_and_unresolved() -> GraphSnapshot {
+    let symbols = sample_symbols();
+    let (resolved_graph, analysis) = sample_graph();
+    let import_base = RawCaptureBase::new(
+        RawCaptureKind::Import,
+        "src/service.ts",
+        "typescript",
+        1,
+        "import { runHelper } from './helper'",
+        Some("./helper".to_string()),
+        Some("symbol-service".to_string()),
+    );
+    let call_base = RawCaptureBase::new(
+        RawCaptureKind::Call,
+        "src/service.ts",
+        "typescript",
+        3,
+        "runHelper()",
+        Some("runHelper".to_string()),
+        Some("symbol-service".to_string()),
+    );
+    GraphSnapshot {
+        snapshot_id: "snapshot-1".to_string(),
+        source_fingerprint: "source-fp-1".to_string(),
+        files: vec![
+            SourceFileRecord {
+                file_id: "file:src/service.ts".to_string(),
+                path: "src/service.ts".to_string(),
+                language: "typescript".to_string(),
+                kind: "source".to_string(),
+                fingerprint: "fp-service".to_string(),
+                size: 128,
+                indexed_at: "2026-07-01T00:00:00Z".to_string(),
+                diagnostics: Vec::new(),
+            },
+            SourceFileRecord {
+                file_id: "file:src/helper.ts".to_string(),
+                path: "src/helper.ts".to_string(),
+                language: "typescript".to_string(),
+                kind: "source".to_string(),
+                fingerprint: "fp-helper".to_string(),
+                size: 64,
+                indexed_at: "2026-07-01T00:00:00Z".to_string(),
+                diagnostics: Vec::new(),
+            },
+        ],
+        folders: vec![FolderRecord {
+            folder_id: "folder:src".to_string(),
+            path: "src".to_string(),
+            parent_id: None,
+        }],
+        symbols,
+        edges: resolved_graph.edges.clone(),
+        raw_imports: vec![RawImportCapture {
+            base: import_base.clone(),
+            file_path: "src/service.ts".to_string(),
+            raw_path: "./helper".to_string(),
+            imported_name: Some("runHelper".to_string()),
+            alias: None,
+            line: 1,
+            language: "typescript".to_string(),
+            source_symbol_id: Some("symbol-service".to_string()),
+            source_text: import_base.raw_text.clone(),
+        }],
+        raw_calls: vec![RawCallCapture {
+            base: call_base.clone(),
+            file_path: "src/service.ts".to_string(),
+            called_name: "runHelper".to_string(),
+            line: 3,
+            language: "typescript".to_string(),
+            source_symbol_id: Some("symbol-service".to_string()),
+            receiver_text: None,
+            source_text: call_base.raw_text.clone(),
+            argument_shape: Some("arity:0".to_string()),
+        }],
+        raw_heritage: Vec::new(),
+        unresolved_refs: vec![UnresolvedRef {
+            unresolved_ref_id: "unresolved-1".to_string(),
+            capture_id: call_base.capture_id.clone(),
+            file_id: "file:src/service.ts".to_string(),
+            resolver_phase: GraphPhase::ResolveCalls,
+            reference_kind: ReferenceKind::Call,
+            reference_name: "runMissing".to_string(),
+            target_hint: Some("runMissing".to_string()),
+            range: SourceRange::new("file:src/service.ts", "src/service.ts", 4, 4, 0, 12),
+            candidates: Vec::new(),
+            reason: "target_not_found".to_string(),
+            diagnostics: vec!["call target was not resolved".to_string()],
+        }],
+        analysis,
+        phase_statuses: vec![GraphPhaseStatus {
+            phase: GraphPhase::BuildFts,
+            status: "ready".to_string(),
+            input_fingerprint: Some("source-fp-1".to_string()),
+            output_fingerprint: Some("graph-fp-1".to_string()),
+            started_at: Some("2026-07-01T00:00:00Z".to_string()),
+            completed_at: Some("2026-07-01T00:00:01Z".to_string()),
+            diagnostics: Vec::new(),
+        }],
+    }
+}
+
+fn sample_graph_snapshot_with_spec_path() -> GraphSnapshot {
+    let mut snapshot = sample_graph_snapshot_with_raw_and_unresolved();
+    snapshot.files = vec![SourceFileRecord {
+        file_id: "file:.spec/changes/demo/tasks.md".to_string(),
+        path: ".spec/changes/demo/tasks.md".to_string(),
+        language: "markdown".to_string(),
+        kind: "source".to_string(),
+        fingerprint: "fp-spec".to_string(),
+        size: 32,
+        indexed_at: "2026-07-01T00:00:00Z".to_string(),
+        diagnostics: Vec::new(),
+    }];
+    snapshot.folders = vec![FolderRecord {
+        folder_id: "folder:.spec".to_string(),
+        path: ".spec".to_string(),
+        parent_id: None,
+    }];
+    snapshot.symbols = vec![SymbolNode::legacy(
+        "symbol-spec".to_string(),
+        "FakeSpecSymbol".to_string(),
+        "function".to_string(),
+        ".spec/changes/demo/tasks.md".to_string(),
+        1,
+        1,
+        true,
+        "markdown".to_string(),
+    )];
+    let base = RawCaptureBase::new(
+        RawCaptureKind::Import,
+        ".spec/changes/demo/tasks.md",
+        "markdown",
+        1,
+        "governance import",
+        Some("governance".to_string()),
+        Some("symbol-spec".to_string()),
+    );
+    snapshot.raw_imports = vec![RawImportCapture {
+        base: base.clone(),
+        file_path: ".spec/changes/demo/tasks.md".to_string(),
+        raw_path: "governance".to_string(),
+        imported_name: Some("governance".to_string()),
+        alias: None,
+        line: 1,
+        language: "markdown".to_string(),
+        source_symbol_id: Some("symbol-spec".to_string()),
+        source_text: base.raw_text.clone(),
+    }];
+    snapshot.raw_calls = Vec::new();
+    snapshot.raw_heritage = Vec::new();
+    snapshot.unresolved_refs = Vec::new();
+    snapshot.edges = Vec::new();
+    snapshot.analysis = GraphAnalysisSnapshot::default();
+    snapshot
+}
+
+fn sample_scoped_graph_snapshot_for_file() -> GraphSnapshot {
+    let mut snapshot = sample_graph_snapshot_with_raw_and_unresolved();
+    snapshot.snapshot_id = "snapshot-2".to_string();
+    snapshot.source_fingerprint = "source-fp-2".to_string();
+    snapshot.files = vec![SourceFileRecord {
+        file_id: "file:src/service.ts".to_string(),
+        path: "src/service.ts".to_string(),
+        language: "typescript".to_string(),
+        kind: "source".to_string(),
+        fingerprint: "fp-service-v2".to_string(),
+        size: 256,
+        indexed_at: "2026-07-01T00:01:00Z".to_string(),
+        diagnostics: Vec::new(),
+    }];
+    snapshot.folders = vec![FolderRecord {
+        folder_id: "folder:src".to_string(),
+        path: "src".to_string(),
+        parent_id: None,
+    }];
+    snapshot.symbols = vec![SymbolNode::legacy(
+        "symbol-service-v2".to_string(),
+        "PaymentServiceV2".to_string(),
+        "class".to_string(),
+        "src/service.ts".to_string(),
+        1,
+        14,
+        true,
+        "typescript".to_string(),
+    )];
+    let call_base = RawCaptureBase::new(
+        RawCaptureKind::Call,
+        "src/service.ts",
+        "typescript",
+        4,
+        "PaymentServiceV2.run()",
+        Some("PaymentServiceV2".to_string()),
+        Some("symbol-service-v2".to_string()),
+    );
+    snapshot.raw_imports = Vec::new();
+    snapshot.raw_calls = vec![RawCallCapture {
+        base: call_base.clone(),
+        file_path: "src/service.ts".to_string(),
+        called_name: "PaymentServiceV2".to_string(),
+        line: 4,
+        language: "typescript".to_string(),
+        source_symbol_id: Some("symbol-service-v2".to_string()),
+        receiver_text: None,
+        source_text: call_base.raw_text.clone(),
+        argument_shape: Some("arity:0".to_string()),
+    }];
+    snapshot.raw_heritage = Vec::new();
+    snapshot.unresolved_refs = vec![UnresolvedRef {
+        unresolved_ref_id: "unresolved-v2".to_string(),
+        capture_id: call_base.capture_id.clone(),
+        file_id: "file:src/service.ts".to_string(),
+        resolver_phase: GraphPhase::ResolveCalls,
+        reference_kind: ReferenceKind::Call,
+        reference_name: "PaymentServiceV2".to_string(),
+        target_hint: Some("PaymentServiceV2".to_string()),
+        range: SourceRange::new("file:src/service.ts", "src/service.ts", 4, 4, 0, 20),
+        candidates: Vec::new(),
+        reason: "target_not_found".to_string(),
+        diagnostics: Vec::new(),
+    }];
+    snapshot.edges = vec![ResolvedSymbolEdge {
+        edge_id: "edge-calls-v2".to_string(),
+        source_id: "symbol-service-v2".to_string(),
+        target_id: "symbol-helper".to_string(),
+        edge_type: "CALLS".to_string(),
+        confidence: 0.98,
+        reason: "import-resolved".to_string(),
+    }];
+    snapshot.analysis = GraphAnalysisSnapshot::default();
+    snapshot
 }
 
 fn write_legacy_db(repo_root: &Path, entries: &[(&str, &str)]) {
@@ -313,16 +552,16 @@ fn remove_page_all_clears_both() {
 fn symbols_roundtrip_and_fts_query() {
     let repo = make_repo();
     let mut conn = sqlite_store::open_db(repo.path()).unwrap();
-    let symbols = vec![SymbolNode {
-        symbol_id: "symbol-1".to_string(),
-        name: "settlePayment".to_string(),
-        label: "function".to_string(),
-        file_path: "src/payments.ts".to_string(),
-        start_line: 1,
-        end_line: 3,
-        is_exported: true,
-        language: "typescript".to_string(),
-    }];
+    let symbols = vec![SymbolNode::legacy(
+        "symbol-1".to_string(),
+        "settlePayment".to_string(),
+        "function".to_string(),
+        "src/payments.ts".to_string(),
+        1,
+        3,
+        true,
+        "typescript".to_string(),
+    )];
 
     sqlite_store::replace_state_and_symbols(&mut conn, &empty_state(), &symbols).unwrap();
 
@@ -332,7 +571,7 @@ fn symbols_roundtrip_and_fts_query() {
 
     let hits = sqlite_store::search_symbols_fts(repo.path(), "settlePayment", 8).unwrap();
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].symbol_id, "symbol-1");
+    assert_eq!(hits[0].symbol.symbol_id, "symbol-1");
 }
 
 #[test]
@@ -375,6 +614,240 @@ fn symbol_graph_roundtrip_persists_edges_communities_and_processes() {
     assert_eq!(steps.len(), 2);
     assert_eq!(steps[0].symbol_id, "symbol-service");
     assert_eq!(steps[1].symbol_id, "symbol-helper");
+}
+
+#[test]
+fn graph_snapshot_roundtrip_persists_raw_unresolved_phase_and_fts_atomically() {
+    let repo = make_repo();
+    let mut conn = sqlite_store::open_db(repo.path()).unwrap();
+    let snapshot = sample_graph_snapshot_with_raw_and_unresolved();
+
+    sqlite_store::replace_graph_snapshot(&mut conn, &snapshot).unwrap();
+
+    assert_eq!(sqlite_store::list_symbols(repo.path()).unwrap().len(), 2);
+    assert_eq!(
+        sqlite_store::list_raw_imports(repo.path()).unwrap().len(),
+        1
+    );
+    assert_eq!(sqlite_store::list_raw_calls(repo.path()).unwrap().len(), 1);
+    assert_eq!(
+        sqlite_store::list_unresolved_refs(repo.path())
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(sqlite_store::search_files_fts(repo.path(), "service", 8)
+        .unwrap()
+        .iter()
+        .any(|hit| hit.path == "src/service.ts"));
+    assert!(sqlite_store::list_graph_phase_runs(repo.path())
+        .unwrap()
+        .iter()
+        .any(|phase| phase.phase == GraphPhase::BuildFts));
+    assert_eq!(
+        sqlite_store::read_current_graph_snapshot(repo.path())
+            .unwrap()
+            .unwrap()
+            .snapshot_id,
+        snapshot.snapshot_id
+    );
+}
+
+#[test]
+fn graph_schema_read_api_exposes_files_folders_raw_unresolved_phase_and_fts() {
+    let repo = make_repo();
+    let mut conn = sqlite_store::open_db(repo.path()).unwrap();
+    let snapshot = sample_graph_snapshot_with_raw_and_unresolved();
+
+    sqlite_store::replace_graph_snapshot(&mut conn, &snapshot).unwrap();
+    sqlite_store::clear_scan_cache_for_test(&conn).unwrap();
+
+    assert!(sqlite_store::list_files(repo.path())
+        .unwrap()
+        .iter()
+        .any(|file| file.path == "src/service.ts"));
+    assert!(sqlite_store::list_folders(repo.path())
+        .unwrap()
+        .iter()
+        .any(|folder| folder.path == "src"));
+    assert!(!sqlite_store::list_raw_imports(repo.path())
+        .unwrap()
+        .is_empty());
+    assert!(!sqlite_store::list_unresolved_refs(repo.path())
+        .unwrap()
+        .is_empty());
+    assert!(!sqlite_store::list_graph_phase_runs(repo.path())
+        .unwrap()
+        .is_empty());
+    assert!(!sqlite_store::search_files_fts(repo.path(), "service", 8)
+        .unwrap()
+        .is_empty());
+    assert!(sqlite_store::read_current_graph_snapshot(repo.path())
+        .unwrap()
+        .is_some());
+}
+
+#[test]
+fn graph_snapshot_rejects_spec_paths_before_tables_and_fts() {
+    let repo = make_repo();
+    let mut conn = sqlite_store::open_db(repo.path()).unwrap();
+    let snapshot = sample_graph_snapshot_with_spec_path();
+
+    sqlite_store::replace_graph_snapshot(&mut conn, &snapshot).unwrap();
+
+    assert!(sqlite_store::list_files(repo.path())
+        .unwrap()
+        .iter()
+        .all(|file| !file.path.starts_with(".spec/")));
+    assert!(sqlite_store::list_folders(repo.path())
+        .unwrap()
+        .iter()
+        .all(|folder| !folder.path.starts_with(".spec")));
+    assert!(sqlite_store::list_symbols(repo.path())
+        .unwrap()
+        .iter()
+        .all(|symbol| !symbol.file_path.starts_with(".spec/")));
+    assert!(sqlite_store::list_raw_imports(repo.path())
+        .unwrap()
+        .is_empty());
+    assert!(sqlite_store::search_files_fts(repo.path(), "governance", 8)
+        .unwrap()
+        .is_empty());
+    assert!(
+        sqlite_store::search_symbols_fts(repo.path(), "FakeSpecSymbol", 8)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn scoped_graph_snapshot_refresh_replaces_symbols_raw_unresolved_edges_and_fts() {
+    let repo = make_repo();
+    let mut conn = sqlite_store::open_db(repo.path()).unwrap();
+    let initial = sample_graph_snapshot_with_raw_and_unresolved();
+    sqlite_store::replace_graph_snapshot(&mut conn, &initial).unwrap();
+
+    let refreshed = sample_scoped_graph_snapshot_for_file();
+    sqlite_store::replace_graph_snapshot_for_files(
+        &mut conn,
+        &["src/service.ts".to_string()],
+        &refreshed,
+    )
+    .unwrap();
+
+    let symbols = sqlite_store::list_symbols(repo.path()).unwrap();
+    assert!(symbols
+        .iter()
+        .any(|symbol| symbol.name == "PaymentServiceV2"));
+    assert!(symbols.iter().any(|symbol| symbol.name == "runHelper"));
+    assert!(symbols.iter().all(|symbol| symbol.name != "PaymentService"));
+    assert!(sqlite_store::list_raw_calls(repo.path())
+        .unwrap()
+        .iter()
+        .all(|capture| capture.file_path != "src/service.ts"
+            || capture.called_name == "PaymentServiceV2"));
+    assert!(sqlite_store::list_unresolved_refs(repo.path())
+        .unwrap()
+        .iter()
+        .all(|item| item.file_id != "file:src/service.ts"
+            || item.reference_name == "PaymentServiceV2"));
+    assert!(
+        sqlite_store::search_symbols_fts(repo.path(), "PaymentService", 8)
+            .unwrap()
+            .iter()
+            .all(|hit| hit.symbol.name != "PaymentService")
+    );
+}
+
+#[test]
+fn graph_readiness_distinguishes_missing_stale_blocked_rebuilding_ready() {
+    let missing = make_repo();
+    let missing_status = sqlite_store::read_graph_readiness(missing.path()).unwrap();
+    assert_eq!(missing_status.status, GraphReadinessStatus::Missing);
+
+    let blocked = make_repo();
+    {
+        let conn = sqlite_store::open_db(blocked.path()).unwrap();
+        conn.execute("DROP TABLE graph_snapshots", []).unwrap();
+    }
+    let blocked_status = sqlite_store::read_graph_readiness(blocked.path()).unwrap();
+    assert_eq!(blocked_status.status, GraphReadinessStatus::Blocked);
+    assert!(blocked_status
+        .required_tables
+        .iter()
+        .any(|table| table == "graph_snapshots"));
+
+    let stale = make_repo();
+    let mut conn = sqlite_store::open_db(stale.path()).unwrap();
+    let mut snapshot = sample_graph_snapshot_with_raw_and_unresolved();
+    snapshot.source_fingerprint = "stale-source-fp".to_string();
+    sqlite_store::replace_graph_snapshot(&mut conn, &snapshot).unwrap();
+    conn.execute(
+        "INSERT OR REPLACE INTO graph_phase_runs
+         (phase, status, input_fingerprint, output_fingerprint, started_at, completed_at, diagnostics)
+         VALUES ('scan', 'stale', 'current-source-fp', 'stale-source-fp', NULL, NULL, '[]')",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        sqlite_store::read_graph_readiness(stale.path())
+            .unwrap()
+            .status,
+        GraphReadinessStatus::Stale
+    );
+
+    let rebuilding = make_repo();
+    let mut conn = sqlite_store::open_db(rebuilding.path()).unwrap();
+    sqlite_store::replace_graph_snapshot(
+        &mut conn,
+        &sample_graph_snapshot_with_raw_and_unresolved(),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT OR REPLACE INTO graph_phase_runs
+         (phase, status, input_fingerprint, output_fingerprint, started_at, completed_at, diagnostics)
+         VALUES ('build_fts', 'rebuilding', NULL, NULL, NULL, NULL, '[]')",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        sqlite_store::read_graph_readiness(rebuilding.path())
+            .unwrap()
+            .status,
+        GraphReadinessStatus::Rebuilding
+    );
+
+    let diagnostic_blocked = make_repo();
+    let mut conn = sqlite_store::open_db(diagnostic_blocked.path()).unwrap();
+    sqlite_store::replace_graph_snapshot(
+        &mut conn,
+        &sample_graph_snapshot_with_raw_and_unresolved(),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT OR REPLACE INTO graph_phase_runs
+         (phase, status, input_fingerprint, output_fingerprint, started_at, completed_at, diagnostics)
+         VALUES ('resolve_calls', 'blocked', NULL, NULL, NULL, NULL, '[\"resolver failed\"]')",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        sqlite_store::read_graph_readiness(diagnostic_blocked.path())
+            .unwrap()
+            .status,
+        GraphReadinessStatus::Blocked
+    );
+
+    let ready = make_repo();
+    let mut conn = sqlite_store::open_db(ready.path()).unwrap();
+    sqlite_store::replace_graph_snapshot(
+        &mut conn,
+        &sample_graph_snapshot_with_raw_and_unresolved(),
+    )
+    .unwrap();
+    let ready_status = sqlite_store::read_graph_readiness(ready.path()).unwrap();
+    assert_eq!(ready_status.status, GraphReadinessStatus::Ready);
+    assert_eq!(ready_status.snapshot_id, Some("snapshot-1".to_string()));
 }
 
 #[test]
@@ -426,16 +899,16 @@ fn symbol_graph_for_files_refresh_replaces_stale_edges_and_analysis() {
     )
     .unwrap();
 
-    let refreshed_symbols = vec![SymbolNode {
-        symbol_id: "symbol-service-v2".to_string(),
-        name: "PaymentServiceV2".to_string(),
-        label: "class".to_string(),
-        file_path: "src/service.ts".to_string(),
-        start_line: 1,
-        end_line: 14,
-        is_exported: true,
-        language: "typescript".to_string(),
-    }];
+    let refreshed_symbols = vec![SymbolNode::legacy(
+        "symbol-service-v2".to_string(),
+        "PaymentServiceV2".to_string(),
+        "class".to_string(),
+        "src/service.ts".to_string(),
+        1,
+        14,
+        true,
+        "typescript".to_string(),
+    )];
     let refreshed_graph = ResolvedGraphSnapshot {
         edges: vec![ResolvedSymbolEdge {
             edge_id: "edge-calls-v2".to_string(),

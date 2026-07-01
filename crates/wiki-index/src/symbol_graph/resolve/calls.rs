@@ -219,7 +219,10 @@ fn call_diagnostic(capture: &RawCallCapture, kind: &str, message: &str) -> Graph
     GraphDiagnostic {
         stage: "resolve_calls".to_string(),
         kind: kind.to_string(),
-        message: format!("{}:{} -> {}", capture.file_path, capture.line, message),
+        message: format!(
+            "{}:{}:{} -> {}",
+            capture.file_path, capture.line, capture.called_name, message
+        ),
         file_path: Some(capture.file_path.clone()),
         symbol_id: capture.source_symbol_id.clone(),
     }

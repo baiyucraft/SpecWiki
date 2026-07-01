@@ -152,6 +152,16 @@ pub struct QuerySourceRef {
     pub ref_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<String>,
 }
 
 /// 单条公开 query 命中结果。
