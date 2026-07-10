@@ -1,3 +1,4 @@
+pub mod governance;
 pub mod knowledge;
 pub mod knowledge_artifact;
 pub mod metadata;

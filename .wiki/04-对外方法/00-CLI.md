@@ -89,7 +89,9 @@ spec-wiki trace [--repo-root <path>]
 - `index_symbol_hit`、`index_path_hit` 和 `index_graph_hit` 只在 graph readiness 为 ready 时生成；missing、stale、blocked 或 rebuilding 时不得用 page fallback 伪装 index 命中。
 - `route_tag` 是闭集；宿主不得在 CLI/Skill 层自造私有 route tag。
 - `provenance_summary` 是只读派生摘要，不能替代 `route_groups` / `results` 主合同。
-- `governance_readiness` 当前为 `not_enabled` 占位；未启用治理 evidence index 不阻断普通 query。
+- 响应通过唯一 `governance` summary 暴露 `not_enabled / ready / stale / blocked / conflict`；旧扁平 `governance_readiness` 不再是产品合同。
+- `governance_summary_hit` 与 `governance_evidence_ref` 只携带结构化 change/artifact/diagnostic refs；不会返回 `.spec` artifact 正文。
+- governance blocked/conflict 不降低普通 index/knowledge route 的 trust；core ready 时产品建议动作可以是 `review_governance`。
 - 查询不是通用聊天接口，也不替代 runtime 初始化、同步或更新。
 
 ## 限制与边界

@@ -1,7 +1,7 @@
 ---
 title: spec-wiki CLI
 description: TypeScript CLI、宿主 bootstrap、runtime forwarding 和发布入口
-updated: 2026-05-25
+updated: 2026-07-11
 owner: docs
 ---
 
@@ -24,6 +24,7 @@ owner: docs
 - 不承载 Wiki 业务规则。
 - 不绕过 `wiki-runtime` 直接拼装 `.wiki` 状态机。
 - 不在宿主层复制 core 生成链逻辑。
+- 不在 TypeScript parser 中复制治理 required artifact matrix 或 blocked/conflict 判定；只校验并透传 Rust governance DTO 闭集。
 
 ## 入口与目录
 

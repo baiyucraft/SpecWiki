@@ -1,7 +1,7 @@
 ---
 title: 04-对外方法
 description: spec-wiki 的 CLI、配置、运行时产物和公开契约入口
-updated: 2026-05-25
+updated: 2026-07-11
 owner: docs
 ---
 
@@ -23,7 +23,7 @@ SpecWiki 对用户优先暴露一级命令。`wiki` 和 `governance` 是内部 r
 | --- | --- |
 | `spec-wiki status` | 查看 Wiki runtime、index、knowledge 和 governance readiness |
 | `spec-wiki update` | 源码、文档或治理 artifact 变化后刷新 runtime |
-| `spec-wiki query <term>` | 查询文件、模块、符号、knowledge pages、projection refs、fallback 结果和治理占位 |
+| `spec-wiki query <term>` | 查询文件、模块、符号、knowledge pages、projection refs、fallback 结果和结构化治理 refs |
 | `spec-wiki validate [change-id]` | 验证 repo runtime，或验证指定 change 的治理 artifact |
 | `spec-wiki archive <change-id>` | 归档治理 change；必须先通过 validate |
 

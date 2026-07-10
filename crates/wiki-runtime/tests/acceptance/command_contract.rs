@@ -177,7 +177,8 @@ fn query_transport_returns_slim_payload_but_internal_query_stays_rich() {
     assert!(payload.get("provenance_summary").is_some());
     assert!(payload.get("route_groups").is_some());
     assert!(payload.get("results").is_some());
-    assert_eq!(payload["governance_readiness"], "not_enabled");
+    assert_eq!(payload["governance"]["readiness"], "not_enabled");
+    assert!(payload.get("governance_readiness").is_none());
     assert!(payload.get("answer").is_some());
     assert!(payload.get("summary").is_some());
     assert!(payload.get("hits").is_some());

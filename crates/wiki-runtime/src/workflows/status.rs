@@ -8,9 +8,10 @@ use std::path::Path;
 
 use crate::domain::change_set::plan_runtime_changes_with_mode;
 use crate::domain::runtime_profile::{
-    blocker_hint_from, merge_recommended_action, preflight_for_state, summarize_health_signals,
-    FusionReadiness, LayerReadiness, LlmModeHint, RecommendedAction, RestoredLevel,
-    RuntimeGateSummary, RuntimeReadiness, RuntimeSummaryProjection,
+    blocker_hint_from, merge_governance_recommended_action, merge_recommended_action,
+    preflight_for_state, summarize_health_signals, FusionReadiness, LayerReadiness, LlmModeHint,
+    RecommendedAction, RestoredLevel, RuntimeGateSummary, RuntimeReadiness,
+    RuntimeSummaryProjection,
 };
 use crate::domain::steering::{load_steering_config_with_mode, SteeringLoadMode};
 use crate::storage::cache_store::cache_dir;
@@ -18,10 +19,12 @@ use crate::storage::knowledge_artifacts::{
     load_health_signals, restore_runtime_cache_from_artifacts,
 };
 use crate::storage::state_store::{index_graph_ready, runtime_mirror_ready};
+use crate::workflows::governance::GovernanceService;
 use crate::workflows::page_render::{
     load_runtime_gate_summary_for_repo, load_runtime_summary_for_repo,
 };
 use crate::workflows::release_scope::project_external_runtime_state;
+use wiki_model::domain::governance::GovernanceSummary;
 use wiki_model::domain::knowledge_artifact::KnowledgeHealthSummary;
 use wiki_model::domain::update_scope::AffectedKnowledgeScope;
 
@@ -40,6 +43,8 @@ pub struct StatusReport {
     pub needs_rebuild_reason: Option<String>,
     /// status/query 共享的分层 readiness 主合同。
     pub readiness: RuntimeReadiness,
+    /// 与 core readiness 并列的 `.spec` 治理产品状态。
+    pub governance: GovernanceSummary,
     /// 面向宿主的下一步建议动作。
     pub recommended_action: RecommendedAction,
     /// 当前阶段仅允许输出预判型 LLM 模式提示。
@@ -105,11 +110,22 @@ pub fn run_status_with_mode(
         gate_summary.as_ref(),
     );
     let readiness = restore_readiness.unwrap_or_else(|| {
-        readiness_from_state(&external_state, graph_ready, mirror_ready, plan.needs_rebuild_reason.as_deref())
+        readiness_from_state(
+            &external_state,
+            graph_ready,
+            mirror_ready,
+            plan.needs_rebuild_reason.as_deref(),
+        )
     });
     let preflight = preflight_for_state(&external_state, graph_ready);
-    let recommended_action =
-        merge_recommended_action(recommended_action_for_readiness(preflight.recommended_action, &readiness), health_summary.as_ref());
+    let governance = GovernanceService::new(repo_root).status()?;
+    let recommended_action = merge_governance_recommended_action(
+        merge_recommended_action(
+            recommended_action_for_readiness(preflight.recommended_action, &readiness),
+            health_summary.as_ref(),
+        ),
+        &governance,
+    );
     let blocker_hint = blocker_hint_from(runtime_summary.as_ref(), gate_summary.as_ref());
     let llm_mode_hint = if load_steering_config_with_mode(repo_root, steering_mode)
         .llm
@@ -127,6 +143,7 @@ pub fn run_status_with_mode(
         affected_knowledge_scope: plan.affected_knowledge_scope,
         needs_rebuild_reason: plan.needs_rebuild_reason,
         readiness,
+        governance,
         recommended_action,
         llm_mode_hint,
         health_summary,

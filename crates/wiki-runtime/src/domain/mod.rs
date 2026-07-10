@@ -4,6 +4,7 @@
 pub mod change_set;
 pub mod checkpoint;
 pub mod context;
+pub mod governance;
 pub mod knowledge;
 pub mod metadata;
 pub mod metadata_mapper;

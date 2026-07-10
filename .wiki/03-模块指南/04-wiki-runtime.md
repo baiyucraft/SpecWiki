@@ -1,7 +1,7 @@
 ---
 title: wiki-runtime
 description: workflow orchestration、storage、transport、query route 和 .wiki 生命周期
-updated: 2026-05-25
+updated: 2026-07-11
 owner: docs
 ---
 
@@ -17,19 +17,24 @@ owner: docs
 
 ## 模块定位
 
-`wiki-runtime` 承接 `wiki-model`、`wiki-index`、`wiki-knowledge`，负责 workflow orchestration、query route、storage、transport、`.wiki` 生命周期与恢复。
+`wiki-runtime` 承接 `wiki-model`、`wiki-index`、`wiki-knowledge`，负责 workflow orchestration、query route、storage、transport、`.wiki` 生命周期与恢复。它也负责只读读取 `.spec` evidence、执行唯一治理 policy，并把独立的 governance summary 组合进 status/query/update。
 
 ## 不负责什么
 
 - 不重新导出 `wiki-index` 或 `wiki-knowledge` 的内部实现给外部直接使用。
 - 不把宿主 bootstrap 资产写入自身业务逻辑。
 - 不把长期文档整理等同于 runtime 初始化。
+- 不把 `.spec` 纳入 code scanner、knowledge truth 或 Wiki 正文，也不让治理状态改写 core fusion readiness。
 
 ## 入口与目录
 
 | 路径 | 用途 |
 | --- | --- |
 | `crates/wiki-runtime/src/**` | runtime 生命周期、workflow、storage、transport |
+| `crates/wiki-runtime/src/domain/governance.rs` | required artifact、report gate、metadata 与 parent/child policy |
+| `crates/wiki-runtime/src/storage/governance_fs.rs` | `.spec` evidence discovery、路径边界与 fingerprint |
+| `crates/wiki-runtime/src/storage/sqlite/governance_store.rs` | fingerprint 绑定的可重建治理 cache wrapper |
+| `crates/wiki-runtime/src/workflows/governance.rs` | status/list/inspect/validate/refresh/query refs 组合入口 |
 | `crates/wiki-runtime/tests/**` | runtime、repo、hierarchy、symbol、lifecycle 测试 |
 | `crates/wiki-runtime/Cargo.toml` | crate 元数据和依赖声明 |
 

@@ -49,25 +49,25 @@
 - 关键验收: raw imports / calls / heritage 持久化；`SymbolNode` 扩展；`.spec` 不进入 code graph facts。
 - 归档状态：[x] archived
 
-### 6. refactor-specwiki-around-contract-closure-cli-product-surface
+### 6. refactor-specwiki-around-contract-closure-governance-isolation
 
-- 目标: 收窄默认 CLI 心智，落实 `init / status / query / update` 主路径、landing state、安全模式和人类可解释输出。
-- 依赖: refactor-specwiki-around-contract-closure-query-route-readiness、refactor-specwiki-around-contract-closure-projection-writeback-boundaries。
-- 关键验收: 默认 help 只突出主路径；advanced / governance 命令通过场景或 `--help --all` 暴露；破坏性动作需要 dry-run / manifest / confirm。
-- 归档状态: [ ] pending
-
-### 7. refactor-specwiki-around-contract-closure-governance-isolation
-
-- 目标: 将 `.spec` evidence、artifact reference index、governance derived knowledge 与 core wiki runtime 隔离。
+- 目标: 建立与 code facts 隔离的只读治理内核，统一 `.spec` evidence、status、validate、ReviewGate、artifact refs、governance query refs 和独立 freshness/readiness。
 - 依赖: refactor-specwiki-around-contract-closure-query-route-readiness、refactor-specwiki-around-contract-closure-code-graph-index。
-- 关键验收: `.spec` changes 只刷新 governance index / summary；`governance_readiness: not_enabled` 不阻断普通 `query / update`。
+- 关键验收: `.spec` 不进入 code facts；治理 evidence 以 `.spec` 为 truth；runtime 能输出 status/validate/query refs；治理 blocked 不阻断普通 `query / update`；validator parity 有 fixture；本 child 不移动目录、不执行 archive。
+- 归档状态：[x] archived
+
+### 7. refactor-specwiki-around-contract-closure-cli-product-surface
+
+- 目标: 在治理共享合同稳定后收窄 CLI 产品面，落实统一 `init`、一级 command router、分层 help、landing state、人类可解释输出和宿主资产。
+- 依赖: refactor-specwiki-around-contract-closure-query-route-readiness、refactor-specwiki-around-contract-closure-projection-writeback-boundaries、refactor-specwiki-around-contract-closure-governance-isolation。
+- 关键验收: 默认 help 只突出 `init / status / query / update`；advanced / governance 命令只通过场景或完整 help 暴露；统一 init 明确 partial success、退出码和 next action；保留 JSON/NDJSON 机器协议；本 child 不实现 archive manifest 或目录移动。
 - 归档状态: [ ] pending
 
 ### 8. refactor-specwiki-around-contract-closure-archive-dry-run-manifest
 
 - 目标: 实现 archive dry-run、readiness report、operation manifest 和失败恢复提示，不把 Wiki 更新混入 archive 事务。
 - 依赖: refactor-specwiki-around-contract-closure-governance-isolation、refactor-specwiki-around-contract-closure-cli-product-surface。
-- 关键验收: archive 默认先 validate；dry-run 不移动目录；apply 只覆盖 `.spec` move + manifest + parent / child meta；Wiki 更新只输出 issue / refs。
+- 关键验收: archive 默认先 validate；dry-run 不移动目录；manifest 具备版本、持久化路径和 precondition digest；apply 原子同步目录移动、parent `meta.yaml` 与 `split.md`；失败可重试/恢复；Wiki 只输出 issue / refs，archive 不调用 Wiki 写流程。
 - 归档状态: [ ] pending
 
 ## ASCII dependency view
@@ -78,13 +78,10 @@ page-tree
        -> projection-writeback
        -> query-route-readiness
             -> code-graph-index
-            -> cli-product-surface
-            -> governance-isolation
-                 -> archive-dry-run-manifest
+                 -> governance-isolation
+                      -> cli-product-surface
+                           -> archive-dry-run-manifest
 
 projection-writeback
   -> cli-product-surface
-
-code-graph-index
-  -> governance-isolation
 ```

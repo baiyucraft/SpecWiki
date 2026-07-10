@@ -4,10 +4,11 @@ deliveryShape: single-change
 multiChange:
   role: child
   parent: refactor-specwiki-around-contract-closure
-  order: 6
+  order: 7
   dependsOn:
     - refactor-specwiki-around-contract-closure-query-route-readiness
     - refactor-specwiki-around-contract-closure-projection-writeback-boundaries
+    - refactor-specwiki-around-contract-closure-governance-isolation
 artifacts:
   proposal:
     status: missing

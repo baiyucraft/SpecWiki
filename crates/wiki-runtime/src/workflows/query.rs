@@ -10,9 +10,9 @@ use std::path::Path;
 use crate::domain::change_set::plan_runtime_changes_with_mode;
 use crate::domain::module_tree::ModuleNode;
 use crate::domain::runtime_profile::{
-    merge_recommended_action, query_trust_for, summarize_health_signals, AnswerEnvelope,
-    AnswerMode, AnswerSupportingRef, AnswerTrust, FusionReadiness, LayerReadiness, QueryMode,
-    QueryTrust, RecommendedAction, RuntimeReadiness,
+    merge_governance_recommended_action, merge_recommended_action, query_trust_for,
+    summarize_health_signals, AnswerEnvelope, AnswerMode, AnswerSupportingRef, AnswerTrust,
+    FusionReadiness, LayerReadiness, QueryMode, QueryTrust, RecommendedAction, RuntimeReadiness,
 };
 use crate::domain::state::{WikiPageState, WikiState};
 use crate::domain::steering::SteeringLoadMode;
@@ -23,9 +23,11 @@ use crate::storage::knowledge_artifacts::{
 use crate::storage::sqlite::index_store::SqliteIndexStore;
 use crate::storage::state_store::{index_graph_ready, load_or_rebuild_state, runtime_mirror_ready};
 use crate::storage::wiki_fs::{is_official_page_path, resolve_page_path};
+use crate::workflows::governance::GovernanceService;
 use crate::workflows::release_scope::project_external_runtime_state;
 use wiki_index::query::{self as index_query, IndexQueryRequest, MatchBasis};
 use wiki_knowledge::plan_pages_from_knowledge_tree;
+use wiki_model::domain::governance::GovernanceSummary;
 use wiki_model::domain::knowledge_artifact::{
     DeclaredKnowledgeRecordStatus, KnowledgeHealthSignal,
 };
@@ -273,8 +275,8 @@ pub struct QueryReport {
     /// community 命中。
     #[serde(default)]
     pub matched_communities: Vec<QueryCommunityMatch>,
-    /// governance 占位读iness，当前阶段固定为 not_enabled。
-    pub governance_readiness: QueryGovernanceReadiness,
+    /// 与 core runtime readiness 并列的治理摘要。
+    pub governance: GovernanceSummary,
     /// 按公开 route 分组后的主合同结果。
     #[serde(default)]
     pub route_groups: Vec<QueryRouteGroup>,
@@ -288,13 +290,6 @@ pub struct QueryReport {
     pub provenance_summary: String,
     /// 当前 query 可直接附带的最小 answer contract。
     pub answer: AnswerEnvelope,
-}
-
-/// `governance_readiness` 当前只承诺 not_enabled 占位，不引入治理扫描状态机。
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum QueryGovernanceReadiness {
-    NotEnabled,
 }
 
 /// 执行关键词查询。
@@ -311,6 +306,8 @@ pub fn run_query_with_mode(
     term: &str,
     steering_mode: SteeringLoadMode,
 ) -> io::Result<QueryReport> {
+    let governance_service = GovernanceService::new(repo_root);
+    let governance = governance_service.status()?;
     let mut plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
     let mut mirror_ready = runtime_mirror_ready(repo_root)?;
     let mut graph_ready = index_graph_ready(repo_root)?;
@@ -345,7 +342,9 @@ pub fn run_query_with_mode(
     } else {
         RecommendedAction::Update
     };
-    let recommended_action = merge_recommended_action(base_action, health_summary.as_ref());
+    let core_recommended_action = merge_recommended_action(base_action, health_summary.as_ref());
+    let recommended_action =
+        merge_governance_recommended_action(core_recommended_action, &governance);
     let needle = term.trim().to_lowercase();
 
     if needle.is_empty() {
@@ -354,7 +353,9 @@ pub fn run_query_with_mode(
             &runtime_state,
             readiness.clone(),
             recommended_action,
-            effective_query_trust(&runtime_state, graph_ready, recommended_action, false),
+            core_recommended_action,
+            effective_query_trust(&runtime_state, graph_ready, core_recommended_action, false),
+            governance,
         ));
     }
 
@@ -370,6 +371,8 @@ pub fn run_query_with_mode(
             &runtime_state,
             readiness,
             recommended_action,
+            core_recommended_action,
+            governance,
             &health_signals,
         );
     }
@@ -430,7 +433,7 @@ pub fn run_query_with_mode(
             QueryTrust::StaleButQueryable
         }
         QueryTrust::Ready
-            if recommended_action != RecommendedAction::None
+            if core_recommended_action != RecommendedAction::None
                 && (has_index_hits || !matches.is_empty()) =>
         {
             QueryTrust::StaleButQueryable
@@ -446,19 +449,27 @@ pub fn run_query_with_mode(
         .unwrap_or_default();
     let provenance_summary =
         build_provenance_summary(has_index_hits, has_knowledge_hits, has_page_fallback);
-    let results = build_query_results(
+    let mut results = build_query_results(
         &matches,
         &matched_sources,
         &matched_symbols,
         &matched_symbol_edges,
         query_trust,
-        recommended_action,
+        core_recommended_action,
     );
+    for result in governance_service.query_refs(term, 20)? {
+        push_query_result(&mut results, result);
+    }
+    let answer_action = if results.iter().any(is_governance_query_result) {
+        recommended_action
+    } else {
+        core_recommended_action
+    };
     let route_groups = build_route_groups(&results);
     let answer = build_answer_envelope(
         term,
         query_trust,
-        recommended_action,
+        answer_action,
         &provenance_summary,
         &matches,
         &matched_modules,
@@ -466,6 +477,7 @@ pub fn run_query_with_mode(
         &matched_symbols,
         &matched_symbol_edges,
         &health_signals,
+        &results,
     );
 
     Ok(QueryReport {
@@ -483,7 +495,7 @@ pub fn run_query_with_mode(
         matched_symbol_edges,
         matched_processes: Vec::new(),
         matched_communities: Vec::new(),
-        governance_readiness: QueryGovernanceReadiness::NotEnabled,
+        governance,
         route_groups,
         results,
         provenance_summary,
@@ -497,14 +509,17 @@ fn empty_query_report(
     runtime_state: &str,
     readiness: RuntimeReadiness,
     recommended_action: RecommendedAction,
+    core_recommended_action: RecommendedAction,
     query_trust: QueryTrust,
+    governance: GovernanceSummary,
 ) -> QueryReport {
     let provenance_summary = String::new();
     let answer = build_answer_envelope(
         term,
         query_trust,
-        recommended_action,
+        core_recommended_action,
         &provenance_summary,
+        &[],
         &[],
         &[],
         &[],
@@ -527,7 +542,7 @@ fn empty_query_report(
         matched_symbol_edges: Vec::new(),
         matched_processes: Vec::new(),
         matched_communities: Vec::new(),
-        governance_readiness: QueryGovernanceReadiness::NotEnabled,
+        governance,
         route_groups: Vec::new(),
         results: Vec::new(),
         matches: Vec::new(),
@@ -543,6 +558,8 @@ fn degraded_query_without_index(
     runtime_state: &str,
     readiness: RuntimeReadiness,
     recommended_action: RecommendedAction,
+    core_recommended_action: RecommendedAction,
+    governance: GovernanceSummary,
     health_signals: &[KnowledgeHealthSignal],
 ) -> io::Result<QueryReport> {
     let fallback_state = load_or_rebuild_state(repo_root).ok();
@@ -579,12 +596,27 @@ fn degraded_query_without_index(
         QueryTrust::StaleButQueryable
     };
     let provenance_summary = build_provenance_summary(false, has_knowledge_hits, has_page_fallback);
-    let results = build_query_results(&matches, &[], &[], &[], query_trust, recommended_action);
+    let mut results = build_query_results(
+        &matches,
+        &[],
+        &[],
+        &[],
+        query_trust,
+        core_recommended_action,
+    );
+    for result in GovernanceService::new(repo_root).query_refs(term, 20)? {
+        push_query_result(&mut results, result);
+    }
+    let answer_action = if results.iter().any(is_governance_query_result) {
+        recommended_action
+    } else {
+        core_recommended_action
+    };
     let route_groups = build_route_groups(&results);
     let answer = build_answer_envelope(
         term,
         query_trust,
-        recommended_action,
+        answer_action,
         &provenance_summary,
         &matches,
         &[],
@@ -592,6 +624,7 @@ fn degraded_query_without_index(
         &[],
         &[],
         health_signals,
+        &results,
     );
 
     Ok(QueryReport {
@@ -609,7 +642,7 @@ fn degraded_query_without_index(
         matched_symbol_edges: Vec::new(),
         matched_processes: Vec::new(),
         matched_communities: Vec::new(),
-        governance_readiness: QueryGovernanceReadiness::NotEnabled,
+        governance,
         route_groups,
         results,
         provenance_summary,
@@ -1459,6 +1492,8 @@ fn build_route_groups(results: &[QueryResultDto]) -> Vec<QueryRouteGroup> {
         QueryRouteTag::IndexGraphHit,
         QueryRouteTag::KnowledgeDeclaredHit,
         QueryRouteTag::KnowledgeDerivedHit,
+        QueryRouteTag::GovernanceEvidenceRef,
+        QueryRouteTag::GovernanceSummaryHit,
         QueryRouteTag::ProjectionRef,
         QueryRouteTag::RenderedPageDebugFallback,
     ] {
@@ -1490,11 +1525,19 @@ fn push_query_result(results: &mut Vec<QueryResultDto>, result: QueryResultDto) 
     results.push(result);
 }
 
+fn is_governance_query_result(result: &QueryResultDto) -> bool {
+    matches!(
+        result.route_tag,
+        QueryRouteTag::GovernanceEvidenceRef | QueryRouteTag::GovernanceSummaryHit
+    )
+}
+
 fn map_recommended_action(action: RecommendedAction) -> QueryRecommendedAction {
     match action {
         RecommendedAction::None => QueryRecommendedAction::None,
         RecommendedAction::Init => QueryRecommendedAction::OpenReference,
         RecommendedAction::Review => QueryRecommendedAction::ReviewGovernance,
+        RecommendedAction::ReviewGovernance => QueryRecommendedAction::ReviewGovernance,
         RecommendedAction::Update => QueryRecommendedAction::Update,
         RecommendedAction::Rebuild => QueryRecommendedAction::Rebuild,
         RecommendedAction::Sync => QueryRecommendedAction::Sync,
@@ -1520,6 +1563,7 @@ fn build_answer_envelope(
     matched_symbols: &[QuerySymbolMatch],
     matched_symbol_edges: &[QueryGraphEdgeMatch],
     health_signals: &[KnowledgeHealthSignal],
+    query_results: &[QueryResultDto],
 ) -> AnswerEnvelope {
     let base_supporting_refs = collect_answer_supporting_refs(
         matches,
@@ -1528,6 +1572,7 @@ fn build_answer_envelope(
         matched_symbols,
         matched_symbol_edges,
         &[],
+        query_results,
     );
     let provenance = collect_answer_provenance(
         provenance_summary,
@@ -1536,6 +1581,7 @@ fn build_answer_envelope(
         matched_symbols,
         matched_symbol_edges,
         health_signals,
+        query_results,
     );
     let has_page_fallback = provenance.iter().any(|tag| tag == "page_fallback");
     let answer_mode = if base_supporting_refs.is_empty() {
@@ -1562,6 +1608,7 @@ fn build_answer_envelope(
             matched_symbols,
             matched_symbol_edges,
             health_signals,
+            query_results,
         ),
         AnswerMode::Refuse => Vec::new(),
     };
@@ -1589,6 +1636,7 @@ fn collect_answer_supporting_refs(
     matched_symbols: &[QuerySymbolMatch],
     matched_symbol_edges: &[QueryGraphEdgeMatch],
     health_signals: &[KnowledgeHealthSignal],
+    query_results: &[QueryResultDto],
 ) -> Vec<AnswerSupportingRef> {
     let mut refs = Vec::new();
     let mut seen = BTreeSet::new();
@@ -1683,6 +1731,22 @@ fn collect_answer_supporting_refs(
         );
     }
 
+    for result in query_results
+        .iter()
+        .filter(|result| is_governance_query_result(result))
+    {
+        push_answer_supporting_ref(
+            &mut refs,
+            &mut seen,
+            AnswerSupportingRef {
+                ref_kind: result.ref_kind.as_str().to_string(),
+                ref_id: result.ref_id.clone(),
+                label: result.label.clone(),
+                provenance: vec![result.route_tag.as_str().to_string()],
+            },
+        );
+    }
+
     refs
 }
 
@@ -1710,6 +1774,7 @@ fn collect_answer_provenance(
     matched_symbols: &[QuerySymbolMatch],
     matched_symbol_edges: &[QueryGraphEdgeMatch],
     health_signals: &[KnowledgeHealthSignal],
+    query_results: &[QueryResultDto],
 ) -> Vec<String> {
     let mut provenance = provenance_summary
         .split(',')
@@ -1724,14 +1789,23 @@ fn collect_answer_provenance(
     if !matched_symbol_edges.is_empty() {
         provenance.insert("graph_hit".to_string());
     }
+    if query_results.iter().any(is_governance_query_result) {
+        provenance.insert("governance_hit".to_string());
+    }
     if query_trust != QueryTrust::Ready || recommended_action != RecommendedAction::None {
         provenance.insert("health_degraded".to_string());
     }
-    if (query_trust != QueryTrust::Ready || recommended_action == RecommendedAction::Review)
+    if (query_trust != QueryTrust::Ready
+        || matches!(
+            recommended_action,
+            RecommendedAction::Review | RecommendedAction::ReviewGovernance
+        ))
         && health_signals.iter().any(|signal| {
-        signal.signal_kind.as_str() == "governance_conflict"
-            || signal.recommended_action == wiki_model::domain::knowledge_artifact::KnowledgeHealthRecommendedAction::Review
-    }) {
+            signal.signal_kind.as_str() == "governance_conflict"
+            || signal.recommended_action
+                == wiki_model::domain::knowledge_artifact::KnowledgeHealthRecommendedAction::Review
+        })
+    {
         provenance.insert("governance_conflict".to_string());
     }
 
@@ -1797,6 +1871,7 @@ fn recommended_action_label(action: RecommendedAction) -> &'static str {
         RecommendedAction::None => "none",
         RecommendedAction::Init => "init",
         RecommendedAction::Review => "review",
+        RecommendedAction::ReviewGovernance => "review_governance",
         RecommendedAction::Update => "update",
         RecommendedAction::Rebuild => "rebuild",
         RecommendedAction::Sync => "sync",

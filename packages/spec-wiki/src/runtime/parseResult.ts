@@ -13,7 +13,14 @@ export type LayerReadiness
     | "not_enabled";
 export type FusionReadiness = "ready" | "degraded" | "blocked";
 export type RestoredLevel = "none" | "level1" | "level2";
-export type RecommendedAction = "none" | "init" | "update" | "rebuild" | "sync";
+export type RecommendedAction
+  = | "none"
+    | "init"
+    | "review"
+    | "review_governance"
+    | "update"
+    | "rebuild"
+    | "sync";
 export type LlmModeHint = "provider_configured" | "deterministic_default";
 export type QueryMode = "index_first" | "knowledge_first" | "page_fallback" | "mixed";
 export type QueryTrust = "ready" | "stale_but_queryable" | "blocked";
@@ -61,6 +68,12 @@ export type QuerySourceRef = {
   ref_kind: QueryRefKind;
   ref_id: string;
   label?: string | null;
+  path?: string | null;
+  start_line?: number | null;
+  end_line?: number | null;
+  provenance?: string[];
+  diagnostics?: string[];
+  [key: string]: unknown;
 };
 export type QueryResultDto = {
   route_tag: QueryRouteTag;
@@ -79,6 +92,39 @@ export type QueryRouteGroup = {
   results: QueryResultDto[];
   score_basis?: string | null;
   [key: string]: unknown;
+};
+
+export type GovernanceReadiness
+  = | "not_enabled"
+    | "ready"
+    | "stale"
+    | "blocked"
+    | "conflict";
+export type GovernanceIssueSeverity = "blocking" | "warning";
+export type GovernanceRecommendedAction = "none" | "update" | "review_governance";
+export type GovernanceArtifactStatus = "missing" | "empty" | "present";
+export type GovernanceArtifactRef = {
+  change_id: string;
+  kind: string;
+  relative_path: string;
+  status: GovernanceArtifactStatus;
+  content_hash?: string | null;
+};
+export type GovernanceBlockingIssue = {
+  rule_id: string;
+  severity: GovernanceIssueSeverity;
+  message: string;
+  change_id?: string | null;
+  artifact_ref?: GovernanceArtifactRef | null;
+  recommended_action: GovernanceRecommendedAction;
+};
+export type GovernanceSummary = {
+  readiness: GovernanceReadiness;
+  fingerprint?: string | null;
+  active_count: number;
+  archived_count: number;
+  issues: GovernanceBlockingIssue[];
+  recommended_action: GovernanceRecommendedAction;
 };
 
 export type CoreUsageBucket = {
@@ -140,6 +186,7 @@ export type WorkflowTerminalData = {
   runtime_summary?: RuntimeSummaryProjection | null;
   llm_execution_mode?: LlmExecutionMode | null;
   blocker_hint?: string | null;
+  governance?: GovernanceSummary | null;
   [key: string]: unknown;
 };
 
@@ -153,6 +200,7 @@ export type WikiStatusData = {
   llm_mode_hint: LlmModeHint;
   runtime_summary?: RuntimeSummaryProjection | null;
   gate_summary?: RuntimeGateSummary | null;
+  governance: GovernanceSummary;
 };
 
 export type StatusPreflightData = WikiStatusData;
@@ -167,7 +215,7 @@ export type WikiQueryData = {
   recommended_action: RecommendedAction;
   matched_pages: string[];
   provenance_summary: string;
-  governance_readiness: "not_enabled";
+  governance: GovernanceSummary;
   route_groups: QueryRouteGroup[];
   results: QueryResultDto[];
   [key: string]: unknown;
@@ -185,6 +233,7 @@ export type WikiUpdateData = WorkflowTerminalData & {
   previous_state: string;
   state: string;
   updated_pages: string[];
+  governance: GovernanceSummary;
 };
 
 export type WikiRebuildData = WorkflowTerminalData & {
@@ -301,6 +350,16 @@ function parseNullableString(value: unknown, field: string): string | null | und
   throw new Error(`invalid wiki-runtime ${field}`);
 }
 
+function parseNullableNumber(value: unknown, field: string): number | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null || typeof value === "number") {
+    return value;
+  }
+  throw new Error(`invalid wiki-runtime ${field}`);
+}
+
 function parseQueryRouteTag(value: unknown): QueryRouteTag {
   return parseLiteral(
     value,
@@ -379,11 +438,30 @@ function parseQuerySourceRef(value: unknown): QuerySourceRef {
   if (!isRecord(parsed) || !("ref_kind" in parsed) || typeof parsed.ref_id !== "string") {
     throw new Error("invalid wiki-runtime query source ref");
   }
-  return {
+  const result: QuerySourceRef = {
+    ...parsed,
     ref_kind: parseQueryRefKind(parsed.ref_kind),
     ref_id: parsed.ref_id,
-    label: parseNullableString(parsed.label, "query_source_ref.label"),
   };
+  if (parsed.label !== undefined) {
+    result.label = parseNullableString(parsed.label, "query_source_ref.label");
+  }
+  if (parsed.path !== undefined) {
+    result.path = parseNullableString(parsed.path, "query_source_ref.path");
+  }
+  if (parsed.start_line !== undefined) {
+    result.start_line = parseNullableNumber(parsed.start_line, "query_source_ref.start_line");
+  }
+  if (parsed.end_line !== undefined) {
+    result.end_line = parseNullableNumber(parsed.end_line, "query_source_ref.end_line");
+  }
+  if (parsed.provenance !== undefined) {
+    result.provenance = parseStringArray(parsed.provenance, "query_source_ref.provenance");
+  }
+  if (parsed.diagnostics !== undefined) {
+    result.diagnostics = parseStringArray(parsed.diagnostics, "query_source_ref.diagnostics");
+  }
+  return result;
 }
 
 function parseQueryResult(value: unknown): QueryResultDto {
@@ -428,6 +506,90 @@ function parseQueryRouteGroup(value: unknown): QueryRouteGroup {
     route_tag: parseQueryRouteTag(parsed.route_tag),
     results: parsed.results.map(parseQueryResult),
     score_basis: parseNullableString(parsed.score_basis, "query_route_group.score_basis"),
+  };
+}
+
+function parseGovernanceArtifactRef(value: unknown): GovernanceArtifactRef {
+  const parsed = value as Partial<GovernanceArtifactRef>;
+  if (
+    !isRecord(parsed)
+    || typeof parsed.change_id !== "string"
+    || typeof parsed.kind !== "string"
+    || typeof parsed.relative_path !== "string"
+  ) {
+    throw new Error("invalid wiki-runtime governance artifact ref");
+  }
+  return {
+    change_id: parsed.change_id,
+    kind: parsed.kind,
+    relative_path: parsed.relative_path,
+    status: parseLiteral(
+      parsed.status,
+      ["missing", "empty", "present"] as const,
+      "governance.artifact_ref.status",
+    ),
+    content_hash: parseNullableString(
+      parsed.content_hash,
+      "governance.artifact_ref.content_hash",
+    ),
+  };
+}
+
+function parseGovernanceIssue(value: unknown): GovernanceBlockingIssue {
+  const parsed = value as Partial<GovernanceBlockingIssue>;
+  if (
+    !isRecord(parsed)
+    || typeof parsed.rule_id !== "string"
+    || typeof parsed.message !== "string"
+  ) {
+    throw new Error("invalid wiki-runtime governance issue");
+  }
+  return {
+    rule_id: parsed.rule_id,
+    severity: parseLiteral(
+      parsed.severity,
+      ["blocking", "warning"] as const,
+      "governance.issue.severity",
+    ),
+    message: parsed.message,
+    change_id: parseNullableString(parsed.change_id, "governance.issue.change_id"),
+    artifact_ref:
+      parsed.artifact_ref == null
+        ? parsed.artifact_ref
+        : parseGovernanceArtifactRef(parsed.artifact_ref),
+    recommended_action: parseLiteral(
+      parsed.recommended_action,
+      ["none", "update", "review_governance"] as const,
+      "governance.issue.recommended_action",
+    ),
+  };
+}
+
+function parseGovernanceSummary(value: unknown): GovernanceSummary {
+  const parsed = value as Partial<GovernanceSummary>;
+  if (
+    !isRecord(parsed)
+    || typeof parsed.active_count !== "number"
+    || typeof parsed.archived_count !== "number"
+    || !Array.isArray(parsed.issues)
+  ) {
+    throw new Error("invalid wiki-runtime governance summary");
+  }
+  return {
+    readiness: parseLiteral(
+      parsed.readiness,
+      ["not_enabled", "ready", "stale", "blocked", "conflict"] as const,
+      "governance.readiness",
+    ),
+    fingerprint: parseNullableString(parsed.fingerprint, "governance.fingerprint"),
+    active_count: parsed.active_count,
+    archived_count: parsed.archived_count,
+    issues: parsed.issues.map(parseGovernanceIssue),
+    recommended_action: parseLiteral(
+      parsed.recommended_action,
+      ["none", "update", "review_governance"] as const,
+      "governance.recommended_action",
+    ),
   };
 }
 
@@ -593,6 +755,8 @@ function parseRuntimeReadiness(value: unknown): RuntimeReadiness {
 function parseWorkflowTerminalData(value: Record<string, unknown>): WorkflowTerminalData {
   return {
     ...value,
+    governance:
+      value.governance == null ? value.governance : parseGovernanceSummary(value.governance),
     runtime_summary:
       value.runtime_summary == null ? value.runtime_summary : parseRuntimeSummary(value.runtime_summary),
     llm_execution_mode:
@@ -611,6 +775,7 @@ function parseStatusData(value: Record<string, unknown>): WikiStatusData {
   if (
     typeof value.state !== "string"
     || !isRecord(value.readiness)
+    || !isRecord(value.governance)
     || typeof value.llm_mode_hint !== "string"
   ) {
     throw new TypeError("invalid wiki-runtime status payload");
@@ -627,7 +792,7 @@ function parseStatusData(value: Record<string, unknown>): WikiStatusData {
     readiness: parseRuntimeReadiness(value.readiness),
     recommended_action: parseLiteral(
       value.recommended_action,
-      ["none", "init", "update", "rebuild", "sync"] as const,
+      ["none", "init", "review", "review_governance", "update", "rebuild", "sync"] as const,
       "recommended_action",
     ),
     llm_mode_hint: parseLiteral(
@@ -639,6 +804,25 @@ function parseStatusData(value: Record<string, unknown>): WikiStatusData {
       value.runtime_summary == null ? value.runtime_summary : parseRuntimeSummary(value.runtime_summary),
     gate_summary:
       value.gate_summary == null ? value.gate_summary : parseGateSummary(value.gate_summary),
+    governance: parseGovernanceSummary(value.governance),
+  };
+}
+
+function parseUpdateData(value: Record<string, unknown>): WikiUpdateData {
+  if (
+    typeof value.previous_state !== "string"
+    || typeof value.state !== "string"
+    || !Array.isArray(value.updated_pages)
+    || !isRecord(value.governance)
+  ) {
+    throw new TypeError("invalid wiki-runtime update payload");
+  }
+  return {
+    ...parseWorkflowTerminalData(value),
+    previous_state: value.previous_state,
+    state: value.state,
+    updated_pages: parseStringArray(value.updated_pages, "updated_pages"),
+    governance: parseGovernanceSummary(value.governance),
   };
 }
 
@@ -647,6 +831,7 @@ function parseQueryData(value: Record<string, unknown>): WikiQueryData {
     typeof value.term !== "string"
     || typeof value.runtime_state !== "string"
     || !isRecord(value.readiness)
+    || !isRecord(value.governance)
     || typeof value.provenance_summary !== "string"
   ) {
     throw new TypeError("invalid wiki-runtime query payload");
@@ -669,16 +854,12 @@ function parseQueryData(value: Record<string, unknown>): WikiQueryData {
     ),
     recommended_action: parseLiteral(
       value.recommended_action,
-      ["none", "init", "update", "rebuild", "sync"] as const,
+      ["none", "init", "review", "review_governance", "update", "rebuild", "sync"] as const,
       "recommended_action",
     ),
     matched_pages: parseStringArray(value.matched_pages ?? [], "matched_pages"),
     provenance_summary: value.provenance_summary,
-    governance_readiness: parseLiteral(
-      value.governance_readiness,
-      ["not_enabled"] as const,
-      "governance_readiness",
-    ),
+    governance: parseGovernanceSummary(value.governance),
     route_groups: Array.isArray(value.route_groups)
       ? value.route_groups.map(parseQueryRouteGroup)
       : [],
@@ -708,6 +889,10 @@ function parseKnownData(value: unknown): CoreKnownData {
     && "query_trust" in value
   ) {
     return parseQueryData(value);
+  }
+
+  if ("previous_state" in value) {
+    return parseUpdateData(value);
   }
 
   if (

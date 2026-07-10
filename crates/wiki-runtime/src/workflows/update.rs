@@ -32,7 +32,8 @@ use crate::storage::cache_store::{
 };
 use crate::storage::knowledge_artifacts::{
     compute_committed_snapshot_id, load_knowledge_artifacts, persist_knowledge_artifacts,
-    restore_runtime_cache_from_artifacts, KnowledgeArtifactSnapshot, PersistKnowledgeArtifactsInput,
+    restore_runtime_cache_from_artifacts, KnowledgeArtifactSnapshot,
+    PersistKnowledgeArtifactsInput,
 };
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite::{index_store::SqliteIndexStore, runtime_store::SqliteRuntimeStore};
@@ -41,6 +42,7 @@ use crate::storage::state_store::{
     facts_snapshot_ready, write_facts_snapshot, write_facts_snapshot_for_files, write_state,
 };
 use crate::storage::wiki_fs::{resolve_page_path, write_page};
+use crate::workflows::governance::GovernanceService;
 use crate::workflows::init::{
     ancestor_ids_for_page, build_minimal_page_context, current_timestamp, page_provenance,
     run_init_with_progress_and_llm_as_with_mode, source_paths_for_page,
@@ -67,6 +69,7 @@ use wiki_index::symbol_graph::{
     analyze_symbol_graph, build_graph_summary, resolve_symbol_graph, ResolvedGraphSnapshot,
 };
 use wiki_index::symbols::{ParsedSymbolsSnapshot, SymbolTable};
+use wiki_model::domain::governance::GovernanceSummary;
 use wiki_model::domain::update_scope::{AffectedKnowledgeScope, ScopeEscalationLevel};
 
 /// 小范围符号变更仍走 scoped graph refresh；超过阈值直接回退全量图刷新，避免增量拼接丢边。
@@ -84,6 +87,8 @@ pub struct UpdateReport {
     pub updated_pages: Vec<String>,
     /// 本次 update 命中的知识范围摘要。
     pub affected_knowledge_scope: AffectedKnowledgeScope,
+    /// 本次 update 刷新后的治理摘要；与 source runtime 状态相互独立。
+    pub governance: GovernanceSummary,
     /// 当前 workflow 终态对应的 runtime 摘要。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_summary: Option<RuntimeSummaryProjection>,
@@ -167,6 +172,7 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
             plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
         }
     }
+    let governance = GovernanceService::new(repo_root).refresh()?;
     let previous_state =
         project_external_runtime_state(repo_root, plan.state(), facts_snapshot_ready(repo_root)?);
 
@@ -186,6 +192,7 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
                 state: init.state,
                 updated_pages: init.generated_pages,
                 affected_knowledge_scope: AffectedKnowledgeScope::default(),
+                governance,
                 runtime_summary: init.runtime_summary,
                 llm_execution_mode: init.llm_execution_mode,
             });
@@ -205,6 +212,7 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
                 state: rebuild.state,
                 updated_pages: rebuild.updated_pages,
                 affected_knowledge_scope: AffectedKnowledgeScope::default(),
+                governance,
                 runtime_summary: rebuild.runtime_summary,
                 llm_execution_mode: rebuild.llm_execution_mode,
             });
@@ -218,6 +226,7 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
             state: "fresh".to_string(),
             updated_pages: Vec::new(),
             affected_knowledge_scope: plan.affected_knowledge_scope.clone(),
+            governance,
             runtime_summary: load_runtime_summary_for_repo(repo_root)?
                 .map(RuntimeSummaryProjection::from_summary),
             llm_execution_mode: LlmExecutionMode::DeterministicOnly,
@@ -244,6 +253,7 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
         state: "fresh".to_string(),
         updated_pages,
         affected_knowledge_scope: plan.affected_knowledge_scope.clone(),
+        governance,
         runtime_summary: load_runtime_summary_for_repo(repo_root)?
             .map(RuntimeSummaryProjection::from_summary),
         llm_execution_mode,
@@ -875,11 +885,7 @@ fn merge_user_sections_into_page(
     let new_managed: Vec<ManagedSectionBlock> = new_sections
         .iter()
         .map(|s| {
-            ManagedSectionBlock::generated(
-                s.section_id.clone(),
-                s.title.clone(),
-                s.content.clone(),
-            )
+            ManagedSectionBlock::generated(s.section_id.clone(), s.title.clone(), s.content.clone())
         })
         .collect();
 

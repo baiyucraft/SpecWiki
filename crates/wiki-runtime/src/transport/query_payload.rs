@@ -6,7 +6,7 @@ use crate::domain::runtime_profile::{
     AnswerEnvelope, QueryMode, QueryTrust, RecommendedAction, RuntimeReadiness,
 };
 use crate::workflows::query::QueryReport;
-use crate::workflows::query::QueryGovernanceReadiness;
+use wiki_model::domain::governance::GovernanceSummary;
 use wiki_model::domain::query::{QueryResultDto, QueryRouteGroup};
 
 const PAGE_HIT_LIMIT: usize = 4;
@@ -27,7 +27,7 @@ pub struct ExternalQueryReport {
     pub recommended_action: RecommendedAction,
     pub matched_pages: Vec<String>,
     pub provenance_summary: String,
-    pub governance_readiness: QueryGovernanceReadiness,
+    pub governance: GovernanceSummary,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub route_groups: Vec<QueryRouteGroup>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -84,7 +84,7 @@ pub fn map_query_report(report: QueryReport) -> ExternalQueryReport {
         recommended_action: report.recommended_action,
         matched_pages: report.matched_pages,
         provenance_summary: report.provenance_summary,
-        governance_readiness: report.governance_readiness,
+        governance: report.governance,
         route_groups: report.route_groups,
         results: report.results,
         answer: report.answer,

@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::checkpoint::PipelineRuntimeSummary;
 use crate::domain::checkpoint::UnitRuntimeGate;
+use wiki_model::domain::governance::{
+    GovernanceReadiness, GovernanceRecommendedAction, GovernanceSummary,
+};
 use wiki_model::domain::knowledge_artifact::{
     KnowledgeHealthRecommendedAction, KnowledgeHealthSeverity, KnowledgeHealthSignal,
     KnowledgeHealthSignalKind, KnowledgeHealthSummary,
@@ -27,6 +30,7 @@ pub enum RecommendedAction {
     None,
     Init,
     Review,
+    ReviewGovernance,
     Update,
     Rebuild,
     Sync,
@@ -496,6 +500,32 @@ pub fn merge_recommended_action(
     promoted
 }
 
+/// 合并 core runtime 与治理状态的产品级建议动作。
+/// init/rebuild 这类 core blocker 优先；普通维护动作不得掩盖治理 blocker。
+pub fn merge_governance_recommended_action(
+    current: RecommendedAction,
+    governance: &GovernanceSummary,
+) -> RecommendedAction {
+    if matches!(
+        current,
+        RecommendedAction::Init | RecommendedAction::Rebuild
+    ) {
+        return current;
+    }
+    match (governance.readiness, governance.recommended_action) {
+        (
+            GovernanceReadiness::Blocked | GovernanceReadiness::Conflict,
+            GovernanceRecommendedAction::ReviewGovernance,
+        ) => RecommendedAction::ReviewGovernance,
+        (GovernanceReadiness::Stale, GovernanceRecommendedAction::Update)
+            if current == RecommendedAction::None =>
+        {
+            RecommendedAction::Update
+        }
+        _ => current,
+    }
+}
+
 fn health_severity_rank(severity: KnowledgeHealthSeverity) -> u8 {
     match severity {
         KnowledgeHealthSeverity::Info => 0,
@@ -516,11 +546,63 @@ fn health_action_rank(action: KnowledgeHealthRecommendedAction) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::summarize_health_signals;
+    use super::{merge_governance_recommended_action, summarize_health_signals, RecommendedAction};
+    use wiki_model::domain::governance::{
+        GovernanceReadiness, GovernanceRecommendedAction, GovernanceSummary,
+    };
     use wiki_model::domain::knowledge_artifact::{
         KnowledgeHealthRecommendedAction, KnowledgeHealthSeverity, KnowledgeHealthSignal,
         KnowledgeHealthSignalKind,
     };
+
+    fn governance_summary(
+        readiness: GovernanceReadiness,
+        recommended_action: GovernanceRecommendedAction,
+    ) -> GovernanceSummary {
+        GovernanceSummary {
+            readiness,
+            fingerprint: Some("fingerprint".to_string()),
+            active_count: 1,
+            archived_count: 0,
+            issues: Vec::new(),
+            recommended_action,
+        }
+    }
+
+    #[test]
+    fn governance_blocker_preempts_non_blocking_core_maintenance() {
+        let governance = governance_summary(
+            GovernanceReadiness::Blocked,
+            GovernanceRecommendedAction::ReviewGovernance,
+        );
+        for action in [
+            RecommendedAction::None,
+            RecommendedAction::Review,
+            RecommendedAction::Update,
+            RecommendedAction::Sync,
+        ] {
+            assert_eq!(
+                merge_governance_recommended_action(action, &governance),
+                RecommendedAction::ReviewGovernance
+            );
+        }
+    }
+
+    #[test]
+    fn core_blocker_preempts_governance_blocker() {
+        let governance = governance_summary(
+            GovernanceReadiness::Conflict,
+            GovernanceRecommendedAction::ReviewGovernance,
+        );
+        assert_eq!(
+            merge_governance_recommended_action(RecommendedAction::Init, &governance),
+            RecommendedAction::Init
+        );
+        assert_eq!(
+            merge_governance_recommended_action(RecommendedAction::Rebuild, &governance),
+            RecommendedAction::Rebuild
+        );
+    }
 
     #[test]
     fn governance_conflict_promotes_health_summary_to_review() {

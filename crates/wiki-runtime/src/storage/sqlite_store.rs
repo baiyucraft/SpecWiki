@@ -96,6 +96,18 @@ pub struct LlmCacheEntry {
     pub ttl_seconds: i64,
 }
 
+/// SQLite 中治理派生快照的序列化记录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GovernanceCacheRecord {
+    pub schema_version: String,
+    pub policy_version: String,
+    pub evidence_fingerprint: String,
+    pub summary_json: String,
+    pub change_jsons: Vec<String>,
+    pub artifact_ref_jsons: Vec<String>,
+    pub issue_jsons: Vec<String>,
+}
+
 /// 返回 DB 文件路径。
 pub fn db_path(repo_root: &Path) -> PathBuf {
     cache_dir(repo_root).join(DB_FILENAME)
@@ -185,7 +197,152 @@ fn init_schema(conn: &Connection) -> io::Result<()> {
     init_index_tables(conn)?;
     init_knowledge_tables(conn)?;
     init_runtime_tables(conn)?;
+    init_governance_tables(conn)?;
     Ok(())
+}
+
+fn init_governance_tables(conn: &Connection) -> io::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS governance_snapshots (
+            singleton_id         INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+            schema_version       TEXT NOT NULL,
+            policy_version       TEXT NOT NULL,
+            evidence_fingerprint TEXT NOT NULL,
+            summary_json         TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS governance_changes (
+            sort_order   INTEGER PRIMARY KEY,
+            payload_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS governance_artifact_refs (
+            sort_order   INTEGER PRIMARY KEY,
+            payload_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS governance_issues (
+            sort_order   INTEGER PRIMARY KEY,
+            payload_json TEXT NOT NULL
+        );",
+    )
+    .map_err(|error| io::Error::other(format!("governance schema init: {error}")))?;
+    Ok(())
+}
+
+/// 在单个事务内替换完整 governance derived snapshot。
+pub fn replace_governance_cache(
+    conn: &mut Connection,
+    record: &GovernanceCacheRecord,
+) -> io::Result<()> {
+    let tx = conn
+        .transaction()
+        .map_err(|error| io::Error::other(format!("begin governance cache tx: {error}")))?;
+    tx.execute_batch(
+        "DELETE FROM governance_changes;
+         DELETE FROM governance_artifact_refs;
+         DELETE FROM governance_issues;
+         DELETE FROM governance_snapshots;",
+    )
+    .map_err(|error| io::Error::other(format!("clear governance cache: {error}")))?;
+    tx.execute(
+        "INSERT INTO governance_snapshots
+         (singleton_id, schema_version, policy_version, evidence_fingerprint, summary_json)
+         VALUES (1, ?1, ?2, ?3, ?4)",
+        params![
+            record.schema_version,
+            record.policy_version,
+            record.evidence_fingerprint,
+            record.summary_json
+        ],
+    )
+    .map_err(|error| io::Error::other(format!("insert governance snapshot: {error}")))?;
+    insert_governance_payload_rows(&tx, "governance_changes", &record.change_jsons)?;
+    insert_governance_payload_rows(&tx, "governance_artifact_refs", &record.artifact_ref_jsons)?;
+    insert_governance_payload_rows(&tx, "governance_issues", &record.issue_jsons)?;
+    tx.commit()
+        .map_err(|error| io::Error::other(format!("commit governance cache tx: {error}")))
+}
+
+/// 清除所有 governance derived rows，不影响其它 SQLite 分层。
+pub fn clear_governance_cache(conn: &mut Connection) -> io::Result<()> {
+    let tx = conn
+        .transaction()
+        .map_err(|error| io::Error::other(format!("begin clear governance cache tx: {error}")))?;
+    tx.execute_batch(
+        "DELETE FROM governance_changes;
+         DELETE FROM governance_artifact_refs;
+         DELETE FROM governance_issues;
+         DELETE FROM governance_snapshots;",
+    )
+    .map_err(|error| io::Error::other(format!("clear governance cache: {error}")))?;
+    tx.commit()
+        .map_err(|error| io::Error::other(format!("commit clear governance cache tx: {error}")))
+}
+
+/// 读取与指定 fingerprint、schema 和 policy 版本完全匹配的治理缓存。
+pub fn read_governance_cache(
+    conn: &Connection,
+    expected_fingerprint: &str,
+    schema_version: &str,
+    policy_version: &str,
+) -> io::Result<Option<GovernanceCacheRecord>> {
+    let snapshot = conn
+        .query_row(
+            "SELECT schema_version, policy_version, evidence_fingerprint, summary_json
+             FROM governance_snapshots
+             WHERE singleton_id = 1
+               AND evidence_fingerprint = ?1
+               AND schema_version = ?2
+               AND policy_version = ?3",
+            params![expected_fingerprint, schema_version, policy_version],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| io::Error::other(format!("read governance snapshot: {error}")))?;
+    let Some((schema_version, policy_version, evidence_fingerprint, summary_json)) = snapshot
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(GovernanceCacheRecord {
+        schema_version,
+        policy_version,
+        evidence_fingerprint,
+        summary_json,
+        change_jsons: read_governance_payload_rows(conn, "governance_changes")?,
+        artifact_ref_jsons: read_governance_payload_rows(conn, "governance_artifact_refs")?,
+        issue_jsons: read_governance_payload_rows(conn, "governance_issues")?,
+    }))
+}
+
+fn insert_governance_payload_rows(
+    tx: &Transaction<'_>,
+    table: &str,
+    payloads: &[String],
+) -> io::Result<()> {
+    let sql = format!("INSERT INTO {table} (sort_order, payload_json) VALUES (?1, ?2)");
+    for (index, payload) in payloads.iter().enumerate() {
+        tx.execute(&sql, params![index as i64, payload])
+            .map_err(|error| io::Error::other(format!("insert {table}: {error}")))?;
+    }
+    Ok(())
+}
+
+fn read_governance_payload_rows(conn: &Connection, table: &str) -> io::Result<Vec<String>> {
+    let sql = format!("SELECT payload_json FROM {table} ORDER BY sort_order");
+    let mut statement = conn
+        .prepare(&sql)
+        .map_err(|error| io::Error::other(format!("prepare read {table}: {error}")))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| io::Error::other(format!("query {table}: {error}")))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| io::Error::other(format!("collect {table}: {error}")))
 }
 
 fn init_legacy_tables(conn: &Connection) -> io::Result<()> {

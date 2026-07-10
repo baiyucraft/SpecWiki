@@ -39,16 +39,20 @@ multiChange:
       archiveStatus: archived
       archivedAt: 2026-07-01T17:35:53.297Z
       archivedTo: .spec/archive/2026-07-01-refactor-specwiki-around-contract-closure-code-graph-index
-    - id: refactor-specwiki-around-contract-closure-cli-product-surface
+    - id: refactor-specwiki-around-contract-closure-governance-isolation
       order: 6
       dependsOn:
         - refactor-specwiki-around-contract-closure-query-route-readiness
-        - refactor-specwiki-around-contract-closure-projection-writeback-boundaries
-    - id: refactor-specwiki-around-contract-closure-governance-isolation
+        - refactor-specwiki-around-contract-closure-code-graph-index
+      archiveStatus: archived
+      archivedAt: 2026-07-10T18:15:23.000Z
+      archivedTo: .spec/archive/2026-07-10-refactor-specwiki-around-contract-closure-governance-isolation
+    - id: refactor-specwiki-around-contract-closure-cli-product-surface
       order: 7
       dependsOn:
         - refactor-specwiki-around-contract-closure-query-route-readiness
-        - refactor-specwiki-around-contract-closure-code-graph-index
+        - refactor-specwiki-around-contract-closure-projection-writeback-boundaries
+        - refactor-specwiki-around-contract-closure-governance-isolation
     - id: refactor-specwiki-around-contract-closure-archive-dry-run-manifest
       order: 8
       dependsOn:
@@ -56,7 +60,7 @@ multiChange:
         - refactor-specwiki-around-contract-closure-cli-product-surface
 refactor:
   kind: contract-closure-driven-runtime-rebuild
-  parallelAllowed: limited
+  parallelAllowed: false
   rollbackPolicy: branch-local-revert
   sourceDesigns:
     - .docs/design/specwiki-contract-closure.md

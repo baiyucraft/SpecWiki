@@ -952,7 +952,8 @@ fn query_reports_governance_not_enabled_without_blocking_query() {
     let query = run_query(repo_root, "项目概述").unwrap();
     let payload = serde_json::to_value(&query).unwrap();
 
-    assert_eq!(payload["governance_readiness"], "not_enabled");
+    assert_eq!(payload["governance"]["readiness"], "not_enabled");
+    assert!(payload.get("governance_readiness").is_none());
     assert!(!query.results.iter().any(|result| {
         matches!(
             result.route_tag,

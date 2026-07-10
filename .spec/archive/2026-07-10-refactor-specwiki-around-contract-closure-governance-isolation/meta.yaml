@@ -1,15 +1,21 @@
 id: refactor-specwiki-around-contract-closure-governance-isolation
-stage: exploration
+stage: verification
 deliveryShape: single-change
 multiChange:
   role: child
   parent: refactor-specwiki-around-contract-closure
-  order: 7
+  order: 6
   dependsOn:
     - refactor-specwiki-around-contract-closure-query-route-readiness
     - refactor-specwiki-around-contract-closure-code-graph-index
 artifacts:
   proposal:
-    status: missing
+    status: present
+  design:
+    status: present
+  cases:
+    status: present
+  tasks:
+    status: present
   metadata:
     status: present

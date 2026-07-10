@@ -1,7 +1,7 @@
 ---
 title: wiki-model
 description: 共享对象语言、正式状态和跨 crate DTO 的模型层
-updated: 2026-05-25
+updated: 2026-07-11
 owner: docs
 ---
 
@@ -30,6 +30,7 @@ owner: docs
 | 路径 | 用途 |
 | --- | --- |
 | `crates/wiki-model/**` | 模型层源码 |
+| `crates/wiki-model/src/domain/governance.rs` | governance readiness、change/artifact refs、issue、gate、summary 与 validation DTO |
 | `crates/wiki-model/Cargo.toml` | crate 元数据和依赖声明 |
 
 ## 验证与排查

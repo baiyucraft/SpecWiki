@@ -2,7 +2,7 @@
 title: Runtime 设计
 description: spec-wiki runtime 主链、.wiki 分层、query route、生命周期和恢复策略
 owner: architecture
-updated: 2026-06-10
+updated: 2026-07-11
 ---
 
 # Repo Wiki Runtime Design
@@ -459,7 +459,9 @@ term only
 - `route_groups` 用来表达不同 route 内部的相对 score；跨 route 不强行混成单一排序
 - page fallback 必须显式标记为 `rendered_page_debug_fallback`，并降低 query/answer trust
 - `provenance_summary` 只保留为只读派生摘要，不再作为 query 主合同
-- governance 当前只暴露 `governance_readiness: not_enabled` 占位，不扫描 `.spec` evidence，也不阻断普通 query
+- 产品响应并列暴露 `governance` summary；正式 readiness 闭集为 `not_enabled / ready / stale / blocked / conflict`
+- governance query 只返回结构化 change、artifact 和 diagnostic refs，不把 `.spec` 正文送入 code FTS、knowledge 或 Markdown fallback
+- governance blocker 只影响治理 route 和产品 next action，不降低普通 index / knowledge route 的 `query_trust`
 - process / community 当前虽然属于 Layer A facts，可作为后续 query 扩展依据，但不应被误写成 `v0.1.0` 已正式承诺的稳定命中层
 
 当前稳定 route tag 闭集包括：
@@ -473,6 +475,30 @@ term only
 - `governance_summary_hit`
 - `projection_ref`
 - `rendered_page_debug_fallback`
+
+## Governance Runtime 边界
+
+`.spec/changes/**` 与 `.spec/archive/**` 是治理 evidence truth。治理状态不进入 core `RuntimeReadiness`，也不复用 source `ChangeSet`：
+
+```text
+.spec evidence
+  -> FsGovernanceEvidenceStore
+  -> GovernancePolicy
+  -> GovernanceSummary / validation result
+  -> rebuildable SQLite governance cache
+  -> status / query / update composition
+```
+
+稳定约束：
+
+- `wiki-model::domain::governance` 定义跨 crate 和 transport 共享的对象语言。
+- `GovernancePolicy` 是 required artifact、metadata、review/verification gate 与 parent/child consistency 的唯一产品规则所有者。
+- SQLite 只保存 fingerprint、summary、change/artifact/issue refs；cache 可丢弃，不保存 artifact 正文，不替代 `.spec`。
+- `status` 读取 live evidence 并只比较 cache freshness，不写 cache。
+- `validate` 绕过 cache，对 live evidence 执行只读 policy。
+- `update` 独立刷新 governance cache；`.spec`-only 变化不触发 scan、symbol graph、knowledge compose 或页面重写。
+- `query` 只消费 fingerprint 一致的 cached refs；blocked 且尚无 cache 时可以从 live blocking issues 返回 diagnostic refs，仍不读取正文。
+- 产品 next action 的优先级是 core `init/rebuild` blocker、governance blocker、其它 core maintenance、governance stale。治理 blocker 使用 `review_governance`。
 
 ### GitNexus 对 query 的参考边界
 

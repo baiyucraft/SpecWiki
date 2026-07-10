@@ -2,6 +2,7 @@
 //! 这里明确区分页面文件、metadata、cache 和状态内核四类产物。
 
 pub mod cache_store;
+pub mod governance_fs;
 pub mod knowledge_artifacts;
 pub mod metadata_store;
 pub mod sqlite;

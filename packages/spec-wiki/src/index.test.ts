@@ -166,6 +166,14 @@ test("parseResult parses status preflight payload", () => {
           blocked_units: 0,
           blockers: [],
         },
+        governance: {
+          readiness: "not_enabled",
+          fingerprint: null,
+          active_count: 0,
+          archived_count: 0,
+          issues: [],
+          recommended_action: "none",
+        },
       },
     }),
   );
@@ -207,6 +215,14 @@ test("parseResult parses status preflight payload", () => {
         blocked_units: 0,
         blockers: [],
       },
+      governance: {
+        readiness: "not_enabled",
+        fingerprint: null,
+        active_count: 0,
+        archived_count: 0,
+        issues: [],
+        recommended_action: "none",
+      },
     },
   });
 });
@@ -232,7 +248,14 @@ test("parseResult parses query payload readiness contract", () => {
         recommended_action: "none",
         matched_pages: [],
         provenance_summary: "index_hit",
-        governance_readiness: "not_enabled",
+        governance: {
+          readiness: "not_enabled",
+          fingerprint: null,
+          active_count: 0,
+          archived_count: 0,
+          issues: [],
+          recommended_action: "none",
+        },
         route_groups: [
           {
             route_tag: "index_symbol_hit",
@@ -299,7 +322,14 @@ test("parseResult parses query payload readiness contract", () => {
     recommended_action: "none",
     matched_pages: [],
     provenance_summary: "index_hit",
-    governance_readiness: "not_enabled",
+    governance: {
+      readiness: "not_enabled",
+      fingerprint: null,
+      active_count: 0,
+      archived_count: 0,
+      issues: [],
+      recommended_action: "none",
+    },
     route_groups: [
       {
         route_tag: "index_symbol_hit",
@@ -369,13 +399,185 @@ test("parseResult rejects unknown query route tags", () => {
           recommended_action: "none",
           matched_pages: [],
           provenance_summary: "index_hit",
-          governance_readiness: "not_enabled",
+          governance: {
+            readiness: "not_enabled",
+            fingerprint: null,
+            active_count: 0,
+            archived_count: 0,
+            issues: [],
+            recommended_action: "none",
+          },
           route_groups: [{ route_tag: "index_hit", results: [] }],
           results: [],
         },
       }),
     ),
   ).toThrow(/query route tag/i);
+});
+
+test("parseResult parses the governance product summary without the legacy field", () => {
+  const parsed = parseResult(
+    JSON.stringify({
+      ok: true,
+      data: {
+        term: "governance-isolation",
+        runtime_state: "fresh",
+        readiness: {
+          index: "ready",
+          knowledge: "ready",
+          projection: "ready",
+          fusion: "ready",
+          restored_level: "level2",
+          reasons: [],
+        },
+        query_mode: "mixed",
+        query_trust: "ready",
+        recommended_action: "review_governance",
+        matched_pages: [],
+        provenance_summary: "governance_summary_hit",
+        governance: {
+          readiness: "blocked",
+          fingerprint: "fp-1",
+          active_count: 1,
+          archived_count: 0,
+          issues: [
+            {
+              rule_id: "artifact.required.tasks",
+              severity: "blocking",
+              message: "tasks.md is missing",
+              change_id: "governance-isolation",
+              recommended_action: "review_governance",
+            },
+          ],
+          recommended_action: "review_governance",
+        },
+        route_groups: [],
+        results: [
+          {
+            route_tag: "governance_evidence_ref",
+            ref_kind: "governance_change",
+            ref_id: "governance-isolation",
+            label: "artifact.required.tasks",
+            score: 0.5,
+            provenance: { layer: "governance", state: "blocked" },
+            confidence: "low",
+            recommended_action: "review_governance",
+            source_refs: [
+              {
+                ref_kind: "governance_artifact",
+                ref_id: "governance-isolation:tasks",
+                label: "tasks",
+                path: ".spec/changes/governance-isolation/tasks.md",
+                start_line: 1,
+                end_line: 3,
+                provenance: ["governance:diagnostic_ref"],
+                diagnostics: ["artifact.required.tasks"],
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  );
+
+  expect(parsed.data).toMatchObject({
+    recommended_action: "review_governance",
+    governance: {
+      readiness: "blocked",
+      active_count: 1,
+      issues: [{ severity: "blocking" }],
+    },
+  });
+  expect(parsed.data).not.toHaveProperty("governance_readiness");
+  expect((parsed.data as any).results[0].source_refs[0]).toMatchObject({
+    path: ".spec/changes/governance-isolation/tasks.md",
+    start_line: 1,
+    end_line: 3,
+    provenance: ["governance:diagnostic_ref"],
+    diagnostics: ["artifact.required.tasks"],
+  });
+});
+
+test("parseResult requires governance on update terminal payloads", () => {
+  expect(() =>
+    parseResult(JSON.stringify({
+      ok: true,
+      data: {
+        previous_state: "fresh",
+        state: "fresh",
+        updated_pages: [],
+        runtime_summary: null,
+      },
+    })),
+  ).toThrow(/update payload/i);
+
+  const parsed = parseResult(JSON.stringify({
+    ok: true,
+    data: {
+      previous_state: "fresh",
+      state: "fresh",
+      updated_pages: [],
+      runtime_summary: null,
+      governance: {
+        readiness: "ready",
+        fingerprint: "fp-update",
+        active_count: 1,
+        archived_count: 0,
+        issues: [],
+        recommended_action: "none",
+      },
+    },
+  }));
+  expect((parsed.data as any).governance.readiness).toBe("ready");
+});
+
+test("parseResult keeps rebuild terminal payloads separate from update", () => {
+  const parsed = parseResult(JSON.stringify({
+    ok: true,
+    data: {
+      state: "fresh",
+      updated_pages: [".wiki/INDEX.md"],
+      runtime_summary: null,
+      llm_execution_mode: "deterministic_only",
+    },
+  }));
+  expect(parsed.data).toMatchObject({
+    state: "fresh",
+    updated_pages: [".wiki/INDEX.md"],
+    llm_execution_mode: "deterministic_only",
+  });
+});
+
+test("parseResult rejects unknown governance readiness", () => {
+  expect(() =>
+    parseResult(
+      JSON.stringify({
+        ok: true,
+        data: {
+          state: "fresh",
+          dirty_sources: [],
+          dirty_pages: [],
+          readiness: {
+            index: "ready",
+            knowledge: "ready",
+            projection: "ready",
+            fusion: "ready",
+            restored_level: "level2",
+            reasons: [],
+          },
+          recommended_action: "none",
+          llm_mode_hint: "deterministic_default",
+          governance: {
+            readiness: "unknown",
+            active_count: 0,
+            archived_count: 0,
+            issues: [],
+            recommended_action: "none",
+          },
+        },
+      }),
+    ),
+  ).toThrow(/governance/i);
 });
 
 test("parseEventLine validates progress events with usage", () => {
