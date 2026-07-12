@@ -24,8 +24,7 @@ SpecWiki 对用户优先暴露一级命令。`wiki` 和 `governance` 是内部 r
 | `spec-wiki status` | 查看 Wiki runtime、index、knowledge 和 governance readiness |
 | `spec-wiki update` | 源码、文档或治理 artifact 变化后刷新 runtime |
 | `spec-wiki query <term>` | 查询文件、模块、符号、knowledge pages、projection refs、fallback 结果和结构化治理 refs |
-| `spec-wiki validate [change-id]` | 验证 repo runtime，或验证指定 change 的治理 artifact |
-| `spec-wiki archive <change-id>` | 归档治理 change；必须先通过 validate |
+| `spec-wiki validate <change-id>` | 验证指定 change 的治理 artifact |
 
 ## 高级维护动作
 
@@ -39,9 +38,8 @@ SpecWiki 对用户优先暴露一级命令。`wiki` 和 `governance` 是内部 r
 | `spec-wiki rebuild` | 显式全量重建 knowledge runtime |
 | `spec-wiki changes` | 列出 active governance changes |
 | `spec-wiki change <change-id>` | 查看单个 change 摘要 |
-| `spec-wiki doctor` | 诊断配置、产物、缓存和宿主资产 |
-| `spec-wiki repair` | 修复可自动恢复的问题；默认只报告计划，显式 `--apply` 才修改 |
-| `spec-wiki trace` | 查看最近 workflow trace |
+
+`archive`、workspace validate、`doctor`、`repair` 和 `trace` 尚未注册为当前 CLI 命令。
 
 ## API / 对外接口
 

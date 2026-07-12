@@ -4,6 +4,40 @@ use serde_json::Value;
 use crate::llm::{LlmBridgeConfig, LlmCompletion, LlmPromptRequest};
 use crate::workflows::progress::WorkflowProgressEvent;
 
+/// CLI 宿主 bootstrap 的总结果。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BootstrapOutcome {
+    Ready,
+    Partial,
+    Failed,
+}
+
+/// 单个宿主资产写入结果，由 TypeScript CLI 生成并交给 `cli_init` 保留。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BootstrapHostReport {
+    pub host: String,
+    pub status: BootstrapOutcome,
+    #[serde(default)]
+    pub files: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// CLI 在进入 Rust runtime 前完成的宿主 bootstrap 事实。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BootstrapReport {
+    pub outcome: BootstrapOutcome,
+    #[serde(default)]
+    pub hosts: Vec<BootstrapHostReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_hint: Option<String>,
+}
+
 /// `CoreCommand` 是 Agent -> core 的最小命令协议。
 /// `streamProgress` 保留为协议字段，但长流程现在统一按事件流输出。
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -12,6 +46,9 @@ pub struct CoreCommand {
     #[serde(rename = "repoRoot")]
     pub repo_root: Option<String>,
     pub term: Option<String>,
+    #[serde(rename = "changeId")]
+    pub change_id: Option<String>,
+    pub bootstrap: Option<BootstrapReport>,
     #[serde(rename = "developmentMode", default)]
     pub development_mode: bool,
     #[serde(rename = "streamProgress", default)]
@@ -25,7 +62,21 @@ pub struct CoreCommand {
 pub struct CoreResponse {
     pub ok: bool,
     pub error: Option<String>,
+    #[serde(rename = "errorKind", default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<CoreErrorKind>,
     pub data: Option<Value>,
+}
+
+/// Transport 可稳定映射的错误分类。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CoreErrorKind {
+    InvalidArgument,
+    GovernanceNotEnabled,
+    ChangeNotFound,
+    WorkflowFailed,
+    ProtocolError,
+    InternalError,
 }
 
 impl CoreResponse {
@@ -40,6 +91,7 @@ impl CoreResponse {
         Self {
             ok: false,
             error: Some(error.into()),
+            error_kind: Some(CoreErrorKind::WorkflowFailed),
             data: None,
         }
     }
@@ -53,6 +105,7 @@ impl CoreResponse {
         Self {
             ok: false,
             error: Some(error.into()),
+            error_kind: Some(CoreErrorKind::WorkflowFailed),
             data: Some(data),
         }
     }
@@ -68,6 +121,31 @@ impl CoreResponse {
         Self {
             ok: true,
             error: None,
+            error_kind: None,
+            data: Some(data),
+        }
+    }
+
+    /// 构造带稳定分类的失败响应。
+    pub fn typed_error(kind: CoreErrorKind, error: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            error: Some(error.into()),
+            error_kind: Some(kind),
+            data: None,
+        }
+    }
+
+    /// 构造带稳定分类和结构化上下文的失败响应。
+    pub fn typed_error_with_data(
+        kind: CoreErrorKind,
+        error: impl Into<String>,
+        data: Value,
+    ) -> Self {
+        Self {
+            ok: false,
+            error: Some(error.into()),
+            error_kind: Some(kind),
             data: Some(data),
         }
     }

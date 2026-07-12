@@ -580,6 +580,35 @@ test("parseResult rejects unknown governance readiness", () => {
   ).toThrow(/governance/i);
 });
 
+test("parseResult accepts omitted empty governance issues", () => {
+  const parsed = parseResult(JSON.stringify({
+    ok: true,
+    data: {
+      state: "fresh",
+      dirty_sources: [],
+      dirty_pages: [],
+      readiness: {
+        index: "ready",
+        knowledge: "ready",
+        projection: "ready",
+        fusion: "ready",
+        restored_level: "level2",
+        reasons: [],
+      },
+      recommended_action: "none",
+      llm_mode_hint: "deterministic_default",
+      governance: {
+        readiness: "not_enabled",
+        active_count: 0,
+        archived_count: 0,
+        recommended_action: "none",
+      },
+    },
+  }));
+
+  expect((parsed.data as any).governance.issues).toEqual([]);
+});
+
 test("parseEventLine validates progress events with usage", () => {
   const event = parseEventLine(
     JSON.stringify({

@@ -31,7 +31,7 @@ test("selectHostsForInit returns explicit hosts without prompting", async () => 
   await expect(
     selectHostsForInit({
       repoRoot,
-      rawTools: "claude,codebuddy",
+      rawHosts: "claude,codebuddy",
       interactive: true,
       selectMultiple,
     }),

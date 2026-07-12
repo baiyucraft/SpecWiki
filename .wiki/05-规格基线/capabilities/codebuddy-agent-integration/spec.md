@@ -7,7 +7,7 @@
 系统 MUST 将 CodeBuddy 视为 `v0.1.0` 当前支持的宿主之一，并与 Claude、Codex 一起共享同一套公开 workflow 收敛边界。CodeBuddy 集成当前只承诺 Windows x64 打包运行时；该规范 MUST NOT 再把“只有 CodeBuddy、没有其他宿主”描述为当前版本事实。
 
 #### Scenario: 通过 bootstrap 生成 CodeBuddy 资产
-- **WHEN** 用户执行 `spec-wiki init --tool codebuddy`
+- **WHEN** 用户执行 `spec-wiki init --host codebuddy`
 - **THEN** 系统 MUST 为 CodeBuddy 写入受管宿主资产
 - **THEN** 该资产边界 MUST 与当前版本其他宿主的公开 workflow 合同一致
 

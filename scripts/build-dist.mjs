@@ -19,7 +19,6 @@ const STAGED_PACKAGE_DIR = path.join("dist", "spec-wiki");
 const STAGED_RUNTIME_DIR = path.join("lib", "x64-win32");
 const README_PATH = "README.md";
 const CLI_HELP_ARGS = ["--help"];
-const SUPPORTED_ACTIONS_LABEL = "Supported actions:";
 const REMOVE_RETRY_DELAY_MS = 500;
 const REMOVE_RETRY_ATTEMPTS = 40;
 
@@ -145,19 +144,12 @@ function normalizeText(text) {
 }
 
 function parseSupportedActions(helpText) {
-  const actionsLine = String(helpText ?? "")
+  return String(helpText ?? "")
     .split(/\r?\n/)
-    .find((line) => line.includes(SUPPORTED_ACTIONS_LABEL));
-
-  if (!actionsLine) {
-    return [];
-  }
-
-  return actionsLine
-    .slice(actionsLine.indexOf(SUPPORTED_ACTIONS_LABEL) + SUPPORTED_ACTIONS_LABEL.length)
-    .split(",")
-    .map((action) => action.trim())
-    .filter((action) => action.length > 0);
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("spec-wiki "))
+    .map((line) => line.split(/\s+/u)[1])
+    .filter((action) => action && !action.startsWith("--"));
 }
 
 function resolvePublishAssetEntries(sourceManifest) {

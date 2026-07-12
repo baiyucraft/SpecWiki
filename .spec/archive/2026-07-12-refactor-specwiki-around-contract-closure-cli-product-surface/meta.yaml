@@ -1,5 +1,5 @@
 id: refactor-specwiki-around-contract-closure-cli-product-surface
-stage: exploration
+stage: verification
 deliveryShape: single-change
 multiChange:
   role: child
@@ -11,6 +11,16 @@ multiChange:
     - refactor-specwiki-around-contract-closure-governance-isolation
 artifacts:
   proposal:
-    status: missing
+    status: present
+  design:
+    status: present
+  cases:
+    status: present
+  tasks:
+    status: present
+  review-report:
+    status: present
+  test-report:
+    status: present
   metadata:
     status: present

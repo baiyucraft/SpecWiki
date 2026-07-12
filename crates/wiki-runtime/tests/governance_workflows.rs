@@ -86,6 +86,31 @@ fn governance_service_tracks_live_and_cached_freshness() {
 }
 
 #[test]
+fn governance_reports_share_one_live_evaluation() {
+    let repo = tempdir().unwrap();
+    write_ready_change(repo.path(), "# proposal\n");
+    let service = GovernanceService::new(repo.path());
+
+    let changes = service.changes_report().unwrap();
+    assert_eq!(changes.changes.len(), 1);
+    assert_eq!(changes.governance.readiness, GovernanceReadiness::Ready);
+
+    let change = service.change_report("demo-change").unwrap();
+    assert_eq!(change.change.id, "demo-change");
+    assert_eq!(
+        change.governance.fingerprint,
+        changes.governance.fingerprint
+    );
+
+    let validation = service.validate_report("demo-change").unwrap();
+    assert_eq!(validation.change_id, "demo-change");
+    assert_eq!(
+        validation.governance.fingerprint,
+        changes.governance.fingerprint
+    );
+}
+
+#[test]
 fn governance_service_queries_only_fresh_structured_refs() {
     let repo = tempdir().unwrap();
     write_ready_change(repo.path(), "# body-only-secret\n");

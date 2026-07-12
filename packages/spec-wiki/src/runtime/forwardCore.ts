@@ -7,7 +7,10 @@ import { spawn } from "node:child_process";
 
 import type { CoreCommand } from "./invokeCore.js";
 import { STREAMING_ACTIONS } from "./invokeCore.js";
-import { parseEventLine, parseResult, responseFromTerminalEvent } from "./parseResult.js";
+import { parseResult } from "./parseResult.js";
+import { CoreEventStream } from "./coreEventStream.js";
+import { renderHumanEvent, renderHumanResponse } from "./humanRenderer.js";
+import { exitCodeForResponse } from "./exitPolicy.js";
 import { resolveBinary } from "./resolveBinary.js";
 import { buildCoreEnv } from "./runtimeEnv.js";
 
@@ -26,6 +29,10 @@ export type ForwardCoreOptions = {
   bridgeStdio?: boolean;
   /** 测试时可替换二进制解析函数。 */
   binaryResolver?: () => string;
+  /** 输出模式；默认 machine 以保持宿主 API 的原始协议。 */
+  outputMode?: "human" | "machine";
+  /** 用于 human renderer 的公开命令名。 */
+  action?: string;
 };
 
 /**
@@ -40,8 +47,9 @@ export async function forwardCoreCommand(
   options: ForwardCoreOptions = {},
 ): Promise<number> {
   const binary = (options.binaryResolver ?? (() => resolveBinary()))();
-  const streamOutput = STREAMING_ACTIONS.has(command.action);
+  const streamOutput = command.action === "cli_init" || STREAMING_ACTIONS.has(command.action);
   const bridgeStdio = streamOutput && Boolean(options.bridgeStdio);
+  const outputMode = options.outputMode ?? "machine";
   const payload = streamOutput
     ? {
         ...command,
@@ -59,11 +67,34 @@ export async function forwardCoreCommand(
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
+    let protocolError: Error | undefined;
+    const eventStream = streamOutput
+      ? new CoreEventStream({
+          onEvent: (event) => {
+            if (outputMode === "machine")
+return;
+            if (event.type === "progress" || event.type === "llm_request") {
+              options.stdout?.(renderHumanEvent(event));
+            }
+          },
+        })
+      : undefined;
 
     const handleStdout = (chunk: Buffer | string) => {
       const text = chunk.toString();
       stdout += text;
-      options.stdout?.(text);
+      if (streamOutput) {
+        if (outputMode === "machine")
+options.stdout?.(text);
+        try {
+          eventStream?.push(text);
+        } catch (error) {
+          protocolError = error instanceof Error ? error : new Error(String(error));
+          options.stderr?.(`${protocolError.message}\n`);
+        }
+      } else if (outputMode === "machine") {
+        options.stdout?.(text);
+      }
     };
     const handleStderr = (chunk: Buffer | string) => {
       options.stderr?.(chunk.toString());
@@ -84,11 +115,27 @@ export async function forwardCoreCommand(
     child.on("close", (code) => {
       cleanup();
       if (code !== 0) {
-        resolve(code ?? 1);
+        resolve(1);
         return;
       }
 
-      resolve(protocolExitCode(stdout, streamOutput));
+      try {
+        if (streamOutput) {
+          if (protocolError)
+throw protocolError;
+          const response = eventStream?.finish();
+          if (outputMode === "human" && response)
+options.stdout?.(renderHumanResponse(response, { action: options.action }));
+          resolve(response ? exitCodeForResponse(response) : 1);
+        } else {
+          const response = parseResult(stdout.trim());
+          if (outputMode === "human")
+options.stdout?.(renderHumanResponse(response, { action: options.action }));
+          resolve(exitCodeForResponse(response));
+        }
+      } catch {
+        resolve(1);
+      }
     });
 
     child.stdin.write(streamOutput ? `${JSON.stringify(payload)}\n` : JSON.stringify(payload));
@@ -111,27 +158,4 @@ export async function forwardCoreCommand(
       options.stdin.off("end", handleStdinEnd);
     }
   });
-}
-
-function protocolExitCode(stdout: string, streamOutput: boolean): number {
-  try {
-    if (!streamOutput) {
-      return parseResult(stdout.trim()).ok ? 0 : 1;
-    }
-
-    const lines = stdout
-      .split(/\r?\n/u)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      const event = parseEventLine(lines[index]);
-      if (event.type === "result" || event.type === "error") {
-        return responseFromTerminalEvent(event).ok ? 0 : 1;
-      }
-    }
-  } catch {
-    return 1;
-  }
-
-  return 1;
 }

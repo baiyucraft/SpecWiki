@@ -11,7 +11,6 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
 import { runCli } from "../../packages/spec-wiki/src/cli.ts";
-import { PUBLIC_WIKI_ACTIONS } from "../../packages/spec-wiki/src/wikiActions.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -137,13 +136,12 @@ test("staging script creates a single publishable Windows x64 spec-wiki package 
   expect(evidence.checks.cpuMatch).toBe(true);
   expect(evidence.checks.readmeMatch).toBe(true);
   expect(evidence.checks.helpMatch).toBe(true);
-  expect(evidence.sourceHelpActions).toEqual([...PUBLIC_WIKI_ACTIONS]);
-  expect(evidence.stagedHelpActions).toEqual([...PUBLIC_WIKI_ACTIONS]);
+  expect(evidence.sourceHelpActions).toEqual(["init", "status", "query", "update"]);
+  expect(evidence.stagedHelpActions).toEqual(["init", "status", "query", "update"]);
   expect(evidence.stagedHelpText.trim()).toBe(sourceHelp);
-  expect(evidence.stagedHelpText).toContain("Supported actions: init, status, update, query, sync, rebuild");
-  expect(evidence.stagedHelpText).toContain(
-    "--bridge-stdio only applies to long-running wiki actions such as init, update, and rebuild",
-  );
+  expect(evidence.stagedHelpText).toContain("spec-wiki init [options]");
+  expect(evidence.stagedHelpText).toContain("spec-wiki query <term...> [options]");
+  expect(evidence.stagedHelpText).not.toContain("spec-wiki sync");
   expect(evidence.stagedHelpText).not.toContain("unsupported action");
   assertStagedPackageEvidence(evidence);
 

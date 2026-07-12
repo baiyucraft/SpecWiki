@@ -38,10 +38,10 @@ const ACTION_DESCRIPTIONS: Record<WikiAction, string> = {
 
 function renderCliCall(action: WikiAction): string {
   if (action === "query") {
-    return "spec-wiki wiki query --term \"$ARGUMENTS\"";
+    return "spec-wiki query \"$ARGUMENTS\"";
   }
 
-  return `spec-wiki wiki ${action}`;
+  return `spec-wiki ${action}`;
 }
 
 function renderArgumentHint(action: WikiAction): string {
@@ -51,7 +51,7 @@ function renderArgumentHint(action: WikiAction): string {
 function renderActionNote(action: WikiAction): string {
   switch (action) {
     case "init":
-      return "`v0.2.0` only guarantees a formal knowledge runtime init. Do not confuse `spec-wiki wiki init` with top-level `spec-wiki init`.";
+      return "`spec-wiki init` is the unified host bootstrap and repo-local runtime initialization entry point.";
     case "update":
       return "`v0.2.0` treats knowledge runtime refresh as the formal update contract.";
     case "query":

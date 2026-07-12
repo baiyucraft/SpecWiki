@@ -118,6 +118,74 @@ fn parses_development_mode_command_flag() {
 }
 
 #[test]
+fn parses_change_id_and_cli_bootstrap_command_fields() {
+    let change: CoreCommand =
+        serde_json::from_str(r#"{"action":"validate","repoRoot":".","changeId":"demo-change"}"#)
+            .unwrap();
+    assert_eq!(change.change_id.as_deref(), Some("demo-change"));
+
+    let init: CoreCommand = serde_json::from_str(
+        r#"{"action":"cli_init","repoRoot":".","bootstrap":{"outcome":"ready","hosts":[]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        init.bootstrap.unwrap().outcome,
+        wiki_runtime::transport::dto::BootstrapOutcome::Ready
+    );
+
+    let partial: CoreCommand = serde_json::from_str(
+        r#"{"action":"cli_init","repoRoot":".","bootstrap":{"outcome":"partial","hosts":[{"host":"codex","status":"partial","files":[],"failedTarget":".codex/skills/wiki-status/SKILL.md","error":"denied"}],"recoveryHint":"rerun"}}"#,
+    )
+    .unwrap();
+    let partial = partial.bootstrap.unwrap();
+    assert_eq!(partial.recovery_hint.as_deref(), Some("rerun"));
+    assert_eq!(
+        partial.hosts[0].failed_target.as_deref(),
+        Some(".codex/skills/wiki-status/SKILL.md")
+    );
+}
+
+#[test]
+fn changes_transport_returns_typed_governance_envelope() {
+    let fixture = tempdir().unwrap();
+    let response = wiki_runtime::transport::cli::dispatch(CoreCommand {
+        action: "changes".to_string(),
+        repo_root: Some(fixture.path().display().to_string()),
+        term: None,
+        change_id: None,
+        bootstrap: None,
+        development_mode: false,
+        stream_progress: false,
+        llm_bridge: None,
+    });
+    assert!(response.ok);
+    let payload = response.data.unwrap();
+    assert_eq!(payload["governance"]["readiness"], "not_enabled");
+    assert_eq!(payload["changes"], serde_json::json!([]));
+}
+
+#[test]
+fn change_transport_distinguishes_governance_not_enabled_from_missing_change() {
+    let fixture = tempdir().unwrap();
+    let response = wiki_runtime::transport::cli::dispatch(CoreCommand {
+        action: "change".to_string(),
+        repo_root: Some(fixture.path().display().to_string()),
+        term: None,
+        change_id: Some("demo-change".to_string()),
+        bootstrap: None,
+        development_mode: false,
+        stream_progress: false,
+        llm_bridge: None,
+    });
+
+    assert!(!response.ok);
+    assert_eq!(
+        response.error_kind,
+        Some(wiki_runtime::transport::dto::CoreErrorKind::GovernanceNotEnabled)
+    );
+}
+
+#[test]
 fn serializes_error_response() {
     let response = CoreResponse::error("not_git_repo");
     let json = serde_json::to_string(&response).unwrap();
@@ -163,6 +231,8 @@ fn query_transport_returns_slim_payload_but_internal_query_stays_rich() {
         action: "query".to_string(),
         repo_root: Some(repo_root.display().to_string()),
         term: Some("handleCheckout".to_string()),
+        change_id: None,
+        bootstrap: None,
         development_mode: false,
         stream_progress: false,
         llm_bridge: None,
@@ -232,6 +302,8 @@ fn query_transport_keeps_page_provenance_inside_compact_page_hits() {
         action: "query".to_string(),
         repo_root: Some(repo_root.display().to_string()),
         term: Some("项目概述".to_string()),
+        change_id: None,
+        bootstrap: None,
         development_mode: false,
         stream_progress: false,
         llm_bridge: None,
@@ -258,6 +330,8 @@ fn init_transport_requires_provider_in_production_but_allows_explicit_developmen
         action: "init".to_string(),
         repo_root: Some(production_repo_root.display().to_string()),
         term: None,
+        change_id: None,
+        bootstrap: None,
         development_mode: false,
         stream_progress: false,
         llm_bridge: None,
@@ -281,6 +355,8 @@ fn init_transport_requires_provider_in_production_but_allows_explicit_developmen
         action: "init".to_string(),
         repo_root: Some(development_repo_root.display().to_string()),
         term: None,
+        change_id: None,
+        bootstrap: None,
         development_mode: true,
         stream_progress: false,
         llm_bridge: None,
@@ -312,6 +388,8 @@ fn blocker_transport_contract_never_looks_like_success() {
         action: "init".to_string(),
         repo_root: Some(repo_root.display().to_string()),
         term: None,
+        change_id: None,
+        bootstrap: None,
         development_mode: false,
         stream_progress: false,
         llm_bridge: None,
@@ -328,6 +406,8 @@ fn blocker_transport_contract_never_looks_like_success() {
         action: "status".to_string(),
         repo_root: Some(repo_root.display().to_string()),
         term: None,
+        change_id: None,
+        bootstrap: None,
         development_mode: false,
         stream_progress: false,
         llm_bridge: None,

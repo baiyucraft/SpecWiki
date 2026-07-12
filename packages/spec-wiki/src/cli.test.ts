@@ -26,15 +26,15 @@ beforeEach(() => {
   forwardCoreCommandMock.mockReset();
 });
 
-test("runCli dispatches init with explicit tool and repo root", async () => {
+test("runCli dispatches unified init with explicit host and repo root", async () => {
   selectHostsForInitMock.mockResolvedValue(["claude"]);
-  runBootstrapInitMock.mockResolvedValue({ hosts: [] });
+  runBootstrapInitMock.mockResolvedValue({ outcome: "ready", hosts: [] });
   const stdout: string[] = [];
   const stderr: string[] = [];
   const { runCli } = await import("./cli.js");
 
   const exitCode = await runCli(
-    ["init", "--tool", "claude", "--repo-root", "/repo"],
+    ["init", "--host", "claude", "--repo-root", "/repo", "--json"],
     {
       cwd: "/cwd",
       env: process.env,
@@ -46,22 +46,22 @@ test("runCli dispatches init with explicit tool and repo root", async () => {
   expect(exitCode).toBe(0);
   expect(selectHostsForInitMock).toHaveBeenCalledWith({
     repoRoot: "/repo",
-    rawTools: "claude",
-    interactive: undefined,
+    rawHosts: "claude",
+    interactive: false,
     stdin: undefined,
   });
   expect(runBootstrapInitMock).toHaveBeenCalledWith({
     repoRoot: "/repo",
-    tools: "claude",
+    hosts: "claude",
     env: process.env,
   });
   expect(stderr).toEqual([]);
   expect(stdout).toEqual([]);
 });
 
-test("runCli supports interactive init selection without --tools", async () => {
+test("runCli supports interactive init selection without --hosts", async () => {
   selectHostsForInitMock.mockResolvedValue(["codex", "codebuddy"]);
-  runBootstrapInitMock.mockResolvedValue({ hosts: [] });
+  runBootstrapInitMock.mockResolvedValue({ outcome: "ready", hosts: [] });
   const { runCli } = await import("./cli.js");
 
   const exitCode = await runCli(["init"], {
@@ -75,20 +75,20 @@ test("runCli supports interactive init selection without --tools", async () => {
   expect(exitCode).toBe(0);
   expect(selectHostsForInitMock).toHaveBeenCalledWith({
     repoRoot: "/repo",
-    rawTools: undefined,
+    rawHosts: undefined,
     interactive: true,
     stdin: undefined,
   });
   expect(runBootstrapInitMock).toHaveBeenCalledWith({
     repoRoot: "/repo",
-    tools: "codex,codebuddy",
+    hosts: "codex,codebuddy",
     env: process.env,
   });
 });
 
 test("runCli passes --no-interactive to host selection", async () => {
   selectHostsForInitMock.mockResolvedValue(["codebuddy"]);
-  runBootstrapInitMock.mockResolvedValue({ hosts: [] });
+  runBootstrapInitMock.mockResolvedValue({ outcome: "ready", hosts: [] });
   const { runCli } = await import("./cli.js");
 
   const exitCode = await runCli(["init", "--no-interactive"], {
@@ -102,17 +102,17 @@ test("runCli passes --no-interactive to host selection", async () => {
   expect(exitCode).toBe(0);
   expect(selectHostsForInitMock).toHaveBeenCalledWith({
     repoRoot: "/repo",
-    rawTools: undefined,
+    rawHosts: undefined,
     interactive: false,
     stdin: undefined,
   });
 });
 
-test("runCli dispatches wiki query with positional terms", async () => {
+test("runCli dispatches top-level query with positional terms", async () => {
   forwardCoreCommandMock.mockResolvedValue(0);
   const { runCli } = await import("./cli.js");
 
-  const exitCode = await runCli(["wiki", "query", "payment", "flow"], {
+  const exitCode = await runCli(["query", "payment", "flow"], {
     cwd: "/repo",
     env: process.env,
     stdout: vi.fn(),
@@ -134,11 +134,11 @@ test("runCli dispatches wiki query with positional terms", async () => {
   );
 });
 
-test("runCli dispatches wiki sync as a public short-running action", async () => {
+test("runCli dispatches top-level sync as a public short-running action", async () => {
   forwardCoreCommandMock.mockResolvedValue(0);
   const { runCli } = await import("./cli.js");
 
-  const exitCode = await runCli(["wiki", "sync", "--repo-root", "/repo"], {
+  const exitCode = await runCli(["sync", "--repo-root", "/repo"], {
     cwd: "/cwd",
     env: process.env,
     stdout: vi.fn(),
@@ -159,11 +159,11 @@ test("runCli dispatches wiki sync as a public short-running action", async () =>
   );
 });
 
-test("runCli dispatches wiki rebuild as a public streaming action", async () => {
+test("runCli dispatches top-level rebuild as a public streaming action", async () => {
   forwardCoreCommandMock.mockResolvedValue(0);
   const { runCli } = await import("./cli.js");
 
-  const exitCode = await runCli(["wiki", "rebuild", "--bridge-stdio"], {
+  const exitCode = await runCli(["rebuild", "--bridge-stdio"], {
     cwd: "/repo",
     env: process.env,
     stdout: vi.fn(),
@@ -184,36 +184,35 @@ test("runCli dispatches wiki rebuild as a public streaming action", async () => 
   );
 });
 
-test("runCli rejects bridge-stdio for non-streaming wiki actions", async () => {
-  const stderr: string[] = [];
+test("runCli rejects bridge-stdio for non-streaming actions", async () => {
+  const stdout: string[] = [];
   const { runCli } = await import("./cli.js");
 
-  const exitCode = await runCli(["wiki", "query", "payment", "flow", "--bridge-stdio"], {
+  const exitCode = await runCli(["query", "payment", "flow", "--bridge-stdio"], {
     cwd: "/repo",
     env: process.env,
-    stdout: vi.fn(),
-    stderr: (text) => stderr.push(text),
+    stdout: (text) => stdout.push(text),
+    stderr: vi.fn(),
   });
 
-  expect(exitCode).toBe(1);
-  expect(stderr.join("")).toContain("--bridge-stdio is only supported for long-running wiki actions");
+  expect(exitCode).toBe(64);
+  expect(stdout.join("")).toContain("invalid_argument");
   expect(forwardCoreCommandMock).not.toHaveBeenCalled();
 });
 
-test("runCli rejects bridge-stdio for wiki status as well", async () => {
-  const stderr: string[] = [];
+test("runCli rejects bridge-stdio for status as well", async () => {
+  const stdout: string[] = [];
   const { runCli } = await import("./cli.js");
 
-  const exitCode = await runCli(["wiki", "status", "--bridge-stdio"], {
+  const exitCode = await runCli(["status", "--bridge-stdio"], {
     cwd: "/repo",
     env: process.env,
-    stdout: vi.fn(),
-    stderr: (text) => stderr.push(text),
+    stdout: (text) => stdout.push(text),
+    stderr: vi.fn(),
   });
 
-  expect(exitCode).toBe(1);
-  expect(stderr.join("")).toContain("--bridge-stdio is only supported for long-running wiki actions");
-  expect(stderr.join("")).toContain("status does not stream");
+  expect(exitCode).toBe(64);
+  expect(stdout.join("")).toContain("--bridge-stdio is only supported");
   expect(forwardCoreCommandMock).not.toHaveBeenCalled();
 });
 
@@ -231,21 +230,62 @@ test("runCli prints usage for --help", async () => {
   expect(exitCode).toBe(0);
   expect(stdout.join("")).toContain("Usage:");
   expect(stdout.join("")).toContain("--no-interactive");
-  expect(stdout.join("")).toContain("Supported actions: init, status, update, query, sync, rebuild");
-  expect(stdout.join("")).toContain("--bridge-stdio only applies to long-running wiki actions such as init, update, and rebuild");
+  expect(stdout.join("")).toContain("spec-wiki init");
+  expect(stdout.join("")).toContain("spec-wiki status");
+  expect(stdout.join("")).not.toContain("spec-wiki wiki");
+  expect(stdout.join("")).not.toContain("archive");
+});
+
+test("runCli exposes implemented advanced commands only through --help-all", async () => {
+  const stdout: string[] = [];
+  const { runCli } = await import("./cli.js");
+
+  const exitCode = await runCli(["--help-all"], {
+    cwd: "/repo",
+    env: process.env,
+    stdout: (text) => stdout.push(text),
+    stderr: vi.fn(),
+  });
+
+  expect(exitCode).toBe(0);
+  expect(stdout.join("")).toContain("spec-wiki changes");
+  expect(stdout.join("")).toContain("spec-wiki validate <change-id>");
+  expect(stdout.join("")).not.toContain("archive");
+});
+
+test("runCli rejects help mixed with machine flags", async () => {
+  const stdout: string[] = [];
+  const { runCli } = await import("./cli.js");
+  expect(await runCli(["--help", "--json"], {
+    cwd: "/repo",
+    env: process.env,
+    stdout: (text) => stdout.push(text),
+    stderr: vi.fn(),
+  })).toBe(64);
+  expect(stdout.join("")).toContain("invalid_argument");
+});
+
+test("runCli rejects the legacy wiki namespace with usage exit code", async () => {
+  const { runCli } = await import("./cli.js");
+  expect(await runCli(["wiki", "status"], {
+    cwd: "/repo",
+    env: process.env,
+    stdout: vi.fn(),
+    stderr: vi.fn(),
+  })).toBe(64);
 });
 
 test("runCli rejects query without a term", async () => {
   const stderr: string[] = [];
   const { runCli } = await import("./cli.js");
 
-  const exitCode = await runCli(["wiki", "query"], {
+  const exitCode = await runCli(["query"], {
     cwd: "/repo",
     env: process.env,
     stdout: vi.fn(),
     stderr: (text) => stderr.push(text),
   });
 
-  expect(exitCode).toBe(1);
-  expect(stderr.join("")).toContain("wiki query requires --term");
+  expect(exitCode).toBe(64);
+  expect(stderr.join("")).toContain("query requires at least one term");
 });

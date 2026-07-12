@@ -26,6 +26,9 @@ export type CoreCommand = {
   repoRoot?: string;
   /** `query` 命令使用的检索词。 */
   term?: string;
+  changeId?: string;
+  developmentMode?: boolean;
+  bootstrap?: unknown;
   /** 长流程协议提示；当前由 invokeCore 内部自动打开。 */
   streamProgress?: boolean;
   /** 宿主若支持双向会话桥接，会在这里显式协商协议。 */

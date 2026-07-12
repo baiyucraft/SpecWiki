@@ -188,11 +188,11 @@ impl IndexSnapshotStore for SqliteIndexStore {
 
     fn replace_graph_snapshot_for_files(
         &self,
-        _file_paths: &[String],
+        file_paths: &[String],
         snapshot: &GraphSnapshot,
     ) -> io::Result<()> {
         let mut conn = sqlite_store::open_db(&self.repo_root)?;
-        sqlite_store::replace_graph_snapshot(&mut conn, snapshot)
+        sqlite_store::replace_graph_snapshot_for_files(&mut conn, file_paths, snapshot)
     }
 }
 

@@ -4,11 +4,34 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use wiki_model::domain::governance::{
     GovernanceArtifactRef, GovernanceChangeSummary, GovernanceGateStatus, GovernanceIssueSeverity,
     GovernanceReadiness, GovernanceRecommendedAction, GovernanceSummary,
     GovernanceValidationResult,
 };
+
+/// 顶层 `changes` 的 live governance 响应。
+#[derive(Debug, Clone, Serialize)]
+pub struct GovernanceChangesReport {
+    pub governance: GovernanceSummary,
+    pub changes: Vec<GovernanceChangeSummary>,
+}
+
+/// 顶层 `change` 的 live governance 响应。
+#[derive(Debug, Clone, Serialize)]
+pub struct GovernanceChangeReport {
+    pub governance: GovernanceSummary,
+    pub change: GovernanceChangeSummary,
+}
+
+/// 顶层 `validate` 的 live governance 响应。
+#[derive(Debug, Clone, Serialize)]
+pub struct GovernanceValidateReport {
+    pub governance: GovernanceSummary,
+    pub change_id: String,
+    pub validation: GovernanceValidationResult,
+}
 use wiki_model::domain::query::{
     QueryConfidence, QueryProvenance, QueryRefKind, QueryResultDto, QueryRouteTag, QuerySourceRef,
     RecommendedAction,
@@ -90,6 +113,58 @@ impl GovernanceService {
         Ok(self.evaluate_live()?.changes)
     }
 
+    /// 从一次 live evaluation 构造列表响应，避免 summary 与 changes 漂移。
+    pub fn changes_report(&self) -> io::Result<GovernanceChangesReport> {
+        let evaluation = self.evaluate_live()?;
+        Ok(GovernanceChangesReport {
+            governance: evaluation.summary,
+            changes: evaluation.changes,
+        })
+    }
+
+    /// 从一次 live evaluation 构造单 change 响应。
+    pub fn change_report(&self, change_id: &str) -> io::Result<GovernanceChangeReport> {
+        let evaluation = self.evaluate_live()?;
+        ensure_governance_enabled(&evaluation.summary)?;
+        let change = evaluation
+            .changes
+            .iter()
+            .find(|change| change.id == change_id)
+            .cloned()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("governance change not found: {change_id}"),
+                )
+            })?;
+        Ok(GovernanceChangeReport {
+            governance: evaluation.summary,
+            change,
+        })
+    }
+
+    /// 从一次 live evaluation 构造 change 校验响应。
+    pub fn validate_report(&self, change_id: &str) -> io::Result<GovernanceValidateReport> {
+        let evaluation = self.evaluate_live()?;
+        ensure_governance_enabled(&evaluation.summary)?;
+        let change = evaluation
+            .changes
+            .iter()
+            .find(|change| change.id == change_id)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("governance change not found: {change_id}"),
+                )
+            })?;
+        let validation = Self::validation_from_evaluation(&evaluation, change);
+        Ok(GovernanceValidateReport {
+            governance: evaluation.summary,
+            change_id: change_id.to_string(),
+            validation,
+        })
+    }
+
     /// 读取单个 live change summary。
     pub fn inspect_change(&self, change_id: &str) -> io::Result<GovernanceChangeSummary> {
         self.evaluate_live()?
@@ -117,6 +192,14 @@ impl GovernanceService {
                     format!("governance change not found: {change_id}"),
                 )
             })?;
+        Ok(Self::validation_from_evaluation(&evaluation, change))
+    }
+
+    fn validation_from_evaluation(
+        evaluation: &GovernanceEvaluation,
+        change: &GovernanceChangeSummary,
+    ) -> GovernanceValidationResult {
+        let change_id = change.id.as_str();
         let issues = evaluation
             .summary
             .issues
@@ -153,12 +236,12 @@ impl GovernanceService {
         } else {
             GovernanceReadiness::Ready
         };
-        Ok(GovernanceValidationResult {
+        GovernanceValidationResult {
             valid: matches!(readiness, GovernanceReadiness::Ready),
             readiness,
             rule_results,
             issues,
-        })
+        }
     }
 
     /// 从 fingerprint 一致的 cache 查询结构化 change/artifact refs。
@@ -206,6 +289,16 @@ impl GovernanceService {
             Err(_) => Ok(None),
         }
     }
+}
+
+fn ensure_governance_enabled(summary: &GovernanceSummary) -> io::Result<()> {
+    if summary.readiness == GovernanceReadiness::NotEnabled {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "governance is not enabled for this repository",
+        ));
+    }
+    Ok(())
 }
 
 fn cache_snapshot(

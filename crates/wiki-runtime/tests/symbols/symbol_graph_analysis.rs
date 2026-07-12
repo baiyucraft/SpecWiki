@@ -252,16 +252,16 @@ fn community_detection_prefers_weighted_clusters_over_single_connected_component
 }
 
 fn test_symbol(symbol_id: &str, name: &str) -> SymbolNode {
-    SymbolNode {
-        symbol_id: symbol_id.to_string(),
-        name: name.to_string(),
-        label: "function".to_string(),
-        file_path: format!("src/{symbol_id}.ts"),
-        start_line: 1,
-        end_line: 1,
-        is_exported: true,
-        language: "typescript".to_string(),
-    }
+    SymbolNode::legacy(
+        symbol_id.to_string(),
+        name.to_string(),
+        "function".to_string(),
+        format!("src/{symbol_id}.ts"),
+        1,
+        1,
+        true,
+        "typescript".to_string(),
+    )
 }
 
 fn weighted_call(source_id: &str, target_id: &str, confidence: f64) -> ResolvedSymbolEdge {

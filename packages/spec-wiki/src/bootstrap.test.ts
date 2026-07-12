@@ -62,6 +62,7 @@ test("runBootstrapInit writes Claude skills and removes legacy command assets", 
     env: process.env,
   });
 
+  expect(result.outcome).toBe("ready");
   expect(result.hosts.map((host) => host.host)).toEqual(["claude"]);
 
   const statusSkillPath = path.join(repoRoot, ".claude", "skills", "wiki-status", "SKILL.md");
@@ -108,7 +109,7 @@ test("runBootstrapInit supports explicit Codex bootstrap as repo skills without 
 
   const result = await runBootstrapInit({
     repoRoot,
-    tools: "codex",
+    hosts: "codex",
     env: {
       ...process.env,
       CODEX_HOME: codexHome,
@@ -179,12 +180,12 @@ test("runBootstrapInit writes CodeBuddy skills, hooks, and settings without crea
 
   await runBootstrapInit({
     repoRoot,
-    tools: "codebuddy",
+    hosts: "codebuddy",
     env: process.env,
   });
   await runBootstrapInit({
     repoRoot,
-    tools: "codebuddy",
+    hosts: "codebuddy",
     env: process.env,
   });
 
@@ -202,7 +203,8 @@ test("runBootstrapInit writes CodeBuddy skills, hooks, and settings without crea
   );
 
   expect(readFileSync(unrelatedPath, "utf8")).toBe("custom");
-  expect(initSkill).toContain("spec-wiki wiki init");
+  expect(initSkill).toContain("spec-wiki init");
+  expect(initSkill).not.toContain("spec-wiki wiki");
   expect(initSkill).toContain("Use when the repository has not been bootstrapped for spec-wiki and you need to initialize the wiki runtime.");
 
   expect(querySkill).toContain("name: wiki-query");
@@ -210,6 +212,8 @@ test("runBootstrapInit writes CodeBuddy skills, hooks, and settings without crea
 
   expect(querySkill).toContain("This is a working pattern, not a rigid output template.");
   expect(querySkill).toContain("`query_mode`");
+  expect(querySkill).toContain("spec-wiki query \"$ARGUMENTS\"");
+  expect(querySkill).not.toContain("spec-wiki wiki");
   expect(querySkill).toContain("## When To Use");
   expect(querySkill).toContain("Do not post-process query output into host-specific Wiki business conclusions");
   expect(
@@ -256,7 +260,7 @@ test("runBootstrapInit no longer depends on Codex global prompt directory", asyn
 
   const result = await runBootstrapInit({
     repoRoot,
-    tools: "codex",
+    hosts: "codex",
     env: {
       ...process.env,
       CODEX_HOME: codexHome,
@@ -265,4 +269,33 @@ test("runBootstrapInit no longer depends on Codex global prompt directory", asyn
 
   expect(result.hosts.map((host) => host.host)).toEqual(["codex"]);
   expect(existsSync(path.join(repoRoot, ".codex", "skills", "wiki-status", "SKILL.md"))).toBe(true);
+});
+
+test("runBootstrapInit returns partial facts when a later asset write fails", async () => {
+  const repoRoot = makeTempDir("spec-wiki-partial-");
+  let writes = 0;
+
+  const result = await runBootstrapInit({
+    repoRoot,
+    hosts: "codex",
+    env: process.env,
+    writeFile: (filePath, content) => {
+      writes += 1;
+      if (writes === 2) {
+        throw new Error("simulated write failure");
+      }
+      mkdirSync(path.dirname(filePath), { recursive: true });
+      writeFileSync(filePath, content);
+      return "created";
+    },
+  });
+
+  expect(result.outcome).toBe("partial");
+  expect(result.hosts[0]).toMatchObject({
+    host: "codex",
+    status: "partial",
+    error: "simulated write failure",
+  });
+  expect(result.hosts[0].files).toHaveLength(1);
+  expect(result.recoveryHint).toContain("rerun spec-wiki init");
 });

@@ -504,15 +504,24 @@ fn apply_incremental_update<'a>(
             &full_resolved_graph,
             &analysis,
         )?,
-        GraphRefreshStrategy::Scoped => write_facts_snapshot_for_files(
-            repo_root,
-            &scan_report,
-            &module_tree,
-            &dirty_symbol_paths,
-            &changed_symbol_snapshot.symbols,
-            &changed_resolved_graph,
-            &analysis,
-        )?,
+        GraphRefreshStrategy::Scoped => {
+            let dirty_paths = dirty_symbol_paths.iter().collect::<BTreeSet<_>>();
+            let scoped_symbols = full_symbol_snapshot
+                .symbols
+                .iter()
+                .filter(|symbol| dirty_paths.contains(&symbol.file_path))
+                .cloned()
+                .collect::<Vec<_>>();
+            write_facts_snapshot_for_files(
+                repo_root,
+                &scan_report,
+                &module_tree,
+                &dirty_symbol_paths,
+                &scoped_symbols,
+                &changed_resolved_graph,
+                &analysis,
+            )?
+        }
     };
     reporter.phase("build_contexts", "构建页面上下文");
     let repo_context = build_repo_context_with_graph(&scan_report, &module_tree, &graph_summary);

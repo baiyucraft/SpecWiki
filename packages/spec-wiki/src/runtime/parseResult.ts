@@ -127,6 +127,28 @@ export type GovernanceSummary = {
   recommended_action: GovernanceRecommendedAction;
 };
 
+export type GovernanceChangeSummary = {
+  id: string;
+  location: "active" | "archived";
+  stage: string;
+  role?: string | null;
+  parent?: string | null;
+  order?: number | null;
+  depends_on: string[];
+  gate: Record<string, unknown>;
+};
+export type GovernanceValidationResult = {
+  valid: boolean;
+  readiness: GovernanceReadiness;
+  rule_results: Array<Record<string, unknown>>;
+  issues: GovernanceBlockingIssue[];
+};
+export type GovernanceChangesReport = { governance: GovernanceSummary; changes: GovernanceChangeSummary[] };
+export type GovernanceChangeReport = { governance: GovernanceSummary; change: GovernanceChangeSummary };
+export type GovernanceValidateReport = { governance: GovernanceSummary; change_id: string; validation: GovernanceValidationResult };
+export type BootstrapReport = { outcome: "ready" | "partial" | "failed"; hosts: Array<Record<string, unknown>>; recoveryHint?: string | null };
+export type UnifiedInitReport = { outcome: "ready" | "partial"; bootstrap: BootstrapReport; runtime: unknown; landing: WikiStatusData; recovery_hint?: string | null };
+
 export type CoreUsageBucket = {
   key: string;
   request_count: number;
@@ -255,8 +277,20 @@ export type CoreKnownData
     | WikiRebuildData
     | WikiSyncData
     | WorkflowTerminalData
+    | GovernanceChangesReport
+    | GovernanceChangeReport
+    | GovernanceValidateReport
+    | UnifiedInitReport
     | Record<string, unknown>
     | null;
+
+export type CoreErrorKind
+  = | "invalid_argument"
+    | "governance_not_enabled"
+    | "change_not_found"
+    | "workflow_failed"
+    | "protocol_error"
+    | "internal_error";
 
 /** `wiki-runtime` 的统一终态响应外壳。 */
 export type CoreResponse<TData = CoreKnownData> = {
@@ -264,6 +298,8 @@ export type CoreResponse<TData = CoreKnownData> = {
   ok: boolean;
   /** 失败时的错误消息。 */
   error?: string | null;
+  /** 机器可判断的错误分类。 */
+  errorKind?: CoreErrorKind | null;
   /** 成功或失败时附带的数据载荷。 */
   data?: TData;
 };
@@ -298,6 +334,10 @@ export type CoreLlmRequestEvent = {
   type: "llm_request";
   request: CoreLlmRequest;
 };
+export type CoreAgentEvent = {
+  type: "agent_session_start" | "agent_message" | "agent_tool_call" | "agent_tool_result" | "agent_final" | "agent_abort";
+  [key: string]: unknown;
+};
 
 /** 长流程事件流里的成功终态事件。 */
 export type CoreResultEvent = {
@@ -315,6 +355,7 @@ export type CoreErrorEvent = {
 export type CoreStreamEvent
   = | CoreProgressEvent
     | CoreLlmRequestEvent
+    | CoreAgentEvent
     | CoreResultEvent
     | CoreErrorEvent;
 
@@ -571,7 +612,7 @@ function parseGovernanceSummary(value: unknown): GovernanceSummary {
     !isRecord(parsed)
     || typeof parsed.active_count !== "number"
     || typeof parsed.archived_count !== "number"
-    || !Array.isArray(parsed.issues)
+    || (parsed.issues !== undefined && !Array.isArray(parsed.issues))
   ) {
     throw new Error("invalid wiki-runtime governance summary");
   }
@@ -584,13 +625,53 @@ function parseGovernanceSummary(value: unknown): GovernanceSummary {
     fingerprint: parseNullableString(parsed.fingerprint, "governance.fingerprint"),
     active_count: parsed.active_count,
     archived_count: parsed.archived_count,
-    issues: parsed.issues.map(parseGovernanceIssue),
+    issues: (parsed.issues ?? []).map(parseGovernanceIssue),
     recommended_action: parseLiteral(
       parsed.recommended_action,
       ["none", "update", "review_governance"] as const,
       "governance.recommended_action",
     ),
   };
+}
+
+function parseGovernanceChange(value: unknown): GovernanceChangeSummary {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.stage !== "string" || !isRecord(value.gate)) {
+    throw new Error("invalid wiki-runtime governance change");
+  }
+  return {
+    id: value.id,
+    location: parseLiteral(value.location, ["active", "archived"] as const, "governance.change.location"),
+    stage: value.stage,
+    role: parseNullableString(value.role, "governance.change.role"),
+    parent: parseNullableString(value.parent, "governance.change.parent"),
+    order: parseNullableNumber(value.order, "governance.change.order"),
+    depends_on: parseStringArray(value.depends_on ?? [], "governance.change.depends_on"),
+    gate: value.gate,
+  };
+}
+
+function parseGovernanceReport(value: Record<string, unknown>): GovernanceChangesReport | GovernanceChangeReport | GovernanceValidateReport {
+  const governance = parseGovernanceSummary(value.governance);
+  if (Array.isArray(value.changes))
+return { governance, changes: value.changes.map(parseGovernanceChange) };
+  if (isRecord(value.change))
+return { governance, change: parseGovernanceChange(value.change) };
+  if (typeof value.change_id === "string" && isRecord(value.validation)) {
+    const validation = value.validation;
+    if (typeof validation.valid !== "boolean")
+throw new Error("invalid wiki-runtime governance validation");
+    return {
+      governance,
+      change_id: value.change_id,
+      validation: {
+        valid: validation.valid,
+        readiness: parseLiteral(validation.readiness, ["not_enabled", "ready", "stale", "blocked", "conflict"] as const, "governance.validation.readiness"),
+        rule_results: Array.isArray(validation.rule_results) ? validation.rule_results.filter(isRecord) : [],
+        issues: Array.isArray(validation.issues) ? validation.issues.map(parseGovernanceIssue) : [],
+      },
+    };
+  }
+  throw new Error("invalid wiki-runtime governance report");
 }
 
 function parseUsageBucket(value: unknown): CoreUsageBucket {
@@ -874,11 +955,32 @@ function parseKnownData(value: unknown): CoreKnownData {
     return value as CoreKnownData;
   }
 
+  if ((value.outcome === "ready" || value.outcome === "partial") && isRecord(value.bootstrap) && isRecord(value.landing)) {
+    const bootstrap = value.bootstrap;
+    if (!Array.isArray(bootstrap.hosts))
+throw new Error("invalid wiki-runtime bootstrap report");
+    return {
+      outcome: value.outcome,
+      bootstrap: {
+        outcome: parseLiteral(bootstrap.outcome, ["ready", "partial", "failed"] as const, "bootstrap.outcome"),
+        hosts: bootstrap.hosts.filter(isRecord),
+        recoveryHint: parseNullableString(bootstrap.recoveryHint, "bootstrap.recoveryHint"),
+      },
+      runtime: value.runtime,
+      landing: parseStatusData(value.landing),
+      recovery_hint: parseNullableString(value.recovery_hint, "recovery_hint"),
+    };
+  }
+
   if (
     typeof value.state === "string"
     && "readiness" in value
   ) {
     return parseStatusData(value);
+  }
+
+  if ("governance" in value && ("changes" in value || "change" in value || "validation" in value)) {
+    return parseGovernanceReport(value);
   }
 
   if (
@@ -917,6 +1019,21 @@ function parseCoreResponse(value: unknown): CoreResponse {
     ok: parsed.ok,
     error:
       typeof parsed.error === "string" || parsed.error == null ? parsed.error : undefined,
+    errorKind:
+      parsed.errorKind == null
+        ? parsed.errorKind
+        : parseLiteral(
+            parsed.errorKind,
+            [
+              "invalid_argument",
+              "governance_not_enabled",
+              "change_not_found",
+              "workflow_failed",
+              "protocol_error",
+              "internal_error",
+            ] as const,
+            "errorKind",
+          ),
     data: parseKnownData(parsed.data),
   };
 }
@@ -998,6 +1115,34 @@ export function parseEventLine(line: string): CoreStreamEvent {
         response_schema: request.response_schema,
       },
     };
+  }
+
+  if (parsed.type === "agent_session_start") {
+    if (!isRecord(parsed.request)) {
+      throw new Error("invalid wiki-runtime agent session event");
+    }
+    return parsed as CoreAgentEvent;
+  }
+  if (["agent_message", "agent_tool_call", "agent_tool_result"].includes(parsed.type ?? "")) {
+    const agentEvent = parsed as Record<string, unknown>;
+    if (typeof agentEvent.requestId !== "string" || !("message" in agentEvent)) {
+      throw new Error("invalid wiki-runtime agent message event");
+    }
+    return parsed as CoreAgentEvent;
+  }
+  if (parsed.type === "agent_final") {
+    const agentEvent = parsed as Record<string, unknown>;
+    if (typeof agentEvent.requestId !== "string" || !isRecord(agentEvent.response)) {
+      throw new Error("invalid wiki-runtime agent final event");
+    }
+    return parsed as CoreAgentEvent;
+  }
+  if (parsed.type === "agent_abort") {
+    const agentEvent = parsed as Record<string, unknown>;
+    if (typeof agentEvent.requestId !== "string" || typeof agentEvent.reason !== "string") {
+      throw new TypeError("invalid wiki-runtime agent abort event");
+    }
+    return parsed as CoreAgentEvent;
   }
 
   if (parsed.type === "result" || parsed.type === "error") {

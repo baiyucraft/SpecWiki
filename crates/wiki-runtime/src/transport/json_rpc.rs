@@ -40,7 +40,10 @@ pub fn handle_json(input: &str) -> Result<CoreResponse, serde_json::Error> {
 
 /// 判断已经解析好的命令是否属于长流程事件流。
 pub fn should_stream_command(command: &CoreCommand) -> bool {
-    matches!(command.action.as_str(), "init" | "update" | "rebuild")
+    matches!(
+        command.action.as_str(),
+        "init" | "cli_init" | "update" | "rebuild"
+    )
 }
 
 /// 判断原始 JSON 输入是否属于长流程事件流。

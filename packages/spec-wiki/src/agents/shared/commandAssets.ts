@@ -64,7 +64,7 @@ function renderQueryWhenToUse(): string[] {
 function renderQueryHowToWork(): string[] {
   return [
     "Extract a concise query term from the request, or use the provided term directly.",
-    "Run `spec-wiki wiki query --term \"$ARGUMENTS\"` from the repository root.",
+    "Run `spec-wiki query \"$ARGUMENTS\"` from the repository root.",
     `Look at these stable fields first to decide whether the result is sufficient: ${QUERY_STABLE_FIELDS.join(", ")}.`,
     "Treat the query result as a structured map for narrowing the search space. Prioritize relevant pages, files, symbols, or call-path clues instead of restating the JSON payload.",
   ];
@@ -110,7 +110,7 @@ function renderHostActionNotes(action: WikiAction, entryName: string): string[] 
   switch (action) {
     case "init":
       return [
-        `\`v0.2.0\` only guarantees a formal knowledge runtime init. Do not confuse \`${entryName}\` with top-level \`spec-wiki init\`.`,
+        `\`${entryName}\` invokes the unified \`spec-wiki init\` product entry point.`,
       ];
     case "status":
       return ["`status` inspects runtime state only. It does not imply full knowledge/page completion."];
@@ -273,7 +273,7 @@ export function renderCodeBuddyHookAdditionalContext(
   const baseLines = [
     "This repository uses spec-wiki as the shared Repo Wiki runtime.",
     "Prefer the explicit skills wiki-status and wiki-query when the user asks about repo structure, files, modules, symbols, call paths, or when you need a fast structured map of how the code works together.",
-    "Do not confuse top-level spec-wiki init with runtime action spec-wiki wiki init.",
+    "Use spec-wiki init as the single initialization entry point for host assets and the repo-local runtime.",
     "Treat wiki-status and wiki-query output as authoritative runtime data instead of rebuilding a host-side wiki state machine.",
     "The shared rules live in hooks and action skill guardrails, not in a separate shared CodeBuddy skill.",
   ];

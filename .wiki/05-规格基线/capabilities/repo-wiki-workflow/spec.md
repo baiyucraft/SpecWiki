@@ -46,7 +46,7 @@
 - **THEN** 系统 MUST NOT 仅凭 facts/index 可查就把缺失 `.knowledge / official page tree / metadata` 的结果表述为 `v0.2.0` init 成功
 
 #### Scenario: `update` 以 knowledge-first refresh 提交成功
-- **WHEN** 用户在已有 runtime 的仓库上执行 `spec-wiki wiki update`
+- **WHEN** 用户在已有 runtime 的仓库上执行 `spec-wiki update`
 - **THEN** 系统 MUST 以 knowledge-first refresh 更新正式 `.knowledge / official page tree / metadata / cache` snapshot
 - **THEN** 系统 MUST NOT 继续把“只刷新 facts/index”表述为 `v0.2.0` update 的正式成功语义
 
@@ -54,7 +54,7 @@
 系统 MUST 把 `status` 作为 knowledge runtime 检查入口，稳定表达当前仓库是否处于 `ready`、`stale`、`needs_update` 或 `blocker`，并返回调用方可直接执行的单值 `recommended_action`。当前版本正式支持的推荐动作 MUST 至少包括 `none`、`init`、`update`、`sync`、`rebuild`。
 
 #### Scenario: `status` 给出 knowledge runtime 推荐动作
-- **WHEN** 用户执行 `spec-wiki wiki status`，且当前 runtime 诊断需要页面回写同步或显式全量重建
+- **WHEN** 用户执行 `spec-wiki status`，且当前 runtime 诊断需要页面回写同步或显式全量重建
 - **THEN** 响应 MUST 返回 `recommended_action = sync` 或 `recommended_action = rebuild`
 - **THEN** 宿主 MUST 能直接消费这些推荐动作，而不需要自行重建一套 host-side 状态机
 
@@ -62,7 +62,7 @@
 系统 MUST 将 `query` 的正式稳定合同收敛到外部 `term-only`、内部 `index -> knowledge -> page fallback` 的结果路由。宿主与用户当前版本可稳定依赖的字段 MUST 继续以 `query_mode`、`query_trust`、`recommended_action`、`matched_pages` 和 `provenance_summary` 为主；其中 `provenance_summary` MUST 至少能稳定区分 `index_hit`、`knowledge_hit` 与 `page_fallback` 三类 route tags。其他实现可见字段 MAY 出现，但 MUST NOT 脱离该 route 语义漂移成新的公开 payload。
 
 #### Scenario: `query` 优先返回 index 与 knowledge 命中
-- **WHEN** 用户执行 `spec-wiki wiki query`，且当前 query 同时存在 facts/index 或 formal knowledge 命中
+- **WHEN** 用户执行 `spec-wiki query`，且当前 query 同时存在 facts/index 或 formal knowledge 命中
 - **THEN** 响应 MUST 优先体现 `index` 与 `knowledge` 层结果
 - **THEN** 调用方 MUST 能从 `provenance_summary` 看出当前命中属于 `index_hit` 或 `knowledge_hit`，而不是 page fallback 伪装
 
@@ -74,16 +74,16 @@
 ### Requirement: `sync` 必须作为正式公开 workflow 同步页面回写
 系统 MUST 将 `sync` 作为正式公开 workflow，用于把 `.wiki` 受管页面的人工编辑、managed drift 与 section 结构变化同步回 runtime state、metadata 与本地 cache。`sync` 只处理页面层 contract，不得被表述成源码扫描、knowledge refresh 或普通增量更新的替代物。
 
-#### Scenario: 用户显式执行 `spec-wiki wiki sync`
-- **WHEN** 用户修改 `.wiki` 页面后执行 `spec-wiki wiki sync`
+#### Scenario: 用户显式执行 `spec-wiki sync`
+- **WHEN** 用户修改 `.wiki` 页面后执行 `spec-wiki sync`
 - **THEN** 系统 MUST 回写相关页面状态、metadata 与本地 cache
 - **THEN** 系统 MUST NOT 因该动作重新进入 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble`
 
 ### Requirement: `rebuild` 必须作为正式公开 workflow 执行显式全量重建
 系统 MUST 将 `rebuild` 作为正式公开 workflow，用于调用方显式要求强制全量重建 runtime。`rebuild` MUST 保持独立于普通 `update` 的语义边界，并继续作为 long-running workflow 对外暴露。
 
-#### Scenario: 用户显式执行 `spec-wiki wiki rebuild`
-- **WHEN** 用户或宿主明确调用 `spec-wiki wiki rebuild`
+#### Scenario: 用户显式执行 `spec-wiki rebuild`
+- **WHEN** 用户或宿主明确调用 `spec-wiki rebuild`
 - **THEN** 系统 MUST 执行正式 runtime 的全量重建
 - **THEN** 系统 MUST NOT 把该动作表述成普通 `update` 的别名或隐式 fallback 文案
 

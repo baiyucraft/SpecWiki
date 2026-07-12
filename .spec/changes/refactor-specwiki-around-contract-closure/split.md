@@ -61,7 +61,7 @@
 - 目标: 在治理共享合同稳定后收窄 CLI 产品面，落实统一 `init`、一级 command router、分层 help、landing state、人类可解释输出和宿主资产。
 - 依赖: refactor-specwiki-around-contract-closure-query-route-readiness、refactor-specwiki-around-contract-closure-projection-writeback-boundaries、refactor-specwiki-around-contract-closure-governance-isolation。
 - 关键验收: 默认 help 只突出 `init / status / query / update`；advanced / governance 命令只通过场景或完整 help 暴露；统一 init 明确 partial success、退出码和 next action；保留 JSON/NDJSON 机器协议；本 child 不实现 archive manifest 或目录移动。
-- 归档状态: [ ] pending
+- 归档状态：[x] archived
 
 ### 8. refactor-specwiki-around-contract-closure-archive-dry-run-manifest
 

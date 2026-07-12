@@ -53,6 +53,9 @@ multiChange:
         - refactor-specwiki-around-contract-closure-query-route-readiness
         - refactor-specwiki-around-contract-closure-projection-writeback-boundaries
         - refactor-specwiki-around-contract-closure-governance-isolation
+      archiveStatus: archived
+      archivedAt: 2026-07-12T18:30:22.931Z
+      archivedTo: .spec/archive/2026-07-12-refactor-specwiki-around-contract-closure-cli-product-surface
     - id: refactor-specwiki-around-contract-closure-archive-dry-run-manifest
       order: 8
       dependsOn:

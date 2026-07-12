@@ -1,5 +1,5 @@
 /**
- * 这个文件覆盖 spec-wiki wiki <action> 的端到端 CLI forwarding。
+ * 这个文件覆盖 spec-wiki 一级命令的端到端 CLI forwarding。
  * 它验证共享 CLI 路径可以真正驱动当前阶段的 wiki-runtime。
  */
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -38,7 +38,7 @@ async function runWikiCli(repoRoot: string, ...args: string[]) {
   };
 }
 
-test("spec-wiki wiki init, status, update, and query keep v0.2 knowledge runtime contract end to end", async () => {
+test("spec-wiki init, status, update, and query keep v0.2 knowledge runtime contract end to end", async () => {
   const repoRoot = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-e2e-"));
   const previousBinary = process.env.SPEC_WIKI_RUNTIME_BIN;
   const previousStructuralRuntime = process.env.SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME;
@@ -63,19 +63,20 @@ test("spec-wiki wiki init, status, update, and query keep v0.2 knowledge runtime
     process.env.SPEC_WIKI_RUNTIME_BIN = binaryPath;
     process.env.SPEC_WIKI_ALLOW_STRUCTURAL_RUNTIME = "1";
 
-    const initResult = await runWikiCli(repoRoot, "wiki", "init");
-    expect(initResult.exitCode).toBe(0);
+    const initResult = await runWikiCli(repoRoot, "init", "--host", "codex", "--json", "--development-mode");
+    expect(initResult.exitCode, `${initResult.stderr}\n${initResult.stdout}`).toBe(0);
     const initLines = initResult.stdout.trim().split(/\r?\n/).filter(Boolean);
     expect(initLines.some((line) => line.includes("\"type\":\"progress\""))).toBe(true);
     const initTerminal = parseJsonLine(initLines[initLines.length - 1]);
     expect(initTerminal.type).toBe("result");
-    expect(initTerminal.response.data.state).toBe("fresh");
-    expect((initTerminal.response.data.generated_pages ?? []).length).toBeGreaterThan(0);
+    expect(initTerminal.response.data.outcome).toBe("ready");
+    expect(initTerminal.response.data.landing.state).toBe("fresh");
+    expect((initTerminal.response.data.runtime.generated_pages ?? []).length).toBeGreaterThan(0);
     expect(existsSync(path.join(repoRoot, ".wiki", ".cache", "wiki-cache.db"))).toBe(true);
     expect(existsSync(path.join(repoRoot, ".wiki", "INDEX.md"))).toBe(true);
     expect(existsSync(path.join(repoRoot, ".wiki", "wiki.metadata.json"))).toBe(true);
 
-    const statusResult = await runWikiCli(repoRoot, "wiki", "status");
+    const statusResult = await runWikiCli(repoRoot, "status", "--json");
     expect(statusResult.exitCode).toBe(0);
     const statusJson = parseJsonLine(statusResult.stdout);
     expect(statusJson.data.state).toBe("fresh");
@@ -86,7 +87,7 @@ test("spec-wiki wiki init, status, update, and query keep v0.2 knowledge runtime
 
     writeFileSync(path.join(repoRoot, "src.ts"), "export const version = 2;\n");
 
-    const updateResult = await runWikiCli(repoRoot, "wiki", "update");
+    const updateResult = await runWikiCli(repoRoot, "update", "--json", "--development-mode");
     expect(updateResult.exitCode).toBe(0);
     const updateLines = updateResult.stdout.trim().split(/\r?\n/).filter(Boolean);
     expect(updateLines.some((line) => line.includes("\"type\":\"progress\""))).toBe(true);
@@ -96,7 +97,7 @@ test("spec-wiki wiki init, status, update, and query keep v0.2 knowledge runtime
     expect((updateTerminal.response.data.updated_pages ?? []).length).toBeGreaterThan(0);
     expect(existsSync(path.join(repoRoot, ".wiki", "wiki.metadata.json"))).toBe(true);
 
-    const queryResult = await runWikiCli(repoRoot, "wiki", "query", "src.ts");
+    const queryResult = await runWikiCli(repoRoot, "query", "src.ts", "--json");
     expect(queryResult.exitCode).toBe(0);
     const queryJson = parseJsonLine(queryResult.stdout);
     expect(queryJson.ok).toBe(true);

@@ -128,6 +128,16 @@ test("forwardCoreCommand 在长流程 terminal error 时返回非零退出码", 
   expect(exitCode).toBe(1);
 });
 
+test("forwardCoreCommand rejects events after the terminal", async () => {
+  const child = createChild([
+    "{\"type\":\"result\",\"response\":{\"ok\":true}}\n",
+    "{\"type\":\"progress\",\"action\":\"update\",\"phase\":\"late\",\"message\":\"late\",\"elapsed_ms\":1,\"processed\":null,\"total\":null}\n",
+  ]);
+  spawnMock.mockReturnValue(child);
+  const { forwardCoreCommand } = await import("./forwardCore.js");
+  expect(await forwardCoreCommand({ action: "update" })).toBe(1);
+});
+
 test("forwardCoreCommand 在 bridge-stdio 模式下打开 llmBridge 并转发 stdin", async () => {
   const stdinEmitter = new EventEmitter();
   const stdin = {

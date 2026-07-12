@@ -133,12 +133,12 @@ export function resolveSelectedHosts(repoRoot: string, rawTools?: string): Suppo
 
   if (detectedHosts.length > 1) {
     throw new Error(
-      `multiple hosts detected: ${detectedHosts.join(", ")}. Use --tool or --tools to choose explicitly.`,
+      `multiple hosts detected: ${detectedHosts.join(", ")}. Use --host or --hosts to choose explicitly.`,
     );
   }
 
   throw new Error(
-    `no supported host detected under ${repoRoot}. Use --tool codex, --tool claude, or --tool codebuddy.`,
+    `no supported host detected under ${repoRoot}. Use --host codex, --host claude, or --host codebuddy.`,
   );
 }
 

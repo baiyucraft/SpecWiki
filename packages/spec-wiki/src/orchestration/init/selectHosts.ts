@@ -16,8 +16,8 @@ import {
 export type SelectHostsOptions = {
   /** 当前仓库根目录。 */
   repoRoot: string;
-  /** CLI 传入的 `--tool` / `--tools` 原始值。 */
-  rawTools?: string;
+  /** CLI 传入的 `--host` / `--hosts` 原始值。 */
+  rawHosts?: string;
   /** 是否允许进入交互模式。 */
   interactive?: boolean;
   /** 可选的标准输入，用于检测 TTY。 */
@@ -27,7 +27,7 @@ export type SelectHostsOptions = {
 };
 
 function canPromptInteractively(options: SelectHostsOptions): boolean {
-  if (options.rawTools) {
+  if (options.rawHosts) {
     return false;
   }
 
@@ -74,7 +74,7 @@ async function promptForHosts(
 export async function selectHostsForInit(
   options: SelectHostsOptions,
 ): Promise<SupportedHost[]> {
-  const explicitHosts = parseRequestedHosts(options.rawTools);
+  const explicitHosts = parseRequestedHosts(options.rawHosts);
   if (explicitHosts.length > 0) {
     return explicitHosts;
   }
@@ -90,11 +90,11 @@ export async function selectHostsForInit(
 
   if (detectedHosts.length > 1) {
     throw new Error(
-      `multiple hosts detected: ${detectedHosts.join(", ")}. Use --tool or --tools to choose explicitly, or rerun without --no-interactive.`,
+      `multiple hosts detected: ${detectedHosts.join(", ")}. Use --host or --hosts to choose explicitly, or rerun without --no-interactive.`,
     );
   }
 
   throw new Error(
-    `no supported host detected under ${options.repoRoot}. Use --tool codex, --tool claude, or --tool codebuddy, or rerun interactively to choose.`,
+    `no supported host detected under ${options.repoRoot}. Use --host codex, --host claude, or --host codebuddy, or rerun interactively to choose.`,
   );
 }

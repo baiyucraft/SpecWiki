@@ -2,11 +2,13 @@ use std::path::PathBuf;
 
 use serde_json::json;
 
+use crate::domain::runtime_profile::FusionReadiness;
 use crate::domain::runtime_profile::{blocker_hint_from, RuntimeSummaryProjection};
 use crate::domain::steering::SteeringLoadMode;
 use crate::llm::LlmService;
-use crate::transport::dto::{CoreCommand, CoreResponse};
+use crate::transport::dto::{BootstrapOutcome, CoreCommand, CoreErrorKind, CoreResponse};
 use crate::transport::query_payload::map_query_report;
+use crate::workflows::governance::GovernanceService;
 use crate::workflows::init::run_init_with_progress_and_llm_as_with_mode;
 use crate::workflows::page_render::{
     load_runtime_gate_summary_for_repo, load_runtime_summary_for_repo,
@@ -17,6 +19,24 @@ use crate::workflows::rebuild::run_rebuild_with_progress_and_llm_as_with_mode;
 use crate::workflows::status::run_status_with_mode;
 use crate::workflows::sync::run_sync_with_mode;
 use crate::workflows::update::run_update_with_progress_and_llm_as_with_mode;
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum UnifiedInitOutcome {
+    Ready,
+    Partial,
+}
+
+#[derive(Debug, Serialize)]
+struct UnifiedInitReport<TInit, TStatus> {
+    outcome: UnifiedInitOutcome,
+    bootstrap: crate::transport::dto::BootstrapReport,
+    runtime: TInit,
+    landing: TStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_hint: Option<String>,
+}
 
 /// 按 `action` 分发到具体 workflow。
 /// transport 层不直接做业务判断，它只负责把协议转成 workflow 调用。
@@ -67,6 +87,70 @@ pub fn dispatch_with_runtime<'a>(
         "status" => {
             encode_result(run_status_with_mode(&repo_root, steering_mode).and_then(as_json))
         }
+        "cli_init" => {
+            let Some(bootstrap) = command.bootstrap.clone() else {
+                return CoreResponse::typed_error(
+                    CoreErrorKind::InvalidArgument,
+                    "cli_init requires bootstrap report",
+                );
+            };
+            if bootstrap.outcome == BootstrapOutcome::Failed {
+                return CoreResponse::typed_error_with_data(
+                    CoreErrorKind::InvalidArgument,
+                    "cli_init cannot start with failed bootstrap",
+                    serde_json::to_value(&bootstrap).unwrap_or_else(|_| json!(null)),
+                );
+            }
+            let init = run_init_with_progress_and_llm_as_with_mode(
+                "cli_init",
+                &repo_root,
+                progress_sink,
+                llm_service.take(),
+                steering_mode,
+            );
+            let init = match init {
+                Ok(value) => value,
+                Err(error) => {
+                    return CoreResponse::typed_error_with_data(
+                        CoreErrorKind::WorkflowFailed,
+                        error.to_string(),
+                        json!({
+                            "bootstrap": bootstrap,
+                            "recovery_hint": "rerun spec-wiki init after resolving the runtime blocker",
+                        }),
+                    )
+                }
+            };
+            let landing = match run_status_with_mode(&repo_root, steering_mode) {
+                Ok(value) => value,
+                Err(error) => {
+                    return CoreResponse::typed_error_with_data(
+                        CoreErrorKind::WorkflowFailed,
+                        error.to_string(),
+                        json!({
+                            "bootstrap": bootstrap,
+                            "runtime": init,
+                            "recovery_hint": "run spec-wiki status after resolving the landing status error",
+                        }),
+                    )
+                }
+            };
+            let outcome = if bootstrap.outcome == BootstrapOutcome::Ready
+                && landing.readiness.fusion == FusionReadiness::Ready
+            {
+                UnifiedInitOutcome::Ready
+            } else {
+                UnifiedInitOutcome::Partial
+            };
+            encode_result(as_json(UnifiedInitReport {
+                outcome,
+                bootstrap,
+                runtime: init,
+                landing,
+                recovery_hint: matches!(outcome, UnifiedInitOutcome::Partial)
+                    .then(|| "inspect landing state and rerun the recommended action".to_string()),
+            }))
+        }
         "update" => encode_long_result(
             &repo_root,
             run_update_with_progress_and_llm_as_with_mode(
@@ -99,7 +183,55 @@ pub fn dispatch_with_runtime<'a>(
             )
             .and_then(as_json),
         ),
+        "changes" => encode_governance_result(
+            GovernanceService::new(&repo_root)
+                .changes_report()
+                .and_then(as_json),
+        ),
+        "change" => {
+            let Some(change_id) = non_empty(command.change_id.as_deref()) else {
+                return CoreResponse::typed_error(
+                    CoreErrorKind::InvalidArgument,
+                    "change requires changeId",
+                );
+            };
+            encode_governance_result(
+                GovernanceService::new(&repo_root)
+                    .change_report(change_id)
+                    .and_then(as_json),
+            )
+        }
+        "validate" => {
+            let Some(change_id) = non_empty(command.change_id.as_deref()) else {
+                return CoreResponse::typed_error(
+                    CoreErrorKind::InvalidArgument,
+                    "validate requires changeId",
+                );
+            };
+            encode_governance_result(
+                GovernanceService::new(&repo_root)
+                    .validate_report(change_id)
+                    .and_then(as_json),
+            )
+        }
         other => CoreResponse::error(format!("unsupported_action:{other}")),
+    }
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn encode_governance_result(result: std::io::Result<serde_json::Value>) -> CoreResponse {
+    match result {
+        Ok(data) => CoreResponse::success(data),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            CoreResponse::typed_error(CoreErrorKind::ChangeNotFound, error.to_string())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
+            CoreResponse::typed_error(CoreErrorKind::GovernanceNotEnabled, error.to_string())
+        }
+        Err(error) => CoreResponse::typed_error(CoreErrorKind::WorkflowFailed, error.to_string()),
     }
 }
 
