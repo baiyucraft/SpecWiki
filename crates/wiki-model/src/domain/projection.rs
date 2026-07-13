@@ -289,7 +289,8 @@ impl ProjectionDigest {
             .filter(|(section_id, hash)| !section_id.is_empty() && !hash.is_empty())
             .collect();
         self.section_hashes.sort();
-        self.section_hashes.dedup_by(|left, right| left.0 == right.0);
+        self.section_hashes
+            .dedup_by(|left, right| left.0 == right.0);
         for reason in &mut self.status_reasons {
             reason.canonicalize();
         }

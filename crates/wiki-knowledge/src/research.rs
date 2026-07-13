@@ -8,8 +8,8 @@ use regex::Regex;
 use crate::domain::context::{ModuleContext, RepoContext};
 use crate::domain::research::{
     canonical_reference_outline_title, is_reference_outline_title, DiagramSuggestion,
-    DomainResearch, EvidenceCluster, KeySourceCluster, PageDigest, SectionPlan,
-    ResearchPageSeed, ResearchProfile, SectionGroundingRef, SkeletonProfile, SkeletonSection,
+    DomainResearch, EvidenceCluster, KeySourceCluster, PageDigest, ResearchPageSeed,
+    ResearchProfile, SectionGroundingRef, SectionPlan, SkeletonProfile, SkeletonSection,
     SourceCitation, SystemResearch, UnitResearch,
 };
 use wiki_index::scanner::{FilePurpose, ScanReport, ScannedFile};
@@ -2660,10 +2660,7 @@ fn build_default_section_plan(
     sections
 }
 
-fn build_profile_section_plan(
-    unit: &KnowledgeUnit,
-    profile: &ResearchProfile,
-) -> Vec<SectionPlan> {
+fn build_profile_section_plan(unit: &KnowledgeUnit, profile: &ResearchProfile) -> Vec<SectionPlan> {
     let overview_intent = match profile {
         ResearchProfile::Runtime => format!("说明 {} 的运行时职责、边界和关键组件", unit.title),
         ResearchProfile::ApiSurface => format!("说明 {} 暴露的 API 面与调用入口", unit.title),
@@ -3268,9 +3265,7 @@ mod tests {
         ResearchDataSource, ResearchKeySourceCandidate, ResearchKeySourceOrigin, ResearchPageKind,
     };
     use crate::domain::context::{ModuleContext, RepoContext};
-    use crate::domain::research::{
-        KeySourceCluster, SectionPlan, ResearchProfile, SourceCitation,
-    };
+    use crate::domain::research::{KeySourceCluster, ResearchProfile, SectionPlan, SourceCitation};
     use std::fs;
     use tempfile::tempdir;
     use wiki_index::scanner::{DependencyHint, FilePurpose, ScanReport, ScannedFile};

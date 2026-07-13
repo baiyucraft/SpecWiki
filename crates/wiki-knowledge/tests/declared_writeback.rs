@@ -44,15 +44,19 @@ fn validate_declared_candidate_normalizes_scope_and_lifecycle() {
     assert_eq!(patch.record.authoring_id, "marker:runtime-policy");
     assert_eq!(patch.record.scope.canonical_key(), "module:runtime");
     assert_eq!(patch.record.status, DeclaredKnowledgeRecordStatus::Active);
-    assert_eq!(patch.affected_projection_refs, vec!["page:runtime:section:section:runtime-policy"]);
+    assert_eq!(
+        patch.affected_projection_refs,
+        vec!["page:runtime:section:section:runtime-policy"]
+    );
 }
 
 #[test]
 fn validate_declared_candidate_rejects_conflicting_scope() {
-    let mut snapshot_record = match validate_declared_writeback(&candidate(), &empty_declared_snapshot()) {
-        DeclaredWritebackDecision::Accepted(patch) => patch.record,
-        _ => panic!("expected accepted seed"),
-    };
+    let mut snapshot_record =
+        match validate_declared_writeback(&candidate(), &empty_declared_snapshot()) {
+            DeclaredWritebackDecision::Accepted(patch) => patch.record,
+            _ => panic!("expected accepted seed"),
+        };
     snapshot_record.scope.r#ref = "other-runtime".to_string();
     let snapshot = DeclaredSnapshot {
         records: vec![snapshot_record],
@@ -60,5 +64,8 @@ fn validate_declared_candidate_rejects_conflicting_scope() {
 
     let decision = validate_declared_writeback(&candidate(), &snapshot);
 
-    assert!(matches!(decision, DeclaredWritebackDecision::Conflict { .. }));
+    assert!(matches!(
+        decision,
+        DeclaredWritebackDecision::Conflict { .. }
+    ));
 }

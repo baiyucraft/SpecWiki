@@ -967,17 +967,13 @@ pub fn validate_conflict_record_snapshot(
                 normalized.conflict_id
             ));
         }
-        if normalized.unit_refs
-            != unit_refs.into_iter().collect::<Vec<_>>()
-        {
+        if normalized.unit_refs != unit_refs.into_iter().collect::<Vec<_>>() {
             return Err(format!(
                 "knowledge conflict '{}' 的 unit_refs 与 declared snapshot 不一致",
                 normalized.conflict_id
             ));
         }
-        if normalized.projection_refs
-            != projection_refs.into_iter().collect::<Vec<_>>()
-        {
+        if normalized.projection_refs != projection_refs.into_iter().collect::<Vec<_>>() {
             return Err(format!(
                 "knowledge conflict '{}' 的 projection_refs 与 declared snapshot 不一致",
                 normalized.conflict_id
@@ -1020,8 +1016,7 @@ mod tests {
         DeclaredKnowledgeRecordStatus, DeclaredKnowledgeRelation, DeclaredKnowledgeRelationKind,
         DeclaredKnowledgeScope, DeclaredKnowledgeScopeKind, KnowledgeConflictKind,
         KnowledgeConflictRecord, KnowledgeConflictStatus, KnowledgeHealthSeverity,
-        KnowledgeResearchStatusReason,
-        KnowledgeResearchStatusReasonKind, KnowledgeResearchSummary,
+        KnowledgeResearchStatusReason, KnowledgeResearchStatusReasonKind, KnowledgeResearchSummary,
         KnowledgeResearchSummaryStatus,
     };
 

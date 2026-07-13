@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::domain::compose::{ComposeSectionDraft, DiagramDraft, PageDraft};
 use crate::domain::research::{
     canonical_reference_outline_title, DiagramSuggestion, DomainResearch, EvidenceCluster,
-    KeySourceCluster, PageDiagramDigest, PageDigest, PageSectionDigest, SectionPlan,
-    ProjectionDigestStatus, ProjectionDigestStatusReason, ProjectionDigestStatusReasonKind,
-    ResearchPageSeed, ResearchProfile, SectionGroundingRef, SkeletonProfile, SourceCitation,
+    KeySourceCluster, PageDiagramDigest, PageDigest, PageSectionDigest, ProjectionDigestStatus,
+    ProjectionDigestStatusReason, ProjectionDigestStatusReasonKind, ResearchPageSeed,
+    ResearchProfile, SectionGroundingRef, SectionPlan, SkeletonProfile, SourceCitation,
     SystemResearch, UnitResearch,
 };
 use wiki_model::domain::knowledge::{
