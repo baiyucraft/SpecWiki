@@ -234,6 +234,66 @@ fn knowledge_artifacts_roundtrip_preserves_declared_and_health_records() {
 }
 
 #[test]
+fn artifact_loader_selects_manifest_from_metadata_snapshot_pointer() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"snapshot-pointer-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const current = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+    let metadata = read_metadata(repo_root).unwrap();
+    let current_snapshot_id = metadata.current_snapshot_id.unwrap();
+    let current = load_knowledge_artifacts(repo_root)
+        .unwrap()
+        .snapshot_manifest;
+    assert_eq!(current.snapshot_id, current_snapshot_id);
+
+    let mut stale = current.clone();
+    stale.snapshot_id = "zzzz-stale-snapshot".to_string();
+    stale.metadata_hash = "stale-metadata-hash".to_string();
+    let stale_path =
+        repo_root.join(".wiki/.knowledge/runtime/snapshots/zzzz-stale-snapshot/manifest.yaml");
+    fs::create_dir_all(stale_path.parent().unwrap()).unwrap();
+    fs::write(&stale_path, serde_yaml::to_string(&stale).unwrap()).unwrap();
+
+    let loaded = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(loaded.snapshot_manifest.snapshot_id, current_snapshot_id);
+}
+
+#[test]
+fn artifact_loader_rejects_manifest_identity_mismatch() {
+    let (_env_lock, _index_only) = force_full_runtime();
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    fs::write(
+        repo_root.join("package.json"),
+        r#"{"name":"snapshot-identity-demo"}"#,
+    )
+    .unwrap();
+    fs::write(repo_root.join("src.ts"), "export const current = true;\n").unwrap();
+
+    run_init(repo_root).unwrap();
+    let metadata = read_metadata(repo_root).unwrap();
+    let current_snapshot_id = metadata.current_snapshot_id.unwrap();
+    let manifest_path = repo_root
+        .join(".wiki/.knowledge/runtime/snapshots")
+        .join(&current_snapshot_id)
+        .join("manifest.yaml");
+    let mut manifest: wiki_model::domain::knowledge_artifact::CommittedSnapshotManifest =
+        serde_yaml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest.snapshot_id = "different-snapshot".to_string();
+    fs::write(&manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+
+    let error = load_knowledge_artifacts(repo_root).unwrap_err();
+    assert!(error.to_string().contains("snapshot id mismatch"));
+}
+
+#[test]
 fn restore_refuses_page_snapshot_drift_even_when_artifacts_exist() {
     let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();

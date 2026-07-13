@@ -1,7 +1,7 @@
 ---
 title: 04-对外方法
 description: spec-wiki 的 CLI、配置、运行时产物和公开契约入口
-updated: 2026-07-11
+updated: 2026-07-13
 owner: docs
 ---
 
@@ -38,8 +38,9 @@ SpecWiki 对用户优先暴露一级命令。`wiki` 和 `governance` 是内部 r
 | `spec-wiki rebuild` | 显式全量重建 knowledge runtime |
 | `spec-wiki changes` | 列出 active governance changes |
 | `spec-wiki change <change-id>` | 查看单个 change 摘要 |
+| `spec-wiki archive <change-id>` | 默认 dry-run；显式 `--apply` 写入，或用 `--resume <operation-id>` 恢复 |
 
-`archive`、workspace validate、`doctor`、`repair` 和 `trace` 尚未注册为当前 CLI 命令。
+workspace validate、`doctor`、`repair` 和 `trace` 尚未注册为当前 CLI 命令。
 
 ## API / 对外接口
 

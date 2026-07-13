@@ -19,18 +19,18 @@
 - **THEN** 该 section 的 marker 中 `section_id` 必须保持不变
 - **THEN** 系统不得因为重新写盘而生成新的随机 marker 身份
 
-### Requirement: 页面解析必须区分 managed sections、user sections 和 legacy 页面
-系统 MUST 能够从 `.wiki/*.md` 中解析出 managed sections 与 user sections。marker 存在时 MUST 以 marker 为主；marker 不存在但页面仍是迭代 3 的 legacy 格式时，系统 MUST 提供基于已知 section 标题的 best-effort fallback 解析。
+### Requirement: 页面解析必须通过 marker v2 fail closed
+系统 MUST 从 `.wiki/*.md` 的 marker v2 解析 managed sections 与 user sections。marker MUST 至少携带稳定 `section_id`、`owner` 和 `version`，并按合同携带 binding/hash 属性。marker 缺失、损坏、版本不支持、结束 id 不一致或 metadata binding 不一致时，系统 MUST 返回显式诊断，不得按已知标题猜测 managed boundary。
 
 #### Scenario: 用户在 managed sections 之间插入新的手工区段
 - **WHEN** 页面中在两个 managed sections 之间新增了一个不带 marker 的 `##` 区段或普通 Markdown 内容
 - **THEN** 系统必须把这段内容识别为 `managed = false` 的 user section
 - **THEN** 系统必须记录该 user section 相对于前后 managed section 的锚点信息
 
-#### Scenario: 页面仍处于 legacy 无 marker 格式
-- **WHEN** 页面没有 managed marker，但仍保留当前页面类型的稳定 section 标题
-- **THEN** 系统必须按已知 section 标题把对应区段恢复为 managed sections
-- **THEN** 系统必须把 managed sections 之间的其余内容恢复为 user sections
+#### Scenario: 页面缺少 marker
+- **WHEN** 页面没有 managed marker，即使仍保留旧版稳定 section 标题
+- **THEN** 系统 MUST 将页面标记为 `UnmanagedOnly` 并返回 `marker_missing` 诊断
+- **THEN** 系统 MUST NOT 从标题反推 managed sections 或 declared/derived truth
 
 #### Scenario: 用户直接修改 managed section 正文
 - **WHEN** 页面中某个 managed section 的 marker 和 `section_id` 仍然存在，但正文被手工修改
@@ -51,15 +51,10 @@
 - **THEN** 系统必须优先把 user section 插回仍然存在的相邻 managed section 之间
 - **THEN** 当完整原锚点不存在时，系统必须退化到最近仍存在的锚点或页面末尾，而不是直接丢弃用户内容
 
-### Requirement: legacy 页面迁移必须是显式的 best-effort 过程
-系统 MUST 对 legacy 无 marker 页面提供 best-effort 迁移能力，但不得在无法可靠识别 managed boundary 时假装迁移成功。
+### Requirement: 无 marker 页面迁移必须显式重建
+系统 MUST 通过显式 `init / rebuild` 或受控迁移流程重新生成 marker v2 页面，不得在 `sync / restore` 中进行标题启发式迁移。
 
-#### Scenario: legacy 页面成功迁移
-- **WHEN** legacy 页面保留了预期的稳定 managed section 标题，且系统能唯一识别这些边界
-- **THEN** 系统必须把该页面迁移为可解析的 managed/user section 状态
-- **THEN** 下一次由 runtime 重写该页面时，输出必须采用 managed marker 格式
-
-#### Scenario: legacy 页面无法可靠迁移
-- **WHEN** legacy 页面缺失关键标题、重复标题或 boundary 已被破坏，导致系统无法可靠恢复 managed sections
-- **THEN** 系统必须给出明确 warning
-- **THEN** 系统不得把该页面误记为已经完成 editable runtime 迁移
+#### Scenario: 无 marker 页面进入迁移
+- **WHEN** 页面缺少 marker 且需要重新纳入 runtime 管理
+- **THEN** 系统 MUST 先保留或报告人工内容，再由正式规划和投影合同重新生成 managed sections
+- **THEN** 未完成显式重建前，系统 MUST NOT 把该页面标记为可安全 writeback

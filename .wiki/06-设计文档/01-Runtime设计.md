@@ -2,7 +2,7 @@
 title: Runtime 设计
 description: spec-wiki runtime 主链、.wiki 分层、query route、生命周期和恢复策略
 owner: architecture
-updated: 2026-07-11
+updated: 2026-07-13
 ---
 
 # Repo Wiki Runtime Design
@@ -351,6 +351,30 @@ flowchart LR
 - 应可由 `.knowledge + 正式可见 Wiki 页面树 + wiki.metadata.json` 重建
 - 如果本地代码与上库状态不一致，恢复后应显式标记为 `stale` 或 `needs_update`
 
+### 两级恢复合同
+
+恢复必须区分正式知识/runtime mirror 与本地 code graph，不能把“cache 可重建”解释成所有索引事实都能从 Wiki 恢复：
+
+```text
+Level 1: formal knowledge + official page tree + metadata
+  -> 校验 committed snapshot manifest
+  -> 恢复本地 knowledge/runtime mirror
+  -> readiness.restored_level = level1
+
+Level 2: current repository sources
+  -> 重新扫描并构建 graph snapshot
+  -> 完成 symbol / edge / graph readiness
+  -> readiness.restored_level = level2
+```
+
+稳定约束：
+
+- Level 1 只消费 `.wiki/.knowledge/**`、正式页面树、`wiki.metadata.json` 与 `.wiki/.knowledge/runtime/snapshots/<snapshot-id>/manifest.yaml`。
+- Level 1 不执行 planning、research、compose 或 assemble，也不能从 Markdown 反推 declared/derived truth。
+- Code graph 是当前源码的本地可重建 facts；formal knowledge snapshot 不能伪造 graph ready。
+- graph 缺失时可以恢复 knowledge/projection 可消费态，但 `readiness.index` 必须保持 `missing / stale / blocked` 等真实状态。
+- 只有重新扫描并提交 graph snapshot 后，才可把 index readiness 提升为 ready。
+
 ## 什么上库、什么不上库
 
 上库：
@@ -369,6 +393,42 @@ flowchart LR
 - `.cache` 只是本地派生层，应该始终可丢弃、可恢复
 
 ## Page Projection 策略
+
+### 投影对象与 ownership
+
+投影链中的对象分工必须明确：
+
+```text
+PagePlan / SectionPlan
+  -> knowledge planning contract
+  -> PageDraft
+       -> transient compose/render input
+       -> Markdown + SectionBinding
+       -> ProjectionDigest
+            -> persistent projection recovery anchor
+```
+
+- `PagePlan / SectionPlan` 属于 knowledge planning 合同，描述要投影什么，不承载 Markdown 磁盘状态。
+- `PageDraft` 是临时 compose/render 输入，不是 truth、snapshot identity 或 restore anchor。
+- `SectionBinding` 绑定 `section_id / owner_kind / knowledge_refs / source_refs / input_hash / content_hash / projection_digest_ref`。
+- `ProjectionDigest` 持久化页面、section、输入、renderer、内容 digest 和状态原因，是 projection recovery anchor。
+- section ownership 闭集为 `declared_managed / derived_managed / projection_static / manual_unmanaged / external_ref`。
+- marker v2 必须显式携带稳定 id、owner、version 和 hash/binding 信息；缺失、损坏或 binding 不一致时 fail closed，不按标题猜测旧 managed boundary。
+
+crate 边界：
+
+- `wiki-knowledge` 规划 `PagePlan / SectionPlan` 并校验/规范化 declared record，不解析 marker、不写 Markdown。
+- `wiki-runtime` 负责 marker parse、render、merge、文件写入、metadata binding、ProjectionDigest 和 stale/conflict commit。
+- `wiki-runtime` 不从 Markdown 反推 derived knowledge；页面只可作为 declared authoring surface。
+
+declared writeback 唯一路径：
+
+```text
+runtime extract declared authoring block
+  -> wiki-knowledge validate / normalize / merge lifecycle
+  -> runtime persist declared artifact
+  -> runtime update metadata / projection digest / stale state
+```
 
 ### 默认策略
 
@@ -499,6 +559,18 @@ term only
 - `update` 独立刷新 governance cache；`.spec`-only 变化不触发 scan、symbol graph、knowledge compose 或页面重写。
 - `query` 只消费 fingerprint 一致的 cached refs；blocked 且尚无 cache 时可以从 live blocking issues 返回 diagnostic refs，仍不读取正文。
 - 产品 next action 的优先级是 core `init/rebuild` blocker、governance blocker、其它 core maintenance、governance stale。治理 blocker 使用 `review_governance`。
+
+### Archive durable operation
+
+`archive` 是治理写流程，不是 Wiki 生命周期动作：
+
+- 默认模式是 dry-run，只执行 live validate/readiness、生成 manifest 和 precondition digest，不创建 `.spec/.runtime`。
+- `--apply` 才创建 immutable `plan.json`、append-only checkpoints、staging 和最终 `result.json`。
+- `--resume <operation-id>` 只消费已持久化 plan/staging，并对 source、target、parent 和 result 做 fail-closed reconcile。
+- sibling child 共享 parent 时必须使用同一 mutation-set OS advisory lock。
+- parent metadata/split、source tree、target absence 和 staging hash 都属于 precondition；未知外部修改不得静默覆盖。
+- archive 不调用 Wiki sync/update/rebuild，也不写 `.wiki/**`；Wiki 相关信息只通过 issues/refs 报告。
+- 未采用旧草稿中的 `--yes`、强制 wiki-sync、workspace validate、doctor、repair 或 trace 设想。
 
 ### GitNexus 对 query 的参考边界
 

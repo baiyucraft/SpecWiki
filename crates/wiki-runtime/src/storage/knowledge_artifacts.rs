@@ -202,16 +202,34 @@ fn snapshot_manifest_path(repo_root: &Path, snapshot_id: &str) -> PathBuf {
         .join("manifest.yaml")
 }
 
-fn latest_snapshot_manifest_path(repo_root: &Path) -> Option<PathBuf> {
-    let root = snapshots_root(repo_root);
-    let entries = fs::read_dir(root).ok()?;
-    let mut manifests = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path().join("manifest.yaml"))
-        .filter(|path| path.exists())
-        .collect::<Vec<_>>();
-    manifests.sort();
-    manifests.pop()
+fn current_snapshot_manifest_path(repo_root: &Path) -> io::Result<(String, PathBuf)> {
+    let metadata = read_metadata(repo_root)?;
+    let snapshot_id = metadata
+        .current_snapshot_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "metadata current_snapshot_id is missing",
+            )
+        })?;
+    let snapshot_path = Path::new(&snapshot_id);
+    if snapshot_path.components().count() != 1
+        || !matches!(
+            snapshot_path.components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "metadata current_snapshot_id is invalid",
+        ));
+    }
+    Ok((
+        snapshot_id.clone(),
+        snapshot_manifest_path(repo_root, &snapshot_id),
+    ))
 }
 
 pub fn knowledge_artifacts_exist(repo_root: &Path) -> bool {
@@ -225,7 +243,9 @@ pub fn knowledge_artifacts_exist(repo_root: &Path) -> bool {
         && conflict_records_path(repo_root).exists()
         && runtime_gates_path(repo_root).exists()
         && health_signals_path(repo_root).exists()
-        && latest_snapshot_manifest_path(repo_root).is_some()
+        && current_snapshot_manifest_path(repo_root)
+            .map(|(_, path)| path.is_file())
+            .unwrap_or(false)
 }
 
 pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) -> io::Result<()> {
@@ -1829,13 +1849,18 @@ fn read_yaml<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<T> {
 }
 
 fn read_snapshot_manifest(repo_root: &Path) -> io::Result<CommittedSnapshotManifest> {
-    let path = latest_snapshot_manifest_path(repo_root).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "committed snapshot manifest not found",
-        )
-    })?;
-    read_yaml(&path)
+    let (snapshot_id, path) = current_snapshot_manifest_path(repo_root)?;
+    let manifest: CommittedSnapshotManifest = read_yaml(&path)?;
+    if manifest.snapshot_id != snapshot_id {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "committed snapshot id mismatch: metadata={snapshot_id}, manifest={}",
+                manifest.snapshot_id
+            ),
+        ));
+    }
+    Ok(manifest)
 }
 
 fn read_json_lines<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<Vec<T>> {

@@ -1,7 +1,7 @@
 # knowledge-runtime-artifacts Specification
 
 ## Purpose
-TBD - created by archiving change iteration-12-2-knowledge-runtime-artifact-minimum-set. Update Purpose after archive.
+定义可上库 formal knowledge artifacts、committed snapshot identity 与 cold restore 边界。
 ## Requirements
 ### Requirement: `.wiki/.knowledge/**` 必须落最小正式知识产物集
 系统 MUST 将 `v0.2.0` knowledge runtime 的最小正式产物写入 `.wiki/.knowledge/**`，并按 truth kind 分层，而不是继续只把这些对象留在 SQLite 或 `.wiki/.cache/**`。最小正式产物集 MUST 至少覆盖以下对象：
@@ -10,15 +10,20 @@ TBD - created by archiving change iteration-12-2-knowledge-runtime-artifact-mini
 - `.wiki/.knowledge/derived/knowledge-units.jsonl`
 - `.wiki/.knowledge/derived/knowledge-tree.json`
 - `.wiki/.knowledge/derived/research-summaries.jsonl`
+- `.wiki/.knowledge/declared/records.jsonl`
 - `.wiki/.knowledge/runtime/page-digests.jsonl`
+- `.wiki/.knowledge/runtime/projection-digests.jsonl`
+- `.wiki/.knowledge/runtime/conflict-records.jsonl`
 - `.wiki/.knowledge/runtime/runtime-gates.jsonl`
-- `.wiki/.knowledge/runtime/recovery-manifest.json`
+- `.wiki/.knowledge/runtime/health-signals.jsonl`
+- `.wiki/.knowledge/runtime/snapshots/<snapshot-id>/manifest.yaml`
 
 其中：
 
 - `knowledge-domains / knowledge-units / knowledge-tree` MUST 被视为 formal identity objects
 - `research-summaries` MUST 被视为 formal derived summaries
-- `page-digests / runtime-gates / recovery-manifest` MUST 被视为 projection / recovery anchors
+- `declared records` MUST 被视为 formal declared truth
+- `page-digests / projection-digests / conflict-records / runtime-gates / health-signals / committed snapshot manifest` MUST 被视为 projection、governance health 或 recovery anchors
 
 #### Scenario: 正式 workflow 写出 identity 与 summary 对象
 - **WHEN** 系统完成正式 `init`、`update` 或 `rebuild` 的 knowledge planning、research 与 compose 主链
@@ -27,15 +32,16 @@ TBD - created by archiving change iteration-12-2-knowledge-runtime-artifact-mini
 
 #### Scenario: 正式 workflow 写出 projection 与 recovery anchor
 - **WHEN** 系统完成页面投影和 runtime gate 汇总
-- **THEN** `.wiki/.knowledge/runtime/**` MUST 写出 `page-digests`、`runtime-gates` 与 `recovery-manifest`
+- **THEN** `.wiki/.knowledge/declared/**` MUST 写出 `records.jsonl`
+- **THEN** `.wiki/.knowledge/runtime/**` MUST 写出 `page-digests`、`projection-digests`、`conflict-records`、`runtime-gates`、`health-signals`，并在 `snapshots/<snapshot-id>/manifest.yaml` 写出 committed snapshot manifest
 - **THEN** 系统 MUST 明确这些对象是 projection / recovery anchor，而不是 knowledge formal identity
 
 ### Requirement: 正式知识产物必须与 metadata 共享稳定 snapshot 身份
-系统 MUST 让 `.wiki/.knowledge/**` 与 `wiki.metadata.json` 共享稳定的 snapshot 身份线索，用于审计、恢复和一致性校验。`recovery-manifest` MUST 至少包含 `schema_version`、`repo_root`、`facts_input_hash`、`knowledge_snapshot_id`、`metadata_hash` 或等价锚点字段。系统 MUST 能基于这些字段判断当前正式产物是否可用于 restore，而不是依赖目录存在与否盲猜。
+系统 MUST 让 `.wiki/.knowledge/**` 与 `wiki.metadata.json` 共享稳定的 snapshot 身份线索，用于审计、恢复和一致性校验。loader MUST 只读取 `wiki.metadata.json.current_snapshot_id` 精确指向的 `.wiki/.knowledge/runtime/snapshots/<snapshot-id>/manifest.yaml`，不得按目录名、修改时间或任意“最新”启发式选择。`CommittedSnapshotManifest` MUST 至少包含 `schema_version`、`snapshot_id`、`repo_root`、`facts_input_hash`、graph/knowledge/declared/projection snapshot identity、`metadata_hash`、page hashes 和 projection/runtime refs；manifest 内 `snapshot_id` MUST 与 metadata pointer 一致，否则 fail closed。
 
 #### Scenario: restore 前校验正式产物快照一致性
 - **WHEN** 系统尝试基于 `.wiki/.knowledge/** + official page tree + metadata` 恢复本地 runtime
-- **THEN** 系统 MUST 先校验 `recovery-manifest` 与 `wiki.metadata.json` 的 snapshot 锚点是否一致
+- **THEN** 系统 MUST 先校验 committed snapshot manifest 与 `wiki.metadata.json` 的 snapshot 锚点是否一致
 - **THEN** 若锚点不一致，系统 MUST 返回显式 `stale`、`needs_update` 或 blocker，而不是静默继续恢复
 
 ### Requirement: restore 必须从正式产物恢复本地 runtime，而不是重新生成知识
@@ -47,7 +53,7 @@ TBD - created by archiving change iteration-12-2-knowledge-runtime-artifact-mini
 - **THEN** restore MUST NOT 重新调用 planning、research 或 compose 主链
 
 #### Scenario: 正式产物不可恢复时返回显式状态
-- **WHEN** `.wiki/.knowledge/**` 缺失关键文件、`recovery-manifest` 不可读，或正式产物之间的锚点不一致
+- **WHEN** `.wiki/.knowledge/**` 缺失关键文件、committed snapshot manifest 不可读，或正式产物之间的锚点不一致
 - **THEN** 系统 MUST 返回显式 blocker 或 `needs_update`
 - **THEN** 系统 MUST NOT 静默退回 full `init` 并把该结果标记为 restore 成功
 

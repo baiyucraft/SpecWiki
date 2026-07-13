@@ -199,8 +199,9 @@
 #### Scenario: runtime projection 与 lifecycle 通过 runtime_store 持久化
 - **WHEN** 系统持久化或读取 `wiki_pages`、`wiki_page_sections`、`wiki_relations`、`runtime_meta`、`pipeline_checkpoint` 或 `unit_runtime_gates`
 - **THEN** 这些表 MUST 归 `wiki-runtime` 合同所有
-- **THEN** 系统 MUST 把 `wiki_pages` 视为 runtime projection truth，把 `pipeline_checkpoint` 与 `unit_runtime_gates` 视为 lifecycle truth
-- **THEN** 系统 MUST NOT 让 `page_drafts` 或 `page_digests` 充当 runtime 正式状态
+- **THEN** 系统 MUST 把 `wiki_pages`、`wiki_page_sections` 与关系表视为由 formal artifacts、页面树和 metadata 重建出的本地 projection mirror，不得把 SQLite 当成正式 truth
+- **THEN** `pipeline_checkpoint` 与 `unit_runtime_gates` 只表达本地 workflow/lifecycle 状态；持久化 projection recovery anchor 以 formal `ProjectionDigest` 和 committed snapshot manifest 为准
+- **THEN** `page_drafts` 只能是 transient compose artifact，`page_digests` 必须作为 formal projection anchor 而不是 SQLite 独占状态
 
 ### Requirement: runtime 的外部 query 入口本轮必须保持 `term` 合同稳定
 系统 MUST 在本轮继续保留外部 `CoreCommand.term` 与 `run_query(repo_root, term)` 入口，不得提前引入新的外部结构化 query payload。runtime 内部 MAY 构造结构化请求调用 `wiki-index::query`，但该结构只属于 crate 内部边界，不属于本轮正式 transport 合同。

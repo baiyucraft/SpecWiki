@@ -1,7 +1,7 @@
 ---
 title: wiki-runtime
 description: workflow orchestration、storage、transport、query route 和 .wiki 生命周期
-updated: 2026-07-11
+updated: 2026-07-13
 owner: docs
 ---
 
@@ -35,6 +35,8 @@ owner: docs
 | `crates/wiki-runtime/src/storage/governance_fs.rs` | `.spec` evidence discovery、路径边界与 fingerprint |
 | `crates/wiki-runtime/src/storage/sqlite/governance_store.rs` | fingerprint 绑定的可重建治理 cache wrapper |
 | `crates/wiki-runtime/src/workflows/governance.rs` | status/list/inspect/validate/refresh/query refs 组合入口 |
+| `crates/wiki-runtime/src/storage/archive_fs.rs` | archive snapshot/digest、durable operation、lock、parent patch 与 reconcile |
+| `crates/wiki-runtime/src/workflows/archive.rs` | archive dry-run、apply、resume 和完成态校验 |
 | `crates/wiki-runtime/tests/**` | runtime、repo、hierarchy、symbol、lifecycle 测试 |
 | `crates/wiki-runtime/Cargo.toml` | crate 元数据和依赖声明 |
 
@@ -60,3 +62,5 @@ node scripts/test-wiki-lifecycle.mjs
 | `runtime.rs` | runtime / SQLite、query / sync / update / rebuild、markdown merge、metadata |
 | `suite_env.rs` | integration suite 共享测试环境 |
 | `symbols.rs` | symbol parsing、symbol resolution、symbol graph analysis |
+
+Archive 专项测试位于 `archive_planning.rs`、`archive_storage.rs` 以及 acceptance command contract。archive 只写 `.spec` truth 和 `.spec/.runtime/archive-operations`，不会调用 Wiki 写流程。

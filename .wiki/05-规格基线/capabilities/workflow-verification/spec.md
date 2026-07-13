@@ -83,7 +83,8 @@
 #### Scenario: lifecycle harness 把缺失 metadata 提升为可消费诊断态
 - **WHEN** lifecycle harness 观察到底层状态为 `missing`，且磁盘诊断快照表明当前 repo 只是缺少 `wiki.metadata.json` 或等价恢复入口
 - **THEN** harness MUST 把该结果提升为可消费的 diagnostic runtime state
-- **THEN** 提升后的结果 MUST 继续保留 `query_readiness` 与 `recommended_action`
+- **THEN** 提升后的公开结果 MUST 继续保留分层 `readiness` 与 `recommended_action`
+- **THEN** 内部 lifecycle harness MAY 保留 `RuntimePreflight.query_readiness` 作为兼容诊断字段，但不得把它写成公开 status/query 主合同
 - **THEN** 系统 MUST NOT 把该结果伪装成 `fresh`、`ready` 或正常可写的 full runtime
 - **THEN** 诊断原因 MUST 继续通过 harness/runtime snapshot 可见，便于调用方判断是否需要 `init`、`update` 或其它恢复动作
 

@@ -1,12 +1,12 @@
 # wiki-state-kernel Specification
 
 ## Purpose
-定义 WikiState 作为 runtime 内部事实主模型的正式边界，说明状态持久化、恢复与 workflow 消费应遵循的基础约束。
+定义 WikiState 作为 runtime 本地聚合视图的边界，说明状态组装、缓存持久化与 workflow 消费应遵循的基础约束。
 
 ## Requirements
 
-### Requirement: WikiState 必须作为所有 workflow 的内部事实主模型
-系统 MUST 继续维护 `WikiState` 作为内部状态的唯一事实主模型，承载页面状态、section 状态、源码状态、模块列表、关系列表、脏状态和构建状态。所有 workflow（init / status / update / query / sync / rebuild）MUST 围绕 `WikiState` 工作，而不是直接操作 `WikiMetadata`。与迭代 6 不同的是，`WikiState` 的持久化和恢复 MUST 基于关系型状态表组装，而不是单条 JSON blob。为了驱动 editable runtime，`WikiState` 还 MUST 为每个页面维护稳定的 `section_anchors` 聚合字段，并保持 `source -> module -> page -> section` 映射可重建。
+### Requirement: WikiState 必须作为 workflow 的本地聚合视图
+系统 MUST 维护 `WikiState` 作为从 facts/index、formal knowledge artifacts、正式页面树、metadata 和本地 runtime tables 组装的聚合视图，承载页面状态、section 状态、源码状态、模块列表、关系列表、脏状态和构建状态。`WikiState` 不是唯一正式 truth，也不得替代 `.wiki/.knowledge/**`、official page tree、`wiki.metadata.json` 或 committed snapshot manifest。workflow（init / status / update / query / sync / rebuild）MUST 通过该聚合视图协调本地运行，但持久化与恢复必须遵循各 truth kind 的正式 owner。`WikiState` 的本地持久化 MUST 基于关系型状态表组装，而不是单条 JSON blob，并为每个页面维护稳定的 `section_anchors` 聚合字段。
 
 #### Scenario: init 装配并持久化 WikiState
 - **WHEN** 系统完成 init pipeline（扫描 → 模块树 → 页面规划 → 渲染）

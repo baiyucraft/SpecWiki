@@ -19,21 +19,21 @@
 - 目标: 统一新版用户可见 Wiki 页面树，停止把 `.wiki/pages/**` 作为 runtime 目标目录；旧目录不属于新版 runtime surface，不迁移、不清理、不诊断。
 - 依赖: 无。
 - 关键验收: `init / update / rebuild` 不再写 `.wiki/pages/**`；metadata、state、SQLite FTS、query fallback 和 restore 只消费正式页面树。
-- 归档状态: [x] archived
+- 归档状态：[x] archived
 
 ### 2. refactor-specwiki-around-contract-closure-truth-restore-snapshot
 
 - 目标: 落实 truth kind、两级 restore、committed snapshot manifest 和 readiness 状态。
 - 依赖: refactor-specwiki-around-contract-closure-page-tree-contract。
 - 关键验收: `.cache` 缺失不会伪装 graph ready；metadata 只保存 snapshot pointer 和 binding index；Level 1 restore 支持 diagnostic mode。
-- 归档状态: [x] archived
+- 归档状态：[x] archived
 
 ### 3. refactor-specwiki-around-contract-closure-projection-writeback-boundaries
 
 - 目标: 拆清 `wiki-knowledge` 的 PagePlan / SectionPlan / declared contract 与 `wiki-runtime` 的 render / merge / write / metadata 绑定职责。
 - 依赖: refactor-specwiki-around-contract-closure-truth-restore-snapshot。
 - 关键验收: declared authoring writeback 按 runtime parse、knowledge validate、runtime commit 执行；derived drift 不写回 derived knowledge。
-- 归档状态: [x] archived
+- 归档状态：[x] archived
 
 ### 4. refactor-specwiki-around-contract-closure-query-route-readiness
 
