@@ -165,7 +165,10 @@ fn knowledge_artifacts_roundtrip_preserves_declared_and_health_records() {
         .iter()
         .map(|digest| digest.projection_id.clone())
         .collect::<Vec<_>>();
-    assert_eq!(after.snapshot_manifest.projection_digest_refs, projection_refs);
+    assert_eq!(
+        after.snapshot_manifest.projection_digest_refs,
+        projection_refs
+    );
     let projection_snapshot_id = wiki_index::fingerprint::fingerprint_bytes(
         serde_json::to_vec(&after.projection_digests)
             .unwrap()
@@ -230,7 +233,11 @@ fn knowledge_artifacts_roundtrip_preserves_declared_and_health_records() {
 
     drop(conn);
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
-    assert!(restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
+    assert!(
+        restore_runtime_cache_from_artifacts(repo_root)
+            .unwrap()
+            .restored_cache
+    );
 }
 
 #[test]
@@ -312,7 +319,11 @@ fn restore_refuses_page_snapshot_drift_even_when_artifacts_exist() {
     fs::write(&overview_path, format!("{original}\n<!-- drift -->\n")).unwrap();
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
+    assert!(
+        !restore_runtime_cache_from_artifacts(repo_root)
+            .unwrap()
+            .restored_cache
+    );
 }
 
 #[test]
@@ -346,7 +357,11 @@ fn restore_refuses_declared_page_drift_instead_of_rebuilding_truth_from_page() {
     set_declared_blocks_in_first_managed_section(repo_root, DECLARED_RUNTIME_CHANGED_BLOCK);
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
+    assert!(
+        !restore_runtime_cache_from_artifacts(repo_root)
+            .unwrap()
+            .restored_cache
+    );
 
     let persisted = load_knowledge_artifacts(repo_root).unwrap();
     assert_eq!(
@@ -388,7 +403,11 @@ fn restore_refuses_invalid_research_summary_snapshot() {
     fs::write(&research_path, format!("{research_jsonl}\n")).unwrap();
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
+    assert!(
+        !restore_runtime_cache_from_artifacts(repo_root)
+            .unwrap()
+            .restored_cache
+    );
 }
 
 #[test]
@@ -424,7 +443,11 @@ fn restore_refuses_invalid_projection_digest_snapshot() {
     fs::write(&digest_path, format!("{digest_jsonl}\n")).unwrap();
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
+    assert!(
+        !restore_runtime_cache_from_artifacts(repo_root)
+            .unwrap()
+            .restored_cache
+    );
 }
 
 #[test]
@@ -460,9 +483,11 @@ fn restore_refuses_invalid_model_projection_digest_snapshot() {
     fs::write(&digest_path, format!("{digest_jsonl}\n")).unwrap();
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    assert!(!restore_runtime_cache_from_artifacts(repo_root)
-        .unwrap()
-        .restored_cache);
+    assert!(
+        !restore_runtime_cache_from_artifacts(repo_root)
+            .unwrap()
+            .restored_cache
+    );
 }
 
 #[test]
@@ -503,7 +528,11 @@ fn restore_refuses_projection_digest_metadata_mismatch() {
     fs::write(&digest_path, format!("{digest_jsonl}\n")).unwrap();
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
+    assert!(
+        !restore_runtime_cache_from_artifacts(repo_root)
+            .unwrap()
+            .restored_cache
+    );
 }
 
 #[test]
@@ -603,7 +632,11 @@ fn artifact_roundtrip_persists_declared_conflict_records() {
         conflicts[0].conflict_kind.as_str(),
         "parallel_active_declared"
     );
-    assert!(restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
+    assert!(
+        restore_runtime_cache_from_artifacts(repo_root)
+            .unwrap()
+            .restored_cache
+    );
 }
 
 #[test]
@@ -709,5 +742,9 @@ fn restore_refuses_invalid_conflict_snapshot() {
     fs::write(&conflict_path, format!("{conflict_jsonl}\n")).unwrap();
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
-    assert!(!restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
+    assert!(
+        !restore_runtime_cache_from_artifacts(repo_root)
+            .unwrap()
+            .restored_cache
+    );
 }

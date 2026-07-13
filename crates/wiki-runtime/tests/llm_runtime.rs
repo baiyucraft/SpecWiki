@@ -101,9 +101,7 @@ fn plan_pages(
     plan_pages_from_knowledge_tree(&knowledge_tree)
 }
 
-fn first_module_page<'a>(
-    pages: &'a [wiki_knowledge::PagePlan],
-) -> &'a wiki_knowledge::PagePlan {
+fn first_module_page<'a>(pages: &'a [wiki_knowledge::PagePlan]) -> &'a wiki_knowledge::PagePlan {
     pages
         .iter()
         .find(|page| page.page_type == "module")

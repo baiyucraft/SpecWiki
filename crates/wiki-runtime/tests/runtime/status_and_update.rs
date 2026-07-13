@@ -96,7 +96,10 @@ fn status_reports_missing_before_init() {
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "missing");
-    assert_ne!(serde_json::to_value(&status).unwrap()["readiness"]["index"], "ready");
+    assert_ne!(
+        serde_json::to_value(&status).unwrap()["readiness"]["index"],
+        "ready"
+    );
     assert_eq!(
         serde_json::to_value(&status).unwrap()["readiness"]["fusion"],
         "blocked"
@@ -123,7 +126,10 @@ fn status_restores_runtime_from_formal_artifacts_when_cache_is_missing() {
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "fresh");
-    assert_eq!(serde_json::to_value(&status).unwrap()["readiness"]["index"], "missing");
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["readiness"]["index"],
+        "missing"
+    );
     assert_eq!(
         serde_json::to_value(&status).unwrap()["readiness"]["knowledge"],
         "ready"
@@ -182,14 +188,8 @@ fn status_keeps_restore_failure_explicit_when_snapshot_manifest_is_stale() {
         status.needs_rebuild_reason.as_deref(),
         Some("cache_missing")
     );
-    assert_eq!(
-        status_json["readiness"]["fusion"],
-        "blocked"
-    );
-    assert_eq!(
-        status_json["recommended_action"],
-        "rebuild"
-    );
+    assert_eq!(status_json["readiness"]["fusion"], "blocked");
+    assert_eq!(status_json["recommended_action"], "rebuild");
 }
 
 /// 场景：初始化完成后，status 应带上 preflight 结果和可选摘要投影。
@@ -211,7 +211,10 @@ fn status_exposes_runtime_preflight_after_init() {
     let status = run_status(repo_root).unwrap();
     let status_json = serde_json::to_value(&status).unwrap();
     assert_eq!(status.state, "fresh");
-    assert_eq!(serde_json::to_value(&status).unwrap()["readiness"]["index"], "ready");
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["readiness"]["index"],
+        "ready"
+    );
     assert_eq!(status_json["readiness"]["fusion"], "ready");
     assert_eq!(status_json["recommended_action"], "none");
     assert_eq!(status_json["runtime_summary"]["runtime_state"], "completed");
@@ -1023,7 +1026,10 @@ fn update_refreshes_stale_runtime_to_fresh() {
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "needs_update");
-    assert_eq!(serde_json::to_value(&status).unwrap()["readiness"]["index"], "ready");
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["readiness"]["index"],
+        "ready"
+    );
     assert_eq!(
         status.affected_knowledge_scope.escalation.level.as_str(),
         "local_refresh"
@@ -1848,7 +1854,10 @@ fn init_builds_formal_runtime_and_reports_v0_2_ready_state() {
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "fresh");
-    assert_eq!(serde_json::to_value(&status).unwrap()["readiness"]["index"], "ready");
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["readiness"]["index"],
+        "ready"
+    );
     assert_eq!(
         serde_json::to_value(&status).unwrap()["readiness"]["fusion"],
         "ready"
@@ -1909,7 +1918,10 @@ fn update_keeps_formal_runtime_ready_after_source_change() {
 
     let status = run_status(repo_root).unwrap();
     assert_eq!(status.state, "fresh");
-    assert_eq!(serde_json::to_value(&status).unwrap()["readiness"]["index"], "ready");
+    assert_eq!(
+        serde_json::to_value(&status).unwrap()["readiness"]["index"],
+        "ready"
+    );
     assert_eq!(
         serde_json::to_value(&status).unwrap()["recommended_action"],
         "none"

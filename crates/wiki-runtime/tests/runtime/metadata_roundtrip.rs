@@ -1,9 +1,9 @@
+use wiki_runtime::domain::metadata::DirtyState;
 use wiki_runtime::domain::metadata::WikiMetadata;
 use wiki_runtime::domain::metadata_mapper::{export_metadata, ExportContext};
 use wiki_runtime::domain::state::{
     BuildState, SourceState, WikiPageState, WikiSectionState, WikiState,
 };
-use wiki_runtime::domain::metadata::DirtyState;
 
 #[test]
 fn metadata_roundtrip_keeps_dirty_state() {

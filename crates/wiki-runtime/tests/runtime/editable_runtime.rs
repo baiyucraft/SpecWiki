@@ -459,11 +459,9 @@ fn sync_rejects_declared_block_inside_derived_section() {
     let sync_json = serde_json::to_value(&sync_result).unwrap();
 
     assert_eq!(
-        sync_json["page_outcomes"][0]["result_kind"],
-        "illegal_drift",
+        sync_json["page_outcomes"][0]["result_kind"], "illegal_drift",
         "warnings = {:?}, sync = {:?}",
-        sync_result.warnings,
-        sync_json
+        sync_result.warnings, sync_json
     );
     assert!(sync_result
         .warnings
@@ -919,7 +917,11 @@ fn sync_materializes_declared_lifecycle_relations_from_managed_blocks() {
     );
 
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
-    assert!(restore_runtime_cache_from_artifacts(repo_root).unwrap().restored_cache);
+    assert!(
+        restore_runtime_cache_from_artifacts(repo_root)
+            .unwrap()
+            .restored_cache
+    );
 
     let restored = load_knowledge_artifacts(repo_root).unwrap();
     assert_eq!(restored.declared_records.len(), 5);

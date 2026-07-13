@@ -1,10 +1,10 @@
 //! managed section parse / merge 内核的单元测试。
 //! 覆盖 marker 解析、typed diagnostics、user section 锚点恢复和 managed drift 检测。
 
-use wiki_runtime::generation::managed_sections::*;
 use wiki_model::domain::projection::{
     ProjectionDigestStatus, SectionBinding, SectionOwnership, SyncResultKind,
 };
+use wiki_runtime::generation::managed_sections::*;
 
 fn managed(section_id: &str, title: &str, body: &str) -> ManagedSectionBlock {
     ManagedSectionBlock::generated(section_id.to_string(), title.to_string(), body.to_string())
@@ -63,13 +63,19 @@ fn render_parse_roundtrip_preserves_section_binding() {
     };
 
     let rendered = render_page_with_markers("Repo", &[PageBlock::Managed(block.clone())]);
-    let parsed = parse_wiki_page(&rendered, &SectionBindingIndex::from_blocks(&[block.clone()]));
+    let parsed = parse_wiki_page(
+        &rendered,
+        &SectionBindingIndex::from_blocks(&[block.clone()]),
+    );
     let roundtripped = parsed.managed_blocks();
 
     assert!(parsed.diagnostics.is_empty());
     assert_eq!(roundtripped.len(), 1);
     assert_eq!(roundtripped[0].owner_kind, block.owner_kind);
-    assert_eq!(roundtripped[0].projection_digest_ref, block.projection_digest_ref);
+    assert_eq!(
+        roundtripped[0].projection_digest_ref,
+        block.projection_digest_ref
+    );
     assert_eq!(roundtripped[0].knowledge_refs, block.knowledge_refs);
     assert_eq!(roundtripped[0].source_refs, block.source_refs);
     assert_eq!(roundtripped[0].input_hash, block.input_hash);
