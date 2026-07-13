@@ -467,7 +467,10 @@ pub fn parse_with_markers_and_bindings(
                 diagnostics.push(PageParseDiagnostic::new(
                     PageParseDiagnosticKind::HashMismatch,
                     Some(marker.section_id.clone()),
-                    format!("managed section '{}' content hash mismatch", marker.section_id),
+                    format!(
+                        "managed section '{}' content hash mismatch",
+                        marker.section_id
+                    ),
                 ));
             }
             if let Some(binding) = binding_index.get(&marker.section_id) {
@@ -593,7 +596,10 @@ pub fn classify_section_drift(
         {
             SectionDriftClassification {
                 kind: SyncResultKind::IllegalDrift,
-                reasons: vec![format!("section '{}' illegal generated drift", parsed.section_id)],
+                reasons: vec![format!(
+                    "section '{}' illegal generated drift",
+                    parsed.section_id
+                )],
             }
         }
         _ => SectionDriftClassification {
@@ -714,7 +720,6 @@ fn flush_user_buf(
     }
     buf.clear();
 }
-
 
 #[cfg(test)]
 mod tests {

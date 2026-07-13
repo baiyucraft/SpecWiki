@@ -35,17 +35,17 @@ use wiki_model::domain::knowledge::{
 };
 use wiki_model::domain::knowledge_artifact::{
     validate_conflict_record_snapshot, validate_declared_record_snapshot,
-    validate_research_summary_snapshot, DeclaredKnowledgeRecord, DeclaredKnowledgeRecordStatus,
-    DeclaredKnowledgeRelationKind, KnowledgeConflictKind, KnowledgeConflictRecord,
-    CommittedSnapshotManifest, KnowledgeConflictStatus, KnowledgeHealthRecommendedAction,
+    validate_research_summary_snapshot, CommittedSnapshotManifest, DeclaredKnowledgeRecord,
+    DeclaredKnowledgeRecordStatus, DeclaredKnowledgeRelationKind, KnowledgeConflictKind,
+    KnowledgeConflictRecord, KnowledgeConflictStatus, KnowledgeHealthRecommendedAction,
     KnowledgeHealthSeverity, KnowledgeHealthSignal, KnowledgeHealthSignalKind,
     KnowledgeResearchSummary, KnowledgeResearchSummaryStatus, KnowledgeRuntimeGateRecord,
 };
+use wiki_model::domain::module_tree::ModuleTree;
 use wiki_model::domain::projection::{
     ProjectionDigest, ProjectionDigestStatus as ModelProjectionDigestStatus,
     ProjectionStatusReason, ProjectionStatusReasonKind,
 };
-use wiki_model::domain::module_tree::ModuleTree;
 use wiki_model::domain::source_citation::SourceCitation;
 
 const ARTIFACT_SCHEMA_VERSION: &str = "1";
@@ -380,11 +380,17 @@ pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) ->
         input.research_summaries,
     )?;
     write_json_lines(&page_digests_path(input.repo_root), input.page_digests)?;
-    write_json_lines(&projection_digests_path(input.repo_root), &projection_digests)?;
+    write_json_lines(
+        &projection_digests_path(input.repo_root),
+        &projection_digests,
+    )?;
     write_json_lines(&conflict_records_path(input.repo_root), &conflict_records)?;
     write_json_lines(&runtime_gates_path(input.repo_root), &runtime_gates)?;
     write_json_lines(&health_signals_path(input.repo_root), &health_signals)?;
-    write_yaml(&snapshot_manifest_path(input.repo_root, &snapshot_id), &manifest)
+    write_yaml(
+        &snapshot_manifest_path(input.repo_root, &snapshot_id),
+        &manifest,
+    )
 }
 
 pub fn load_knowledge_artifacts(repo_root: &Path) -> io::Result<KnowledgeArtifactSnapshot> {
@@ -552,9 +558,7 @@ pub fn restore_runtime_cache_from_artifacts(repo_root: &Path) -> io::Result<Rest
         ));
     }
     if validate_projection_digest_snapshot_binding(&artifacts).is_err() {
-        return Ok(RestoreOutcome::blocked(
-            "model_projection_digest_mismatch",
-        ));
+        return Ok(RestoreOutcome::blocked("model_projection_digest_mismatch"));
     }
     let knowledge_snapshot_id = compute_knowledge_snapshot_id(
         &artifacts.knowledge_tree,

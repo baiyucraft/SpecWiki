@@ -75,11 +75,7 @@ pub fn drafts_to_managed_blocks(sections: &[SectionDraft]) -> Vec<ManagedSection
     sections
         .iter()
         .map(|s| {
-            ManagedSectionBlock::generated(
-                s.section_id.clone(),
-                s.title.clone(),
-                s.content.clone(),
-            )
+            ManagedSectionBlock::generated(s.section_id.clone(), s.title.clone(), s.content.clone())
         })
         .collect()
 }

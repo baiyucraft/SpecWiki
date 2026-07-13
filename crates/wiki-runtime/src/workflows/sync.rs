@@ -19,7 +19,8 @@ use crate::storage::cache_store::{
 };
 use crate::storage::knowledge_artifacts::{
     compute_committed_snapshot_id, knowledge_artifacts_exist, load_knowledge_artifacts,
-    persist_knowledge_artifacts, restore_runtime_cache_from_artifacts, PersistKnowledgeArtifactsInput,
+    persist_knowledge_artifacts, restore_runtime_cache_from_artifacts,
+    PersistKnowledgeArtifactsInput,
 };
 use crate::storage::metadata_store::write_metadata;
 use crate::storage::sqlite_store;
@@ -207,7 +208,8 @@ pub fn run_sync_with_mode(
             stale_unit_ids: analysis.stale_unit_ids,
             stale_projection_ids: analysis.stale_projection_ids,
             reasons: analysis.reasons,
-            recommended_action: recommended_action_for_sync_result(analysis.result_kind).to_string(),
+            recommended_action: recommended_action_for_sync_result(analysis.result_kind)
+                .to_string(),
         });
     }
 

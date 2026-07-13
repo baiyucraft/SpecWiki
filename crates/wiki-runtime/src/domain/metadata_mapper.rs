@@ -1,4 +1,6 @@
-use crate::domain::metadata::{MetadataReverseRefs, MetadataSectionBinding, SourceFileRecord, WikiMetadata};
+use crate::domain::metadata::{
+    MetadataReverseRefs, MetadataSectionBinding, SourceFileRecord, WikiMetadata,
+};
 use crate::domain::state::WikiState;
 use crate::domain::wiki_item::WikiItem;
 use crate::storage::wiki_fs::is_official_page_path;

@@ -485,11 +485,7 @@ fn merge_old_user_sections(
     let new_managed: Vec<ManagedSectionBlock> = new_sections
         .iter()
         .map(|s| {
-            ManagedSectionBlock::generated(
-                s.section_id.clone(),
-                s.title.clone(),
-                s.content.clone(),
-            )
+            ManagedSectionBlock::generated(s.section_id.clone(), s.title.clone(), s.content.clone())
         })
         .collect();
 

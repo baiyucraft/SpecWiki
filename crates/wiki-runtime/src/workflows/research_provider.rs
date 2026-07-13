@@ -1271,8 +1271,8 @@ mod tests {
     use wiki_index::symbols::ParsedSymbolsSnapshot;
     use wiki_knowledge::domain::research::{
         PageDigest, PageResearchDiagramRollup, PageResearchEvidenceGroup, PageResearchEvidenceItem,
-        PageResearchResult, PageResearchSectionPlan, SectionPlan, ProjectionDigestStatus,
-        ResearchProfile, ResearchStopReason, UnitResearch,
+        PageResearchResult, PageResearchSectionPlan, ProjectionDigestStatus, ResearchProfile,
+        ResearchStopReason, SectionPlan, UnitResearch,
     };
     use wiki_knowledge::research::{
         ResearchDataSource, ResearchProvider, StructuralResearchProvider,
