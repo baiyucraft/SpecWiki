@@ -3,7 +3,7 @@ use std::path::Path;
 
 use tempfile::tempdir;
 use wiki_runtime::domain::steering::SteeringLoadMode;
-use wiki_runtime::transport::dto::{CoreCommand, CoreResponse};
+use wiki_runtime::transport::dto::{CoreCommand, CoreErrorKind, CoreResponse};
 use wiki_runtime::workflows::progress::NoopProgressSink;
 use wiki_runtime::workflows::{
     init::run_init_with_progress_and_llm_as_with_mode, query::run_query,
@@ -146,6 +146,51 @@ fn parses_change_id_and_cli_bootstrap_command_fields() {
 }
 
 #[test]
+fn parses_archive_mode_and_operation_id() {
+    let command: CoreCommand = serde_json::from_str(
+        r#"{"action":"archive","repoRoot":".","changeId":"demo","archiveMode":"resume","archiveOperationId":"op-7"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        command.archive_mode,
+        Some(wiki_model::domain::governance::ArchiveMode::Resume)
+    );
+    assert_eq!(command.archive_operation_id.as_deref(), Some("op-7"));
+}
+
+#[test]
+fn archive_resume_maps_missing_or_malformed_plan_to_manifest_invalid() {
+    for (operation_id, plan) in [("missing-plan", None), ("bad-plan", Some("not-json"))] {
+        let fixture = tempdir().unwrap();
+        let operation_root = fixture
+            .path()
+            .join(".spec/.runtime/archive-operations")
+            .join(operation_id);
+        fs::create_dir_all(&operation_root).unwrap();
+        if let Some(plan) = plan {
+            fs::write(operation_root.join("plan.json"), plan).unwrap();
+        }
+        let response = wiki_runtime::transport::cli::dispatch(CoreCommand {
+            action: "archive".to_string(),
+            repo_root: Some(fixture.path().display().to_string()),
+            term: None,
+            change_id: Some("demo".to_string()),
+            archive_mode: Some(wiki_model::domain::governance::ArchiveMode::Resume),
+            archive_operation_id: Some(operation_id.to_string()),
+            bootstrap: None,
+            development_mode: false,
+            stream_progress: false,
+            llm_bridge: None,
+        });
+        assert!(!response.ok);
+        assert_eq!(
+            response.error_kind,
+            Some(CoreErrorKind::ArchiveManifestInvalid)
+        );
+    }
+}
+
+#[test]
 fn changes_transport_returns_typed_governance_envelope() {
     let fixture = tempdir().unwrap();
     let response = wiki_runtime::transport::cli::dispatch(CoreCommand {
@@ -153,6 +198,8 @@ fn changes_transport_returns_typed_governance_envelope() {
         repo_root: Some(fixture.path().display().to_string()),
         term: None,
         change_id: None,
+        archive_mode: None,
+        archive_operation_id: None,
         bootstrap: None,
         development_mode: false,
         stream_progress: false,
@@ -172,6 +219,8 @@ fn change_transport_distinguishes_governance_not_enabled_from_missing_change() {
         repo_root: Some(fixture.path().display().to_string()),
         term: None,
         change_id: Some("demo-change".to_string()),
+        archive_mode: None,
+        archive_operation_id: None,
         bootstrap: None,
         development_mode: false,
         stream_progress: false,
@@ -232,6 +281,8 @@ fn query_transport_returns_slim_payload_but_internal_query_stays_rich() {
         repo_root: Some(repo_root.display().to_string()),
         term: Some("handleCheckout".to_string()),
         change_id: None,
+        archive_mode: None,
+        archive_operation_id: None,
         bootstrap: None,
         development_mode: false,
         stream_progress: false,
@@ -303,6 +354,8 @@ fn query_transport_keeps_page_provenance_inside_compact_page_hits() {
         repo_root: Some(repo_root.display().to_string()),
         term: Some("项目概述".to_string()),
         change_id: None,
+        archive_mode: None,
+        archive_operation_id: None,
         bootstrap: None,
         development_mode: false,
         stream_progress: false,
@@ -331,6 +384,8 @@ fn init_transport_requires_provider_in_production_but_allows_explicit_developmen
         repo_root: Some(production_repo_root.display().to_string()),
         term: None,
         change_id: None,
+        archive_mode: None,
+        archive_operation_id: None,
         bootstrap: None,
         development_mode: false,
         stream_progress: false,
@@ -356,6 +411,8 @@ fn init_transport_requires_provider_in_production_but_allows_explicit_developmen
         repo_root: Some(development_repo_root.display().to_string()),
         term: None,
         change_id: None,
+        archive_mode: None,
+        archive_operation_id: None,
         bootstrap: None,
         development_mode: true,
         stream_progress: false,
@@ -389,6 +446,8 @@ fn blocker_transport_contract_never_looks_like_success() {
         repo_root: Some(repo_root.display().to_string()),
         term: None,
         change_id: None,
+        archive_mode: None,
+        archive_operation_id: None,
         bootstrap: None,
         development_mode: false,
         stream_progress: false,
@@ -407,6 +466,8 @@ fn blocker_transport_contract_never_looks_like_success() {
         repo_root: Some(repo_root.display().to_string()),
         term: None,
         change_id: None,
+        archive_mode: None,
+        archive_operation_id: None,
         bootstrap: None,
         development_mode: false,
         stream_progress: false,

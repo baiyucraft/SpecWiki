@@ -18,6 +18,8 @@ type Parsed = {
   repoRoot: string;
   term?: string;
   changeId?: string;
+  archiveMode?: "dry_run" | "apply" | "resume";
+  archiveOperationId?: string;
   hosts?: string;
   noInteractive: boolean;
   bridgeStdio: boolean;
@@ -45,7 +47,7 @@ function defaultHelp(): string {
 
 function allHelp(): string {
   const commands = ADVANCED_COMMANDS.map((command) => {
-    const operand = command === "change" || command === "validate" ? " <change-id>" : "";
+    const operand = command === "change" || command === "validate" || command === "archive" ? " <change-id>" : "";
     return `  spec-wiki ${command}${operand} [options]`;
   });
   return `${defaultHelp()}Advanced:\n${commands.join("\n")}\n`;
@@ -54,11 +56,14 @@ function allHelp(): string {
 function commandHelp(command: CommandName): string {
   const operand = command === "query"
     ? " <term...>"
-    : command === "change" || command === "validate"
+    : command === "change" || command === "validate" || command === "archive"
       ? " <change-id>"
       : "";
   const bridgeOption = STREAMING_COMMANDS.has(command) ? " --bridge-stdio" : "";
-  return `Usage:\n  spec-wiki ${command}${operand} [options]\n\nOptions: --repo-root <path> --json${bridgeOption}\n`;
+  const archiveOptions = command === "archive"
+    ? "\nArchive mode: --dry-run | --apply | --resume <operation-id>"
+    : "";
+  return `Usage:\n  spec-wiki ${command}${operand} [options]\n\nOptions: --repo-root <path> --json${bridgeOption}${archiveOptions}\n`;
 }
 
 function optionValue(args: string[], index: number, name: string): string {
@@ -109,6 +114,7 @@ function parseArgs(args: string[], cwd: string): Parsed {
   const terms: string[] = [];
   const hosts: string[] = [];
   let usedHostsOption = false;
+  let archiveModeExplicit = false;
 
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index];
@@ -127,6 +133,23 @@ function parseArgs(args: string[], cwd: string): Parsed {
     }
     if (arg === "--development-mode") {
       parsed.developmentMode = true;
+      continue;
+    }
+    if (arg === "--dry-run" || arg === "--apply" || arg === "--resume") {
+      if (parsed.command !== "archive") {
+        throw new CliUsageError(`${arg} is only supported for archive`);
+      }
+      if (archiveModeExplicit) {
+        throw new CliUsageError("--dry-run, --apply, and --resume are mutually exclusive");
+      }
+      archiveModeExplicit = true;
+      if (arg === "--resume") {
+        parsed.archiveMode = "resume";
+        parsed.archiveOperationId = optionValue(args, index, arg);
+        index += 1;
+      } else {
+        parsed.archiveMode = arg === "--apply" ? "apply" : "dry_run";
+      }
       continue;
     }
     if (arg === "--bridge-stdio") {
@@ -164,7 +187,7 @@ function parseArgs(args: string[], cwd: string): Parsed {
       terms.push(arg);
       continue;
     }
-    if (parsed.command === "change" || parsed.command === "validate") {
+    if (parsed.command === "change" || parsed.command === "validate" || parsed.command === "archive") {
       if (parsed.changeId) {
         throw new CliUsageError(`unexpected positional argument: ${arg}`);
       }
@@ -180,8 +203,11 @@ function parseArgs(args: string[], cwd: string): Parsed {
     }
     parsed.term = terms.join(" ");
   }
-  if ((parsed.command === "change" || parsed.command === "validate") && !parsed.changeId) {
+  if (!parsed.help && (parsed.command === "change" || parsed.command === "validate" || parsed.command === "archive") && !parsed.changeId) {
     throw new CliUsageError(`${parsed.command} requires <change-id>`);
+  }
+  if (parsed.command === "archive" && !parsed.archiveMode) {
+    parsed.archiveMode = "dry_run";
   }
   if (parsed.bridgeStdio && !STREAMING_COMMANDS.has(parsed.command)) {
     throw new CliUsageError("--bridge-stdio is only supported for init, update, and rebuild");
@@ -266,6 +292,8 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
         repoRoot: parsed.repoRoot,
         ...(parsed.term ? { term: parsed.term } : {}),
         ...(parsed.changeId ? { changeId: parsed.changeId } : {}),
+        ...(parsed.archiveMode ? { archiveMode: parsed.archiveMode } : {}),
+        ...(parsed.archiveOperationId ? { archiveOperationId: parsed.archiveOperationId } : {}),
         ...(parsed.developmentMode ? { developmentMode: true } : {}),
       },
       {

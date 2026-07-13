@@ -8,6 +8,7 @@ use crate::domain::steering::SteeringLoadMode;
 use crate::llm::LlmService;
 use crate::transport::dto::{BootstrapOutcome, CoreCommand, CoreErrorKind, CoreResponse};
 use crate::transport::query_payload::map_query_report;
+use crate::workflows::archive::ArchiveService;
 use crate::workflows::governance::GovernanceService;
 use crate::workflows::init::run_init_with_progress_and_llm_as_with_mode;
 use crate::workflows::page_render::{
@@ -214,7 +215,102 @@ pub fn dispatch_with_runtime<'a>(
                     .and_then(as_json),
             )
         }
+        "archive" => {
+            let Some(change_id) = non_empty(command.change_id.as_deref()) else {
+                return CoreResponse::typed_error(
+                    CoreErrorKind::InvalidArgument,
+                    "archive requires changeId",
+                );
+            };
+            let mode = command
+                .archive_mode
+                .unwrap_or(wiki_model::domain::governance::ArchiveMode::DryRun);
+            let result = match mode {
+                wiki_model::domain::governance::ArchiveMode::DryRun => {
+                    ArchiveService::new(&repo_root).plan(change_id)
+                }
+                wiki_model::domain::governance::ArchiveMode::Apply => {
+                    ArchiveService::new(&repo_root).apply(change_id)
+                }
+                wiki_model::domain::governance::ArchiveMode::Resume => {
+                    let Some(operation_id) = non_empty(command.archive_operation_id.as_deref())
+                    else {
+                        return CoreResponse::typed_error(
+                            CoreErrorKind::InvalidArgument,
+                            "archive resume requires archiveOperationId",
+                        );
+                    };
+                    ArchiveService::new(&repo_root).resume(change_id, operation_id)
+                }
+            };
+            encode_archive_result(result)
+        }
         other => CoreResponse::error(format!("unsupported_action:{other}")),
+    }
+}
+
+fn encode_archive_result(
+    result: std::io::Result<wiki_model::domain::governance::ArchiveReport>,
+) -> CoreResponse {
+    match result {
+        Ok(report) => encode_result(as_json(report)),
+        Err(error) if crate::storage::archive_fs::archive_failure_kind(&error).is_some() => {
+            let kind = match crate::storage::archive_fs::archive_failure_kind(&error).unwrap() {
+                wiki_model::domain::governance::ArchiveErrorKind::NotReady => {
+                    CoreErrorKind::ArchiveNotReady
+                }
+                wiki_model::domain::governance::ArchiveErrorKind::PreconditionChanged => {
+                    CoreErrorKind::ArchivePreconditionChanged
+                }
+                wiki_model::domain::governance::ArchiveErrorKind::Conflict => {
+                    CoreErrorKind::ArchiveConflict
+                }
+                wiki_model::domain::governance::ArchiveErrorKind::Locked => {
+                    CoreErrorKind::ArchiveLocked
+                }
+                wiki_model::domain::governance::ArchiveErrorKind::RecoveryRequired => {
+                    CoreErrorKind::ArchiveRecoveryRequired
+                }
+                wiki_model::domain::governance::ArchiveErrorKind::ManifestInvalid => {
+                    CoreErrorKind::ArchiveManifestInvalid
+                }
+                wiki_model::domain::governance::ArchiveErrorKind::Io => {
+                    CoreErrorKind::WorkflowFailed
+                }
+            };
+            CoreResponse::typed_error(kind, error.to_string())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            CoreResponse::typed_error(CoreErrorKind::ChangeNotFound, error.to_string())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            CoreResponse::typed_error(CoreErrorKind::ArchiveLocked, error.to_string())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+            CoreResponse::typed_error(CoreErrorKind::ArchiveRecoveryRequired, error.to_string())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            CoreResponse::typed_error(CoreErrorKind::ArchiveConflict, error.to_string())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
+            CoreResponse::typed_error(CoreErrorKind::InvalidArgument, error.to_string())
+        }
+        Err(error)
+            if error.kind() == std::io::ErrorKind::InvalidData
+                && error.to_string().contains("not ready") =>
+        {
+            CoreResponse::typed_error(CoreErrorKind::ArchiveNotReady, error.to_string())
+        }
+        Err(error)
+            if error.kind() == std::io::ErrorKind::InvalidData
+                && error.to_string().contains("precondition") =>
+        {
+            CoreResponse::typed_error(CoreErrorKind::ArchivePreconditionChanged, error.to_string())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+            CoreResponse::typed_error(CoreErrorKind::ArchiveConflict, error.to_string())
+        }
+        Err(error) => CoreResponse::typed_error(CoreErrorKind::WorkflowFailed, error.to_string()),
     }
 }
 

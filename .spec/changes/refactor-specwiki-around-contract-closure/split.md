@@ -68,7 +68,7 @@
 - 目标: 实现 archive dry-run、readiness report、operation manifest 和失败恢复提示，不把 Wiki 更新混入 archive 事务。
 - 依赖: refactor-specwiki-around-contract-closure-governance-isolation、refactor-specwiki-around-contract-closure-cli-product-surface。
 - 关键验收: archive 默认先 validate；dry-run 不移动目录；manifest 具备版本、持久化路径和 precondition digest；apply 原子同步目录移动、parent `meta.yaml` 与 `split.md`；失败可重试/恢复；Wiki 只输出 issue / refs，archive 不调用 Wiki 写流程。
-- 归档状态: [ ] pending
+- 归档状态：[x] archived
 
 ## ASCII dependency view
 

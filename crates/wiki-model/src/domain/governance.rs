@@ -3,6 +3,163 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Archive 命令的稳定执行模式。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveMode {
+    DryRun,
+    Apply,
+    Resume,
+}
+
+/// Archive 对外可观察的结果。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveOutcome {
+    Ready,
+    Completed,
+    AlreadyCompleted,
+    Blocked,
+    Conflict,
+    RecoveryRequired,
+    Rejected,
+}
+
+/// Durable archive operation 的聚合状态。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveOperationStatus {
+    Planned,
+    Applying,
+    RecoveryRequired,
+    Completed,
+    Rejected,
+}
+
+/// Archive 状态机中的可恢复步骤。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveStep {
+    Prepared,
+    SourceMoved,
+    ParentMetaUpdated,
+    ParentSplitUpdated,
+    Completed,
+}
+
+/// 单个步骤在 checkpoint 聚合视图中的状态。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveStepStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+/// Archive workflow 的稳定错误分类。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveErrorKind {
+    NotReady,
+    PreconditionChanged,
+    Conflict,
+    Locked,
+    RecoveryRequired,
+    ManifestInvalid,
+    Io,
+}
+
+/// Source tree 中参与 precondition digest 的单个条目。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ArchiveArtifactHash {
+    pub relative_path: String,
+    pub file_type: String,
+    pub size: u64,
+    pub content_hash: String,
+}
+
+/// Child archive 对 active parent 的预期更新。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ArchiveParentDiff {
+    pub parent_id: String,
+    pub meta_path: String,
+    pub split_path: String,
+    pub archived_at: String,
+    pub archived_to: String,
+    pub meta_before_hash: String,
+    pub meta_after_hash: String,
+    pub split_before_hash: String,
+    pub split_after_hash: String,
+}
+
+/// Append-only checkpoint 的稳定记录。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ArchiveCheckpoint {
+    pub sequence: u64,
+    pub attempt: u32,
+    pub step: ArchiveStep,
+    pub status: ArchiveStepStatus,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Dry-run 输出和 durable operation 聚合共用的 manifest。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ArchiveOperationManifest {
+    pub schema_version: String,
+    pub policy_version: String,
+    pub algorithm_version: String,
+    pub operation_id: String,
+    pub change_id: String,
+    pub mode: ArchiveMode,
+    pub outcome: ArchiveOutcome,
+    pub status: ArchiveOperationStatus,
+    pub step: ArchiveStep,
+    pub step_status: ArchiveStepStatus,
+    pub source_path: String,
+    pub target_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_root: Option<String>,
+    pub created_at: String,
+    pub persisted: bool,
+    pub resumable: bool,
+    pub validation: GovernanceValidationResult,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_hash_summary: Vec<ArchiveArtifactHash>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_diff: Option<ArchiveParentDiff>,
+    pub precondition_digest: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub completed_steps: Vec<ArchiveStep>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_step: Option<ArchiveStep>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wiki_sync_issues: Vec<GovernanceBlockingIssue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_refs: Vec<GovernanceArtifactRef>,
+}
+
+/// Archive workflow 输入。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ArchiveRequest {
+    pub change_id: String,
+    pub mode: ArchiveMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+}
+
+/// Archive workflow 输出。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ArchiveReport {
+    pub governance: GovernanceSummary,
+    pub validation: GovernanceValidationResult,
+    pub manifest: ArchiveOperationManifest,
+}
+
 /// 仓库级治理证据及其派生缓存的可用状态。
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]

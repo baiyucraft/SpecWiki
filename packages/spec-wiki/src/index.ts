@@ -21,6 +21,8 @@ export {
   STREAMING_ACTIONS,
 } from "./runtime/invokeCore.js";
 export {
+  type ArchiveOperationManifest,
+  type ArchiveReport,
   type CoreResponse,
   type CoreStreamEvent,
   parseEventLine,

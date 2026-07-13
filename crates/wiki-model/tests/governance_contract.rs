@@ -1,9 +1,57 @@
 use wiki_model::domain::governance::{
-    GovernanceArtifactRef, GovernanceArtifactStatus, GovernanceBlockingIssue,
+    ArchiveMode, ArchiveOperationManifest, ArchiveOperationStatus, ArchiveOutcome, ArchiveStep,
+    ArchiveStepStatus, GovernanceArtifactRef, GovernanceArtifactStatus, GovernanceBlockingIssue,
     GovernanceChangeSummary, GovernanceGateStatus, GovernanceGateSummary, GovernanceIssueSeverity,
     GovernanceLocation, GovernanceReadiness, GovernanceRecommendedAction, GovernanceRuleResult,
     GovernanceSummary, GovernanceValidationResult,
 };
+
+#[test]
+fn archive_contract_roundtrips_and_rejects_unknown_enums() {
+    let manifest = ArchiveOperationManifest {
+        schema_version: "archive-v1".to_string(),
+        policy_version: "unispec-0.1.0".to_string(),
+        algorithm_version: "archive-v1".to_string(),
+        operation_id: "op-1".to_string(),
+        change_id: "demo".to_string(),
+        mode: ArchiveMode::DryRun,
+        outcome: ArchiveOutcome::Ready,
+        status: ArchiveOperationStatus::Planned,
+        step: ArchiveStep::Prepared,
+        step_status: ArchiveStepStatus::Pending,
+        source_path: ".spec/changes/demo".to_string(),
+        target_path: ".spec/archive/2026-07-13-demo".to_string(),
+        operation_root: None,
+        created_at: "2026-07-13T00:00:00Z".to_string(),
+        persisted: false,
+        resumable: false,
+        validation: GovernanceValidationResult {
+            valid: true,
+            readiness: GovernanceReadiness::Ready,
+            rule_results: Vec::new(),
+            issues: Vec::new(),
+        },
+        artifact_hash_summary: Vec::new(),
+        parent_diff: None,
+        precondition_digest: "digest".to_string(),
+        completed_steps: Vec::new(),
+        failure_step: None,
+        recovery_hint: None,
+        wiki_sync_issues: Vec::new(),
+        evidence_refs: Vec::new(),
+    };
+    let value = serde_json::to_value(&manifest).unwrap();
+    assert_eq!(value["mode"], "dry_run");
+    assert_eq!(value["outcome"], "ready");
+    assert_eq!(value["step"], "prepared");
+    assert_eq!(value["step_status"], "pending");
+    assert_eq!(
+        serde_json::from_value::<ArchiveOperationManifest>(value).unwrap(),
+        manifest
+    );
+    assert!(serde_json::from_str::<ArchiveMode>(r#""unknown""#).is_err());
+    assert!(serde_json::from_str::<ArchiveOutcome>(r#""unknown""#).is_err());
+}
 
 fn governance_artifact() -> GovernanceArtifactRef {
     GovernanceArtifactRef {

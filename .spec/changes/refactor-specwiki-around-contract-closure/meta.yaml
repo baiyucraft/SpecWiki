@@ -61,6 +61,9 @@ multiChange:
       dependsOn:
         - refactor-specwiki-around-contract-closure-governance-isolation
         - refactor-specwiki-around-contract-closure-cli-product-surface
+      archiveStatus: archived
+      archivedAt: 2026-07-13T03:34:03.861Z
+      archivedTo: .spec/archive/2026-07-13-refactor-specwiki-around-contract-closure-archive-dry-run-manifest
 refactor:
   kind: contract-closure-driven-runtime-rebuild
   parallelAllowed: false

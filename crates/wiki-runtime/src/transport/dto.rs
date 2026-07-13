@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use crate::llm::{LlmBridgeConfig, LlmCompletion, LlmPromptRequest};
 use crate::workflows::progress::WorkflowProgressEvent;
+use wiki_model::domain::governance::ArchiveMode;
 
 /// CLI 宿主 bootstrap 的总结果。
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -48,6 +49,10 @@ pub struct CoreCommand {
     pub term: Option<String>,
     #[serde(rename = "changeId")]
     pub change_id: Option<String>,
+    #[serde(rename = "archiveMode")]
+    pub archive_mode: Option<ArchiveMode>,
+    #[serde(rename = "archiveOperationId")]
+    pub archive_operation_id: Option<String>,
     pub bootstrap: Option<BootstrapReport>,
     #[serde(rename = "developmentMode", default)]
     pub development_mode: bool,
@@ -74,6 +79,12 @@ pub enum CoreErrorKind {
     InvalidArgument,
     GovernanceNotEnabled,
     ChangeNotFound,
+    ArchiveNotReady,
+    ArchivePreconditionChanged,
+    ArchiveConflict,
+    ArchiveLocked,
+    ArchiveRecoveryRequired,
+    ArchiveManifestInvalid,
     WorkflowFailed,
     ProtocolError,
     InternalError,

@@ -27,6 +27,10 @@ export type CoreCommand = {
   /** `query` 命令使用的检索词。 */
   term?: string;
   changeId?: string;
+  /** `archive` 的显式执行模式；CLI 默认发送 `dry_run`。 */
+  archiveMode?: "dry_run" | "apply" | "resume";
+  /** `archiveMode=resume` 时要恢复的 durable operation。 */
+  archiveOperationId?: string;
   developmentMode?: boolean;
   bootstrap?: unknown;
   /** 长流程协议提示；当前由 invokeCore 内部自动打开。 */

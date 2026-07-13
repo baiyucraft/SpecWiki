@@ -27,10 +27,10 @@ function buildMainPackageBundle() {
   expect(result.status).toBe(0);
 }
 
-async function renderSourceHelp() {
+async function renderSourceHelp(args: string[] = ["--help"]) {
   const stdout = [];
   const stderr = [];
-  const exitCode = await runCli(["--help"], {
+  const exitCode = await runCli(args, {
     cwd: rootDir,
     env: process.env,
     stdin: process.stdin,
@@ -172,6 +172,45 @@ test("staged CLI help matches the source help contract", async () => {
 
     expect(stagedHelp.status).toBe(0);
     expect(stagedHelp.stdout.trim()).toBe(sourceHelp);
+  } finally {
+    rmSync(outputDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test("staged advanced and archive help match the source contracts", async () => {
+  const outputDir = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-stage-archive-help-"));
+  const profile = "test-integration";
+  const binaryDir = path.join(rootDir, "target", profile);
+  const binaryPath = path.join(binaryDir, "wiki-runtime.exe");
+
+  buildMainPackageBundle();
+  const sourceAdvancedHelp = await renderSourceHelp(["--help-all"]);
+  const sourceArchiveHelp = await renderSourceHelp(["archive", "--help"]);
+
+  mkdirSync(binaryDir, { recursive: true });
+  writeFileSync(binaryPath, "mock-binary");
+
+  try {
+    const { stagePackage } = await import("../build-dist.mjs");
+    stagePackage({ rootDir, profile, outputDir, platform: "win32" });
+
+    const stagedAdvancedHelp = spawnSync(
+      "node",
+      [path.join(outputDir, "bin", "spec-wiki.js"), "--help-all"],
+      { cwd: outputDir, encoding: "utf8", shell: process.platform === "win32" },
+    );
+    const stagedArchiveHelp = spawnSync(
+      "node",
+      [path.join(outputDir, "bin", "spec-wiki.js"), "archive", "--help"],
+      { cwd: outputDir, encoding: "utf8", shell: process.platform === "win32" },
+    );
+
+    expect(stagedAdvancedHelp.status).toBe(0);
+    expect(stagedAdvancedHelp.stdout.trim()).toBe(sourceAdvancedHelp);
+    expect(stagedAdvancedHelp.stdout).toContain("spec-wiki archive <change-id>");
+    expect(stagedArchiveHelp.status).toBe(0);
+    expect(stagedArchiveHelp.stdout.trim()).toBe(sourceArchiveHelp);
+    expect(stagedArchiveHelp.stdout).toContain("--dry-run | --apply | --resume <operation-id>");
   } finally {
     rmSync(outputDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }

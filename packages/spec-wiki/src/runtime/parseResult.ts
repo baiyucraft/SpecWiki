@@ -146,6 +146,51 @@ export type GovernanceValidationResult = {
 export type GovernanceChangesReport = { governance: GovernanceSummary; changes: GovernanceChangeSummary[] };
 export type GovernanceChangeReport = { governance: GovernanceSummary; change: GovernanceChangeSummary };
 export type GovernanceValidateReport = { governance: GovernanceSummary; change_id: string; validation: GovernanceValidationResult };
+export type ArchiveMode = "dry_run" | "apply" | "resume";
+export type ArchiveOutcome = "ready" | "completed" | "already_completed" | "blocked" | "conflict" | "recovery_required" | "rejected";
+export type ArchiveOperationStatus = "planned" | "applying" | "recovery_required" | "completed" | "rejected";
+export type ArchiveStep = "prepared" | "source_moved" | "parent_meta_updated" | "parent_split_updated" | "completed";
+export type ArchiveStepStatus = "pending" | "in_progress" | "completed" | "failed";
+export type ArchiveArtifactHash = { relative_path: string; file_type: string; size: number; content_hash: string };
+export type ArchiveParentDiff = {
+  parent_id: string;
+  meta_path: string;
+  split_path: string;
+  archived_at: string;
+  archived_to: string;
+  meta_before_hash: string;
+  meta_after_hash: string;
+  split_before_hash: string;
+  split_after_hash: string;
+};
+export type ArchiveOperationManifest = {
+  schema_version: string;
+  policy_version: string;
+  algorithm_version: string;
+  operation_id: string;
+  change_id: string;
+  mode: ArchiveMode;
+  outcome: ArchiveOutcome;
+  status: ArchiveOperationStatus;
+  step: ArchiveStep;
+  step_status: ArchiveStepStatus;
+  source_path: string;
+  target_path: string;
+  operation_root?: string | null;
+  created_at: string;
+  persisted: boolean;
+  resumable: boolean;
+  validation: GovernanceValidationResult;
+  artifact_hash_summary: ArchiveArtifactHash[];
+  parent_diff?: ArchiveParentDiff | null;
+  precondition_digest: string;
+  completed_steps: ArchiveStep[];
+  failure_step?: ArchiveStep | null;
+  recovery_hint?: string | null;
+  wiki_sync_issues: GovernanceBlockingIssue[];
+  evidence_refs: GovernanceArtifactRef[];
+};
+export type ArchiveReport = { governance: GovernanceSummary; validation: GovernanceValidationResult; manifest: ArchiveOperationManifest };
 export type BootstrapReport = { outcome: "ready" | "partial" | "failed"; hosts: Array<Record<string, unknown>>; recoveryHint?: string | null };
 export type UnifiedInitReport = { outcome: "ready" | "partial"; bootstrap: BootstrapReport; runtime: unknown; landing: WikiStatusData; recovery_hint?: string | null };
 
@@ -280,6 +325,7 @@ export type CoreKnownData
     | GovernanceChangesReport
     | GovernanceChangeReport
     | GovernanceValidateReport
+    | ArchiveReport
     | UnifiedInitReport
     | Record<string, unknown>
     | null;
@@ -290,7 +336,13 @@ export type CoreErrorKind
     | "change_not_found"
     | "workflow_failed"
     | "protocol_error"
-    | "internal_error";
+    | "internal_error"
+    | "archive_not_ready"
+    | "archive_precondition_changed"
+    | "archive_conflict"
+    | "archive_locked"
+    | "archive_recovery_required"
+    | "archive_manifest_invalid";
 
 /** `wiki-runtime` 的统一终态响应外壳。 */
 export type CoreResponse<TData = CoreKnownData> = {
@@ -674,6 +726,141 @@ throw new Error("invalid wiki-runtime governance validation");
   throw new Error("invalid wiki-runtime governance report");
 }
 
+function parseGovernanceValidation(value: unknown, field = "governance.validation"): GovernanceValidationResult {
+  if (!isRecord(value) || typeof value.valid !== "boolean") {
+    throw new Error(`invalid wiki-runtime ${field}`);
+  }
+  return {
+    valid: value.valid,
+    readiness: parseLiteral(
+      value.readiness,
+      ["not_enabled", "ready", "stale", "blocked", "conflict"] as const,
+      `${field}.readiness`,
+    ),
+    rule_results: Array.isArray(value.rule_results) ? value.rule_results.filter(isRecord) : [],
+    issues: Array.isArray(value.issues) ? value.issues.map(parseGovernanceIssue) : [],
+  };
+}
+
+function parseArchiveStep(value: unknown, field: string): ArchiveStep {
+  return parseLiteral(
+    value,
+    ["prepared", "source_moved", "parent_meta_updated", "parent_split_updated", "completed"] as const,
+    field,
+  );
+}
+
+function parseArchiveArtifactHash(value: unknown): ArchiveArtifactHash {
+  if (
+    !isRecord(value)
+    || typeof value.relative_path !== "string"
+    || typeof value.file_type !== "string"
+    || typeof value.size !== "number"
+    || typeof value.content_hash !== "string"
+  ) {
+    throw new Error("invalid wiki-runtime archive artifact_hash_summary");
+  }
+  return {
+    relative_path: value.relative_path,
+    file_type: value.file_type,
+    size: value.size,
+    content_hash: value.content_hash,
+  };
+}
+
+function parseArchiveParentDiff(value: unknown): ArchiveParentDiff {
+  const fields = [
+    "parent_id",
+    "meta_path",
+    "split_path",
+    "archived_at",
+    "archived_to",
+    "meta_before_hash",
+    "meta_after_hash",
+    "split_before_hash",
+    "split_after_hash",
+  ] as const;
+  if (!isRecord(value) || fields.some(field => typeof value[field] !== "string")) {
+    throw new Error("invalid wiki-runtime archive parent_diff");
+  }
+  return Object.fromEntries(fields.map(field => [field, value[field]])) as ArchiveParentDiff;
+}
+
+function parseArchiveManifest(value: unknown): ArchiveOperationManifest {
+  if (!isRecord(value))
+throw new Error("invalid wiki-runtime archive manifest");
+  const requiredStrings = [
+    "schema_version",
+    "policy_version",
+    "algorithm_version",
+    "operation_id",
+    "change_id",
+    "source_path",
+    "target_path",
+    "created_at",
+    "precondition_digest",
+  ] as const;
+  if (
+    requiredStrings.some(field => typeof value[field] !== "string")
+    || typeof value.persisted !== "boolean"
+    || typeof value.resumable !== "boolean"
+    || !Array.isArray(value.artifact_hash_summary)
+    || !Array.isArray(value.completed_steps)
+    || !Array.isArray(value.wiki_sync_issues)
+    || !Array.isArray(value.evidence_refs)
+  ) {
+    throw new Error("invalid wiki-runtime archive manifest");
+  }
+
+  return {
+    schema_version: value.schema_version as string,
+    policy_version: value.policy_version as string,
+    algorithm_version: value.algorithm_version as string,
+    operation_id: value.operation_id as string,
+    change_id: value.change_id as string,
+    mode: parseLiteral(value.mode, ["dry_run", "apply", "resume"] as const, "archive manifest.mode"),
+    outcome: parseLiteral(
+      value.outcome,
+      ["ready", "completed", "already_completed", "blocked", "conflict", "recovery_required", "rejected"] as const,
+      "archive manifest.outcome",
+    ),
+    status: parseLiteral(
+      value.status,
+      ["planned", "applying", "recovery_required", "completed", "rejected"] as const,
+      "archive manifest.status",
+    ),
+    step: parseArchiveStep(value.step, "archive manifest.step"),
+    step_status: parseLiteral(
+      value.step_status,
+      ["pending", "in_progress", "completed", "failed"] as const,
+      "archive manifest.step_status",
+    ),
+    source_path: value.source_path as string,
+    target_path: value.target_path as string,
+    operation_root: parseNullableString(value.operation_root, "archive manifest.operation_root"),
+    created_at: value.created_at as string,
+    persisted: value.persisted,
+    resumable: value.resumable,
+    validation: parseGovernanceValidation(value.validation, "archive manifest.validation"),
+    artifact_hash_summary: value.artifact_hash_summary.map(parseArchiveArtifactHash),
+    parent_diff: value.parent_diff == null ? value.parent_diff : parseArchiveParentDiff(value.parent_diff),
+    precondition_digest: value.precondition_digest as string,
+    completed_steps: value.completed_steps.map(step => parseArchiveStep(step, "archive manifest.completed_steps")),
+    failure_step: value.failure_step == null ? value.failure_step : parseArchiveStep(value.failure_step, "archive manifest.failure_step"),
+    recovery_hint: parseNullableString(value.recovery_hint, "archive manifest.recovery_hint"),
+    wiki_sync_issues: value.wiki_sync_issues.map(parseGovernanceIssue),
+    evidence_refs: value.evidence_refs.map(parseGovernanceArtifactRef),
+  };
+}
+
+function parseArchiveReport(value: Record<string, unknown>): ArchiveReport {
+  return {
+    governance: parseGovernanceSummary(value.governance),
+    validation: parseGovernanceValidation(value.validation, "archive.validation"),
+    manifest: parseArchiveManifest(value.manifest),
+  };
+}
+
 function parseUsageBucket(value: unknown): CoreUsageBucket {
   const parsed = value as Partial<CoreUsageBucket>;
 
@@ -979,6 +1166,10 @@ throw new Error("invalid wiki-runtime bootstrap report");
     return parseStatusData(value);
   }
 
+  if ("governance" in value && "validation" in value && "manifest" in value) {
+    return parseArchiveReport(value);
+  }
+
   if ("governance" in value && ("changes" in value || "change" in value || "validation" in value)) {
     return parseGovernanceReport(value);
   }
@@ -1031,6 +1222,12 @@ function parseCoreResponse(value: unknown): CoreResponse {
               "workflow_failed",
               "protocol_error",
               "internal_error",
+              "archive_not_ready",
+              "archive_precondition_changed",
+              "archive_conflict",
+              "archive_locked",
+              "archive_recovery_required",
+              "archive_manifest_invalid",
             ] as const,
             "errorKind",
           ),

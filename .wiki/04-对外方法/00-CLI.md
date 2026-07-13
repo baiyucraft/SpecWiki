@@ -30,9 +30,14 @@ spec-wiki rebuild [--repo-root <path>] [--bridge-stdio]
 spec-wiki changes [--repo-root <path>]
 spec-wiki change <change-id> [--repo-root <path>]
 spec-wiki validate <change-id> [--repo-root <path>]
+spec-wiki archive <change-id> [--dry-run | --apply | --resume <operation-id>] [--repo-root <path>]
 ```
 
-本阶段不注册 `archive`、workspace validate、`doctor`、`repair` 或 `trace`。
+`archive` 默认等同于 `--dry-run`，只执行 validate、readiness 评估并返回 operation manifest，不移动 change，也不创建 durable operation。`--apply` 才执行归档写入；部分完成后必须使用报告给出的 `operation-id` 配合 `--resume` 恢复。三种模式互斥，archive 始终是短流程命令。
+
+archive 只修改 `.spec` 的 change、parent marker 和 `.spec/.runtime/archive-operations` 操作证据，不调用 Wiki sync/update/rebuild，也不写 `.wiki/**`；Wiki 相关结果仅作为 `wiki_sync_issues` 和 `evidence_refs` 返回。
+
+本阶段不注册 workspace validate、`doctor`、`repair` 或 `trace`。
 
 ## 输出模式
 
@@ -46,14 +51,15 @@ spec-wiki validate <change-id> [--repo-root <path>]
 | 退出码 | 含义 |
 | --- | --- |
 | `0` | 成功 |
-| `2` | unified init partial，或 `validate` 返回 `valid=false` |
+| `2` | unified init partial、`validate` 返回 `valid=false`，或 archive 返回 not-ready、precondition changed、conflict、locked、recovery-required |
 | `64` | 缺参、未知命令/参数、非法组合、host 选择失败 |
-| `1` | domain、workflow、protocol 或 internal failure |
+| `1` | archive manifest invalid，或其他 domain、workflow、protocol、I/O、internal failure |
 
 ## 稳定边界
 
 - `query` 只接受一个或多个位置 token，并合并为查询词。
 - `--host` 可重复，`--hosts` 接受逗号列表，两者互斥。
 - `changes/change/validate` 返回基于单次 live governance evaluation 的结构化 envelope。
+- `archive` 转发 `archiveMode`；仅 resume 额外转发 `archiveOperationId`，human/JSON 输出均直接翻译 Rust archive DTO。
 - JavaScript API 保留 `wikiInit/wikiStatus/wikiQuery/wikiUpdate/wikiSync/wikiRebuild`。
 - 宿主资产保留 `wiki-*` skill identity 和 Claude `/wiki:*` identity，但执行一级 CLI。

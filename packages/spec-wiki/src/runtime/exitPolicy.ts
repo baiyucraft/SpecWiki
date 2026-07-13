@@ -25,6 +25,16 @@ export function exitCodeForResponse(response: CoreResponse): number {
   if (response.errorKind === "invalid_argument")
 return EXIT_CODES.usage;
 
+  if (
+    response.errorKind === "archive_not_ready"
+    || response.errorKind === "archive_precondition_changed"
+    || response.errorKind === "archive_conflict"
+    || response.errorKind === "archive_locked"
+    || response.errorKind === "archive_recovery_required"
+  ) {
+    return EXIT_CODES.partial;
+  }
+
   return EXIT_CODES.failure;
 }
 

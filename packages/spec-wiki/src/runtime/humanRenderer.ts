@@ -15,6 +15,9 @@ export function renderHumanResponse(
   const data = response.data as unknown;
   if (!isRecord(data))
 return `${options.action ?? "done"}: ok\n`;
+  if (isRecord(data.manifest)) {
+    return renderArchiveManifest(data.manifest, options.action ?? "archive");
+  }
   const lines = [`${options.action ?? "done"}: ${stringValue(data.outcome) ?? "ok"}`];
   for (const key of ["state", "runtime_state", "query_trust", "recommended_action", "provenance_summary"]) {
     const value = data[key];
@@ -25,6 +28,28 @@ lines.push(`${key}: ${value}`);
 lines.push(`updated_pages: ${data.updated_pages.length}`);
   if (Array.isArray(data.matched_pages))
 lines.push(`matched_pages: ${data.matched_pages.length}`);
+  return `${lines.join("\n")}\n`;
+}
+
+function renderArchiveManifest(manifest: Record<string, unknown>, action: string): string {
+  const lines = [`${action}: ${stringValue(manifest.outcome) ?? "ok"}`];
+  for (const key of [
+    "operation_id",
+    "mode",
+    "status",
+    "step",
+    "source_path",
+    "target_path",
+    "recovery_hint",
+  ]) {
+    const value = manifest[key];
+    if (typeof value === "string")
+lines.push(`${key}: ${value}`);
+  }
+  if (typeof manifest.persisted === "boolean")
+lines.push(`persisted: ${manifest.persisted}`);
+  if (typeof manifest.resumable === "boolean")
+lines.push(`resumable: ${manifest.resumable}`);
   return `${lines.join("\n")}\n`;
 }
 

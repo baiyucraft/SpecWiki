@@ -250,7 +250,84 @@ test("runCli exposes implemented advanced commands only through --help-all", asy
   expect(exitCode).toBe(0);
   expect(stdout.join("")).toContain("spec-wiki changes");
   expect(stdout.join("")).toContain("spec-wiki validate <change-id>");
-  expect(stdout.join("")).not.toContain("archive");
+  expect(stdout.join("")).toContain("spec-wiki archive <change-id>");
+});
+
+test("runCli dispatches archive as dry-run by default", async () => {
+  forwardCoreCommandMock.mockResolvedValue(0);
+  const { runCli } = await import("./cli.js");
+
+  expect(await runCli(["archive", "child-change"], {
+    cwd: "/repo",
+    env: process.env,
+    stdout: vi.fn(),
+    stderr: vi.fn(),
+  })).toBe(0);
+  expect(forwardCoreCommandMock).toHaveBeenCalledWith(
+    { action: "archive", repoRoot: "/repo", changeId: "child-change", archiveMode: "dry_run" },
+    expect.objectContaining({ action: "archive", bridgeStdio: false }),
+  );
+});
+
+test.each([
+  [["archive", "child-change", "--dry-run"], { archiveMode: "dry_run" }],
+  [["archive", "child-change", "--apply"], { archiveMode: "apply" }],
+  [["archive", "child-change", "--resume", "operation-7"], { archiveMode: "resume", archiveOperationId: "operation-7" }],
+] as const)("runCli forwards archive mode for %j", async (args, expected) => {
+  forwardCoreCommandMock.mockResolvedValue(0);
+  const { runCli } = await import("./cli.js");
+  expect(await runCli([...args], {
+    cwd: "/repo",
+    env: process.env,
+    stdout: vi.fn(),
+    stderr: vi.fn(),
+  })).toBe(0);
+  expect(forwardCoreCommandMock).toHaveBeenCalledWith(
+    expect.objectContaining({ action: "archive", changeId: "child-change", ...expected }),
+    expect.objectContaining({ action: "archive", bridgeStdio: false }),
+  );
+});
+
+test.each([
+  ["--dry-run", "--apply"],
+  ["--dry-run", "--resume", "operation-7"],
+  ["--apply", "--resume", "operation-7"],
+])("runCli rejects mutually exclusive archive modes: %j", async (...options) => {
+  const stderr: string[] = [];
+  const { runCli } = await import("./cli.js");
+  expect(await runCli(["archive", "child-change", ...options], {
+    cwd: "/repo",
+    env: process.env,
+    stdout: vi.fn(),
+    stderr: text => stderr.push(text),
+  })).toBe(64);
+  expect(stderr.join("")).toContain("mutually exclusive");
+  expect(forwardCoreCommandMock).not.toHaveBeenCalled();
+});
+
+test("runCli requires an operation id after archive --resume", async () => {
+  const stderr: string[] = [];
+  const { runCli } = await import("./cli.js");
+  expect(await runCli(["archive", "child-change", "--resume"], {
+    cwd: "/repo",
+    env: process.env,
+    stdout: vi.fn(),
+    stderr: text => stderr.push(text),
+  })).toBe(64);
+  expect(stderr.join("")).toContain("missing value for --resume");
+});
+
+test("runCli shows archive only in advanced and command help", async () => {
+  const stdout: string[] = [];
+  const { runCli } = await import("./cli.js");
+  expect(await runCli(["archive", "--help"], {
+    cwd: "/repo",
+    env: process.env,
+    stdout: text => stdout.push(text),
+    stderr: vi.fn(),
+  })).toBe(0);
+  expect(stdout.join("")).toContain("archive <change-id>");
+  expect(stdout.join("")).toContain("--dry-run | --apply | --resume <operation-id>");
 });
 
 test("runCli rejects help mixed with machine flags", async () => {
