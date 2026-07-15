@@ -2,7 +2,7 @@
 title: Agents 设计
 description: spec-wiki 宿主接入、bootstrap、runtime forwarding 和资产模型
 owner: architecture
-updated: 2026-06-10
+updated: 2026-07-16
 ---
 
 # Repo Wiki Agents Design
@@ -22,6 +22,7 @@ updated: 2026-06-10
 
 - crate 主边界仍以 [00-总体设计](./00-总体设计.md) 为准
 - runtime 主链仍以 [01-Runtime设计](./01-Runtime设计.md) 为准
+- query 的稳定字段、排序、状态与错误以 [06-Runtime查询合同](./06-Runtime查询合同.md) 为准
 - 本文不重新定义 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble`
 - 本文不把宿主 prompt / command / skill 文案升级成 Wiki 业务真相来源
 
@@ -387,67 +388,13 @@ flowchart TD
     L --> M
 ```
 
-## 宿主消费 query 的当前与后续边界
+## 宿主消费 query 的边界
 
-### `v0.1.0` 当前边界
+宿主不拥有 query 业务语义。它们只负责提取非空 term、调用 Runtime，并薄消费 [06-Runtime查询合同](./06-Runtime查询合同.md) 定义的 canonical 响应。
 
-当前宿主对 `query` 的消费仍应收敛在稳定字段：
+当前共享资产应先读取 Runtime 状态、恢复建议、分组结果和 answer，使用 Runtime 提供的组内 rank，禁止跨 route 比较 score。宿主不得重建 route 枚举、ranking、readiness/trust 状态机或 answer 结论，也不得继续消费已移除的旧派生视图。精确实现细节仍需回到 source refs 和源码核验。
 
-- `term`
-- `runtime_state`
-- `query_mode`
-- `query_trust`
-- `recommended_action`
-- `matched_pages`
-- `provenance_summary`
-
-含义：
-
-- 宿主可以围绕这些字段做薄解释
-- 宿主不得把当前 runtime 的实现可见字段当成正式合同
-- 宿主不得自行推断 `process / community` 命中
-- 宿主不得在 runtime 之外拼装新的 wiki 状态机、query 语义层或业务协议
-
-### richer query 的后续消费边界
-
-未来 runtime 可能逐步暴露 richer query 结果，例如：
-
-- 更明确的 graph projection
-- process / community 命中
-- knowledge-layer 命中
-- 更细的 provenance / ranking 信息
-
-但这些字段只有在 `wiki-runtime` 的 transport / DTO 被正式升级后，宿主才可以消费。
-
-在正式升级之前：
-
-- 宿主只能转述稳定字段
-- 宿主不能把实现细节字段写进宿主自己的固定协议
-- 宿主不能自行补推 ranking、state machine 或 query intent
-
-在正式升级之后：
-
-- 宿主仍然只做 route / invoke / thin consumption
-- 宿主可以按 runtime 明确分层后的结果做转述
-- 宿主仍不得重写 knowledge/page/query 的核心业务语义
-
-### 已明确延期到后续设计的宿主触发体系
-
-当前 `v0.1.0` 宿主层只正式承诺：
-
-- skill description 收敛到 `status / query / init / update` 的真实稳定能力
-- CodeBuddy hook 只覆盖结构、模块、文件、符号、调用、概念、wiki/status/query 这一层触发词
-- 宿主回答只围绕 runtime 稳定字段做 thin consumption
-
-这意味着以下内容明确转入后续设计，而不是继续写进当前 skill 文案：
-
-- Codex / Claude / CodeBuddy 统一 trigger 规范
-  - 后续应把 `should-trigger / should-not-trigger` 语料、关键词、意图分类和冲突消解规则沉淀成单一规范源
-  - 现在不应该让不同宿主各自发散补 prompt 词表
-- richer query 结果的宿主消费模板
-  - 只有等 runtime 正式开放 `owner / entrypoint / impact` 一类稳定字段后，宿主 skill 才能把这些能力写进 description 和 action note
-- trigger 测试语料体系
-  - 后续应给每个宿主补显式的正例 / 反例 / 歧义例测试，验证何时该触发 wiki-query、何时该回到普通代码分析，而不是只做当前这种静态字符串断言
+Richer query 的延期能力与升级条件只在 Runtime 查询合同维护。在它们进入 Runtime transport/DTO 且通过跨入口验收前，任何宿主都不得用 description、action note 或私有 payload 预先承诺。Codex / Claude / CodeBuddy 的统一 trigger 规范和正反例语料仍由后续宿主触发合同处理，不在本页复制 query 字段定义。
 
 ## 一级命令分流图
 

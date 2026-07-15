@@ -35,7 +35,21 @@ fn write_repo_file(repo_root: &Path, relative_path: &str, content: &str) {
 }
 
 fn write_graph_query_repo(repo_root: &Path) {
-    write_repo_file(repo_root, "package.json", r#"{"name":"graph-query-demo"}"#);
+    write_repo_file(
+        repo_root,
+        "package.json",
+        r#"{"name":"graph-query-demo","workspaces":["packages/*"]}"#,
+    );
+    write_repo_file(
+        repo_root,
+        "packages/payments/package.json",
+        r#"{"name":"payments"}"#,
+    );
+    write_repo_file(
+        repo_root,
+        "packages/payments/index.ts",
+        "export const paymentsModule = true;\n",
+    );
     write_repo_file(
         repo_root,
         "src/shared.ts",
@@ -367,6 +381,13 @@ fn query_marks_stale_runtime_as_queryable_but_recommends_update() {
 
     assert_eq!(payload["runtime_state"], "stale");
     assert_eq!(payload["query_trust"], "stale_but_queryable");
+    assert!(query
+        .results
+        .iter()
+        .filter(|result| result.route_tag.is_index_route())
+        .all(|result| {
+            result.provenance.state == wiki_model::domain::query::QueryProvenanceState::Stale
+        }));
     assert_eq!(payload["recommended_action"], "update");
     assert_eq!(payload["answer"]["answer_mode"], "degraded");
     assert_eq!(payload["answer"]["answer_trust"], "constrained");
@@ -514,12 +535,42 @@ fn query_fusion_outputs_route_groups_and_results() {
         "expected index graph route group, got {:#?}",
         query.route_groups
     );
+    let module_query = run_query(repo_root, "payments").unwrap();
+    let module_group = module_query
+        .route_groups
+        .iter()
+        .find(|group| group.route_tag == QueryRouteTag::IndexModuleHit)
+        .unwrap_or_else(|| {
+            panic!(
+                "expected index module route group, matched modules: {:#?}",
+                module_query.matched_modules
+            )
+        });
+    assert_eq!(module_group.returned_count, module_group.results.len());
+    assert_eq!(module_group.total_count, module_group.results.len());
+    assert!(!module_group.truncated);
+    assert_eq!(module_group.results[0].rank, 1);
+    assert_eq!(
+        module_group.results[0].ref_kind,
+        wiki_model::domain::query::QueryRefKind::SourceModule
+    );
     assert!(
         query.results.iter().any(|result| {
             result.route_tag == QueryRouteTag::IndexSymbolHit && !result.source_refs.is_empty()
         }),
         "expected query results with source refs, got {:#?}",
         query.results
+    );
+    let symbol_result = query
+        .results
+        .iter()
+        .find(|result| result.route_tag == QueryRouteTag::IndexSymbolHit)
+        .expect("expected symbol result");
+    assert!(symbol_result.score.is_some_and(|score| score < 0.0));
+    assert_eq!(
+        symbol_result.confidence,
+        wiki_model::domain::query::QueryConfidence::High,
+        "ready symbol confidence must not be derived from raw lower-is-better BM25"
     );
     assert!(
         query.provenance_summary.contains("index_hit"),
@@ -541,6 +592,15 @@ fn query_projects_symbol_range_and_graph_refs_into_public_results() {
         .iter()
         .find(|result| result.route_tag == QueryRouteTag::IndexSymbolHit)
         .expect("expected index symbol result");
+    assert!(
+        symbol_result.score.is_some_and(|score| score < 0.0),
+        "fixture should exercise a negative raw BM25 score: {symbol_result:#?}"
+    );
+    assert_eq!(
+        symbol_result.confidence,
+        wiki_model::domain::query::QueryConfidence::High,
+        "raw BM25 magnitude must not determine symbol confidence"
+    );
     assert!(symbol_result.source_refs.iter().any(|source_ref| {
         source_ref.path.as_deref() == Some("src/controller.ts")
             && source_ref.start_line.is_some()
@@ -557,7 +617,7 @@ fn query_projects_symbol_range_and_graph_refs_into_public_results() {
         .iter()
         .find(|result| result.route_tag == QueryRouteTag::IndexPathHit)
         .expect("expected index path result");
-    assert_ne!(path_result.score, 0.75);
+    assert_ne!(path_result.score, Some(0.75));
     assert!(path_result
         .source_refs
         .iter()

@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 
 import { renderCodeBuddyActionSkill, renderHostActionSkill } from "./commandAssets.js";
 
-test("共享 host skill 引导宿主薄消费稳定 query 字段", () => {
+test("query skill consumes canonical groups and defers richer inputs", () => {
   const skill = renderHostActionSkill("query");
 
   expect(skill).toContain("name: wiki-query");
@@ -15,11 +15,16 @@ test("共享 host skill 引导宿主薄消费稳定 query 字段", () => {
   expect(skill).toContain("## How To Work");
   expect(skill).toContain("## After This");
   expect(skill).toContain("## Action Notes");
+  expect(skill).toContain("`readiness`");
   expect(skill).toContain("`query_mode`");
   expect(skill).toContain("`query_trust`");
   expect(skill).toContain("`recommended_action`");
-  expect(skill).toContain("`matched_pages`");
-  expect(skill).toContain("`provenance_summary`");
+  expect(skill).toContain("`governance`");
+  expect(skill).toContain("`route_groups`");
+  expect(skill).toContain("`answer`");
+  expect(skill).not.toContain("matched_pages");
+  expect(skill).not.toContain("provenance_summary");
+  expect(skill).not.toContain("flat `results`");
   expect(skill).toContain("instead of restating the JSON payload");
   expect(skill).toContain("Do not rebuild a new Wiki state machine or page semantic layer from query results");
   expect(skill).toContain("Do not treat wiki-query as a replacement for `rg`, targeted file reads, or full implementation review");

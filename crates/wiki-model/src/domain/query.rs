@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub enum QueryRouteTag {
     IndexSymbolHit,
     IndexPathHit,
+    IndexModuleHit,
     IndexGraphHit,
     KnowledgeDeclaredHit,
     KnowledgeDerivedHit,
@@ -23,6 +24,7 @@ impl QueryRouteTag {
         match self {
             Self::IndexSymbolHit => "index_symbol_hit",
             Self::IndexPathHit => "index_path_hit",
+            Self::IndexModuleHit => "index_module_hit",
             Self::IndexGraphHit => "index_graph_hit",
             Self::KnowledgeDeclaredHit => "knowledge_declared_hit",
             Self::KnowledgeDerivedHit => "knowledge_derived_hit",
@@ -36,7 +38,7 @@ impl QueryRouteTag {
     pub fn is_index_route(self) -> bool {
         matches!(
             self,
-            Self::IndexSymbolHit | Self::IndexPathHit | Self::IndexGraphHit
+            Self::IndexSymbolHit | Self::IndexPathHit | Self::IndexModuleHit | Self::IndexGraphHit
         )
     }
 
@@ -54,6 +56,7 @@ impl QueryRouteTag {
 pub enum QueryRefKind {
     SourcePath,
     SourceSymbol,
+    SourceModule,
     IndexGraphEdge,
     KnowledgePage,
     KnowledgeRecord,
@@ -69,6 +72,7 @@ impl QueryRefKind {
         match self {
             Self::SourcePath => "source_path",
             Self::SourceSymbol => "source_symbol",
+            Self::SourceModule => "source_module",
             Self::IndexGraphEdge => "index_graph_edge",
             Self::KnowledgePage => "knowledge_page",
             Self::KnowledgeRecord => "knowledge_record",
@@ -135,12 +139,55 @@ impl RecommendedAction {
     }
 }
 
+/// Query result 所属的正式数据层。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryProvenanceLayer {
+    Index,
+    Knowledge,
+    Governance,
+    Projection,
+    Fallback,
+}
+
+/// Query result 所属数据层在查询时的真实可用状态。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryProvenanceState {
+    Ready,
+    Stale,
+    Missing,
+    Rebuilding,
+    Conflict,
+    Blocked,
+    NotEnabled,
+    Fallback,
+}
+
+/// Route group 的排序依据；只在组内有意义。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryRankingBasis {
+    Bm25,
+    StructuralMatch,
+    GraphConfidence,
+    DeterministicMatch,
+}
+
+/// Route-local score 的相关性方向。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryScoreDirection {
+    LowerIsBetter,
+    HigherIsBetter,
+    None,
+}
+
 /// Query result 的 provenance 摘要对象。
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct QueryProvenance {
-    pub layer: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub state: Option<String>,
+    pub layer: QueryProvenanceLayer,
+    pub state: QueryProvenanceState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -171,7 +218,9 @@ pub struct QueryResultDto {
     pub ref_kind: QueryRefKind,
     pub ref_id: String,
     pub label: String,
-    pub score: f64,
+    pub rank: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
     pub provenance: QueryProvenance,
     pub confidence: QueryConfidence,
     pub recommended_action: RecommendedAction,
@@ -183,8 +232,11 @@ pub struct QueryResultDto {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct QueryRouteGroup {
     pub route_tag: QueryRouteTag,
+    pub ranking_basis: QueryRankingBasis,
+    pub score_direction: QueryScoreDirection,
+    pub total_count: usize,
+    pub returned_count: usize,
+    pub truncated: bool,
     #[serde(default)]
     pub results: Vec<QueryResultDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub score_basis: Option<String>,
 }

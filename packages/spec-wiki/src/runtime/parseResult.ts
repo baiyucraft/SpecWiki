@@ -28,6 +28,7 @@ export type LlmExecutionMode = "provider_direct" | "agent_bridge" | "determinist
 export type QueryRouteTag
   = | "index_symbol_hit"
     | "index_path_hit"
+    | "index_module_hit"
     | "index_graph_hit"
     | "knowledge_declared_hit"
     | "knowledge_derived_hit"
@@ -38,6 +39,7 @@ export type QueryRouteTag
 export type QueryRefKind
   = | "source_path"
     | "source_symbol"
+    | "source_module"
     | "index_graph_edge"
     | "knowledge_page"
     | "knowledge_record"
@@ -47,6 +49,18 @@ export type QueryRefKind
     | "governance_artifact"
     | "rendered_page";
 export type QueryConfidence = "high" | "medium" | "low";
+export type QueryProvenanceLayer = "index" | "knowledge" | "governance" | "projection" | "fallback";
+export type QueryProvenanceState
+  = | "ready"
+    | "stale"
+    | "missing"
+    | "rebuilding"
+    | "conflict"
+    | "blocked"
+    | "not_enabled"
+    | "fallback";
+export type QueryRankingBasis = "bm25" | "structural_match" | "graph_confidence" | "deterministic_match";
+export type QueryScoreDirection = "lower_is_better" | "higher_is_better" | "none";
 export type QueryResultRecommendedAction
   = | "none"
     | "open_reference"
@@ -60,8 +74,8 @@ export type QueryResultRecommendedAction
     | "update"
     | "sync";
 export type QueryProvenance = {
-  layer: string;
-  state?: string | null;
+  layer: QueryProvenanceLayer;
+  state: QueryProvenanceState;
   reason?: string | null;
 };
 export type QuerySourceRef = {
@@ -80,7 +94,8 @@ export type QueryResultDto = {
   ref_kind: QueryRefKind;
   ref_id: string;
   label: string;
-  score: number;
+  rank: number;
+  score?: number | null;
   provenance: QueryProvenance;
   confidence: QueryConfidence;
   recommended_action: QueryResultRecommendedAction;
@@ -89,9 +104,30 @@ export type QueryResultDto = {
 };
 export type QueryRouteGroup = {
   route_tag: QueryRouteTag;
+  ranking_basis: QueryRankingBasis;
+  score_direction: QueryScoreDirection;
+  total_count: number;
+  returned_count: number;
+  truncated: boolean;
   results: QueryResultDto[];
-  score_basis?: string | null;
   [key: string]: unknown;
+};
+
+export type AnswerMode = "direct" | "degraded" | "refuse";
+export type AnswerTrust = "grounded" | "constrained" | "unsupported";
+export type AnswerSupportingRef = {
+  ref_kind: string;
+  ref_id: string;
+  label: string;
+  provenance: string[];
+};
+export type AnswerEnvelope = {
+  text: string;
+  answer_mode: AnswerMode;
+  answer_trust: AnswerTrust;
+  recommended_action: RecommendedAction;
+  provenance: string[];
+  supporting_refs: AnswerSupportingRef[];
 };
 
 export type GovernanceReadiness
@@ -280,11 +316,9 @@ export type WikiQueryData = {
   query_mode: QueryMode;
   query_trust: QueryTrust;
   recommended_action: RecommendedAction;
-  matched_pages: string[];
-  provenance_summary: string;
   governance: GovernanceSummary;
   route_groups: QueryRouteGroup[];
-  results: QueryResultDto[];
+  answer: AnswerEnvelope;
   [key: string]: unknown;
 };
 
@@ -334,6 +368,7 @@ export type CoreErrorKind
   = | "invalid_argument"
     | "governance_not_enabled"
     | "change_not_found"
+    | "index_not_ready"
     | "workflow_failed"
     | "protocol_error"
     | "internal_error"
@@ -459,6 +494,7 @@ function parseQueryRouteTag(value: unknown): QueryRouteTag {
     [
       "index_symbol_hit",
       "index_path_hit",
+      "index_module_hit",
       "index_graph_hit",
       "knowledge_declared_hit",
       "knowledge_derived_hit",
@@ -477,6 +513,7 @@ function parseQueryRefKind(value: unknown): QueryRefKind {
     [
       "source_path",
       "source_symbol",
+      "source_module",
       "index_graph_edge",
       "knowledge_page",
       "knowledge_record",
@@ -516,12 +553,20 @@ function parseQueryResultRecommendedAction(value: unknown): QueryResultRecommend
 
 function parseQueryProvenance(value: unknown): QueryProvenance {
   const parsed = value as Partial<QueryProvenance>;
-  if (!isRecord(parsed) || typeof parsed.layer !== "string") {
+  if (!isRecord(parsed) || !("layer" in parsed) || !("state" in parsed)) {
     throw new Error("invalid wiki-runtime query provenance");
   }
   return {
-    layer: parsed.layer,
-    state: parseNullableString(parsed.state, "query_provenance.state"),
+    layer: parseLiteral(
+      parsed.layer,
+      ["index", "knowledge", "governance", "projection", "fallback"] as const,
+      "query_provenance.layer",
+    ),
+    state: parseLiteral(
+      parsed.state,
+      ["ready", "stale", "missing", "rebuilding", "conflict", "blocked", "not_enabled", "fallback"] as const,
+      "query_provenance.state",
+    ),
     reason: parseNullableString(parsed.reason, "query_provenance.reason"),
   };
 }
@@ -559,13 +604,17 @@ function parseQuerySourceRef(value: unknown): QuerySourceRef {
 
 function parseQueryResult(value: unknown): QueryResultDto {
   const parsed = value as Partial<QueryResultDto>;
+  if (!isRecord(parsed) || !Number.isInteger(parsed.rank) || (parsed.rank ?? 0) < 1) {
+    throw new Error("invalid wiki-runtime query_result.rank");
+  }
   if (
-    !isRecord(parsed)
-    || !("route_tag" in parsed)
+    !("route_tag" in parsed)
     || !("ref_kind" in parsed)
     || typeof parsed.ref_id !== "string"
     || typeof parsed.label !== "string"
-    || typeof parsed.score !== "number"
+    || !Number.isInteger(parsed.rank)
+    || (parsed.rank ?? 0) < 1
+    || (parsed.score !== undefined && parsed.score !== null && typeof parsed.score !== "number")
     || !("provenance" in parsed)
     || !("confidence" in parsed)
     || !("recommended_action" in parsed)
@@ -580,6 +629,7 @@ function parseQueryResult(value: unknown): QueryResultDto {
     ref_kind: parseQueryRefKind(parsed.ref_kind),
     ref_id: parsed.ref_id,
     label: parsed.label,
+    rank: parsed.rank,
     score: parsed.score,
     provenance: parseQueryProvenance(parsed.provenance),
     confidence: parseQueryConfidence(parsed.confidence),
@@ -590,15 +640,89 @@ function parseQueryResult(value: unknown): QueryResultDto {
 
 function parseQueryRouteGroup(value: unknown): QueryRouteGroup {
   const parsed = value as Partial<QueryRouteGroup>;
-  if (!isRecord(parsed) || !("route_tag" in parsed) || !Array.isArray(parsed.results)) {
+  if (
+    !isRecord(parsed)
+    || !("route_tag" in parsed)
+    || !("ranking_basis" in parsed)
+    || !("score_direction" in parsed)
+    || !Number.isInteger(parsed.total_count)
+    || !Number.isInteger(parsed.returned_count)
+    || typeof parsed.truncated !== "boolean"
+    || !Array.isArray(parsed.results)
+  ) {
     throw new Error("invalid wiki-runtime query route group");
+  }
+
+  const results = parsed.results.map(parseQueryResult);
+  if (parsed.returned_count !== results.length) {
+    throw new Error("invalid wiki-runtime query_route_group.returned_count");
+  }
+  if ((parsed.total_count ?? -1) < (parsed.returned_count ?? 0)) {
+    throw new Error("invalid wiki-runtime query_route_group.total_count");
+  }
+  if (results.some((result, index) => result.rank !== index + 1)) {
+    throw new Error("invalid wiki-runtime query_result.rank");
   }
 
   return {
     ...parsed,
     route_tag: parseQueryRouteTag(parsed.route_tag),
-    results: parsed.results.map(parseQueryResult),
-    score_basis: parseNullableString(parsed.score_basis, "query_route_group.score_basis"),
+    ranking_basis: parseLiteral(
+      parsed.ranking_basis,
+      ["bm25", "structural_match", "graph_confidence", "deterministic_match"] as const,
+      "query_route_group.ranking_basis",
+    ),
+    score_direction: parseLiteral(
+      parsed.score_direction,
+      ["lower_is_better", "higher_is_better", "none"] as const,
+      "query_route_group.score_direction",
+    ),
+    total_count: parsed.total_count,
+    returned_count: parsed.returned_count,
+    truncated: parsed.truncated,
+    results,
+  };
+}
+
+function parseAnswerSupportingRef(value: unknown): AnswerSupportingRef {
+  const parsed = value as Partial<AnswerSupportingRef>;
+  if (
+    !isRecord(parsed)
+    || typeof parsed.ref_kind !== "string"
+    || typeof parsed.ref_id !== "string"
+    || typeof parsed.label !== "string"
+  ) {
+    throw new Error("invalid wiki-runtime answer supporting ref");
+  }
+  return {
+    ref_kind: parsed.ref_kind,
+    ref_id: parsed.ref_id,
+    label: parsed.label,
+    provenance: parseStringArray(parsed.provenance, "answer.supporting_refs.provenance"),
+  };
+}
+
+function parseAnswerEnvelope(value: unknown): AnswerEnvelope {
+  const parsed = value as Partial<AnswerEnvelope>;
+  if (
+    !isRecord(parsed)
+    || typeof parsed.text !== "string"
+    || !Array.isArray(parsed.provenance)
+    || !Array.isArray(parsed.supporting_refs)
+  ) {
+    throw new Error("invalid wiki-runtime answer");
+  }
+  return {
+    text: parsed.text,
+    answer_mode: parseLiteral(parsed.answer_mode, ["direct", "degraded", "refuse"] as const, "answer.answer_mode"),
+    answer_trust: parseLiteral(parsed.answer_trust, ["grounded", "constrained", "unsupported"] as const, "answer.answer_trust"),
+    recommended_action: parseLiteral(
+      parsed.recommended_action,
+      ["none", "init", "review", "review_governance", "update", "rebuild", "sync"] as const,
+      "answer.recommended_action",
+    ),
+    provenance: parseStringArray(parsed.provenance, "answer.provenance"),
+    supporting_refs: parsed.supporting_refs.map(parseAnswerSupportingRef),
   };
 }
 
@@ -1095,12 +1219,23 @@ function parseUpdateData(value: Record<string, unknown>): WikiUpdateData {
 }
 
 function parseQueryData(value: Record<string, unknown>): WikiQueryData {
+  const legacyFields = ["results", "matched_pages", "provenance_summary", "summary", "hits"];
+  const legacyField = legacyFields.find(field => field in value);
+  if (legacyField) {
+    throw new Error(`invalid wiki-runtime legacy query field: ${legacyField}`);
+  }
+  if (!Array.isArray(value.route_groups)) {
+    throw new TypeError("invalid wiki-runtime query payload: route_groups");
+  }
+  if (!isRecord(value.answer)) {
+    throw new TypeError("invalid wiki-runtime query payload: answer");
+  }
   if (
     typeof value.term !== "string"
+    || value.term.trim().length === 0
     || typeof value.runtime_state !== "string"
     || !isRecord(value.readiness)
     || !isRecord(value.governance)
-    || typeof value.provenance_summary !== "string"
   ) {
     throw new TypeError("invalid wiki-runtime query payload");
   }
@@ -1125,15 +1260,9 @@ function parseQueryData(value: Record<string, unknown>): WikiQueryData {
       ["none", "init", "review", "review_governance", "update", "rebuild", "sync"] as const,
       "recommended_action",
     ),
-    matched_pages: parseStringArray(value.matched_pages ?? [], "matched_pages"),
-    provenance_summary: value.provenance_summary,
     governance: parseGovernanceSummary(value.governance),
-    route_groups: Array.isArray(value.route_groups)
-      ? value.route_groups.map(parseQueryRouteGroup)
-      : [],
-    results: Array.isArray(value.results)
-      ? value.results.map(parseQueryResult)
-      : [],
+    route_groups: value.route_groups.map(parseQueryRouteGroup),
+    answer: parseAnswerEnvelope(value.answer),
   };
 }
 
@@ -1217,6 +1346,7 @@ function parseCoreResponse(value: unknown): CoreResponse {
             parsed.errorKind,
             [
               "invalid_argument",
+              "index_not_ready",
               "governance_not_enabled",
               "change_not_found",
               "workflow_failed",

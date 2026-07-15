@@ -2,7 +2,7 @@
 title: Runtime 设计
 description: spec-wiki runtime 主链、.wiki 分层、query route、生命周期和恢复策略
 owner: architecture
-updated: 2026-07-13
+updated: 2026-07-16
 ---
 
 # Repo Wiki Runtime Design
@@ -19,7 +19,7 @@ updated: 2026-07-13
 - `init / update / sync / rebuild / status / query` 的状态如何流转
 - A 用户提交后，B 用户如何基于上库产物恢复本地 runtime
 
-宿主接入、bootstrap、全局 CLI 与多宿主扩展模型不在本文档展开，单独见 [02-Agents设计](./02-Agents设计.md)。
+宿主接入、bootstrap、全局 CLI 与多宿主扩展模型不在本文档展开，单独见 [02-Agents设计](./02-Agents设计.md)。Query 的稳定输入输出、route-local ranking、状态、错误与延期能力由 [06-Runtime查询合同](./06-Runtime查询合同.md) 唯一定义。
 
 ## 参考实现边界
 
@@ -459,82 +459,16 @@ runtime extract declared authoring block
 
 ## Query Route
 
-目标查询顺序：
+Query workflow 把各分层的可用事实、知识、治理和投影交给 Runtime 统一装配，由 Runtime 决定 route、排序、可信度、降级和恢复动作。查询过程在本文中只保留主链责任：
 
 ```text
-symbol first
--> graph next
--> declared knowledge next
--> derived knowledge next
--> page last
+external query
+-> runtime fusion and fallback policy
+-> canonical response
+-> CLI / Agents thin consumption
 ```
 
-展开后：
-
-```text
-[Agent Ask]
-      |
-      v
-[Query Route]
-      |
-      +--> [Symbol Match]
-      |
-      +--> [Graph Match]
-      |
-      +--> [Declared Knowledge Match]
-      |
-      +--> [Derived Knowledge Match]
-      |
-      +--> [Page Match]
-      |
-      v
-[Return Best Answer]
-```
-
-意图：
-
-- 查方法、查入口、查调用链时优先命中事实层
-- 查规范、查约定、查避坑时优先命中 declared knowledge
-- 查项目理解和稳定阅读入口时再回到 page
-
-## 当前 query 边界与演进方向
-
-### 当前 query 边界
-
-当前外部 query 输入仍保持 `term-only`，但返回合同已经收口为 `route_groups` / `results` 主合同：
-
-```text
-term only
--> runtime route
--> route_groups / results
--> readiness / trust / recommended_action
--> answer / compact hits
-```
-
-这意味着：
-
-- 当前外部正式输入仍是 `term`
-- runtime 当前优先把 query 路由到 facts/index substrate
-- `results` 中每条结果必须携带 `route_tag / ref_kind / ref_id / label / score / provenance / confidence / recommended_action / source_refs`
-- `route_groups` 用来表达不同 route 内部的相对 score；跨 route 不强行混成单一排序
-- page fallback 必须显式标记为 `rendered_page_debug_fallback`，并降低 query/answer trust
-- `provenance_summary` 只保留为只读派生摘要，不再作为 query 主合同
-- 产品响应并列暴露 `governance` summary；正式 readiness 闭集为 `not_enabled / ready / stale / blocked / conflict`
-- governance query 只返回结构化 change、artifact 和 diagnostic refs，不把 `.spec` 正文送入 code FTS、knowledge 或 Markdown fallback
-- governance blocker 只影响治理 route 和产品 next action，不降低普通 index / knowledge route 的 `query_trust`
-- process / community 当前虽然属于 Layer A facts，可作为后续 query 扩展依据，但不应被误写成 `v0.1.0` 已正式承诺的稳定命中层
-
-当前稳定 route tag 闭集包括：
-
-- `index_symbol_hit`
-- `index_path_hit`
-- `index_graph_hit`
-- `knowledge_declared_hit`
-- `knowledge_derived_hit`
-- `governance_evidence_ref`
-- `governance_summary_hit`
-- `projection_ref`
-- `rendered_page_debug_fallback`
+稳定 request/response 字段、route/ref 闭集、route-local ranking、readiness/trust/provenance 矩阵、typed errors 和 richer query 延期边界统一见 [06-Runtime查询合同](./06-Runtime查询合同.md)。本页不再维护第二份字段清单或 route 状态机。
 
 ## Governance Runtime 边界
 
@@ -572,65 +506,9 @@ term only
 - archive 不调用 Wiki sync/update/rebuild，也不写 `.wiki/**`；Wiki 相关信息只通过 issues/refs 报告。
 - 未采用旧草稿中的 `--yes`、强制 wiki-sync、workspace validate、doctor、repair 或 trace 设想。
 
-### GitNexus 对 query 的参考边界
+### Query 实现参考与演进边界
 
-GitNexus 对当前系统的 query 演进有明确参考价值，但参考面主要集中在：
-
-- `wiki-index` 的厚索引底座
-- symbol / graph / process / community 的 facts-owned query substrate
-- impact analysis、context drilling 和 process trace 的查询消费组织
-- `wiki-index` 内部 ingestion pipeline 的 phase DAG 编排
-- hybrid ranking、provenance 和结果分组策略
-
-不应把它直接当成：
-
-- `wiki-knowledge` 的知识组织模板
-- 正式可见 Wiki 页面树的页面语义模板
-- 当前 runtime query contract 的直接真相来源
-
-换句话说：
-
-- GitNexus 更适合作为 `query / impact / graph consumption` 侧参考
-- 它也可作为 `wiki-index` 内部 phase DAG 编排的工程参考
-- 它不直接定义当前系统的 `KnowledgeUnit` 主线
-- 它也不直接定义当前系统的 knowledge/page projection 结构
-
-补充说明：
-
-- “厚索引底座”与 `query / impact / graph consumption` 参考不是新增判断，只是对既有表述的进一步收紧
-- 这次新增强调的参考点，是 GitNexus 把 `scan -> structure -> parse -> crossFile -> mro -> communities -> processes` 拆成显式 phase DAG，并用清晰的阶段输入输出约束提升索引构建的可演进性与可诊断性
-- 这条参考只适用于 `wiki-index` 内部的构建编排与阶段拆层，不构成 `spec-wiki` 的知识主链模板
-
-### query 演进原则
-
-后续 query 若继续增强，优先级应是：
-
-1. 先补清晰的 query routing / result shaping 规则
-2. 再定义 process / community 的命中语义、排序规则、截断策略和 provenance
-3. 再把更完整的 graph projection 正式提升到 transport / DTO 合同
-4. 最后再考虑 semantic search 作为可选增强层，而不是当前主链前提
-
-具体约束：
-
-- 短期内外部可继续保持 `term-only` 合同稳定
-- 内部可以继续演进 intent routing、graph projection 和 result shaping
-- 当前内部已经存在 `index_graph_hit` 基础输出；更完整的 `callers / callees / impact slice` 仍需明确哪些升级为正式输出，哪些保持内部能力
-- process grouping 不应压过 `symbol -> graph -> declared knowledge -> derived knowledge -> page` 这条查询主线
-- 一旦 query 同时返回 facts、knowledge、process 和 page，多层结果必须有统一 ranking 与 provenance，避免宿主消费失真
-
-### 已明确延期到后续设计的 query 能力
-
-这轮 `v0.1.0` 收口后，以下能力明确保留为后续设计，不作为当前 runtime 对外合同：
-
-- `intent-aware query` 外部输入
-  - 当前正式输入仍然只保留 `term`
-  - 后续若要参考 GitNexus 的 query substrate，把 intent 显式升级为外部 payload，必须先定义稳定的 `intent / focus / scope / traversal` 合同，而不是让宿主靠 description 猜
-- 稳定的 `owner / entrypoint / impact` 输出 schema
-  - 当前 index/graph 内部已经有一部分 substrate，但还没有形成稳定 transport 字段、排序规则与置信度解释
-  - 后续只有在字段定义、ranking、provenance 和截断策略稳定后，才适合提升为正式 query contract
-- 更完整的 query 质量信号模型
-  - 当前外部已经正式暴露 `readiness / query_trust / recommended_action / route_groups / results`
-  - 后续若要补 richer quality signal，应统一回答“结果是否完整、是否来自 fallback、是否需要 rebuild、覆盖面有多大”，避免宿主继续自己拼状态机
+本页前文的参考实现矩阵只能帮助 `wiki-index` 和 Runtime 选择工程手法，不构成 query 合同来源。后续新输入、新 route 或质量信号只有在 [06-Runtime查询合同](./06-Runtime查询合同.md) 的升级条件满足并经独立 change 验证后，才能进入公开合同。
 
 ## Workflow 生命周期
 

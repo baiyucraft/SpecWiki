@@ -768,12 +768,16 @@ function assertSymbolQuery(ctx, t, probe, label) {
   });
   t.assertOk(`${label} symbol query returns ok`, queryResult);
 
-  const exactMatch = queryResult.data?.hits?.some(
-    (hit) => hit.hit_type === "symbol" && hit.title === probe.term,
-  );
+  const exactMatch = queryResult.data?.route_groups
+    ?.flatMap(group => group.results ?? [])
+    .some(result =>
+      result.route_tag === "index_symbol_hit"
+      && result.ref_kind === "source_symbol"
+      && result.label?.includes(probe.term),
+    );
   exactMatch
     ? t.pass(`${label} exact symbol hit present`)
-    : t.fail(`${label} exact symbol hit present`, `missing ${probe.term} in compact hits`);
+    : t.fail(`${label} exact symbol hit present`, `missing ${probe.term} in route groups`);
 }
 
 function assertGraphQuery(ctx, t, probe, label) {
@@ -794,9 +798,10 @@ function assertGraphQuery(ctx, t, probe, label) {
   });
   t.assertOk(`${label} graph query returns ok`, queryResult);
 
-  const matchedGraphTotal = queryResult.data?.hits?.filter(
-    (hit) => hit.hit_type === "call_edge",
-  ).length ?? 0;
+  const graphGroup = queryResult.data?.route_groups?.find(
+    group => group.route_tag === "index_graph_hit",
+  );
+  const matchedGraphTotal = graphGroup?.returned_count ?? graphGroup?.results?.length ?? 0;
 
   matchedGraphTotal > 0
     ? t.pass(`${label} graph query returns graph context`)
@@ -805,11 +810,11 @@ function assertGraphQuery(ctx, t, probe, label) {
       `missing graph hits for ${probe.term}`,
     );
 
-  queryResult.data?.provenance_summary?.includes("index_hit")
-    ? t.pass(`${label} graph provenance summary recorded`)
+  graphGroup?.results?.every(result => result.provenance?.layer === "index")
+    ? t.pass(`${label} graph provenance recorded`)
     : t.fail(
-      `${label} graph provenance summary recorded`,
-      `summary=${JSON.stringify(queryResult.data?.provenance_summary ?? "")}`,
+      `${label} graph provenance recorded`,
+      `group=${JSON.stringify(graphGroup ?? null)}`,
     );
 }
 

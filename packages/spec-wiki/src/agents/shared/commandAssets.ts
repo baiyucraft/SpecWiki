@@ -17,11 +17,13 @@ function renderFrontmatterString(value: string): string {
 }
 
 const QUERY_STABLE_FIELDS = [
+  "`readiness`",
   "`query_mode`",
   "`query_trust`",
   "`recommended_action`",
-  "`matched_pages`",
-  "`provenance_summary`",
+  "`governance`",
+  "`route_groups`",
+  "`answer`",
 ];
 
 function renderActionDescription(action: WikiAction): string {
@@ -66,13 +68,13 @@ function renderQueryHowToWork(): string[] {
     "Extract a concise query term from the request, or use the provided term directly.",
     "Run `spec-wiki query \"$ARGUMENTS\"` from the repository root.",
     `Look at these stable fields first to decide whether the result is sufficient: ${QUERY_STABLE_FIELDS.join(", ")}.`,
-    "Treat the query result as a structured map for narrowing the search space. Prioritize relevant pages, files, symbols, or call-path clues instead of restating the JSON payload.",
+    "Treat `route_groups` as the only result authority and consume each group's Runtime-provided rank without comparing scores across routes. Use `answer` as the Runtime-owned conclusion instead of restating the JSON payload.",
   ];
 }
 
 function renderQueryAfterThis(): string[] {
   return [
-    "If query already answers the question, respond directly from the hits.",
+    "If `answer` and its supporting route groups already answer the question, respond directly from those references.",
     "If query only gives direction, continue with `rg`, targeted file reads, symbol-level analysis, or implementation-level verification.",
     "If the result is insufficient, state the coverage gap clearly and suggest a better next action or a narrower query.",
   ];
@@ -117,7 +119,7 @@ function renderHostActionNotes(action: WikiAction, entryName: string): string[] 
     case "update":
       return ["`v0.2.0` treats knowledge runtime refresh as the formal update contract."];
     case "query":
-      return ["`v0.2.0` keeps the external term-only query contract, but routes results through index -> knowledge -> page fallback."];
+      return ["The external query contract accepts one non-empty term and returns formal route fusion with an explicitly degraded rendered-page fallback."];
     case "sync":
       return ["`sync` only applies `.wiki` page edits back into runtime state. It does not replace `update`."];
     case "rebuild":

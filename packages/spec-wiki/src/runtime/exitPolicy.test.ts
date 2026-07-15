@@ -9,6 +9,7 @@ test("parseResult validates errorKind and exit policy maps structured partials",
   expect(exitCodeForResponse({ ok: true, data: { outcome: "partial" } })).toBe(2);
   expect(exitCodeForResponse({ ok: true, data: { validation: { valid: false } } })).toBe(2);
   expect(exitCodeForResponse({ ok: false, errorKind: "workflow_failed" })).toBe(1);
+  expect(exitCodeForResponse({ ok: false, errorKind: "index_not_ready" })).toBe(1);
   expect(exitCodeForResponse({ ok: false, errorKind: "invalid_argument" })).toBe(64);
 });
 

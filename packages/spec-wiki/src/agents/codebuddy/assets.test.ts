@@ -43,8 +43,10 @@ test("codeBuddy wiki-query skill 只引导宿主薄消费稳定 query 字段", (
   expect(queryContent).toContain("`query_mode`");
   expect(queryContent).toContain("`query_trust`");
   expect(queryContent).toContain("`recommended_action`");
-  expect(queryContent).toContain("`matched_pages`");
-  expect(queryContent).toContain("`provenance_summary`");
+  expect(queryContent).toContain("`route_groups`");
+  expect(queryContent).toContain("`answer`");
+  expect(queryContent).not.toContain("matched_pages");
+  expect(queryContent).not.toContain("provenance_summary");
   expect(queryContent).toContain("## When To Use");
   expect(queryContent).toContain("## How To Work");
   expect(queryContent).toContain("## After This");

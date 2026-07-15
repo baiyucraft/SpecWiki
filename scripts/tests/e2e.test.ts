@@ -98,31 +98,27 @@ test("spec-wiki init, status, update, and query keep v0.2 knowledge runtime cont
     expect(existsSync(path.join(repoRoot, ".wiki", "wiki.metadata.json"))).toBe(true);
 
     const queryResult = await runWikiCli(repoRoot, "query", "src.ts", "--json");
-    expect(queryResult.exitCode).toBe(0);
+    expect(queryResult.exitCode, `${queryResult.stderr}\n${queryResult.stdout}`).toBe(0);
     const queryJson = parseJsonLine(queryResult.stdout);
     expect(queryJson.ok).toBe(true);
-    expect(queryJson.data.provenance_summary).toContain("index_hit");
-    expect(queryJson.data.provenance_summary).toContain("knowledge_hit");
-    expect((queryJson.data.matched_pages ?? []).length).toBeGreaterThan(0);
-    expect(queryJson.data.summary).toBeDefined();
-    expect(Array.isArray(queryJson.data.hits)).toBe(true);
+    expect(Array.isArray(queryJson.data.route_groups)).toBe(true);
+    const routeResults = (queryJson.data.route_groups ?? []).flatMap((group: {
+      results?: Array<{
+        route_tag: string;
+        ref_kind: string;
+        source_refs?: Array<{ path?: string }>;
+      }>;
+    }) => group.results ?? []);
     expect(
-      (queryJson.data.hits ?? []).some((hit: {
-        hit_type: string;
-        title: string;
-        location: string;
-        summary?: string;
-        reasons?: string[];
-      }) => {
-        expect(typeof hit.summary).toBe("string");
-        expect(Array.isArray(hit.reasons ?? [])).toBe(true);
-        return (
-          (hit.hit_type === "symbol" && hit.location === "src.ts")
-          || (hit.hit_type === "source" && hit.location.endsWith("src.ts"))
-          || (hit.hit_type === "page" && hit.location.endsWith("INDEX.md"))
-        );
-      }),
+      routeResults.some((result: {
+        route_tag: string;
+        ref_kind: string;
+        source_refs?: Array<{ path?: string }>;
+      }) => result.source_refs?.some(ref => ref.path?.endsWith("src.ts"))),
     ).toBe(true);
+    expect(queryJson.data.answer).toBeDefined();
+    for (const legacy of ["matched_pages", "provenance_summary", "results", "summary", "hits"])
+      expect(queryJson.data).not.toHaveProperty(legacy);
   } finally {
     if (previousBinary === undefined) {
       delete process.env.SPEC_WIKI_RUNTIME_BIN;

@@ -77,6 +77,7 @@ pub struct CoreResponse {
 #[serde(rename_all = "snake_case")]
 pub enum CoreErrorKind {
     InvalidArgument,
+    IndexNotReady,
     GovernanceNotEnabled,
     ChangeNotFound,
     ArchiveNotReady,

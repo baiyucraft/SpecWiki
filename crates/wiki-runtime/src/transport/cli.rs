@@ -163,15 +163,19 @@ pub fn dispatch_with_runtime<'a>(
             )
             .and_then(as_json),
         ),
-        "query" => encode_result(
-            run_query_with_mode(
-                &repo_root,
-                command.term.as_deref().unwrap_or(""),
-                steering_mode,
+        "query" => {
+            let Some(term) = non_empty(command.term.as_deref()) else {
+                return CoreResponse::typed_error(
+                    CoreErrorKind::InvalidArgument,
+                    "query requires a non-empty term",
+                );
+            };
+            encode_query_result(
+                run_query_with_mode(&repo_root, term, steering_mode)
+                    .map(map_query_report)
+                    .and_then(as_json),
             )
-            .map(map_query_report)
-            .and_then(as_json),
-        ),
+        }
         "sync" => encode_result(run_sync_with_mode(&repo_root, steering_mode).and_then(as_json)),
         "rebuild" => encode_long_result(
             &repo_root,
@@ -326,6 +330,26 @@ fn encode_governance_result(result: std::io::Result<serde_json::Value>) -> CoreR
         }
         Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
             CoreResponse::typed_error(CoreErrorKind::GovernanceNotEnabled, error.to_string())
+        }
+        Err(error) => CoreResponse::typed_error(CoreErrorKind::WorkflowFailed, error.to_string()),
+    }
+}
+
+fn encode_query_result(result: std::io::Result<serde_json::Value>) -> CoreResponse {
+    match result {
+        Ok(data) => CoreResponse::success(data),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            CoreResponse::typed_error_with_data(
+                CoreErrorKind::IndexNotReady,
+                error.to_string(),
+                json!({
+                    "reason": "facts_snapshot_missing",
+                    "recommended_action": "init",
+                }),
+            )
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
+            CoreResponse::typed_error(CoreErrorKind::InvalidArgument, error.to_string())
         }
         Err(error) => CoreResponse::typed_error(CoreErrorKind::WorkflowFailed, error.to_string()),
     }

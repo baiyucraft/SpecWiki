@@ -33,8 +33,8 @@ pub struct GovernanceValidateReport {
     pub validation: GovernanceValidationResult,
 }
 use wiki_model::domain::query::{
-    QueryConfidence, QueryProvenance, QueryRefKind, QueryResultDto, QueryRouteTag, QuerySourceRef,
-    RecommendedAction,
+    QueryConfidence, QueryProvenance, QueryProvenanceLayer, QueryProvenanceState, QueryRefKind,
+    QueryResultDto, QueryRouteTag, QuerySourceRef, RecommendedAction,
 };
 
 use crate::domain::governance::{GovernanceEvaluation, GovernancePolicy};
@@ -377,11 +377,12 @@ fn query_cached_refs(
                 ref_kind: QueryRefKind::GovernanceChange,
                 ref_id: change.id.clone(),
                 label: format!("{} ({})", change.id, change.stage),
-                score: if change.id.eq_ignore_ascii_case(term.trim()) {
+                rank: 0,
+                score: Some(if change.id.eq_ignore_ascii_case(term.trim()) {
                     1.0
                 } else {
                     0.85
-                },
+                }),
                 provenance: governance_provenance(summary),
                 confidence: governance_confidence(summary),
                 recommended_action: governance_query_action(summary),
@@ -401,7 +402,8 @@ fn query_cached_refs(
                 ref_kind: QueryRefKind::GovernanceArtifact,
                 ref_id: format!("{}:{}", artifact.change_id, artifact.kind),
                 label: artifact.relative_path.clone(),
-                score: 0.8,
+                rank: 0,
+                score: Some(0.8),
                 provenance: governance_provenance(summary),
                 confidence: governance_confidence(summary),
                 recommended_action: governance_query_action(summary),
@@ -421,7 +423,8 @@ fn query_cached_refs(
     results.sort_by(|left, right| {
         right
             .score
-            .total_cmp(&left.score)
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
             .then(left.ref_id.cmp(&right.ref_id))
     });
     results.truncate(limit);
@@ -443,7 +446,8 @@ fn query_issue_refs(summary: &GovernanceSummary, term: &str, limit: usize) -> Ve
             .contains(&needle)
         })
         .take(limit)
-        .map(|issue| QueryResultDto {
+        .enumerate()
+        .map(|(index, issue)| QueryResultDto {
             route_tag: QueryRouteTag::GovernanceEvidenceRef,
             ref_kind: QueryRefKind::GovernanceChange,
             ref_id: issue
@@ -451,7 +455,8 @@ fn query_issue_refs(summary: &GovernanceSummary, term: &str, limit: usize) -> Ve
                 .clone()
                 .unwrap_or_else(|| issue.rule_id.clone()),
             label: issue.rule_id.clone(),
-            score: 0.5,
+            rank: index + 1,
+            score: Some(0.5),
             provenance: governance_provenance(summary),
             confidence: QueryConfidence::Low,
             recommended_action: RecommendedAction::ReviewGovernance,
@@ -475,8 +480,14 @@ fn query_issue_refs(summary: &GovernanceSummary, term: &str, limit: usize) -> Ve
 
 fn governance_provenance(summary: &GovernanceSummary) -> QueryProvenance {
     QueryProvenance {
-        layer: "governance".to_string(),
-        state: Some(format!("{:?}", summary.readiness).to_ascii_lowercase()),
+        layer: QueryProvenanceLayer::Governance,
+        state: match summary.readiness {
+            GovernanceReadiness::NotEnabled => QueryProvenanceState::NotEnabled,
+            GovernanceReadiness::Ready => QueryProvenanceState::Ready,
+            GovernanceReadiness::Stale => QueryProvenanceState::Stale,
+            GovernanceReadiness::Blocked => QueryProvenanceState::Blocked,
+            GovernanceReadiness::Conflict => QueryProvenanceState::Conflict,
+        },
         reason: summary.issues.first().map(|issue| issue.rule_id.clone()),
     }
 }

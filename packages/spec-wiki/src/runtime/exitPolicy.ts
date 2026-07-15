@@ -22,8 +22,9 @@ export function exitCodeForResponse(response: CoreResponse): number {
     return EXIT_CODES.success;
   }
 
-  if (response.errorKind === "invalid_argument")
-return EXIT_CODES.usage;
+  if (response.errorKind === "invalid_argument") {
+    return EXIT_CODES.usage;
+  }
 
   if (
     response.errorKind === "archive_not_ready"

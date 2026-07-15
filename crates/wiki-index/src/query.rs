@@ -438,6 +438,7 @@ where
             }
         })
         .collect::<Vec<_>>();
+    let has_ranked_fts_hits = !hits.is_empty();
     if hits.is_empty() {
         hits = facts
             .files
@@ -470,7 +471,9 @@ where
             })
             .collect::<Vec<_>>();
     }
-    hits.sort_by(|left, right| left.path.cmp(&right.path));
+    if !has_ranked_fts_hits {
+        hits.sort_by(|left, right| left.path.cmp(&right.path));
+    }
     hits.truncate(limit);
     Ok(hits)
 }
@@ -984,6 +987,41 @@ mod tests {
                     .iter()
                     .any(|item| item == "index:call_trace")
         }));
+    }
+
+    #[test]
+    fn source_query_preserves_store_relevance_order() {
+        let mut store = sample_store();
+        store.file_hits = vec![
+            FileSearchHit {
+                file_id: "file:z-most-relevant.ts".to_string(),
+                path: "z-most-relevant.ts".to_string(),
+                language: "typescript".to_string(),
+                kind: "source".to_string(),
+                score: -2.0,
+            },
+            FileSearchHit {
+                file_id: "file:a-less-relevant.ts".to_string(),
+                path: "a-less-relevant.ts".to_string(),
+                language: "typescript".to_string(),
+                kind: "source".to_string(),
+                score: -1.0,
+            },
+        ];
+
+        let result = run_query(
+            &store,
+            &IndexQueryRequest {
+                intent: IndexQueryIntent::SourceLookup,
+                text: "relevant".to_string(),
+                ..IndexQueryRequest::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.sources[0].path, "z-most-relevant.ts");
+        assert_eq!(result.sources[0].score, Some(-2.0));
+        assert_eq!(result.sources[1].path, "a-less-relevant.ts");
     }
 
     #[test]

@@ -19,15 +19,33 @@ return `${options.action ?? "done"}: ok\n`;
     return renderArchiveManifest(data.manifest, options.action ?? "archive");
   }
   const lines = [`${options.action ?? "done"}: ${stringValue(data.outcome) ?? "ok"}`];
-  for (const key of ["state", "runtime_state", "query_trust", "recommended_action", "provenance_summary"]) {
+  for (const key of ["state", "runtime_state", "query_mode", "query_trust", "recommended_action"]) {
     const value = data[key];
     if (typeof value === "string")
 lines.push(`${key}: ${value}`);
   }
   if (Array.isArray(data.updated_pages))
 lines.push(`updated_pages: ${data.updated_pages.length}`);
-  if (Array.isArray(data.matched_pages))
-lines.push(`matched_pages: ${data.matched_pages.length}`);
+  if (Array.isArray(data.route_groups)) {
+    lines.push(`route_groups: ${data.route_groups.length}`);
+    const resultCount = data.route_groups.reduce((count, group) => {
+      if (!isRecord(group))
+return count;
+      if (typeof group.returned_count === "number")
+return count + group.returned_count;
+      return count + (Array.isArray(group.results) ? group.results.length : 0);
+    }, 0);
+    lines.push(`results: ${resultCount}`);
+  }
+  if (isRecord(data.answer)) {
+    for (const [field, label] of [["answer_mode", "answer_mode"], ["answer_trust", "answer_trust"]] as const) {
+      const value = data.answer[field];
+      if (typeof value === "string")
+lines.push(`${label}: ${value}`);
+    }
+    if (typeof data.answer.text === "string" && data.answer.text.trim())
+lines.push(`answer: ${data.answer.text}`);
+  }
   return `${lines.join("\n")}\n`;
 }
 

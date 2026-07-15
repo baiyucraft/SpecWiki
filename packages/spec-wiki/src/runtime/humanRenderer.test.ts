@@ -35,3 +35,31 @@ test("human renderer relays archive operation and recovery fields", () => {
   expect(text).toContain("step: parent_meta_updated");
   expect(text).toContain("recovery_hint: rerun with --resume archive-op-7");
 });
+
+test("human renderer relays canonical query groups and answer without re-ranking", () => {
+  const text = renderHumanResponse({
+    ok: true,
+    data: {
+      query_trust: "stale_but_queryable",
+      recommended_action: "update",
+      route_groups: [
+        { route_tag: "index_symbol_hit", returned_count: 2, results: [{}, {}] },
+        { route_tag: "projection_ref", returned_count: 1, results: [{}] },
+      ],
+      answer: {
+        text: "Inspect the returned references before relying on this answer.",
+        answer_mode: "degraded",
+        answer_trust: "constrained",
+      },
+    },
+  }, { action: "query" });
+
+  expect(text).toContain("query_trust: stale_but_queryable");
+  expect(text).toContain("route_groups: 2");
+  expect(text).toContain("results: 3");
+  expect(text).toContain("answer_mode: degraded");
+  expect(text).toContain("answer_trust: constrained");
+  expect(text).toContain("answer: Inspect the returned references");
+  expect(text).not.toContain("matched_pages");
+  expect(text).not.toContain("provenance_summary");
+});

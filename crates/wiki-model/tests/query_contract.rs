@@ -1,6 +1,7 @@
 use wiki_model::domain::query::{
-    QueryConfidence, QueryProvenance, QueryRefKind, QueryResultDto, QueryRouteTag, QuerySourceRef,
-    RecommendedAction,
+    QueryConfidence, QueryProvenance, QueryProvenanceLayer, QueryProvenanceState,
+    QueryRankingBasis, QueryRefKind, QueryResultDto, QueryRouteGroup, QueryRouteTag,
+    QueryScoreDirection, QuerySourceRef, RecommendedAction,
 };
 
 #[test]
@@ -10,10 +11,11 @@ fn query_result_dto_serializes_public_contract_fields() {
         ref_kind: QueryRefKind::SourcePath,
         ref_id: "src/lib.rs".to_string(),
         label: "src/lib.rs".to_string(),
-        score: 0.91,
+        rank: 1,
+        score: Some(0.91),
         provenance: QueryProvenance {
-            layer: "index".to_string(),
-            state: Some("ready".to_string()),
+            layer: QueryProvenanceLayer::Index,
+            state: QueryProvenanceState::Ready,
             reason: None,
         },
         confidence: QueryConfidence::High,
@@ -55,4 +57,46 @@ fn query_route_tag_and_ref_kind_reject_unknown_values() {
 
     let ref_kind_err = serde_json::from_str::<QueryRefKind>(r#""mystery_ref""#).unwrap_err();
     assert!(ref_kind_err.to_string().contains("unknown variant"));
+}
+
+#[test]
+fn query_group_serializes_ranking_and_module_contract() {
+    let result = QueryResultDto {
+        route_tag: QueryRouteTag::IndexModuleHit,
+        ref_kind: QueryRefKind::SourceModule,
+        ref_id: "module:payments".to_string(),
+        label: "payments".to_string(),
+        rank: 1,
+        score: None,
+        provenance: QueryProvenance {
+            layer: QueryProvenanceLayer::Index,
+            state: QueryProvenanceState::Ready,
+            reason: Some("module name matched".to_string()),
+        },
+        confidence: QueryConfidence::High,
+        recommended_action: RecommendedAction::OpenSourceRef,
+        source_refs: Vec::new(),
+    };
+    let group = QueryRouteGroup {
+        route_tag: QueryRouteTag::IndexModuleHit,
+        ranking_basis: QueryRankingBasis::StructuralMatch,
+        score_direction: QueryScoreDirection::None,
+        total_count: 1,
+        returned_count: 1,
+        truncated: false,
+        results: vec![result],
+    };
+
+    let value = serde_json::to_value(group).unwrap();
+    assert_eq!(value["route_tag"], "index_module_hit");
+    assert_eq!(value["ranking_basis"], "structural_match");
+    assert_eq!(value["score_direction"], "none");
+    assert_eq!(value["total_count"], 1);
+    assert_eq!(value["returned_count"], 1);
+    assert_eq!(value["truncated"], false);
+    assert_eq!(value["results"][0]["ref_kind"], "source_module");
+    assert_eq!(value["results"][0]["rank"], 1);
+    assert!(value["results"][0].get("score").is_none());
+    assert_eq!(value["results"][0]["provenance"]["layer"], "index");
+    assert_eq!(value["results"][0]["provenance"]["state"], "ready");
 }

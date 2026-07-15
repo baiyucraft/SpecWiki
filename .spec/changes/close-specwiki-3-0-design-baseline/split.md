@@ -44,7 +44,7 @@ multi-change
 - 目标：统一 query input / output、route groups、ranking、provenance、readiness、trust、错误和降级语义，并明确 intent-aware query、owner / entrypoint / impact 的当前或延期边界。
 - 验收边界：Runtime、CLI 与 Agents 对稳定字段逐项一致；term-only 与 richer query 的关系明确；每类结果都有排序、截断、来源和质量解释；宿主不再依赖过时的 matched-pages-only 合同。
 - 依赖：close-specwiki-3-0-design-baseline-product-contract。
-- 归档状态：[ ] pending
+- 归档状态：[x] archived
 - 后续阶段：使用 `unispec-propose` 创建该 child 的 `proposal.md`
 
 ### 3. close-specwiki-3-0-design-baseline-core-scenario-acceptance

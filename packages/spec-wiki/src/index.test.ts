@@ -246,8 +246,6 @@ test("parseResult parses query payload readiness contract", () => {
         query_mode: "mixed",
         query_trust: "ready",
         recommended_action: "none",
-        matched_pages: [],
-        provenance_summary: "index_hit",
         governance: {
           readiness: "not_enabled",
           fingerprint: null,
@@ -259,12 +257,18 @@ test("parseResult parses query payload readiness contract", () => {
         route_groups: [
           {
             route_tag: "index_symbol_hit",
+            ranking_basis: "bm25",
+            score_direction: "lower_is_better",
+            total_count: 1,
+            returned_count: 1,
+            truncated: false,
             results: [
               {
                 route_tag: "index_symbol_hit",
                 ref_kind: "source_symbol",
                 ref_id: "symbol:handleCheckout",
                 label: "handleCheckout",
+                rank: 1,
                 score: 0.9,
                 provenance: { layer: "index", state: "ready" },
                 confidence: "high",
@@ -281,26 +285,14 @@ test("parseResult parses query payload readiness contract", () => {
             ],
           },
         ],
-        results: [
-          {
-            route_tag: "index_symbol_hit",
-            ref_kind: "source_symbol",
-            ref_id: "symbol:handleCheckout",
-            label: "handleCheckout",
-            score: 0.9,
-            provenance: { layer: "index", state: "ready" },
-            confidence: "high",
-            recommended_action: "open_source_ref",
-            source_refs: [
-              {
-                ref_kind: "source_path",
-                ref_id: "src/controller.ts",
-                label: "src/controller.ts",
-              },
-            ],
-            extra_field: "keep-me",
-          },
-        ],
+        answer: {
+          text: "Inspect handleCheckout.",
+          answer_mode: "direct",
+          answer_trust: "grounded",
+          recommended_action: "none",
+          provenance: ["index_hit"],
+          supporting_refs: [],
+        },
       },
     }),
   );
@@ -320,8 +312,6 @@ test("parseResult parses query payload readiness contract", () => {
     query_mode: "mixed",
     query_trust: "ready",
     recommended_action: "none",
-    matched_pages: [],
-    provenance_summary: "index_hit",
     governance: {
       readiness: "not_enabled",
       fingerprint: null,
@@ -333,12 +323,18 @@ test("parseResult parses query payload readiness contract", () => {
     route_groups: [
       {
         route_tag: "index_symbol_hit",
+        ranking_basis: "bm25",
+        score_direction: "lower_is_better",
+        total_count: 1,
+        returned_count: 1,
+        truncated: false,
         results: [
           {
             route_tag: "index_symbol_hit",
             ref_kind: "source_symbol",
             ref_id: "symbol:handleCheckout",
             label: "handleCheckout",
+            rank: 1,
             score: 0.9,
             provenance: { layer: "index", state: "ready" },
             confidence: "high",
@@ -355,26 +351,14 @@ test("parseResult parses query payload readiness contract", () => {
         ],
       },
     ],
-    results: [
-      {
-        route_tag: "index_symbol_hit",
-        ref_kind: "source_symbol",
-        ref_id: "symbol:handleCheckout",
-        label: "handleCheckout",
-        score: 0.9,
-        provenance: { layer: "index", state: "ready" },
-        confidence: "high",
-        recommended_action: "open_source_ref",
-        source_refs: [
-          {
-            ref_kind: "source_path",
-            ref_id: "src/controller.ts",
-            label: "src/controller.ts",
-          },
-        ],
-        extra_field: "keep-me",
-      },
-    ],
+    answer: {
+      text: "Inspect handleCheckout.",
+      answer_mode: "direct",
+      answer_trust: "grounded",
+      recommended_action: "none",
+      provenance: ["index_hit"],
+      supporting_refs: [],
+    },
   });
 });
 
@@ -397,8 +381,6 @@ test("parseResult rejects unknown query route tags", () => {
           query_mode: "mixed",
           query_trust: "ready",
           recommended_action: "none",
-          matched_pages: [],
-          provenance_summary: "index_hit",
           governance: {
             readiness: "not_enabled",
             fingerprint: null,
@@ -407,8 +389,23 @@ test("parseResult rejects unknown query route tags", () => {
             issues: [],
             recommended_action: "none",
           },
-          route_groups: [{ route_tag: "index_hit", results: [] }],
-          results: [],
+          route_groups: [{
+            route_tag: "index_hit",
+            ranking_basis: "deterministic_match",
+            score_direction: "none",
+            total_count: 0,
+            returned_count: 0,
+            truncated: false,
+            results: [],
+          }],
+          answer: {
+            text: "",
+            answer_mode: "degraded",
+            answer_trust: "constrained",
+            recommended_action: "review",
+            provenance: [],
+            supporting_refs: [],
+          },
         },
       }),
     ),
@@ -433,8 +430,6 @@ test("parseResult parses the governance product summary without the legacy field
         query_mode: "mixed",
         query_trust: "ready",
         recommended_action: "review_governance",
-        matched_pages: [],
-        provenance_summary: "governance_summary_hit",
         governance: {
           readiness: "blocked",
           fingerprint: "fp-1",
@@ -451,31 +446,43 @@ test("parseResult parses the governance product summary without the legacy field
           ],
           recommended_action: "review_governance",
         },
-        route_groups: [],
-        results: [
-          {
+        route_groups: [{
+          route_tag: "governance_evidence_ref",
+          ranking_basis: "deterministic_match",
+          score_direction: "none",
+          total_count: 1,
+          returned_count: 1,
+          truncated: false,
+          results: [{
             route_tag: "governance_evidence_ref",
             ref_kind: "governance_change",
             ref_id: "governance-isolation",
             label: "artifact.required.tasks",
+            rank: 1,
             score: 0.5,
             provenance: { layer: "governance", state: "blocked" },
             confidence: "low",
             recommended_action: "review_governance",
-            source_refs: [
-              {
-                ref_kind: "governance_artifact",
-                ref_id: "governance-isolation:tasks",
-                label: "tasks",
-                path: ".spec/changes/governance-isolation/tasks.md",
-                start_line: 1,
-                end_line: 3,
-                provenance: ["governance:diagnostic_ref"],
-                diagnostics: ["artifact.required.tasks"],
-              },
-            ],
-          },
-        ],
+            source_refs: [{
+              ref_kind: "governance_artifact",
+              ref_id: "governance-isolation:tasks",
+              label: "tasks",
+              path: ".spec/changes/governance-isolation/tasks.md",
+              start_line: 1,
+              end_line: 3,
+              provenance: ["governance:diagnostic_ref"],
+              diagnostics: ["artifact.required.tasks"],
+            }],
+          }],
+        }],
+        answer: {
+          text: "Review governance blockers.",
+          answer_mode: "degraded",
+          answer_trust: "constrained",
+          recommended_action: "review_governance",
+          provenance: ["governance_summary_hit"],
+          supporting_refs: [],
+        },
       },
     }),
   );
@@ -489,7 +496,7 @@ test("parseResult parses the governance product summary without the legacy field
     },
   });
   expect(parsed.data).not.toHaveProperty("governance_readiness");
-  expect((parsed.data as any).results[0].source_refs[0]).toMatchObject({
+  expect((parsed.data as any).route_groups[0].results[0].source_refs[0]).toMatchObject({
     path: ".spec/changes/governance-isolation/tasks.md",
     start_line: 1,
     end_line: 3,

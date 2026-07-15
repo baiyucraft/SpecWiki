@@ -32,8 +32,9 @@ use wiki_model::domain::knowledge_artifact::{
     DeclaredKnowledgeRecordStatus, KnowledgeHealthSignal,
 };
 use wiki_model::domain::query::{
-    QueryConfidence, QueryProvenance, QueryRefKind, QueryResultDto, QueryRouteGroup, QueryRouteTag,
-    QuerySourceRef, RecommendedAction as QueryRecommendedAction,
+    QueryConfidence, QueryProvenance, QueryProvenanceLayer, QueryProvenanceState,
+    QueryRankingBasis, QueryRefKind, QueryResultDto, QueryRouteGroup, QueryRouteTag,
+    QueryScoreDirection, QuerySourceRef, RecommendedAction as QueryRecommendedAction,
 };
 
 const ANSWER_SUPPORTING_REF_LIMIT: usize = 8;
@@ -451,6 +452,7 @@ pub fn run_query_with_mode(
         build_provenance_summary(has_index_hits, has_knowledge_hits, has_page_fallback);
     let mut results = build_query_results(
         &matches,
+        &matched_modules,
         &matched_sources,
         &matched_symbols,
         &matched_symbol_edges,
@@ -598,6 +600,7 @@ fn degraded_query_without_index(
     let provenance_summary = build_provenance_summary(false, has_knowledge_hits, has_page_fallback);
     let mut results = build_query_results(
         &matches,
+        &[],
         &[],
         &[],
         &[],
@@ -1256,6 +1259,7 @@ fn build_provenance_summary(
 
 fn build_query_results(
     matches: &[QueryMatch],
+    matched_modules: &[QueryModuleMatch],
     matched_sources: &[QuerySourceMatch],
     matched_symbols: &[QuerySymbolMatch],
     matched_symbol_edges: &[QueryGraphEdgeMatch],
@@ -1263,6 +1267,7 @@ fn build_query_results(
     recommended_action: RecommendedAction,
 ) -> Vec<QueryResultDto> {
     let mut results = Vec::new();
+    let index_state = provenance_state_for_query(query_trust);
 
     for symbol in matched_symbols {
         push_query_result(
@@ -1272,23 +1277,14 @@ fn build_query_results(
                 ref_kind: QueryRefKind::SourceSymbol,
                 ref_id: symbol.symbol_id.clone(),
                 label: format!("{} {}", symbol.label, symbol.name),
-                score: symbol.score,
+                rank: 0,
+                score: Some(symbol.score),
                 provenance: QueryProvenance {
-                    layer: "index".to_string(),
-                    state: Some(match query_trust {
-                        QueryTrust::Ready => "ready".to_string(),
-                        QueryTrust::StaleButQueryable => "degraded".to_string(),
-                        QueryTrust::Blocked => "blocked".to_string(),
-                    }),
+                    layer: QueryProvenanceLayer::Index,
+                    state: index_state,
                     reason: symbol.reasons.first().cloned(),
                 },
-                confidence: if symbol.score >= 0.8 {
-                    QueryConfidence::High
-                } else if symbol.score >= 0.5 {
-                    QueryConfidence::Medium
-                } else {
-                    QueryConfidence::Low
-                },
+                confidence: confidence_for_state(index_state, QueryConfidence::High),
                 recommended_action: map_recommended_action(recommended_action),
                 source_refs: vec![source_ref(
                     QueryRefKind::SourcePath,
@@ -1304,6 +1300,43 @@ fn build_query_results(
         );
     }
 
+    for module in matched_modules {
+        push_query_result(
+            &mut results,
+            QueryResultDto {
+                route_tag: QueryRouteTag::IndexModuleHit,
+                ref_kind: QueryRefKind::SourceModule,
+                ref_id: module.module_id.clone(),
+                label: module.name.clone(),
+                rank: 0,
+                score: None,
+                provenance: QueryProvenance {
+                    layer: QueryProvenanceLayer::Index,
+                    state: index_state,
+                    reason: module.reasons.first().cloned(),
+                },
+                confidence: confidence_for_state(index_state, QueryConfidence::High),
+                recommended_action: map_recommended_action(recommended_action),
+                source_refs: module
+                    .root_paths
+                    .iter()
+                    .map(|path| {
+                        source_ref(
+                            QueryRefKind::SourcePath,
+                            path.clone(),
+                            Some(path.clone()),
+                            Some(path.clone()),
+                            None,
+                            None,
+                            Vec::new(),
+                            Vec::new(),
+                        )
+                    })
+                    .collect(),
+            },
+        );
+    }
+
     for source in matched_sources {
         push_query_result(
             &mut results,
@@ -1312,13 +1345,14 @@ fn build_query_results(
                 ref_kind: QueryRefKind::SourcePath,
                 ref_id: source.path.clone(),
                 label: source.path.clone(),
-                score: source.score,
+                rank: 0,
+                score: Some(source.score),
                 provenance: QueryProvenance {
-                    layer: "index".to_string(),
-                    state: Some("ready".to_string()),
+                    layer: QueryProvenanceLayer::Index,
+                    state: index_state,
                     reason: source.reasons.first().cloned(),
                 },
-                confidence: QueryConfidence::Medium,
+                confidence: confidence_for_state(index_state, QueryConfidence::High),
                 recommended_action: map_recommended_action(recommended_action),
                 source_refs: vec![source_ref(
                     QueryRefKind::SourcePath,
@@ -1342,10 +1376,11 @@ fn build_query_results(
                 ref_kind: QueryRefKind::IndexGraphEdge,
                 ref_id: edge.edge_id.clone(),
                 label: format!("{} -> {}", edge.source_symbol, edge.target_symbol),
-                score: edge.confidence,
+                rank: 0,
+                score: Some(edge.confidence),
                 provenance: QueryProvenance {
-                    layer: "index".to_string(),
-                    state: Some("ready".to_string()),
+                    layer: QueryProvenanceLayer::Index,
+                    state: index_state,
                     reason: Some(edge.reason.clone()),
                 },
                 confidence: if edge.confidence >= 0.8 {
@@ -1407,22 +1442,23 @@ fn build_query_results(
                 },
                 ref_id: page.page_id.clone(),
                 label: page.title.clone(),
-                score: 0.6,
+                rank: 0,
+                score: None,
                 provenance: QueryProvenance {
                     layer: if page.match_mode == "fallback_markdown" {
-                        "fallback".to_string()
+                        QueryProvenanceLayer::Fallback
                     } else if page.match_mode == "knowledge_declared" {
-                        "knowledge".to_string()
+                        QueryProvenanceLayer::Knowledge
                     } else if page.match_mode == "knowledge_digest" {
-                        "projection".to_string()
+                        QueryProvenanceLayer::Projection
                     } else {
-                        "projection".to_string()
+                        QueryProvenanceLayer::Projection
                     },
-                    state: Some(if page.match_mode == "knowledge_declared" {
-                        "declared".to_string()
+                    state: if page.match_mode == "fallback_markdown" {
+                        QueryProvenanceState::Fallback
                     } else {
-                        "derived".to_string()
-                    }),
+                        provenance_state_for_query(query_trust)
+                    },
                     reason: page.reasons.first().cloned(),
                 },
                 confidence: QueryConfidence::Low,
@@ -1489,6 +1525,7 @@ fn build_route_groups(results: &[QueryResultDto]) -> Vec<QueryRouteGroup> {
     for route_tag in [
         QueryRouteTag::IndexSymbolHit,
         QueryRouteTag::IndexPathHit,
+        QueryRouteTag::IndexModuleHit,
         QueryRouteTag::IndexGraphHit,
         QueryRouteTag::KnowledgeDeclaredHit,
         QueryRouteTag::KnowledgeDerivedHit,
@@ -1497,7 +1534,7 @@ fn build_route_groups(results: &[QueryResultDto]) -> Vec<QueryRouteGroup> {
         QueryRouteTag::ProjectionRef,
         QueryRouteTag::RenderedPageDebugFallback,
     ] {
-        let grouped_results = results
+        let mut grouped_results = results
             .iter()
             .filter(|result| result.route_tag == route_tag)
             .cloned()
@@ -1505,13 +1542,79 @@ fn build_route_groups(results: &[QueryResultDto]) -> Vec<QueryRouteGroup> {
         if grouped_results.is_empty() {
             continue;
         }
+        sort_route_results(route_tag, &mut grouped_results);
+        for (index, result) in grouped_results.iter_mut().enumerate() {
+            result.rank = index + 1;
+        }
+        let total_count = grouped_results.len();
         groups.push(QueryRouteGroup {
             route_tag,
-            score_basis: Some("route_group".to_string()),
+            ranking_basis: ranking_basis_for(route_tag),
+            score_direction: score_direction_for(route_tag),
+            total_count,
+            returned_count: grouped_results.len(),
+            truncated: false,
             results: grouped_results,
         });
     }
     groups
+}
+
+fn provenance_state_for_query(query_trust: QueryTrust) -> QueryProvenanceState {
+    match query_trust {
+        QueryTrust::Ready => QueryProvenanceState::Ready,
+        QueryTrust::StaleButQueryable => QueryProvenanceState::Stale,
+        QueryTrust::Blocked => QueryProvenanceState::Blocked,
+    }
+}
+
+fn confidence_for_state(
+    state: QueryProvenanceState,
+    ready_confidence: QueryConfidence,
+) -> QueryConfidence {
+    match state {
+        QueryProvenanceState::Ready => ready_confidence,
+        QueryProvenanceState::Stale | QueryProvenanceState::Conflict => QueryConfidence::Medium,
+        _ => QueryConfidence::Low,
+    }
+}
+
+fn ranking_basis_for(route_tag: QueryRouteTag) -> QueryRankingBasis {
+    match route_tag {
+        QueryRouteTag::IndexSymbolHit | QueryRouteTag::IndexPathHit => QueryRankingBasis::Bm25,
+        QueryRouteTag::IndexGraphHit => QueryRankingBasis::GraphConfidence,
+        QueryRouteTag::IndexModuleHit => QueryRankingBasis::StructuralMatch,
+        _ => QueryRankingBasis::DeterministicMatch,
+    }
+}
+
+fn score_direction_for(route_tag: QueryRouteTag) -> QueryScoreDirection {
+    match route_tag {
+        QueryRouteTag::IndexSymbolHit | QueryRouteTag::IndexPathHit => {
+            QueryScoreDirection::LowerIsBetter
+        }
+        QueryRouteTag::IndexGraphHit => QueryScoreDirection::HigherIsBetter,
+        _ => QueryScoreDirection::None,
+    }
+}
+
+fn sort_route_results(route_tag: QueryRouteTag, results: &mut [QueryResultDto]) {
+    results.sort_by(|left, right| {
+        let score_order = match score_direction_for(route_tag) {
+            QueryScoreDirection::LowerIsBetter => left
+                .score
+                .partial_cmp(&right.score)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            QueryScoreDirection::HigherIsBetter => right
+                .score
+                .partial_cmp(&left.score)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            QueryScoreDirection::None => std::cmp::Ordering::Equal,
+        };
+        score_order
+            .then(left.ref_kind.cmp(&right.ref_kind))
+            .then(left.ref_id.cmp(&right.ref_id))
+    });
 }
 
 fn push_query_result(results: &mut Vec<QueryResultDto>, result: QueryResultDto) {

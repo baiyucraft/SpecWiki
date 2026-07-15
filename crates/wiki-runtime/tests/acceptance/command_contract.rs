@@ -255,7 +255,7 @@ fn handles_json_command_and_returns_error_payload() {
 }
 
 #[test]
-fn query_transport_returns_slim_payload_but_internal_query_stays_rich() {
+fn query_transport_returns_canonical_payload_but_internal_query_stays_rich() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
     write_graph_query_repo(repo_root);
@@ -295,15 +295,10 @@ fn query_transport_returns_slim_payload_but_internal_query_stays_rich() {
     assert!(payload.get("query_mode").is_some());
     assert!(payload.get("query_trust").is_some());
     assert!(payload.get("recommended_action").is_some());
-    assert!(payload.get("provenance_summary").is_some());
     assert!(payload.get("route_groups").is_some());
-    assert!(payload.get("results").is_some());
     assert_eq!(payload["governance"]["readiness"], "not_enabled");
     assert!(payload.get("governance_readiness").is_none());
     assert!(payload.get("answer").is_some());
-    assert!(payload.get("summary").is_some());
-    assert!(payload.get("hits").is_some());
-    assert!(payload["matched_pages"].is_array());
     assert!(internal_json["answer"]["answer_mode"].is_string());
     assert!(internal_json["answer"]["supporting_refs"].is_array());
 
@@ -312,38 +307,39 @@ fn query_transport_returns_slim_payload_but_internal_query_stays_rich() {
     assert!(payload.get("matched_modules").is_none());
     assert!(payload.get("matched_symbol_edges").is_none());
     assert!(payload.get("matches").is_none());
-    assert!(payload["results"].as_array().is_some_and(|results| {
-        results.iter().any(|result| {
-            result["route_tag"] == "index_symbol_hit" && result["source_refs"].is_array()
-        })
-    }));
-
-    let hits = payload["hits"]
-        .as_array()
-        .expect("query transport should expose compact hits");
+    for legacy in [
+        "matched_pages",
+        "provenance_summary",
+        "results",
+        "summary",
+        "hits",
+    ] {
+        assert!(
+            payload.get(legacy).is_none(),
+            "legacy field leaked: {legacy}"
+        );
+    }
     assert_eq!(payload["answer"]["answer_mode"], "direct");
     assert_eq!(payload["answer"]["answer_trust"], "grounded");
     assert!(payload["answer"]["supporting_refs"]
         .as_array()
         .is_some_and(|refs| !refs.is_empty()));
-    assert!(hits.iter().any(|hit| {
-        hit["hit_type"] == "symbol"
-            && hit["title"] == "handleCheckout"
-            && hit["location"] == "src/controller.ts:2"
-    }));
-    assert!(hits.iter().any(|hit| {
-        hit["hit_type"] == "call_edge" && hit["title"] == "handleCheckout -> runPayment"
-    }));
-    let symbol_hit = hits
+    let results = payload["route_groups"]
+        .as_array()
+        .expect("query transport should expose route groups")
         .iter()
-        .find(|hit| hit["hit_type"] == "symbol" && hit["title"] == "handleCheckout")
+        .flat_map(|group| group["results"].as_array().into_iter().flatten())
+        .collect::<Vec<_>>();
+    let symbol_hit = results
+        .iter()
+        .find(|hit| hit["route_tag"] == "index_symbol_hit" && hit["ref_kind"] == "source_symbol")
         .expect("symbol hit should be present");
-    assert_eq!(symbol_hit["line_start"], 2);
-    assert_eq!(symbol_hit["line_end"], 4);
+    assert_eq!(symbol_hit["source_refs"][0]["start_line"], 2);
+    assert_eq!(symbol_hit["source_refs"][0]["end_line"], 4);
 }
 
 #[test]
-fn query_transport_keeps_page_provenance_inside_compact_page_hits() {
+fn query_transport_keeps_page_provenance_inside_canonical_route_results() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
     write_repo_file(repo_root, "package.json", r#"{"name":"demo"}"#);
@@ -364,12 +360,88 @@ fn query_transport_keeps_page_provenance_inside_compact_page_hits() {
 
     assert!(response.ok);
     let payload = response.data.expect("query transport should include data");
-    let page = payload["hits"]
+    let page = payload["route_groups"]
         .as_array()
-        .and_then(|hits| hits.iter().find(|hit| hit["hit_type"] == "page"))
-        .expect("overview query should produce page match");
+        .into_iter()
+        .flatten()
+        .flat_map(|group| group["results"].as_array().into_iter().flatten())
+        .find(|hit| {
+            matches!(
+                hit["ref_kind"].as_str(),
+                Some("knowledge_record" | "projection_page" | "rendered_page")
+            )
+        })
+        .expect("overview query should produce a page-like match");
     assert!(page.get("provenance").is_some());
     assert!(payload.get("matches").is_none());
+}
+
+#[test]
+fn query_transport_requires_non_empty_term_and_types_index_not_ready() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    let invalid = wiki_runtime::transport::cli::dispatch(CoreCommand {
+        action: "query".to_string(),
+        repo_root: Some(repo_root.display().to_string()),
+        term: Some("   ".to_string()),
+        change_id: None,
+        archive_mode: None,
+        archive_operation_id: None,
+        bootstrap: None,
+        development_mode: false,
+        stream_progress: false,
+        llm_bridge: None,
+    });
+    assert!(!invalid.ok);
+    assert_eq!(invalid.error_kind, Some(CoreErrorKind::InvalidArgument));
+
+    let not_ready = wiki_runtime::transport::cli::dispatch(CoreCommand {
+        action: "query".to_string(),
+        repo_root: Some(repo_root.display().to_string()),
+        term: Some("payments".to_string()),
+        change_id: None,
+        archive_mode: None,
+        archive_operation_id: None,
+        bootstrap: None,
+        development_mode: false,
+        stream_progress: false,
+        llm_bridge: None,
+    });
+    assert!(!not_ready.ok);
+    assert_eq!(not_ready.error_kind, Some(CoreErrorKind::IndexNotReady));
+    assert_eq!(
+        not_ready.data,
+        Some(serde_json::json!({
+            "reason": "facts_snapshot_missing",
+            "recommended_action": "init",
+        }))
+    );
+}
+
+#[test]
+fn query_transport_keeps_empty_route_groups_in_success_payload() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    write_repo_file(repo_root, "package.json", r#"{"name":"demo"}"#);
+    run_init_in_development(repo_root);
+
+    let response = wiki_runtime::transport::cli::dispatch(CoreCommand {
+        action: "query".to_string(),
+        repo_root: Some(repo_root.display().to_string()),
+        term: Some("definitely-no-such-query-term".to_string()),
+        change_id: None,
+        archive_mode: None,
+        archive_operation_id: None,
+        bootstrap: None,
+        development_mode: false,
+        stream_progress: false,
+        llm_bridge: None,
+    });
+
+    assert!(response.ok);
+    let payload = response.data.expect("query transport should include data");
+    assert_eq!(payload["route_groups"], serde_json::json!([]));
 }
 
 #[test]
