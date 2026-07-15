@@ -1,7 +1,7 @@
 ---
 title: 06-设计文档
 description: spec-wiki 当前稳定设计、runtime 设计、Agents 设计和场景边界入口
-updated: 2026-06-10
+updated: 2026-07-15
 owner: architecture
 ---
 
@@ -18,6 +18,7 @@ owner: architecture
 | [02-Agents设计](./02-Agents设计.md) | `spec-wiki` 宿主接入、bootstrap、runtime forwarding 和资产模型 | 当前稳定设计 |
 | [03-核心场景](./03-核心场景.md) | 第一版 9 个核心用户故事 | 当前场景边界 |
 | [04-扩展场景](./04-扩展场景.md) | 第一版之外的重要扩展场景 | 后续场景边界 |
+| [05-产品基线与设计治理](./05-产品基线与设计治理.md) | 3.0 产品范围、版本 authority、状态证据和设计完成规则 | 当前治理基线 |
 
 ## 维护规则
 

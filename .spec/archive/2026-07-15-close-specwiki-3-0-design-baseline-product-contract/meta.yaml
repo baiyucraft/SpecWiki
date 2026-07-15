@@ -1,0 +1,23 @@
+id: close-specwiki-3-0-design-baseline-product-contract
+stage: verification
+deliveryShape: single-change
+multiChange:
+  role: child
+  parent: close-specwiki-3-0-design-baseline
+  order: 1
+  dependsOn: []
+artifacts:
+  proposal:
+    status: present
+  design:
+    status: present
+  cases:
+    status: present
+  tasks:
+    status: present
+  review-report:
+    status: present
+  test-report:
+    status: present
+  metadata:
+    status: present
