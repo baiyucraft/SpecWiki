@@ -50,8 +50,10 @@ import {
 } from "./testing/helpers.mjs";
 import { runInitWithResume } from "./testing/init-resume.mjs";
 import {
-  buildAcceptanceHarnessSummary,
-  createFormalGateResults,
+  aggregateGateResults,
+  CAPABILITY_TEST_MATRIX,
+  FORMAL_QUALITY_GATES,
+  REQUIRED_TEST_SURFACES,
 } from "./testing/quality-gates.mjs";
 import { inspectWikiRuntime } from "./testing/wiki-runtime-inspection.mjs";
 
@@ -76,6 +78,17 @@ export const LIFECYCLE_PHASES = {
   mutation: "变更链路：init → touch source → status → update",
   rebuild: "重建链路：init → rebuild → status",
 };
+
+function lifecycleAssertionGateId(label) {
+  const normalizedLabel = label.toLowerCase();
+  if (/query|symbol|graph/.test(normalizedLabel))
+    return "query_route_contract";
+  if (/status|state|fresh|needs_update|recommended action/.test(normalizedLabel))
+    return "status_recommended_action_stability";
+  if (/restore|rebuild|warm|cache/.test(normalizedLabel))
+    return "restore_validity";
+  return "artifact_validity";
+}
 
 function resolveRunModes(runMode) {
   if (runMode === "both") {
@@ -1292,7 +1305,24 @@ async function runLifecycleProject(proj, options = {}) {
   try {
     const runs = [];
     for (const run of resolveRunModes(options.runMode || "cold")) {
-      const t = new TestRunner();
+      const t = new TestRunner({
+        assertionFactory(label, outcome) {
+          return {
+            assertion_ref: label,
+            gate_id: lifecycleAssertionGateId(label),
+            outcome,
+          };
+        },
+        failureFactory(label, detail) {
+          return {
+            failure_id: `lifecycle:${proj}:${run.label}:${label}`,
+            owner_gate_id: lifecycleAssertionGateId(label),
+            source_ref: proj,
+            assertion_ref: detail ? `${label}: ${detail}` : label,
+            evidence_refs: [`${proj}:${run.label}`],
+          };
+        },
+      });
       const ctx = {
         isRealRepo,
         phase,
@@ -1323,6 +1353,11 @@ async function runLifecycleProject(proj, options = {}) {
         total: t.total,
         passed: t.passed,
         failed: t.failed,
+        failures: t.failures,
+        covered_gate_ids: [...new Set(t.assertions.map(assertion => assertion.gate_id))].sort(),
+        diagnosticState: ctx.lifecycleMode === "diagnostic" ? ctx.runtimeState : null,
+        diagnosticReason: ctx.latestStatusResult?.data?.incomplete_reason ?? null,
+        recommendedAction: ctx.latestStatusResult?.data?.recommended_action ?? null,
         usage: ctx.usageSummary,
       });
     }
@@ -1336,6 +1371,8 @@ async function runLifecycleProject(proj, options = {}) {
       total: runs.reduce((sum, run) => sum + run.total, 0),
       passed: runs.reduce((sum, run) => sum + run.passed, 0),
       failed: runs.reduce((sum, run) => sum + run.failed, 0),
+      failures: runs.flatMap(run => run.failures),
+      covered_gate_ids: [...new Set(runs.flatMap(run => run.covered_gate_ids))].sort(),
       runs,
       logs,
     };
@@ -1424,57 +1461,127 @@ export function buildLifecycleSummary(results, options = {}) {
       total_assertions: result.total ?? 0,
       failed_assertions: result.failed ?? 0,
       run_labels: (result.runs ?? []).map((run) => run.label),
+      covered_gate_ids: result.covered_gate_ids ?? [],
     };
   });
 
-  return buildAcceptanceHarnessSummary({
-    gateLevel: "baseline_guard",
-    gateScope: "lifecycle",
+  const explicitFailures = results.flatMap(result => result.failures ?? []);
+  const failures = explicitFailures.length > 0
+    ? explicitFailures
+    : failedAssertions > 0
+      ? [{
+          failure_id: `lifecycle:${options.phase ?? "full"}:assertions`,
+          owner_gate_id: "artifact_validity",
+          source_ref: "node scripts/test-wiki-lifecycle.mjs",
+          assertion_ref: `${failedAssertions} lifecycle assertions failed`,
+          evidence_refs: projectResults
+            .filter(project => project.failed_assertions > 0)
+            .map(project => project.project),
+        }]
+      : [];
+  const failureIdsByOwner = new Map();
+  for (const failure of failures) {
+    const ownerFailures = failureIdsByOwner.get(failure.owner_gate_id) ?? [];
+    ownerFailures.push(failure);
+    failureIdsByOwner.set(failure.owner_gate_id, ownerFailures);
+  }
+  const diagnostics = results.flatMap(result => (result.runs ?? [])
+    .filter(run => run.diagnosticState)
+    .map(run => ({
+      diagnostic_id: `${result.proj}:${run.label ?? "run"}:${run.diagnosticState}`,
+      state: run.diagnosticState,
+      reason: run.diagnosticReason ?? "lifecycle run entered diagnostic state",
+      recommended_action: run.recommendedAction ?? "review",
+      evidence_refs: [result.proj],
+    })));
+  const activeResults = projectResults.filter(project => !project.skipped);
+  const successfulBaseline = failures.length === 0
+    && diagnostics.length === 0
+    && activeResults.length > 0
+    && totalAssertions > 0;
+  const v2GateResults = Object.fromEntries(FORMAL_QUALITY_GATES.flatMap((gateId) => {
+    const ownerFailures = failureIdsByOwner.get(gateId) ?? [];
+    if (ownerFailures.length > 0) {
+      return [[gateId, {
+        decision: "blocker",
+        evidence_refs: ownerFailures.flatMap(failure => failure.evidence_refs ?? []),
+        failure_refs: ownerFailures.map(failure => failure.failure_id),
+      }]];
+    }
+    const coveredByAllProjects = activeResults.length > 0
+      && activeResults.every(project => project.covered_gate_ids.includes(gateId));
+    if (coveredByAllProjects) {
+      return [[gateId, {
+        decision: "pass",
+        evidence_refs: [`lifecycle:${options.phase ?? "full"}`],
+        failure_refs: [],
+      }]];
+    }
+    return [];
+  }));
+  const failureRefs = failures.map(failure => failure.failure_id);
+  if (successfulBaseline) {
+    v2GateResults.lifecycle_baseline = {
+      decision: "pass",
+      evidence_refs: [`lifecycle:${options.phase ?? "full"}`],
+      failure_refs: [],
+    };
+  } else if (failures.length > 0) {
+    v2GateResults.lifecycle_baseline = {
+      decision: "blocker",
+      evidence_refs: failures.flatMap(failure => failure.evidence_refs ?? []),
+      failure_refs: failureRefs,
+    };
+  }
+  const acceptancePlan = options.acceptancePlan ?? {
+    plan_id: `lifecycle:${options.phase ?? "full"}`,
+    primary_fixtures: options.samples?.length > 0 ? options.samples : ["lifecycle"],
+    required_primary_gates: [],
+    required_gates: [...FORMAL_QUALITY_GATES],
+    required_guards: ["lifecycle_baseline"],
+    report_only: false,
+  };
+  const v2Summary = aggregateGateResults({
+    plan: acceptancePlan,
+    gate_results: v2GateResults,
+    failures,
+    diagnostics,
+    scenario_results: [],
+  });
+  const relevantCapabilities = [
+    "projection_readiness_recovery",
+    "query_route_completeness",
+    "answer_assembly_contract",
+    "knowledge_quality_gates",
+  ];
+
+  return {
+    ...v2Summary,
+    gate_level: "baseline_guard",
+    gate_scope: "lifecycle",
     command: "node scripts/test-wiki-lifecycle.mjs",
-    decision: failedAssertions > 0 ? "blocker" : "pass",
     phase: options.phase ?? "full",
+    samples: options.samples ?? [],
     totals: {
-      totalProjects: results.length,
-      passedProjects,
-      failedProjects,
-      skippedProjects: skipped,
-      totalAssertions,
-      failedAssertions,
+      total_projects: results.length,
+      passed_projects: passedProjects,
+      failed_projects: failedProjects,
+      skipped_projects: skipped,
+      diagnostic_projects: diagnostics.length,
+      total_assertions: totalAssertions,
+      failed_assertions: failedAssertions,
     },
-    projectResults,
-    formalGates: createFormalGateResults({
-      artifact_validity: {
-        decision: failedAssertions > 0 ? "blocker" : "pass",
-        blocking: failedAssertions > 0,
-        evidence_refs: ["init", "status after init"],
-      },
-      restore_validity: {
-        decision: failedAssertions > 0 ? "blocker" : "pass",
-        blocking: failedAssertions > 0,
-        evidence_refs: ["warm restore preflight", "rebuild", "status after rebuild"],
-      },
-      query_route_contract: {
-        decision: failedAssertions > 0 ? "blocker" : "pass",
-        blocking: failedAssertions > 0,
-        evidence_refs: ["query", "graph query", "symbol query"],
-      },
-      status_recommended_action_stability: {
-        decision: failedAssertions > 0 ? "blocker" : "pass",
-        blocking: failedAssertions > 0,
-        evidence_refs: ["status after init", "status after touch", "status after rebuild"],
-      },
-    }),
+    required_test_surfaces: [...REQUIRED_TEST_SURFACES],
+    relevant_capabilities: relevantCapabilities,
+    capability_test_matrix: relevantCapabilities.map(capability => ({
+      capability,
+      ...(CAPABILITY_TEST_MATRIX[capability] ?? {}),
+    })),
+    project_results: projectResults,
     notes: [
       "`test-wiki-lifecycle.mjs` 是 baseline guard，用来验证 lifecycle 与 formal gate consumption，不替代 primary gate 样本。",
     ],
-    relevantCapabilities: [
-      "projection_readiness_recovery",
-      "query_route_completeness",
-      "answer_assembly_contract",
-      "knowledge_quality_gates",
-    ],
-    samples: options.samples ?? [],
-  });
+  };
 }
 
 export async function runLifecycleTestsWithSummary(names, options = {}) {
@@ -1535,7 +1642,7 @@ export async function runLifecycleTestsWithSummary(names, options = {}) {
     results,
     summary: buildLifecycleSummary(results, {
       phase,
-      samples: projects.filter((project) => ["storybook", "dagger"].includes(project)),
+      samples: projects,
     }),
   };
 }
@@ -1665,6 +1772,5 @@ if (entryHref && import.meta.url === entryHref) {
   if (args.jsonSummary) {
     process.stdout.write(`${JSON.stringify(result.summary, null, 2)}\n`);
   }
-  if (!result.ok)
-process.exit(1);
+  process.exitCode = result.summary.exit_code;
 }

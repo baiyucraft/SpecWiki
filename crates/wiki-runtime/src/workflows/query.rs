@@ -29,7 +29,7 @@ use wiki_index::query::{self as index_query, IndexQueryRequest, MatchBasis};
 use wiki_knowledge::plan_pages_from_knowledge_tree;
 use wiki_model::domain::governance::GovernanceSummary;
 use wiki_model::domain::knowledge_artifact::{
-    DeclaredKnowledgeRecordStatus, KnowledgeHealthSignal,
+    DeclaredKnowledgeRecordStatus, KnowledgeHealthSignal, KnowledgeHealthSignalKind,
 };
 use wiki_model::domain::query::{
     QueryConfidence, QueryProvenance, QueryProvenanceLayer, QueryProvenanceState,
@@ -335,6 +335,7 @@ pub fn run_query_with_mode(
         )
     });
     let health_signals = load_health_signals(repo_root).unwrap_or_default();
+    let has_governance_conflict = contains_governance_conflict(&health_signals);
     let health_summary = summarize_health_signals(&health_signals);
     let base_action = if readiness.fusion == FusionReadiness::Ready {
         RecommendedAction::None
@@ -344,8 +345,11 @@ pub fn run_query_with_mode(
         RecommendedAction::Update
     };
     let core_recommended_action = merge_recommended_action(base_action, health_summary.as_ref());
-    let recommended_action =
-        merge_governance_recommended_action(core_recommended_action, &governance);
+    let recommended_action = if has_governance_conflict {
+        RecommendedAction::ReviewGovernance
+    } else {
+        merge_governance_recommended_action(core_recommended_action, &governance)
+    };
     let needle = term.trim().to_lowercase();
 
     if needle.is_empty() {
@@ -462,7 +466,8 @@ pub fn run_query_with_mode(
     for result in governance_service.query_refs(term, 20)? {
         push_query_result(&mut results, result);
     }
-    let answer_action = if results.iter().any(is_governance_query_result) {
+    let answer_action = if has_governance_conflict || results.iter().any(is_governance_query_result)
+    {
         recommended_action
     } else {
         core_recommended_action
@@ -610,7 +615,9 @@ fn degraded_query_without_index(
     for result in GovernanceService::new(repo_root).query_refs(term, 20)? {
         push_query_result(&mut results, result);
     }
-    let answer_action = if results.iter().any(is_governance_query_result) {
+    let answer_action = if contains_governance_conflict(health_signals)
+        || results.iter().any(is_governance_query_result)
+    {
         recommended_action
     } else {
         core_recommended_action
@@ -652,6 +659,12 @@ fn degraded_query_without_index(
         answer,
         matches,
     })
+}
+
+fn contains_governance_conflict(health_signals: &[KnowledgeHealthSignal]) -> bool {
+    health_signals
+        .iter()
+        .any(|signal| signal.signal_kind == KnowledgeHealthSignalKind::GovernanceConflict)
 }
 
 fn effective_query_trust(

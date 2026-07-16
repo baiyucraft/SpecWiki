@@ -11,5 +11,9 @@ fn init_acceptance_suite_env() {
 mod baseline_acceptance;
 #[path = "acceptance/command_contract.rs"]
 mod command_contract;
+#[path = "acceptance/core_scenario_acceptance.rs"]
+mod core_scenario_acceptance;
+#[path = "acceptance/core_scenario_support.rs"]
+mod core_scenario_support;
 #[path = "acceptance/init_generates_wiki.rs"]
 mod init_generates_wiki;

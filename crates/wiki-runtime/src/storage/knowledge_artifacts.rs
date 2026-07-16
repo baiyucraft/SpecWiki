@@ -24,7 +24,7 @@ use crate::storage::sqlite_store;
 use crate::storage::state_store::{mark_level1_restored_mirror, write_state};
 use crate::storage::wiki_fs::{remove_cache_db, resolve_page_path, wiki_root};
 use wiki_index::fingerprint::fingerprint_bytes;
-use wiki_index::scanner::{FilePurpose, ScanReport, ScannedFile};
+use wiki_index::scanner::{scan_repo, FilePurpose, ScanReport, ScannedFile};
 use wiki_knowledge::domain::compose::PageDraft;
 use wiki_knowledge::domain::research::{
     validate_page_digest_snapshot, PageDigest, ProjectionDigestStatus, UnitResearch,
@@ -1725,19 +1725,36 @@ fn rebuild_scan_report(repo_root: &Path, metadata: &WikiMetadata) -> ScanReport 
         .iter()
         .map(|source| rebuild_scanned_file(source, &entry_points))
         .collect::<Vec<_>>();
+    let live_structure = scan_repo(repo_root, &[]).ok();
 
     ScanReport {
         root: repo_root.to_string_lossy().to_string(),
-        config_files: files
-            .iter()
-            .filter(|file| file.kind == "config")
-            .map(|file| file.path.clone())
-            .collect(),
-        entry_points: entry_points.into_iter().collect(),
+        config_files: live_structure
+            .as_ref()
+            .map(|scan| scan.config_files.clone())
+            .unwrap_or_else(|| {
+                files
+                    .iter()
+                    .filter(|file| file.kind == "config")
+                    .map(|file| file.path.clone())
+                    .collect()
+            }),
+        entry_points: live_structure
+            .as_ref()
+            .map(|scan| scan.entry_points.clone())
+            .unwrap_or_else(|| entry_points.into_iter().collect()),
         files,
-        tech_hints: Vec::new(),
-        workspace_roots: vec![".".to_string()],
-        dependency_hints: Vec::new(),
+        tech_hints: live_structure
+            .as_ref()
+            .map(|scan| scan.tech_hints.clone())
+            .unwrap_or_default(),
+        workspace_roots: live_structure
+            .as_ref()
+            .map(|scan| scan.workspace_roots.clone())
+            .unwrap_or_else(|| vec![".".to_string()]),
+        dependency_hints: live_structure
+            .map(|scan| scan.dependency_hints)
+            .unwrap_or_default(),
     }
 }
 

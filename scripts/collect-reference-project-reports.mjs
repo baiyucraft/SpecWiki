@@ -10,9 +10,9 @@
  * - .spec/changes/<change>/reference-project-reports/_optimization-notes.md
  *
  * 用法：
- *   node scripts/collect-reference-project-reports.mjs
- *   node scripts/collect-reference-project-reports.mjs --jobs 2
- *   node scripts/collect-reference-project-reports.mjs chi axum
+ *   node scripts/collect-reference-project-reports.mjs --acceptance-plan <plan.json>
+ *   node scripts/collect-reference-project-reports.mjs --acceptance-plan <plan.json> --jobs 2
+ *   node scripts/collect-reference-project-reports.mjs --acceptance-plan <plan.json> chi axum
  */
 
 import { execFileSync } from "node:child_process";
@@ -21,6 +21,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -39,9 +40,10 @@ import {
   withTemporaryDevConfig,
 } from "./testing/helpers.mjs";
 import {
-  buildAcceptanceHarnessSummary,
-  createFormalGateResults,
-  FORMAL_QUALITY_GATES,
+  createAcceptancePlan,
+} from "./testing/core-scenario-acceptance.mjs";
+import {
+  aggregateGateResults,
 } from "./testing/quality-gates.mjs";
 import {
   analyzeReferenceFidelity,
@@ -53,7 +55,6 @@ import {
 
 const REFERENCE_DIR = path.join(TMP_DIR, "reference");
 const DEFAULT_CHANGE = "iteration-9-6-fidelity-gates-and-reference-report-hardening";
-const VALIDATION_PROJECTS = ["storybook", "dagger"];
 const REAL_REPO_MAP = {
   aLocal: "E:\\project\\aLocal",
 };
@@ -114,7 +115,6 @@ function discoverProjects() {
 
   return readdirSync(REFERENCE_DIR)
     .filter((entry) => statSync(path.join(REFERENCE_DIR, entry)).isDirectory())
-    .filter((entry) => VALIDATION_PROJECTS.includes(entry))
     .sort();
 }
 
@@ -1291,7 +1291,24 @@ function formatRatio(value) {
   return value == null ? "N/A" : Number(value).toFixed(2);
 }
 
-function gateDecision(result) {
+function referenceThresholds(plan) {
+  const thresholds = plan.thresholds;
+  const numericFields = [
+    "overall_match_rate_min",
+    "reuse_overage_max",
+    "median_skeleton_fidelity_min",
+    "median_key_source_coverage_min",
+  ];
+  for (const field of numericFields) {
+    if (typeof thresholds?.[field] !== "number" || !Number.isFinite(thresholds[field]))
+      throw new TypeError(`reference acceptance plan requires numeric threshold: ${field}`);
+  }
+  if (typeof thresholds.require_warm_stability !== "boolean")
+    throw new TypeError("reference acceptance plan requires boolean threshold: require_warm_stability");
+  return thresholds;
+}
+
+function gateDecision(result, thresholds) {
   if (result.status !== "ready") {
     return {
       decision: "blocker",
@@ -1300,11 +1317,11 @@ function gateDecision(result) {
   }
 
   const pass
-    = (result.fidelity_metrics?.overall_match_rate ?? 0) >= 95
-      && (result.fidelity_metrics?.reuse_overage ?? 0) === 0
-      && (result.fidelity_metrics?.median_skeleton_fidelity ?? 0) >= 0.8
-      && (result.fidelity_metrics?.median_key_source_coverage ?? 0) >= 0.7
-      && (result.stability?.stable ?? true);
+    = (result.fidelity_metrics?.overall_match_rate ?? 0) >= thresholds.overall_match_rate_min
+      && (result.fidelity_metrics?.reuse_overage ?? 0) <= thresholds.reuse_overage_max
+      && (result.fidelity_metrics?.median_skeleton_fidelity ?? 0) >= thresholds.median_skeleton_fidelity_min
+      && (result.fidelity_metrics?.median_key_source_coverage ?? 0) >= thresholds.median_key_source_coverage_min
+      && (!thresholds.require_warm_stability || result.stability?.stable === true);
   return {
     decision: pass ? "pass" : "blocker",
     reason: [
@@ -1318,8 +1335,15 @@ function gateDecision(result) {
 }
 
 export function buildPrimaryGateSummary(results, options = {}) {
+  const acceptancePlan = createAcceptancePlan(options.acceptancePlan);
+  const thresholds = referenceThresholds(acceptancePlan);
+  if (results.length > 0) {
+    const actualProjects = [...new Set(results.map(result => result.project))].sort();
+    if (JSON.stringify(actualProjects) !== JSON.stringify([...acceptancePlan.primary_fixtures].sort()))
+      throw new TypeError("reference results must match acceptance plan primary_fixtures");
+  }
   const projectResults = results.map((result) => {
-    const gate = gateDecision(result);
+    const gate = gateDecision(result, thresholds);
     return {
       project: result.project,
       status: result.status,
@@ -1331,51 +1355,52 @@ export function buildPrimaryGateSummary(results, options = {}) {
   const blockingProjects = projectResults.filter((project) => project.gate_label !== "pass");
   const decision = blockingProjects.length > 0 ? "blocker" : "pass";
 
-  return buildAcceptanceHarnessSummary({
-    gateLevel: "primary_gate",
-    gateScope: "reference_fidelity",
-    command: "node scripts/collect-reference-project-reports.mjs storybook dagger",
-    decision,
+  const failures = blockingProjects.map(project => ({
+    failure_id: `reference-fidelity:${project.project}`,
+    owner_gate_id: "reference_fidelity_primary",
+    source_ref: project.project,
+    assertion_ref: project.gate_reason,
+    evidence_refs: [project.project],
+  }));
+  const failureRefs = failures.map(failure => failure.failure_id);
+  const v2Summary = aggregateGateResults({
+    plan: acceptancePlan,
+    gate_results: projectResults.length > 0
+      ? {
+          reference_fidelity_primary: {
+            decision,
+            evidence_refs: projectResults.map(project => project.project),
+            failure_refs: failureRefs,
+          },
+        }
+      : {},
+    failures,
+    diagnostics: [],
+    scenario_results: [],
+  });
+
+  return {
+    ...v2Summary,
+    gate_level: "primary_gate",
+    gate_scope: "reference_fidelity",
+    command: "node scripts/collect-reference-project-reports.mjs",
+    samples: [...acceptancePlan.primary_fixtures],
     totals: {
-      totalProjects: results.length,
-      passedProjects: results.length - blockingProjects.length,
-      failedProjects: blockingProjects.length,
+      total_projects: results.length,
+      passed_projects: results.length - blockingProjects.length,
+      failed_projects: blockingProjects.length,
+      skipped_projects: 0,
+      diagnostic_projects: 0,
+      total_assertions: 0,
+      failed_assertions: 0,
     },
-    projectResults,
-    formalGates: createFormalGateResults({
-      artifact_validity: {
-        decision,
-        blocking: decision === "blocker",
-        evidence_refs: ["wiki metadata/runtime snapshot", "reference project runtime state"],
-      },
-      restore_validity: {
-        decision: "not_covered",
-        blocking: false,
-        evidence_refs: ["must be checked by lifecycle baseline"],
-      },
-      query_route_contract: {
-        decision: "not_covered",
-        blocking: false,
-        evidence_refs: ["must be checked by lifecycle baseline"],
-      },
-      status_recommended_action_stability: {
-        decision: "not_covered",
-        blocking: false,
-        evidence_refs: ["must be checked by lifecycle baseline"],
-      },
-    }),
+    project_results: projectResults,
     notes: [
       "reference fidelity 报告是 primary gate 输入，不取代 formal artifact / restore / query route / status gates。",
     ],
-    relevantCapabilities: [
-      "query_route_completeness",
-      "answer_assembly_contract",
-      "knowledge_quality_gates",
-    ],
-    samples: options.samples ?? [],
-    requiredCompanionGates: [...FORMAL_QUALITY_GATES],
-    fidelityInputOnly: true,
-  });
+    fidelity_input_only: true,
+    required_companion_gates: [...acceptancePlan.required_gates],
+  };
 }
 
 function summarizeStabilitySeries(values) {
@@ -1485,9 +1510,10 @@ function renderGapLedger(result) {
  * 避免把 warm usage、cache 历史和 runtime 完整性混成一栏。
  *
  * @param result 单项目结构化结果。
+ * @param gate 已由 acceptance plan 阈值计算的项目 gate 结果。
  * @returns 返回项目 Markdown 报告。
  */
-function renderProjectReport(result) {
+function renderProjectReport(result, gate) {
   const lines = [
     `# ${result.project} Reference Fidelity Report`,
     "",
@@ -1537,11 +1563,10 @@ function renderProjectReport(result) {
     return `${lines.join("\n")}\n`;
   }
 
-  const gate = gateDecision(result);
   lines.push("## Fidelity Gate");
   lines.push("");
-  lines.push(`- decision：${gate.decision}`);
-  lines.push(`- reason：${gate.reason}`);
+  lines.push(`- decision：${gate.gate_label}`);
+  lines.push(`- reason：${gate.gate_reason}`);
   lines.push(`- overall_match_rate：${formatPercent(result.fidelity_metrics.overall_match_rate)}`);
   lines.push(`- reuse_overage：${result.fidelity_metrics.reuse_overage}`);
   lines.push(`- median_skeleton_fidelity：${formatRatio(result.fidelity_metrics.median_skeleton_fidelity)}`);
@@ -1678,9 +1703,14 @@ function renderSummary(results, meta = {}) {
   lines.push("");
   lines.push("## Gate");
   lines.push("");
+  const projectGates = new Map(
+    (meta.primaryGateSummary?.project_results ?? []).map(item => [item.project, item]),
+  );
   for (const result of results) {
-    const gate = gateDecision(result);
-    lines.push(`- ${result.project}：${gate.decision}，${gate.reason}`);
+    const gate = projectGates.get(result.project);
+    if (!gate)
+      throw new TypeError(`missing primary gate result for ${result.project}`);
+    lines.push(`- ${result.project}：${gate.gate_label}，${gate.gate_reason}`);
   }
 
   lines.push("");
@@ -1808,8 +1838,14 @@ function writeReports(results, reportDir, summaryPath, optimizationNotesPath, sn
     primary_gate_summary: meta.primaryGateSummary ?? null,
     results,
   }, null, 2)}\n`);
+  const projectGates = new Map(
+    (meta.primaryGateSummary?.project_results ?? []).map(item => [item.project, item]),
+  );
   for (const result of results) {
-    writeFileSync(path.join(reportDir, `${result.project}.md`), renderProjectReport(result));
+    const gate = projectGates.get(result.project);
+    if (!gate)
+      throw new TypeError(`missing primary gate result for ${result.project}`);
+    writeFileSync(path.join(reportDir, `${result.project}.md`), renderProjectReport(result, gate));
     writeFileSync(path.join(reportDir, `${result.project}-gap-ledger.md`), renderGapLedger(result));
   }
   writeFileSync(summaryPath, renderSummary(results, meta));
@@ -1827,6 +1863,7 @@ function writeReports(results, reportDir, summaryPath, optimizationNotesPath, sn
  */
 function parseCliArgs(argv) {
   const names = [];
+  let acceptancePlanPath;
   let jobs;
   let runMode = "cold";
   let change = DEFAULT_CHANGE;
@@ -1836,6 +1873,11 @@ function parseCliArgs(argv) {
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
+    if (arg === "--acceptance-plan") {
+      acceptancePlanPath = argv[index + 1];
+      index++;
+      continue;
+    }
     if (arg === "--jobs") {
       jobs = argv[index + 1];
       index++;
@@ -1876,6 +1918,7 @@ function parseCliArgs(argv) {
       : DEFAULT_INIT_TIMEOUT_MS;
 
   return {
+    acceptancePlanPath,
     change,
     initTimeoutMs,
     jobs,
@@ -1896,6 +1939,11 @@ async function main(argv) {
   const optimizationNotesPath = path.join(reportDir, "_optimization-notes.md");
   const snapshotPath = path.join(reportDir, "_snapshot.json");
   const projects = argv.names.length > 0 ? argv.names : discoverProjects();
+  if (!argv.acceptancePlanPath)
+    throw new TypeError("--acceptance-plan is required");
+  const acceptancePlan = createAcceptancePlan(JSON.parse(
+    readFileSync(path.resolve(argv.acceptancePlanPath), "utf8"),
+  ));
   const jobs = argv.jobs == null ? 1 : resolveProjectJobs(argv.jobs, projects.length);
   const stabilityReruns
     = argv.warmReruns
@@ -1928,7 +1976,7 @@ async function main(argv) {
   }
 
   const generatedAt = new Date().toISOString();
-  const primaryGateSummary = buildPrimaryGateSummary(results, { samples: projects });
+  const primaryGateSummary = buildPrimaryGateSummary(results, { acceptancePlan });
   writeReports(
     results,
     reportDir,
@@ -1989,10 +2037,12 @@ async function main(argv) {
       stability: result.stability ?? null,
     })),
   }, null, 2)}\n`);
+  return primaryGateSummary;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main(parseCliArgs(process.argv.slice(2)));
+  const summary = await main(parseCliArgs(process.argv.slice(2)));
+  process.exitCode = summary.exit_code;
 }
 
 export {

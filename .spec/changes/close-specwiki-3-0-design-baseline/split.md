@@ -52,7 +52,7 @@ multi-change
 - 目标：把 9 个核心场景转成可验收设计合同，并统一 formal quality gate、primary gate、baseline guard 和 diagnostic 的决策语义。
 - 验收边界：9/9 场景均绑定 actor、trigger、command/API、formal artifacts、state/readiness、failure/degraded、recovery 和 verification fixture；workflow-verification 中互相冲突的样本门禁被消解；同一失败只映射到一个明确 gate decision。
 - 依赖：close-specwiki-3-0-design-baseline-product-contract、close-specwiki-3-0-design-baseline-runtime-query-contract。
-- 归档状态：[ ] pending
+- 归档状态：[x] archived
 - 后续阶段：使用 `unispec-propose` 创建该 child 的 `proposal.md`
 
 ### 4. close-specwiki-3-0-design-baseline-reliability-lifecycle

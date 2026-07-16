@@ -36,8 +36,9 @@ import {
 } from "./testing/helpers.mjs";
 import { MAX_INIT_RESUME_ATTEMPTS, runInitWithResume } from "./testing/init-resume.mjs";
 import {
-  buildAcceptanceHarnessSummary,
-  createFormalGateResults,
+  aggregateGateResults,
+  CAPABILITY_TEST_MATRIX,
+  REQUIRED_TEST_SURFACES,
 } from "./testing/quality-gates.mjs";
 import { inspectWikiRuntime } from "./testing/wiki-runtime-inspection.mjs";
 
@@ -522,11 +523,6 @@ export function buildRunTestProjectsSummary(results, options = {}) {
     };
   });
 
-  const decision = failed > 0
-    ? "blocker"
-    : diagnosticProjects > 0
-      ? "diagnostic"
-      : "pass";
   const notes = [
     "`run-test-projects.mjs` 只作为 baseline guard，不等同于 19 项目全量质量达标承诺。",
   ];
@@ -534,37 +530,98 @@ export function buildRunTestProjectsSummary(results, options = {}) {
     notes.push("存在 diagnostic runtime 观察结果；它们保留在 baseline guard 内，但不单独冒充 primary gate。");
   }
 
-  return buildAcceptanceHarnessSummary({
-    gateLevel: "baseline_guard",
-    gateScope: "batch_init",
-    command: "node scripts/run-test-projects.mjs",
-    decision,
-    totals: {
-      totalProjects: results.length,
-      passedProjects: passed,
-      failedProjects: failed,
-      skippedProjects: skipped,
-      diagnosticProjects,
-    },
-    projectResults,
-    formalGates: createFormalGateResults({
-      artifact_validity: {
-        decision,
-        blocking: failed > 0,
-        evidence_refs: [
-          "node scripts/run-test-projects.mjs",
-          "batch init project results",
-        ],
-      },
-    }),
-    notes,
-    relevantCapabilities: [
-      "declared_lifecycle_completeness",
-      "projection_readiness_recovery",
-      "knowledge_quality_gates",
-    ],
-    samples: options.samples ?? [],
+  const failures = projectResults
+    .filter(project => !project.ok && !project.skipped)
+    .map(project => ({
+      failure_id: `run-test-projects:${project.project}:init`,
+      owner_gate_id: "artifact_validity",
+      source_ref: project.project,
+      assertion_ref: project.error ?? "batch init failed",
+      evidence_refs: [project.project],
+    }));
+  const diagnostics = projectResults.flatMap(project => project.diagnostic_states.map(state => ({
+    diagnostic_id: `run-test-projects:${project.project}:${state}`,
+    state,
+    reason: "project runtime did not reach complete acceptance coverage",
+    recommended_action: "resume",
+    evidence_refs: [project.project],
+  })));
+  const failureRefs = failures.map(failure => failure.failure_id);
+  const successfulCoverage = failures.length === 0
+    && diagnostics.length === 0
+    && projectResults.some(project => !project.skipped);
+  const gateResults = successfulCoverage
+    ? {
+        artifact_validity: {
+          decision: "pass",
+          evidence_refs: ["batch init project results"],
+          failure_refs: [],
+        },
+        run_test_projects_baseline: {
+          decision: "pass",
+          evidence_refs: ["node scripts/run-test-projects.mjs"],
+          failure_refs: [],
+        },
+      }
+    : failures.length > 0
+      ? {
+          artifact_validity: {
+            decision: "blocker",
+            evidence_refs: failures.flatMap(failure => failure.evidence_refs),
+            failure_refs: failureRefs,
+          },
+          run_test_projects_baseline: {
+            decision: "blocker",
+            evidence_refs: failures.flatMap(failure => failure.evidence_refs),
+            failure_refs: failureRefs,
+          },
+        }
+      : {};
+  const acceptancePlan = options.acceptancePlan ?? {
+    plan_id: "run-test-projects:batch-init",
+    primary_fixtures: options.samples?.length > 0 ? options.samples : ["project-set"],
+    required_primary_gates: [],
+    required_gates: ["artifact_validity"],
+    required_guards: ["run_test_projects_baseline"],
+    report_only: false,
+  };
+  const v2Summary = aggregateGateResults({
+    plan: acceptancePlan,
+    gate_results: gateResults,
+    failures,
+    diagnostics,
+    scenario_results: [],
   });
+  const relevantCapabilities = [
+    "declared_lifecycle_completeness",
+    "projection_readiness_recovery",
+    "knowledge_quality_gates",
+  ];
+
+  return {
+    ...v2Summary,
+    gate_level: "baseline_guard",
+    gate_scope: "batch_init",
+    command: "node scripts/run-test-projects.mjs",
+    samples: options.samples ?? [],
+    totals: {
+      total_projects: results.length,
+      passed_projects: passed,
+      failed_projects: failed,
+      skipped_projects: skipped,
+      diagnostic_projects: diagnosticProjects,
+      total_assertions: 0,
+      failed_assertions: 0,
+    },
+    required_test_surfaces: [...REQUIRED_TEST_SURFACES],
+    relevant_capabilities: relevantCapabilities,
+    capability_test_matrix: relevantCapabilities.map(capability => ({
+      capability,
+      ...(CAPABILITY_TEST_MATRIX[capability] ?? {}),
+    })),
+    project_results: projectResults,
+    notes,
+  };
 }
 
 export async function runTestProjectsWithSummary(names, options = {}) {
@@ -613,7 +670,7 @@ export async function runTestProjectsWithSummary(names, options = {}) {
     ok: failed === 0,
     results,
     summary: buildRunTestProjectsSummary(results, {
-      samples: projects.filter((project) => ["storybook", "dagger"].includes(project)),
+      samples: projects,
     }),
   };
 }
@@ -690,6 +747,5 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (args.jsonSummary) {
     process.stdout.write(`${JSON.stringify(result.summary, null, 2)}\n`);
   }
-  if (!result.ok)
-process.exit(1);
+  process.exitCode = result.summary.exit_code;
 }

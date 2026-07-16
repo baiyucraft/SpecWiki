@@ -949,7 +949,7 @@ fn query_marks_governance_conflict_answer_as_degraded() {
 
     assert_eq!(payload["answer"]["answer_mode"], "degraded");
     assert_eq!(payload["answer"]["answer_trust"], "constrained");
-    assert_eq!(payload["answer"]["recommended_action"], "rebuild");
+    assert_eq!(payload["answer"]["recommended_action"], "review_governance");
     assert!(query
         .answer
         .provenance

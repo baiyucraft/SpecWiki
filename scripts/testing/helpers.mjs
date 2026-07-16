@@ -741,21 +741,34 @@ export function countFilesWithMarker(dir) {
 // -------------------------------------------------------------------------
 
 export class TestRunner {
-  constructor() {
+  constructor(options = {}) {
     this.total = 0;
     this.passed = 0;
     this.failed = 0;
+    this.failures = [];
+    this.failureFactory = options.failureFactory ?? null;
+    this.assertions = [];
+    this.assertionFactory = options.assertionFactory ?? null;
   }
 
   pass(label) {
     this.total++;
     this.passed++;
+    if (this.assertionFactory) {
+      this.assertions.push(this.assertionFactory(label, "pass"));
+    }
     console.log(`    \x1B[32mPASS\x1B[0m ${label}`);
   }
 
   fail(label, detail) {
     this.total++;
     this.failed++;
+    if (this.failureFactory) {
+      this.failures.push(this.failureFactory(label, detail));
+    }
+    if (this.assertionFactory) {
+      this.assertions.push(this.assertionFactory(label, "fail", detail));
+    }
     console.log(`    \x1B[31mFAIL\x1B[0m ${label}`);
     if (detail) {
       console.log(`         ${detail}`);

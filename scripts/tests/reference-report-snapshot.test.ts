@@ -1,5 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,8 +15,30 @@ const changesDir = path.join(rootDir, ".spec", "changes");
 function runReport(changeName: string, extraArgs: string[] = []) {
   const changeDir = path.join(changesDir, changeName);
   rmSync(changeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  const planDir = mkdtempSync(path.join(os.tmpdir(), "reference-acceptance-plan-"));
+  const planPath = path.join(planDir, "plan.json");
+  writeFileSync(planPath, JSON.stringify({
+    plan_id: `reference-snapshot:${changeName}`,
+    primary_fixtures: ["storybook", "dagger"],
+    required_primary_gates: ["reference_fidelity_primary"],
+    required_gates: [
+      "artifact_validity",
+      "restore_validity",
+      "query_route_contract",
+      "status_recommended_action_stability",
+    ],
+    required_guards: [],
+    thresholds: {
+      overall_match_rate_min: 95,
+      reuse_overage_max: 0,
+      median_skeleton_fidelity_min: 0.8,
+      median_key_source_coverage_min: 0.7,
+      require_warm_stability: true,
+    },
+    report_only: false,
+  }));
 
-  const output = execFileSync(
+  const result = spawnSync(
     "node",
     [
       scriptPath,
@@ -24,6 +47,8 @@ function runReport(changeName: string, extraArgs: string[] = []) {
       "dagger",
       "--change",
       changeName,
+      "--acceptance-plan",
+      planPath,
       ...extraArgs,
     ],
     {
@@ -32,10 +57,13 @@ function runReport(changeName: string, extraArgs: string[] = []) {
       timeout: 120_000,
     },
   );
+  rmSync(planDir, { recursive: true, force: true });
 
-  const parsed = JSON.parse(output.slice(output.indexOf("{")));
+  expect(result.error).toBeUndefined();
+  const parsed = JSON.parse(result.stdout.slice(result.stdout.indexOf("{")));
   return {
     parsed,
+    status: result.status,
     changeDir,
     reportDir: parsed.reportDir,
     summaryPath: parsed.summaryPath,
@@ -66,7 +94,8 @@ test("reference report snapshot、summary 与项目结果来自同一批 results
     expect(snapshot.primary_gate_summary.gate_scope).toBe("reference_fidelity");
     expect(snapshot.primary_gate_summary.fidelity_input_only).toBe(true);
     expect(snapshot.primary_gate_summary.required_companion_gates).toContain("artifact_validity");
-    expect(snapshot.primary_gate_summary.formal_gates.artifact_validity.decision).toBe("blocker");
+    expect(snapshot.primary_gate_summary.gate_results.reference_fidelity_primary.decision).toBe("blocker");
+    expect(snapshot.primary_gate_summary.exit_code).toBe(1);
     expect(storybook?.status).toBe("runtime_incomplete");
     expect(dagger?.status).toBe("runtime_incomplete");
     expect(storybook?.runtime_metrics?.runtime_state).toBe("missing");
@@ -88,6 +117,7 @@ test("reference report snapshot、summary 与项目结果来自同一批 results
     expect(storybookLedger).toContain("- status：runtime_incomplete");
     expect(run.parsed.primaryGateSummary.decision).toBe("blocker");
     expect(run.parsed.primaryGateSummary.fidelity_input_only).toBe(true);
+    expect(run.status).toBe(1);
   } finally {
     rmSync(run.changeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
