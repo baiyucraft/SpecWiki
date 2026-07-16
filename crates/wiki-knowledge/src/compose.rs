@@ -273,6 +273,7 @@ fn compose_seed_backed_page(
     compose_page_from_contract(&contract)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_compose_page_contract_from_parts(
     unit: &KnowledgeUnit,
     summary: String,
@@ -931,10 +932,11 @@ fn collect_section_child_digests<'a>(
         .map(|grounding| grounding.child_digest_refs.clone())
         .unwrap_or_default();
     if references.is_empty() {
-        return planned
-            .child_digest_slot
-            .then(|| contract.child_digest_rollup.iter().collect())
-            .unwrap_or_default();
+        return if planned.child_digest_slot {
+            contract.child_digest_rollup.iter().collect()
+        } else {
+            Default::default()
+        };
     }
     contract
         .child_digest_rollup
@@ -959,10 +961,11 @@ fn collect_section_child_section_digests<'a>(
         .map(|grounding| grounding.child_digest_refs.clone())
         .unwrap_or_default();
     if references.is_empty() {
-        return planned
-            .child_digest_slot
-            .then(|| contract.child_section_citation_digest.iter().collect())
-            .unwrap_or_default();
+        return if planned.child_digest_slot {
+            contract.child_section_citation_digest.iter().collect()
+        } else {
+            Default::default()
+        };
     }
     contract
         .child_section_citation_digest
@@ -1504,6 +1507,7 @@ mod tests {
             diagram_suggestions: Vec::new(),
             key_sources: vec!["src/parent.ts".to_string()],
             provider_stop_reason: None,
+            provider_failure_kind: None,
             provider_session_stats: None,
             input_hash: String::new(),
         };
@@ -1964,6 +1968,7 @@ mod tests {
             diagram_suggestions: Vec::new(),
             key_sources: vec!["src/runtime/scheduler.ts".to_string()],
             provider_stop_reason: None,
+            provider_failure_kind: None,
             provider_session_stats: None,
             input_hash: String::new(),
         };
@@ -2045,6 +2050,7 @@ mod tests {
             diagram_suggestions: Vec::new(),
             key_sources: vec!["src/runtime/scheduler.ts".to_string()],
             provider_stop_reason: None,
+            provider_failure_kind: None,
             provider_session_stats: None,
             input_hash: String::new(),
         };
@@ -2195,6 +2201,7 @@ mod tests {
             }],
             key_sources: vec!["src/runtime.rs".to_string()],
             provider_stop_reason: None,
+            provider_failure_kind: None,
             provider_session_stats: None,
             input_hash: String::new(),
         };
@@ -2237,6 +2244,7 @@ mod tests {
             diagram_suggestions: Vec::new(),
             key_sources: vec!["src/index.ts".to_string()],
             provider_stop_reason: None,
+            provider_failure_kind: None,
             provider_session_stats: None,
             input_hash: String::new(),
         };
@@ -2299,6 +2307,7 @@ mod tests {
             diagram_suggestions: Vec::new(),
             key_sources: vec!["docs/topic.md".to_string()],
             provider_stop_reason: None,
+            provider_failure_kind: None,
             provider_session_stats: None,
             input_hash: String::new(),
         };
@@ -2389,6 +2398,7 @@ mod tests {
             diagram_suggestions: Vec::new(),
             key_sources: vec!["docs/topic.md".to_string()],
             provider_stop_reason: None,
+            provider_failure_kind: None,
             provider_session_stats: None,
             input_hash: String::new(),
         };
@@ -2536,6 +2546,7 @@ mod tests {
                 diagram_suggestions: Vec::new(),
                 key_sources: vec!["src/leaf.ts".to_string()],
                 provider_stop_reason: None,
+                provider_failure_kind: None,
                 provider_session_stats: None,
                 input_hash: String::new(),
             },
@@ -2564,6 +2575,7 @@ mod tests {
                 diagram_suggestions: Vec::new(),
                 key_sources: vec!["src/domain.ts".to_string()],
                 provider_stop_reason: None,
+                provider_failure_kind: None,
                 provider_session_stats: None,
                 input_hash: String::new(),
             },
@@ -2592,6 +2604,7 @@ mod tests {
                 diagram_suggestions: Vec::new(),
                 key_sources: vec!["src/overview.ts".to_string()],
                 provider_stop_reason: None,
+                provider_failure_kind: None,
                 provider_session_stats: None,
                 input_hash: String::new(),
             },

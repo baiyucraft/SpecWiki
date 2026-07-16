@@ -32,6 +32,9 @@ const DECLARED_RESOLVED_BLOCK: &str = concat!(
     "\n<!-- wiki:declared id=runtime-policy-a kind=policy scope=repo status=active source=manual -->\n",
     "formal artifact must be written before query.\n",
     "<!-- wiki:declared:end -->\n",
+    "\n<!-- wiki:declared id=runtime-policy-b kind=policy scope=repo status=deprecated deprecated=true source=manual -->\n",
+    "formal artifact must be independently approved before query.\n",
+    "<!-- wiki:declared:end -->\n",
 );
 
 #[test]
@@ -47,7 +50,10 @@ fn canonical_core_scenarios_stay_within_public_contract() {
 
     let initial_status = dispatch(repo_root, "status", None);
     assert_eq!(initial_status["state"], "fresh");
-    assert_eq!(initial_status["recommended_action"], "none");
+    assert_eq!(
+        initial_status["recommended_action"], "none",
+        "status = {initial_status:#}"
+    );
 
     let symbol_query = dispatch(repo_root, "query", Some("handleCheckout"));
     assert!(symbol_query.get("route_groups").is_some());
@@ -201,7 +207,12 @@ fn declared_knowledge_and_structured_conflict_are_traceable() {
     );
     dispatch(conflict_fixture.path(), "sync", None);
     let resolved = load_knowledge_artifacts(conflict_fixture.path()).unwrap();
-    assert!(resolved.conflict_records.is_empty());
+    assert!(
+        resolved.conflict_records.is_empty(),
+        "records={:#?} conflicts={:#?}",
+        resolved.declared_records,
+        resolved.conflict_records
+    );
 }
 
 #[test]

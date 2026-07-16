@@ -3228,6 +3228,7 @@ struct LeafScopeRefinementPolicy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(clippy::enum_variant_names)]
 enum GenericContractClass {
     DeclarationHeavy,
     ConfigManifestHeavy,
@@ -3913,6 +3914,7 @@ fn plan_repo_signal_capability_units(
     units
 }
 
+#[allow(clippy::too_many_arguments)]
 fn plan_domain_signal_family_units(
     domain: &KnowledgeDomain,
     report: &ScanReport,
@@ -4011,6 +4013,7 @@ fn plan_domain_signal_family_units(
     units
 }
 
+#[allow(clippy::too_many_arguments)]
 fn plan_repo_signal_family_units_from_candidates(
     domain: &KnowledgeDomain,
     candidate_files: &[&wiki_index::scanner::ScannedFile],
@@ -4037,7 +4040,7 @@ fn plan_repo_signal_family_units_from_candidates(
     );
 
     for child in children {
-        let matched_signal = matching_signal(&candidate_files, child.keywords);
+        let matched_signal = matching_signal(candidate_files, child.keywords);
         if matched_signal.source_count() < child.min_hits {
             continue;
         }
@@ -4111,7 +4114,7 @@ fn plan_repo_signal_leaf_units_from_candidates(
     let mut units = Vec::new();
 
     for leaf in leaves {
-        let matched_signal = matching_signal(&candidate_files, leaf.keywords);
+        let matched_signal = matching_signal(candidate_files, leaf.keywords);
         if matched_signal.source_count() < leaf.min_hits {
             continue;
         }
@@ -4607,14 +4610,19 @@ fn plan_config_doc_units(
         .iter()
         .filter(|surface| config_surface_keeps_standalone_unit(&surface.file_path))
         .map(|surface| normalize_path(&surface.file_path))
-        .chain(domain.source_files.iter().filter_map(|path| {
-            (is_markdown_path(path)
-                && matches!(
-                    classify_docs_unit_profile(path).1,
-                    DecompositionProfile::ConfigSurface
-                ))
-            .then(|| normalize_path(path))
-        }))
+        .chain(
+            domain
+                .source_files
+                .iter()
+                .filter(|&path| {
+                    is_markdown_path(path)
+                        && matches!(
+                            classify_docs_unit_profile(path).1,
+                            DecompositionProfile::ConfigSurface
+                        )
+                })
+                .map(|path| normalize_path(path)),
+        )
         .collect::<BTreeSet<_>>();
     let collapsed_candidate_paths = domain
         .source_files
@@ -4739,7 +4747,7 @@ fn plan_config_doc_units(
 
     if units.is_empty() || collapse_raw_config_surfaces {
         units.retain(|unit| {
-            unit.scope.docs_anchors.first().is_some()
+            !unit.scope.docs_anchors.is_empty()
                 || (unit.scope.config_surfaces.is_empty() && !unit.scope.source_ids.is_empty())
                 || unit
                     .scope
@@ -5254,7 +5262,7 @@ fn prettify_segment(segment: &str) -> String {
         .join(" ")
 }
 
-fn establish_parent_child_links(units: &mut Vec<KnowledgeUnit>) {
+fn establish_parent_child_links(units: &mut [KnowledgeUnit]) {
     let id_to_index: BTreeMap<String, usize> = units
         .iter()
         .enumerate()
@@ -5576,9 +5584,7 @@ fn docs_path_has_hidden_prefix(path: &str) -> bool {
 }
 
 fn docs_path_is_localized(path: &str) -> bool {
-    normalize_path(path)
-        .chars()
-        .any(|character| !character.is_ascii())
+    !normalize_path(path).is_ascii()
 }
 
 fn docs_output_relative_path(domain_label: &str, source_path: &str, title: &str) -> String {
@@ -5892,7 +5898,7 @@ fn collect_domain_index_by_domain(units: &[KnowledgeUnit]) -> BTreeMap<String, S
 }
 
 fn repair_orphan_parent_links(
-    units: &mut Vec<KnowledgeUnit>,
+    units: &mut [KnowledgeUnit],
     original_parent_by_id: &BTreeMap<String, Option<String>>,
     domain_index_by_domain: &BTreeMap<String, String>,
 ) {
@@ -6031,7 +6037,7 @@ pub fn build_knowledge_tree(
 
 // ─── Helpers ────────────────────────────────────────────────
 
-fn collect_top_modules<'a>(module_tree: &'a ModuleTree) -> Vec<&'a ModuleNode> {
+fn collect_top_modules(module_tree: &ModuleTree) -> Vec<&ModuleNode> {
     let root_ids: BTreeSet<&str> = module_tree
         .root_modules
         .iter()

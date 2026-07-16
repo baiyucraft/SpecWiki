@@ -6,6 +6,7 @@ pub mod cache_store;
 pub mod governance_fs;
 pub mod knowledge_artifacts;
 pub mod metadata_store;
+pub mod runtime_commit;
 pub mod sqlite;
 pub mod sqlite_store;
 pub mod state_store;

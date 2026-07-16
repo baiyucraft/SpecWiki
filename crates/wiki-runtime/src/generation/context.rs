@@ -221,8 +221,7 @@ fn discover_module_capability_topics(
     }
 
     let Some((purpose, files)) = by_purpose
-        .into_iter()
-        .map(|(_, entry)| entry)
+        .into_values()
         .filter(|(purpose, files)| purpose.signal_weight() >= 45 && files.len() >= 2)
         .max_by(|left, right| {
             left.1
@@ -992,14 +991,7 @@ pub fn build_page_context_with_graph_inputs(
                 } else {
                     "叶子来源"
                 },
-                section_key_for_title(
-                    page.page_type.as_str(),
-                    if page.page_type == "family-index" {
-                        "关键来源"
-                    } else {
-                        "关键来源"
-                    },
-                ),
+                section_key_for_title(page.page_type.as_str(), "关键来源"),
                 &format!("family-evidence:{family_kind}:{family_key}"),
                 "关键来源",
                 "这些 docs / API / config / type 入口共同支撑当前知识域页面。",
@@ -1123,7 +1115,7 @@ fn best_span_for_path(
         .unwrap_or(0);
     SpanHint {
         start_line: 1,
-        end_line: line_count.min(24).max(1),
+        end_line: line_count.clamp(1, 24),
         coarse_span: true,
     }
 }
@@ -1188,7 +1180,7 @@ fn build_evidence_group(
         deduped.push(PageEvidenceItem {
             evidence_id: stable_id(
                 "evidence",
-                &format!("{page_id}:{section_title}:{group_key}:{normalized}"),
+                format!("{page_id}:{section_title}:{group_key}:{normalized}"),
             ),
             label: normalized.clone(),
             path: normalized,
@@ -1205,7 +1197,7 @@ fn build_evidence_group(
     (!deduped.is_empty()).then(|| PageEvidenceGroup {
         group_id: stable_id(
             "evidence-group",
-            &format!("{page_id}:{section_title}:{group_key}"),
+            format!("{page_id}:{section_title}:{group_key}"),
         ),
         section_title: section_title.to_string(),
         title: title.to_string(),
@@ -1255,7 +1247,7 @@ fn build_structure_diagram_for_modules(
     }
 
     (!nodes.is_empty() && !edges.is_empty()).then(|| PageDiagramInput {
-        diagram_id: stable_id("diagram", &format!("{page_id}:{section_title}:structure")),
+        diagram_id: stable_id("diagram", format!("{page_id}:{section_title}:structure")),
         section_title: section_title.to_string(),
         diagram_type: "structure".to_string(),
         title: title.to_string(),
@@ -1307,7 +1299,7 @@ fn build_dependency_diagram_for_modules(
     }
 
     (!nodes.is_empty() && !edges.is_empty()).then(|| PageDiagramInput {
-        diagram_id: stable_id("diagram", &format!("{page_id}:{section_title}:dependency")),
+        diagram_id: stable_id("diagram", format!("{page_id}:{section_title}:dependency")),
         section_title: section_title.to_string(),
         diagram_type: "dependency".to_string(),
         title: title.to_string(),
@@ -1334,7 +1326,7 @@ fn build_process_diagram(
         .map(|(index, step)| PageDiagramNode {
             node_id: stable_id(
                 "diagram-node",
-                &format!("{page_id}:{section_title}:{index}:{step}"),
+                format!("{page_id}:{section_title}:{index}:{step}"),
             ),
             label: step.clone(),
         })
@@ -1349,7 +1341,7 @@ fn build_process_diagram(
         .collect::<Vec<_>>();
 
     Some(PageDiagramInput {
-        diagram_id: stable_id("diagram", &format!("{page_id}:{section_title}:flow")),
+        diagram_id: stable_id("diagram", format!("{page_id}:{section_title}:flow")),
         section_title: section_title.to_string(),
         diagram_type: "flow".to_string(),
         title: title.to_string(),
@@ -1448,7 +1440,7 @@ fn slug_key(value: &str) -> String {
 ///
 /// # 返回
 /// - 返回所有顶层业务模块的引用列表。
-fn top_modules<'a>(module_tree: &'a ModuleTree) -> Vec<&'a ModuleNode> {
+fn top_modules(module_tree: &ModuleTree) -> Vec<&ModuleNode> {
     module_tree
         .modules
         .iter()
@@ -1756,7 +1748,7 @@ fn build_research_surface(report: &ScanReport, surface_type: &str, path: &str) -
     };
 
     ResearchSurface {
-        surface_id: stable_id("surface", &format!("{surface_type}:{path}")),
+        surface_id: stable_id("surface", format!("{surface_type}:{path}")),
         surface_type: surface_type.to_string(),
         source_id: report
             .files

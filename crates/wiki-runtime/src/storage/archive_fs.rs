@@ -30,13 +30,10 @@ impl std::fmt::Display for ArchiveFailure {
 impl std::error::Error for ArchiveFailure {}
 
 pub fn archive_failure(kind: ArchiveErrorKind, message: impl Into<String>) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::Other,
-        ArchiveFailure {
-            kind,
-            message: message.into(),
-        },
-    )
+    io::Error::other(ArchiveFailure {
+        kind,
+        message: message.into(),
+    })
 }
 
 pub fn archive_failure_kind(error: &io::Error) -> Option<ArchiveErrorKind> {
@@ -186,6 +183,7 @@ impl ArchiveFs {
         fs::create_dir_all(&dir)?;
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(dir.join(format!("{key}.lock")))?;

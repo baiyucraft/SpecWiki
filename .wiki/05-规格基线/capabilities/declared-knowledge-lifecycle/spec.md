@@ -49,6 +49,24 @@
 - **THEN** restore 后该 relation MUST 保持稳定
 - **THEN** 若关系形成环、跨 kind、跨 scope 或指向缺失 target，系统 MUST 拒绝 snapshot
 
+### Requirement: semantic lifecycle、authoring state 与 authority 必须分离
+
+系统 MUST 分别表达 record 的 semantic status、`bound/missing/detached` authoring state，以及 group 的 unique/none/conflict authority decision。Authoring block 消失 MUST 保留 formal record；authority record missing MUST 触发治理复核，非 authority record 只有先进入非 active semantic status 后才可 detached。系统 MUST NOT 把 block 消失解释为物理 prune。
+
+#### Scenario: authority authoring block 消失时保留审计记录
+- **WHEN** 当前 authoritative record 的 managed block 从 authoring surface 消失
+- **THEN** record MUST 保持在 formal artifact 中并进入 `missing`
+- **THEN** recommended action MUST 指向 governance review，而不是静默删除
+
+#### Scenario: deprecated record 才允许 detached
+- **WHEN** 非 authority record 已显式 deprecated 且 authoring block 消失
+- **THEN** 系统 MAY 将 authoring state 置为 `detached`
+- **THEN** semantic record 与 lifecycle history MUST 继续保留
+
+### Requirement: declared governance history 必须 append-only
+
+系统 MUST 为 conflict opened/resolved/reopened、authoring missing/restored/detached 和 authority changed 生成稳定 append-only events。Current open conflict view MUST 与历史正交；no-op sync MUST NOT 重复事件，已解决历史 MUST NOT 降低无关 route trust。
+
 ### Requirement: `sync` 回写 declared 时必须受受管编辑面约束
 
 系统 MUST 将 `sync` 对 declared knowledge 的回写限制在受管编辑面内。只有显式标记为可回写 declared 的 managed section 或等价结构化编辑面，才允许被解析为 declared record 更新。系统 MUST 区分 `declared_writeback`、`metadata_only` 与 `illegal_drift` 三类结果，并保留对应 reason。

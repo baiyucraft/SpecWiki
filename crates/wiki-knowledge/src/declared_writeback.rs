@@ -2,8 +2,8 @@
 //! runtime 只能提交结构化 candidate，本模块负责归一化 declared record 并产出 patch。
 
 use wiki_model::domain::knowledge_artifact::{
-    DeclaredKnowledgeRecord, DeclaredKnowledgeRecordKind, DeclaredKnowledgeRecordStatus,
-    DeclaredKnowledgeRelation, DeclaredKnowledgeScope,
+    DeclaredAuthoringState, DeclaredKnowledgeRecord, DeclaredKnowledgeRecordKind,
+    DeclaredKnowledgeRecordStatus, DeclaredKnowledgeRelation, DeclaredKnowledgeScope,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -36,6 +36,7 @@ pub struct DeclaredRecordPatch {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum DeclaredWritebackDecision {
     Accepted(DeclaredRecordPatch),
     Rejected {
@@ -72,6 +73,7 @@ pub fn validate_declared_writeback(
         record_kind: candidate.record_kind,
         scope: candidate.scope.clone(),
         status: candidate.status,
+        authoring_state: DeclaredAuthoringState::Bound,
         relations: candidate.relations.clone(),
         source_ref: candidate.source_ref.trim().to_string(),
         updated_at: String::new(),

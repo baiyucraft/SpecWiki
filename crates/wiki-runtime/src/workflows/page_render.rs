@@ -14,8 +14,8 @@ use serde_json::json;
 
 use crate::debug_trace;
 use crate::domain::checkpoint::{
-    compute_facts_input_hash, PipelineCheckpoint, PipelineRuntimeSummary, PipelineStage,
-    UnitRuntimeGate,
+    compute_facts_input_hash, compute_knowledge_tree_hash, PipelineCheckpoint,
+    PipelineResumeIdentity, PipelineRuntimeSummary, PipelineStage, UnitRuntimeGate,
 };
 use crate::domain::knowledge::{KnowledgeTree, KnowledgeUnit, UnitType};
 use crate::domain::module_tree::ModuleTree;
@@ -40,8 +40,9 @@ use wiki_knowledge::planning::{
     build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
 };
 use wiki_knowledge::research::{ResearchDataSource, ResearchProvider};
-use wiki_knowledge::{plan_pages_from_knowledge_tree, PagePlan};
+use wiki_knowledge::{plan_projection_intents, project_page_plans, PagePlan};
 use wiki_knowledge::{KnowledgeArtifactStore, KnowledgeSnapshotStore, ModuleContext, RepoContext};
+use wiki_model::domain::projection::PageProjectionDecision;
 use wiki_model::domain::update_scope::AffectedKnowledgeScope;
 
 /// 新 compose pipeline 的统一输出。
@@ -49,6 +50,7 @@ pub struct ComposePipelineOutput {
     pub page_drafts: Vec<PageDraft>,
     pub digests: BTreeMap<String, PageDigest>,
     pub knowledge_tree: KnowledgeTree,
+    pub projection_decisions: Vec<PageProjectionDecision>,
     pub planned_pages: Vec<PagePlan>,
     pub unit_researches: BTreeMap<String, UnitResearch>,
 }
@@ -103,7 +105,6 @@ pub fn run_compose_pipeline_with_action(
     let conn = sqlite_store::open_db(repo_root)?;
     let knowledge_store = SqliteKnowledgeStore::new(&conn);
     let facts_input_hash = compute_facts_input_hash(scan_report, module_tree);
-    let resume_enabled = prepare_resume_state(&conn, workflow_action, &facts_input_hash)?;
 
     let planner_config = steering.knowledge_planner_config();
     let domains = discover_knowledge_domains(
@@ -122,17 +123,20 @@ pub fn run_compose_pipeline_with_action(
         &planner_config,
     );
     let knowledge_tree = build_knowledge_tree(domains.clone(), units.clone());
+    let resume_identity = build_resume_identity(
+        workflow_action,
+        &facts_input_hash,
+        &knowledge_tree,
+        steering,
+    )?;
+    let resume_enabled = prepare_resume_state(&conn, &resume_identity)?;
     if !resume_enabled {
         knowledge_store.write_knowledge_domains(&domains)?;
         knowledge_store.write_knowledge_units(&units)?;
     }
     let mut unit_runtime_gates = initialize_runtime_gates(&conn, &knowledge_tree, resume_enabled)?;
-    let mut runtime_summary = initialize_runtime_summary(
-        &conn,
-        workflow_action,
-        &facts_input_hash,
-        &unit_runtime_gates,
-    )?;
+    let mut runtime_summary =
+        initialize_runtime_summary(&conn, &resume_identity, &unit_runtime_gates)?;
     runtime_summary.workflow_action = workflow_action.to_string();
     runtime_summary.facts_input_hash = facts_input_hash.clone();
     runtime_summary.runtime_state = "researching".to_string();
@@ -169,13 +173,12 @@ pub fn run_compose_pipeline_with_action(
         None,
         || research_provider.research_system(&research_ds),
     )
-    .map_err(|error| {
+    .inspect_err(|error| {
         runtime_summary.runtime_state = "interrupted".to_string();
         runtime_summary.last_interrupted_stage =
             Some(PipelineStage::ResearchSystem.as_str().to_string());
         runtime_summary.summary_reason = Some(error.to_string());
         let _ = save_runtime_summary(&conn, &runtime_summary);
-        error
     })?;
 
     let mut domain_researches = BTreeMap::new();
@@ -192,13 +195,12 @@ pub fn run_compose_pipeline_with_action(
             Some(domain.id.clone()),
             || research_provider.research_domain(domain, &research_ds),
         )
-        .map_err(|error| {
+        .inspect_err(|error| {
             runtime_summary.runtime_state = "interrupted".to_string();
             runtime_summary.last_interrupted_stage =
                 Some(PipelineStage::ResearchDomain.as_str().to_string());
             runtime_summary.summary_reason = Some(error.to_string());
             let _ = save_runtime_summary(&conn, &runtime_summary);
-            error
         })?;
         domain_researches.insert(domain.id.clone(), research);
     }
@@ -231,13 +233,12 @@ pub fn run_compose_pipeline_with_action(
             Some(unit.id.clone()),
             || research_provider.research_unit(unit, &research_ds, &child_digests),
         )
-        .map_err(|error| {
+        .inspect_err(|error| {
             runtime_summary.runtime_state = "interrupted".to_string();
             runtime_summary.last_interrupted_stage =
                 Some(PipelineStage::ResearchUnit.as_str().to_string());
             runtime_summary.summary_reason = Some(error.to_string());
             let _ = save_runtime_summary(&conn, &runtime_summary);
-            error
         })?;
         enrich_parent_research(
             unit,
@@ -280,14 +281,9 @@ pub fn run_compose_pipeline_with_action(
             continue;
         };
         if resume_enabled {
-            if let (Some(draft), Some(digest)) = (
-                read_cached_json::<PageDraft, _>(unit.id.as_str(), |unit_id| {
-                    knowledge_store.read_page_draft(unit_id)
-                })?,
-                read_cached_json::<PageDigest, _>(unit.id.as_str(), |unit_id| {
-                    knowledge_store.read_page_digest(unit_id)
-                })?,
-            ) {
+            if let Some((draft, digest)) =
+                load_valid_cached_compose_pair(&conn, unit, &resume_identity)?
+            {
                 digests.insert(unit.id.clone(), digest);
                 page_drafts.push(draft);
                 persist_compose_progress(
@@ -342,7 +338,7 @@ pub fn run_compose_pipeline_with_action(
             )
         })?;
 
-        persist_compose_result(&conn, unit, &draft, &digest)?;
+        persist_compose_result(&conn, unit, &draft, &digest, &resume_identity)?;
         digests.insert(unit.id.clone(), digest);
         page_drafts.push(draft);
         persist_compose_progress(
@@ -354,7 +350,17 @@ pub fn run_compose_pipeline_with_action(
         )?;
     }
 
-    let planned_pages = plan_pages_from_knowledge_tree(&knowledge_tree);
+    let projection_decisions =
+        plan_projection_intents(&knowledge_tree, &steering.pages.projection_policy(), &[])
+            .map_err(|error| io::Error::other(format!("plan projection intents: {error:?}")))?;
+    let planned_pages = project_page_plans(&knowledge_tree, &projection_decisions)
+        .map_err(|error| io::Error::other(format!("project page plans: {error:?}")))?;
+    let projected_unit_ids = projection_decisions
+        .iter()
+        .filter(|decision| decision.eligibility.is_projectable())
+        .map(|decision| decision.unit_ref.as_str())
+        .collect::<BTreeSet<_>>();
+    page_drafts.retain(|draft| projected_unit_ids.contains(draft.unit_id.as_str()));
     runtime_summary.runtime_state = "compose_complete".to_string();
     runtime_summary.last_interrupted_stage = None;
     runtime_summary.summary_reason = None;
@@ -363,6 +369,7 @@ pub fn run_compose_pipeline_with_action(
         page_drafts,
         digests,
         knowledge_tree,
+        projection_decisions,
         planned_pages,
         unit_researches,
     })
@@ -381,6 +388,7 @@ pub fn run_scoped_compose_pipeline_for_update(
     graph_summary: &GraphSummary,
     steering: &SteeringConfig,
     knowledge_tree: &KnowledgeTree,
+    previous_projection_decisions: &[PageProjectionDecision],
     persisted_page_digests: &[PageDigest],
     affected_scope: &AffectedKnowledgeScope,
     affected_page_ids: &[String],
@@ -388,7 +396,22 @@ pub fn run_scoped_compose_pipeline_for_update(
 ) -> io::Result<ComposePipelineOutput> {
     let conn = sqlite_store::open_db(repo_root)?;
     let facts_input_hash = compute_facts_input_hash(scan_report, module_tree);
-    let planned_pages = plan_pages_from_knowledge_tree(knowledge_tree);
+    let resume_identity =
+        build_resume_identity(workflow_action, &facts_input_hash, knowledge_tree, steering)?;
+    let resume_enabled = prepare_resume_state(&conn, &resume_identity)?;
+    let projection_decisions = plan_projection_intents(
+        knowledge_tree,
+        &steering.pages.projection_policy(),
+        previous_projection_decisions,
+    )
+    .map_err(|error| io::Error::other(format!("plan projection intents: {error:?}")))?;
+    let planned_pages = project_page_plans(knowledge_tree, &projection_decisions)
+        .map_err(|error| io::Error::other(format!("project page plans: {error:?}")))?;
+    let projected_unit_ids = projection_decisions
+        .iter()
+        .filter(|decision| decision.eligibility.is_projectable())
+        .map(|decision| decision.unit_ref.as_str())
+        .collect::<BTreeSet<_>>();
     let active_unit_ids = affected_scope
         .active_unit_ids()
         .into_iter()
@@ -423,13 +446,9 @@ pub fn run_scoped_compose_pipeline_for_update(
     sqlite_store::replace_knowledge_snapshot(&conn, &domains, &units)?;
     clear_removed_compose_artifacts(&conn, &affected_scope.removed_unit_ids)?;
 
-    let mut unit_runtime_gates = initialize_runtime_gates(&conn, knowledge_tree, false)?;
-    let mut runtime_summary = initialize_runtime_summary(
-        &conn,
-        workflow_action,
-        &facts_input_hash,
-        &unit_runtime_gates,
-    )?;
+    let mut unit_runtime_gates = initialize_runtime_gates(&conn, knowledge_tree, resume_enabled)?;
+    let mut runtime_summary =
+        initialize_runtime_summary(&conn, &resume_identity, &unit_runtime_gates)?;
     runtime_summary.workflow_action = workflow_action.to_string();
     runtime_summary.facts_input_hash = facts_input_hash.clone();
     runtime_summary.runtime_state = "researching".to_string();
@@ -469,18 +488,17 @@ pub fn run_scoped_compose_pipeline_for_update(
             "system",
             &facts_input_hash,
             &system_input_hash,
-            false,
+            resume_enabled,
             PipelineStage::ResearchSystem,
             None,
             || research_provider.research_system(&research_ds),
         )
-        .map_err(|error| {
+        .inspect_err(|error| {
             runtime_summary.runtime_state = "interrupted".to_string();
             runtime_summary.last_interrupted_stage =
                 Some(PipelineStage::ResearchSystem.as_str().to_string());
             runtime_summary.summary_reason = Some(error.to_string());
             let _ = save_runtime_summary(&conn, &runtime_summary);
-            error
         })?
     } else {
         SystemResearch::default()
@@ -509,18 +527,17 @@ pub fn run_scoped_compose_pipeline_for_update(
             &domain.id,
             &facts_input_hash,
             &domain_input_hash,
-            false,
+            resume_enabled,
             PipelineStage::ResearchDomain,
             Some(domain.id.clone()),
             || research_provider.research_domain(domain, &research_ds),
         )
-        .map_err(|error| {
+        .inspect_err(|error| {
             runtime_summary.runtime_state = "interrupted".to_string();
             runtime_summary.last_interrupted_stage =
                 Some(PipelineStage::ResearchDomain.as_str().to_string());
             runtime_summary.summary_reason = Some(error.to_string());
             let _ = save_runtime_summary(&conn, &runtime_summary);
-            error
         })?;
         domain_researches.insert(domain.id.clone(), research);
     }
@@ -551,18 +568,17 @@ pub fn run_scoped_compose_pipeline_for_update(
             &unit.id,
             &facts_input_hash,
             &unit_input_hash,
-            false,
+            resume_enabled,
             PipelineStage::ResearchUnit,
             Some(unit.id.clone()),
             || research_provider.research_unit(unit, &research_ds, &child_digests),
         )
-        .map_err(|error| {
+        .inspect_err(|error| {
             runtime_summary.runtime_state = "interrupted".to_string();
             runtime_summary.last_interrupted_stage =
                 Some(PipelineStage::ResearchUnit.as_str().to_string());
             runtime_summary.summary_reason = Some(error.to_string());
             let _ = save_runtime_summary(&conn, &runtime_summary);
-            error
         })?;
         enrich_parent_research(
             unit,
@@ -607,6 +623,24 @@ pub fn run_scoped_compose_pipeline_for_update(
             continue;
         };
 
+        if resume_enabled {
+            if let Some((draft, digest)) =
+                load_valid_cached_compose_pair(&conn, unit, &resume_identity)?
+            {
+                compose_input_digests.insert(unit.id.clone(), digest.clone());
+                fresh_digests.insert(unit.id.clone(), digest);
+                page_drafts.push(draft);
+                persist_compose_progress(
+                    &conn,
+                    &mut runtime_summary,
+                    &mut unit_runtime_gates,
+                    unit,
+                    stage_for_compose_error(unit),
+                )?;
+                continue;
+            }
+        }
+
         let child_digests =
             collect_compose_input_digests(unit, knowledge_tree, &compose_input_digests);
         if let Err(issue) = validate_compose_contract_inputs(unit, &child_digests, &unit_researches)
@@ -650,7 +684,7 @@ pub fn run_scoped_compose_pipeline_for_update(
             )
         })?;
 
-        persist_compose_result(&conn, unit, &draft, &digest)?;
+        persist_compose_result(&conn, unit, &draft, &digest, &resume_identity)?;
         compose_input_digests.insert(unit.id.clone(), digest.clone());
         fresh_digests.insert(unit.id.clone(), digest);
         page_drafts.push(draft);
@@ -667,10 +701,12 @@ pub fn run_scoped_compose_pipeline_for_update(
     runtime_summary.last_interrupted_stage = None;
     runtime_summary.summary_reason = None;
     save_runtime_summary(&conn, &runtime_summary)?;
+    page_drafts.retain(|draft| projected_unit_ids.contains(draft.unit_id.as_str()));
     Ok(ComposePipelineOutput {
         page_drafts,
         digests: fresh_digests,
         knowledge_tree: knowledge_tree.clone(),
+        projection_decisions,
         planned_pages,
         unit_researches,
     })
@@ -713,43 +749,47 @@ fn clear_removed_compose_artifacts(
 
 fn prepare_resume_state(
     conn: &Connection,
-    workflow_action: &str,
-    facts_input_hash: &str,
+    resume_identity: &PipelineResumeIdentity,
 ) -> io::Result<bool> {
     let runtime_store = SqliteRuntimeStore::new(conn);
     let checkpoint = runtime_store.read_pipeline_checkpoint()?;
     let runtime_summary = load_runtime_summary(conn)?;
-    let knowledge_store = SqliteKnowledgeStore::new(conn);
     let Some(checkpoint) = checkpoint else {
         if let Some(summary) = runtime_summary {
-            if summary.workflow_action == workflow_action
-                && summary.facts_input_hash == facts_input_hash
+            if summary.resume_identity == *resume_identity
+                && summary.resume_identity.is_complete()
                 && summary.runtime_state != "completed"
                 && summary.runtime_state != "assemble_complete"
             {
                 return Ok(true);
             }
         }
-        knowledge_store.clear_page_drafts()?;
-        knowledge_store.clear_page_digests()?;
-        runtime_store.clear_unit_runtime_gates()?;
+        discard_resume_working_state(conn)?;
         return Ok(false);
     };
 
-    if checkpoint.facts_input_hash != facts_input_hash
+    if !checkpoint.resume_identity.is_complete()
+        || checkpoint.resume_identity != *resume_identity
         || runtime_summary
             .as_ref()
-            .map(|summary| summary.workflow_action.as_str())
-            != Some(workflow_action)
+            .map(|summary| &summary.resume_identity)
+            != Some(resume_identity)
     {
-        runtime_store.clear_pipeline_checkpoint()?;
-        knowledge_store.clear_page_drafts()?;
-        knowledge_store.clear_page_digests()?;
-        runtime_store.clear_unit_runtime_gates()?;
+        discard_resume_working_state(conn)?;
         return Ok(false);
     }
 
     Ok(true)
+}
+
+fn discard_resume_working_state(conn: &Connection) -> io::Result<()> {
+    let knowledge_store = SqliteKnowledgeStore::new(conn);
+    let runtime_store = SqliteRuntimeStore::new(conn);
+    runtime_store.clear_pipeline_checkpoint()?;
+    knowledge_store.clear_research_cache()?;
+    knowledge_store.clear_page_drafts()?;
+    knowledge_store.clear_page_digests()?;
+    runtime_store.clear_unit_runtime_gates()
 }
 
 fn build_pipeline_unit_order(knowledge_tree: &KnowledgeTree) -> Vec<String> {
@@ -818,13 +858,13 @@ fn initialize_runtime_gates(
 
 fn initialize_runtime_summary(
     conn: &Connection,
-    workflow_action: &str,
-    facts_input_hash: &str,
+    resume_identity: &PipelineResumeIdentity,
     runtime_gates: &BTreeMap<String, UnitRuntimeGate>,
 ) -> io::Result<PipelineRuntimeSummary> {
     let mut summary = load_runtime_summary(conn)?.unwrap_or_else(|| PipelineRuntimeSummary {
-        facts_input_hash: facts_input_hash.to_string(),
-        workflow_action: workflow_action.to_string(),
+        resume_identity: resume_identity.clone(),
+        facts_input_hash: resume_identity.facts_input_hash.clone(),
+        workflow_action: resume_identity.workflow_action.clone(),
         runtime_state: "knowledge_planning_complete".to_string(),
         researched_units: 0,
         compose_ready_units: 0,
@@ -840,8 +880,9 @@ fn initialize_runtime_summary(
         last_researched_unit_id: None,
         last_research_elapsed_ms: None,
     });
-    summary.facts_input_hash = facts_input_hash.to_string();
-    summary.workflow_action = workflow_action.to_string();
+    summary.resume_identity = resume_identity.clone();
+    summary.facts_input_hash = resume_identity.facts_input_hash.clone();
+    summary.workflow_action = resume_identity.workflow_action.clone();
     summary.researched_units = runtime_gates
         .values()
         .filter(|gate| gate.research_status == "ready")
@@ -1042,17 +1083,124 @@ fn read_cached_research<T: DeserializeOwned>(
         .map_err(|error| io::Error::other(format!("deserialize research cache: {error}")))
 }
 
-fn read_cached_json<T, F>(unit_id: &str, reader: F) -> io::Result<Option<T>>
-where
-    T: DeserializeOwned,
-    F: Fn(&str) -> io::Result<Option<String>>,
-{
-    let Some(raw) = reader(unit_id)? else {
-        return Ok(None);
+#[derive(Debug, Clone)]
+struct CachedComposeRecord<T> {
+    value: T,
+    commit_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComposeReuseInvalidReason {
+    MissingDraft,
+    MissingDigest,
+    CommitRefMismatch,
+    ResumeIdentityMismatch,
+    WrongUnit,
+    WrongPage,
+    WrongPath,
+    DigestNotReady,
+}
+
+fn compose_pair_commit_ref(
+    resume_identity: &PipelineResumeIdentity,
+    unit: &KnowledgeUnit,
+    draft: &PageDraft,
+    digest: &PageDigest,
+) -> io::Result<String> {
+    let pair = serde_json::to_vec(&(draft, digest))
+        .map_err(|error| io::Error::other(format!("serialize compose pair: {error}")))?;
+    Ok(format!(
+        "compose-pair-v1:{}:{}:{}",
+        resume_identity.resume_key,
+        unit.id,
+        fingerprint_bytes(&pair)
+    ))
+}
+
+fn validate_cached_compose_pair(
+    unit: &KnowledgeUnit,
+    resume_identity: &PipelineResumeIdentity,
+    draft: Option<&CachedComposeRecord<PageDraft>>,
+    digest: Option<&CachedComposeRecord<PageDigest>>,
+) -> Result<(), ComposeReuseInvalidReason> {
+    let draft = draft.ok_or(ComposeReuseInvalidReason::MissingDraft)?;
+    let digest = digest.ok_or(ComposeReuseInvalidReason::MissingDigest)?;
+    if draft.value.unit_id != unit.id || digest.value.unit_id != unit.id {
+        return Err(ComposeReuseInvalidReason::WrongUnit);
+    }
+    let expected_path = wiki_model::domain::knowledge::official_wiki_relative_path(
+        &unit.unit_type,
+        &unit.title,
+        &unit.relative_path,
+    );
+    if draft.value.relative_path != expected_path {
+        return Err(ComposeReuseInvalidReason::WrongPath);
+    }
+    let expected_page_id = crate::domain::stable_id::stable_id("page", &expected_path);
+    if draft.value.page_id != expected_page_id
+        || digest.value.page_id != expected_page_id
+        || draft.value.page_id != digest.value.page_id
+    {
+        return Err(ComposeReuseInvalidReason::WrongPage);
+    }
+    if digest.value.projection_status != ProjectionDigestStatus::Ready
+        || !digest.value.status_reasons.is_empty()
+        || digest.value.readiness_stage != "compose_ready"
+    {
+        return Err(ComposeReuseInvalidReason::DigestNotReady);
+    }
+    if draft.commit_ref != digest.commit_ref {
+        return Err(ComposeReuseInvalidReason::CommitRefMismatch);
+    }
+    let Some(commit_ref) = draft.commit_ref.as_deref() else {
+        return Err(ComposeReuseInvalidReason::CommitRefMismatch);
     };
-    serde_json::from_str(&raw)
-        .map(Some)
-        .map_err(|error| io::Error::other(format!("deserialize cached json: {error}")))
+    let identity_prefix = format!(
+        "compose-pair-v1:{}:{}:",
+        resume_identity.resume_key, unit.id
+    );
+    if !commit_ref.starts_with(&identity_prefix) {
+        return Err(ComposeReuseInvalidReason::ResumeIdentityMismatch);
+    }
+    let expected_commit_ref =
+        compose_pair_commit_ref(resume_identity, unit, &draft.value, &digest.value)
+            .map_err(|_| ComposeReuseInvalidReason::CommitRefMismatch)?;
+    if commit_ref != expected_commit_ref {
+        return Err(ComposeReuseInvalidReason::CommitRefMismatch);
+    }
+    Ok(())
+}
+
+fn load_valid_cached_compose_pair(
+    conn: &Connection,
+    unit: &KnowledgeUnit,
+    resume_identity: &PipelineResumeIdentity,
+) -> io::Result<Option<(PageDraft, PageDigest)>> {
+    let knowledge_store = SqliteKnowledgeStore::new(conn);
+    let draft = knowledge_store
+        .read_page_draft_with_hash(&unit.id)?
+        .and_then(|(raw, commit_ref)| {
+            serde_json::from_str(&raw)
+                .ok()
+                .map(|value| CachedComposeRecord { value, commit_ref })
+        });
+    let digest = knowledge_store
+        .read_page_digest_with_hash(&unit.id)?
+        .and_then(|(raw, commit_ref)| {
+            serde_json::from_str(&raw)
+                .ok()
+                .map(|value| CachedComposeRecord { value, commit_ref })
+        });
+    if validate_cached_compose_pair(unit, resume_identity, draft.as_ref(), digest.as_ref()).is_ok()
+    {
+        return Ok(Some((
+            draft.expect("validated draft").value,
+            digest.expect("validated digest").value,
+        )));
+    }
+    sqlite_store::remove_page_draft(conn, &unit.id)?;
+    sqlite_store::remove_page_digest(conn, &unit.id)?;
+    Ok(None)
 }
 
 fn build_research_digest(unit: &KnowledgeUnit, research: &UnitResearch) -> PageDigest {
@@ -1407,16 +1555,16 @@ fn persist_compose_result(
     unit: &KnowledgeUnit,
     draft: &PageDraft,
     digest: &PageDigest,
+    resume_identity: &PipelineResumeIdentity,
 ) -> io::Result<()> {
     let draft_json = serde_json::to_string(draft)
         .map_err(|error| io::Error::other(format!("serialize page draft: {error}")))?;
     let digest_json = serde_json::to_string(digest)
         .map_err(|error| io::Error::other(format!("serialize page digest: {error}")))?;
-    let draft_hash = fingerprint_bytes(draft_json.as_bytes());
-    let digest_hash = fingerprint_bytes(digest_json.as_bytes());
+    let commit_ref = compose_pair_commit_ref(resume_identity, unit, draft, digest)?;
     let knowledge_store = SqliteKnowledgeStore::new(conn);
-    knowledge_store.write_page_draft(&unit.id, &draft_json, Some(&draft_hash))?;
-    knowledge_store.write_page_digest(&unit.id, &digest_json, Some(&digest_hash))?;
+    knowledge_store.write_page_draft(&unit.id, &draft_json, Some(&commit_ref))?;
+    knowledge_store.write_page_digest(&unit.id, &digest_json, Some(&commit_ref))?;
     Ok(())
 }
 
@@ -1553,6 +1701,28 @@ fn llm_research_cache_contract(steering: &SteeringConfig) -> (bool, &str, usize,
     )
 }
 
+fn build_resume_identity(
+    workflow_action: &str,
+    facts_input_hash: &str,
+    knowledge_tree: &KnowledgeTree,
+    steering: &SteeringConfig,
+) -> io::Result<PipelineResumeIdentity> {
+    let knowledge_tree_hash = compute_knowledge_tree_hash(knowledge_tree)?;
+    let research_contract = serde_json::to_vec(&(
+        "research-contract-v1",
+        llm_research_cache_contract(steering),
+        steering.llm.cache_mode,
+    ))
+    .map_err(|error| io::Error::other(format!("serialize research contract: {error}")))?;
+    let research_contract_hash = fingerprint_bytes(&research_contract);
+    Ok(PipelineResumeIdentity::new(
+        workflow_action,
+        facts_input_hash,
+        knowledge_tree_hash,
+        research_contract_hash,
+    ))
+}
+
 fn stable_hash<T: Serialize>(value: &T) -> String {
     let serialized = serde_json::to_vec(value).unwrap_or_default();
     fingerprint_bytes(&serialized)
@@ -1574,8 +1744,13 @@ fn save_checkpoint_and_return(
             "error": error.to_string(),
         }),
     );
+    let resume_identity = load_runtime_summary(conn)
+        .ok()
+        .flatten()
+        .map(|summary| summary.resume_identity)
+        .unwrap_or_default();
     let checkpoint = PipelineCheckpoint::new(
-        facts_input_hash.to_string(),
+        resume_identity,
         stage,
         interrupted_target_id.clone(),
         Some(error.to_string()),
@@ -1803,8 +1978,18 @@ pub fn persist_runtime_blocker_for_repo(
         runtime_store.write_unit_runtime_gate(&blocker_gate)?;
         vec![blocker_id]
     };
+    let knowledge_tree_hash = knowledge_tree
+        .map(compute_knowledge_tree_hash)
+        .transpose()?
+        .unwrap_or_else(|| "no-knowledge-tree".to_string());
+    let resume_identity = PipelineResumeIdentity::new(
+        workflow_action,
+        facts_input_hash,
+        knowledge_tree_hash,
+        "provider-blocker-v1",
+    );
     let checkpoint = PipelineCheckpoint::new(
-        facts_input_hash.to_string(),
+        resume_identity.clone(),
         stage.clone(),
         blocked_gate_ids.first().cloned(),
         Some(reason.to_string()),
@@ -1812,6 +1997,7 @@ pub fn persist_runtime_blocker_for_repo(
     runtime_store.write_pipeline_checkpoint(&checkpoint)?;
 
     let mut summary = load_runtime_summary(&conn)?.unwrap_or_default();
+    summary.resume_identity = resume_identity;
     summary.facts_input_hash = facts_input_hash.to_string();
     summary.workflow_action = workflow_action.to_string();
     summary.runtime_state = "interrupted".to_string();
@@ -1880,7 +2066,9 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::debug_trace;
-    use crate::domain::checkpoint::{PipelineRuntimeSummary, PipelineStage, UnitRuntimeGate};
+    use crate::domain::checkpoint::{
+        PipelineResumeIdentity, PipelineRuntimeSummary, PipelineStage, UnitRuntimeGate,
+    };
     use crate::domain::knowledge::{KnowledgeDomain, KnowledgeTree, KnowledgeUnit, UnitType};
     use crate::domain::steering::{load_steering_config, DebugConfig, SteeringConfig};
     use crate::generation::context::{
@@ -1897,17 +2085,122 @@ mod tests {
         DomainResearch, PageDigest, ProjectionDigestStatus, ResearchSessionStats,
         ResearchStopReason, SystemResearch, UnitResearch,
     };
+
+    fn resume_identity(action: &str, facts: &str) -> PipelineResumeIdentity {
+        PipelineResumeIdentity::new(action, facts, "tree-same", "research-contract-same")
+    }
+
+    #[test]
+    fn resume_reuses_only_complete_matching_unit_commit_points() {
+        let unit = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "Runtime",
+            "domain-runtime",
+            "runtime/Runtime.md",
+        );
+        let identity = resume_identity("init", "facts-same");
+        let expected_path = wiki_model::domain::knowledge::official_wiki_relative_path(
+            &unit.unit_type,
+            &unit.title,
+            &unit.relative_path,
+        );
+        let expected_page_id = crate::domain::stable_id::stable_id("page", &expected_path);
+        let draft = PageDraft {
+            page_id: expected_page_id.clone(),
+            unit_id: unit.id.clone(),
+            title: unit.title.clone(),
+            relative_path: expected_path,
+            sections: Vec::new(),
+            diagrams: Vec::new(),
+            citation_count: 0,
+        };
+        let digest = PageDigest {
+            unit_id: unit.id.clone(),
+            page_id: expected_page_id,
+            projection_status: ProjectionDigestStatus::Ready,
+            readiness_stage: "compose_ready".to_string(),
+            ..PageDigest::default()
+        };
+        let commit_ref = compose_pair_commit_ref(&identity, &unit, &draft, &digest).unwrap();
+        let valid_draft = CachedComposeRecord {
+            value: draft.clone(),
+            commit_ref: Some(commit_ref.clone()),
+        };
+        let valid_digest = CachedComposeRecord {
+            value: digest.clone(),
+            commit_ref: Some(commit_ref),
+        };
+        assert_eq!(
+            validate_cached_compose_pair(&unit, &identity, Some(&valid_draft), Some(&valid_digest),),
+            Ok(())
+        );
+        assert_eq!(
+            validate_cached_compose_pair(&unit, &identity, None, Some(&valid_digest)),
+            Err(ComposeReuseInvalidReason::MissingDraft)
+        );
+        assert_eq!(
+            validate_cached_compose_pair(&unit, &identity, Some(&valid_draft), None),
+            Err(ComposeReuseInvalidReason::MissingDigest)
+        );
+
+        let mut wrong_unit = valid_draft.clone();
+        wrong_unit.value.unit_id = "wrong-unit".to_string();
+        assert_eq!(
+            validate_cached_compose_pair(&unit, &identity, Some(&wrong_unit), Some(&valid_digest),),
+            Err(ComposeReuseInvalidReason::WrongUnit)
+        );
+        let mut wrong_page = valid_digest.clone();
+        wrong_page.value.page_id = "wrong-page".to_string();
+        assert_eq!(
+            validate_cached_compose_pair(&unit, &identity, Some(&valid_draft), Some(&wrong_page),),
+            Err(ComposeReuseInvalidReason::WrongPage)
+        );
+        let mut wrong_path = valid_draft.clone();
+        wrong_path.value.relative_path = "wrong.md".to_string();
+        assert_eq!(
+            validate_cached_compose_pair(&unit, &identity, Some(&wrong_path), Some(&valid_digest),),
+            Err(ComposeReuseInvalidReason::WrongPath)
+        );
+        let mut stale = valid_digest.clone();
+        stale.value.projection_status = ProjectionDigestStatus::Stale;
+        assert_eq!(
+            validate_cached_compose_pair(&unit, &identity, Some(&valid_draft), Some(&stale),),
+            Err(ComposeReuseInvalidReason::DigestNotReady)
+        );
+
+        let other_identity = resume_identity("rebuild", "facts-same");
+        let other_commit_ref =
+            compose_pair_commit_ref(&other_identity, &unit, &draft, &digest).unwrap();
+        let identity_draft = CachedComposeRecord {
+            value: draft.clone(),
+            commit_ref: Some(other_commit_ref.clone()),
+        };
+        let identity_digest = CachedComposeRecord {
+            value: digest,
+            commit_ref: Some(other_commit_ref),
+        };
+        assert_eq!(
+            validate_cached_compose_pair(
+                &unit,
+                &identity,
+                Some(&identity_draft),
+                Some(&identity_digest),
+            ),
+            Err(ComposeReuseInvalidReason::ResumeIdentityMismatch)
+        );
+    }
     use wiki_knowledge::research::{
         ResearchDataSource, ResearchProvider, StructuralResearchProvider,
     };
 
     use super::{
-        collect_compose_input_digests, compute_unit_input_hash, enrich_parent_research,
-        initialize_runtime_gates, initialize_runtime_summary, load_or_compute_research,
-        load_runtime_summary, pending_runtime_gate, persist_compose_contract_block,
-        persist_compose_progress, persist_research_progress, prepare_resume_state,
-        run_compose_pipeline, save_runtime_summary, validate_compose_contract_inputs,
-        ComposeContractIssue,
+        collect_compose_input_digests, compose_pair_commit_ref, compute_unit_input_hash,
+        enrich_parent_research, initialize_runtime_gates, initialize_runtime_summary,
+        load_or_compute_research, load_runtime_summary, pending_runtime_gate,
+        persist_compose_contract_block, persist_compose_progress, persist_research_progress,
+        prepare_resume_state, run_compose_pipeline, save_runtime_summary,
+        validate_cached_compose_pair, validate_compose_contract_inputs, CachedComposeRecord,
+        ComposeContractIssue, ComposeReuseInvalidReason,
     };
 
     #[test]
@@ -1927,7 +2220,7 @@ mod tests {
             "核心运行时/运行时.md",
         );
         sqlite_store::write_knowledge_domains(&conn, &[domain]).unwrap();
-        sqlite_store::write_knowledge_units(&conn, &[unit.clone()]).unwrap();
+        sqlite_store::write_knowledge_units(&conn, std::slice::from_ref(&unit)).unwrap();
 
         let draft = PageDraft {
             page_id: crate::domain::stable_id::stable_id("page", &unit.relative_path),
@@ -1976,6 +2269,7 @@ mod tests {
         save_runtime_summary(
             &conn,
             &PipelineRuntimeSummary {
+                resume_identity: resume_identity("init", "facts-same"),
                 facts_input_hash: "facts-same".to_string(),
                 workflow_action: "init".to_string(),
                 runtime_state: "compose_pending".to_string(),
@@ -1996,14 +2290,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(prepare_resume_state(&conn, "init", "facts-same").unwrap());
+        assert!(prepare_resume_state(&conn, &resume_identity("init", "facts-same")).unwrap());
         assert!(sqlite_store::read_page_draft(&conn, &unit.id)
             .unwrap()
             .is_some());
         assert!(sqlite_store::read_page_digest(&conn, &unit.id)
             .unwrap()
             .is_some());
-        assert!(!prepare_resume_state(&conn, "rebuild", "facts-same").unwrap());
+        assert!(!prepare_resume_state(&conn, &resume_identity("rebuild", "facts-same")).unwrap());
     }
 
     #[test]
@@ -2022,11 +2316,12 @@ mod tests {
             "核心运行时/运行时.md",
         );
         sqlite_store::write_knowledge_domains(&conn, &[domain]).unwrap();
-        sqlite_store::write_knowledge_units(&conn, &[unit.clone()]).unwrap();
+        sqlite_store::write_knowledge_units(&conn, std::slice::from_ref(&unit)).unwrap();
 
         save_runtime_summary(
             &conn,
             &PipelineRuntimeSummary {
+                resume_identity: resume_identity("init", "facts-same"),
                 facts_input_hash: "facts-same".to_string(),
                 workflow_action: "init".to_string(),
                 runtime_state: "compose_pending".to_string(),
@@ -2048,6 +2343,7 @@ mod tests {
         .unwrap();
 
         let mut runtime_summary = PipelineRuntimeSummary {
+            resume_identity: resume_identity("init", "facts-same"),
             facts_input_hash: "facts-same".to_string(),
             workflow_action: "init".to_string(),
             runtime_state: "compose_pending".to_string(),
@@ -2199,6 +2495,7 @@ mod tests {
         save_runtime_summary(
             &conn,
             &PipelineRuntimeSummary {
+                resume_identity: resume_identity("init", "facts-old"),
                 facts_input_hash: "facts-old".to_string(),
                 workflow_action: "init".to_string(),
                 runtime_state: "interrupted".to_string(),
@@ -2250,8 +2547,12 @@ mod tests {
             ),
         ]);
 
-        let summary =
-            initialize_runtime_summary(&conn, "init", "facts-same", &runtime_gates).unwrap();
+        let summary = initialize_runtime_summary(
+            &conn,
+            &resume_identity("init", "facts-same"),
+            &runtime_gates,
+        )
+        .unwrap();
 
         assert_eq!(summary.facts_input_hash, "facts-same");
         assert_eq!(summary.workflow_action, "init");
@@ -2282,7 +2583,7 @@ mod tests {
         knowledge_tree.add_unit(unit.clone());
         knowledge_tree.processing_order = vec![unit.id.clone()];
         sqlite_store::write_knowledge_domains(&conn, &[domain]).unwrap();
-        sqlite_store::write_knowledge_units(&conn, &[unit.clone()]).unwrap();
+        sqlite_store::write_knowledge_units(&conn, std::slice::from_ref(&unit)).unwrap();
 
         sqlite_store::write_unit_runtime_gate(
             &conn,
@@ -2428,9 +2729,10 @@ mod tests {
             "核心运行时/运行时.md",
         );
         sqlite_store::write_knowledge_domains(&conn, &[domain]).unwrap();
-        sqlite_store::write_knowledge_units(&conn, &[unit.clone()]).unwrap();
+        sqlite_store::write_knowledge_units(&conn, std::slice::from_ref(&unit)).unwrap();
 
         let mut runtime_summary = PipelineRuntimeSummary {
+            resume_identity: resume_identity("init", "facts-same"),
             facts_input_hash: "facts-same".to_string(),
             workflow_action: "init".to_string(),
             runtime_state: "compose_pending".to_string(),
@@ -2652,9 +2954,7 @@ mod tests {
             .unwrap()
             .expect("runtime summary should exist after resume");
         assert!(runtime_summary.contains("\"runtime_state\":\"compose_complete\""));
-        assert!(
-            runtime_summary.contains(&format!("\"composed_units\":{}", resumed.page_drafts.len()))
-        );
+        assert!(runtime_summary.contains(&format!("\"composed_units\":{}", resumed.digests.len())));
         assert!(sqlite_store::read_pipeline_checkpoint(&conn)
             .unwrap()
             .is_some());
@@ -3170,7 +3470,7 @@ mod tests {
         let fixture = tempdir().unwrap();
         let conn = sqlite_store::open_db(fixture.path()).unwrap();
         let overview = KnowledgeUnit::new(UnitType::Overview, "项目概述", "system", "项目概述.md");
-        sqlite_store::write_knowledge_units(&conn, &[overview.clone()]).unwrap();
+        sqlite_store::write_knowledge_units(&conn, std::slice::from_ref(&overview)).unwrap();
         let mut runtime_summary = PipelineRuntimeSummary::default();
         let mut runtime_gates = BTreeMap::new();
         runtime_gates.insert(overview.id.clone(), pending_runtime_gate(&overview));

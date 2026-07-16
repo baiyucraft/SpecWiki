@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use wiki_model::domain::knowledge::{DecompositionProfile, KnowledgeUnit};
 use wiki_model::domain::knowledge_artifact::{
     KnowledgeResearchStatusReason, KnowledgeResearchStatusReasonKind, KnowledgeResearchSummary,
-    KnowledgeResearchSummaryStatus,
+    KnowledgeResearchSummaryStatus, ProviderFailureKind,
 };
 
 // ─── ResearchProfile ───────────────────────────────────────
@@ -350,6 +350,8 @@ pub struct UnitResearch {
     pub key_sources: Vec<String>,
     #[serde(default)]
     pub provider_stop_reason: Option<ResearchStopReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_failure_kind: Option<ProviderFailureKind>,
     #[serde(default)]
     pub provider_session_stats: Option<ResearchSessionStats>,
     #[serde(default)]
@@ -390,18 +392,7 @@ impl UnitResearch {
             .collect::<Vec<_>>();
         let mut status_reasons = Vec::new();
         if let Some(stop_reason) = self.provider_stop_reason.as_ref() {
-            let reason_kind = match stop_reason {
-                ResearchStopReason::ProviderError => {
-                    Some(KnowledgeResearchStatusReasonKind::ProviderError)
-                }
-                ResearchStopReason::InvalidOutput => {
-                    Some(KnowledgeResearchStatusReasonKind::InvalidOutput)
-                }
-                ResearchStopReason::CallBudgetRejected => {
-                    Some(KnowledgeResearchStatusReasonKind::CallBudgetRejected)
-                }
-                _ => None,
-            };
+            let reason_kind = status_reason_kind_for_provider_stop(stop_reason);
             if let Some(reason_kind) = reason_kind {
                 status_reasons.push(KnowledgeResearchStatusReason {
                     reason_kind: Some(reason_kind),
@@ -435,14 +426,9 @@ impl UnitResearch {
             });
         }
         let summary_status = if status_reasons.iter().any(|reason| {
-            matches!(
-                reason.reason_kind,
-                Some(
-                    KnowledgeResearchStatusReasonKind::ProviderError
-                        | KnowledgeResearchStatusReasonKind::InvalidOutput
-                        | KnowledgeResearchStatusReasonKind::CallBudgetRejected
-                )
-            )
+            reason.reason_kind.is_some_and(|kind| {
+                kind.expected_status() == KnowledgeResearchSummaryStatus::Blocked
+            })
         }) {
             KnowledgeResearchSummaryStatus::Blocked
         } else if status_reasons.is_empty() {
@@ -461,10 +447,31 @@ impl UnitResearch {
             source_refs,
             citation_refs,
             summary_status,
+            provider_failure_kind: self.provider_failure_kind,
             status_reasons,
         };
         summary.canonicalize();
         summary
+    }
+}
+
+fn status_reason_kind_for_provider_stop(
+    stop_reason: &ResearchStopReason,
+) -> Option<KnowledgeResearchStatusReasonKind> {
+    match stop_reason {
+        ResearchStopReason::ProviderError => Some(KnowledgeResearchStatusReasonKind::ProviderError),
+        ResearchStopReason::InvalidOutput => Some(KnowledgeResearchStatusReasonKind::InvalidOutput),
+        ResearchStopReason::CallBudgetRejected => {
+            Some(KnowledgeResearchStatusReasonKind::CallBudgetRejected)
+        }
+        ResearchStopReason::NotRun => Some(KnowledgeResearchStatusReasonKind::ProviderNotRun),
+        ResearchStopReason::NoMeaningfulDelta => {
+            Some(KnowledgeResearchStatusReasonKind::NoMeaningfulDelta)
+        }
+        ResearchStopReason::TurnBudgetExhausted => {
+            Some(KnowledgeResearchStatusReasonKind::TurnBudgetExhausted)
+        }
+        ResearchStopReason::Completed | ResearchStopReason::NoFurtherToolCalls => None,
     }
 }
 
@@ -933,6 +940,52 @@ mod tests {
             summary.status_reasons[0].reason_kind,
             Some(KnowledgeResearchStatusReasonKind::ProviderError)
         );
+    }
+
+    #[test]
+    fn artifact_summary_blocks_every_provider_stop_without_valid_output() {
+        let unit = KnowledgeUnit::new(
+            UnitType::ModuleDoc,
+            "运行时",
+            "domain-runtime",
+            "核心模块/运行时.md",
+        );
+        for stop_reason in [
+            ResearchStopReason::NotRun,
+            ResearchStopReason::NoMeaningfulDelta,
+            ResearchStopReason::TurnBudgetExhausted,
+            ResearchStopReason::CallBudgetRejected,
+            ResearchStopReason::ProviderError,
+            ResearchStopReason::InvalidOutput,
+        ] {
+            let research = UnitResearch {
+                unit_id: unit.id.clone(),
+                summary: "仅有 structural seed".to_string(),
+                positioning: "没有有效 provider output".to_string(),
+                key_sources: vec!["src/runtime.rs".to_string()],
+                evidence_clusters: vec![EvidenceCluster {
+                    cluster_key: "runtime".to_string(),
+                    label: "运行时".to_string(),
+                    citations: vec![SourceCitation {
+                        path: "src/runtime.rs".to_string(),
+                        start_line: 1,
+                        end_line: 2,
+                        source_id: Some("source-runtime".to_string()),
+                        symbol_id: None,
+                        note: "structural".to_string(),
+                    }],
+                }],
+                provider_stop_reason: Some(stop_reason.clone()),
+                ..UnitResearch::default()
+            };
+
+            assert_eq!(
+                research.to_artifact_summary(&unit).summary_status,
+                KnowledgeResearchSummaryStatus::Blocked,
+                "{} must not be accepted without provider output",
+                stop_reason.as_str()
+            );
+        }
     }
 
     #[test]

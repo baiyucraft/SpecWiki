@@ -17,7 +17,7 @@ fn unit_runtime_gate_crud_roundtrips_and_clears() {
         "核心运行时/运行时.md",
     );
     sqlite_store::write_knowledge_domains(&conn, &[domain]).unwrap();
-    sqlite_store::write_knowledge_units(&conn, &[unit.clone()]).unwrap();
+    sqlite_store::write_knowledge_units(&conn, std::slice::from_ref(&unit)).unwrap();
 
     sqlite_store::write_unit_runtime_gate(
         &conn,

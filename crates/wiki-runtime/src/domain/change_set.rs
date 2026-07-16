@@ -28,7 +28,7 @@ use wiki_index::symbol_graph::GraphSummary;
 use wiki_knowledge::planning::{
     build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
 };
-use wiki_knowledge::{plan_pages_from_knowledge_tree, PagePlan};
+use wiki_knowledge::{plan_projection_intents, project_page_plans, PagePlan};
 use wiki_model::domain::knowledge::{KnowledgeTree, KnowledgeUnit};
 use wiki_model::domain::update_scope::{
     AffectedKnowledgeScope, ScopeEscalation, ScopeEscalationLevel,
@@ -367,9 +367,19 @@ pub fn plan_runtime_changes_with_mode(
         &module_contexts,
         &planner_config,
     );
-    let knowledge_tree = build_knowledge_tree(domains, units);
-    let planned_pages = plan_pages_from_knowledge_tree(&knowledge_tree);
     let previous_artifacts = load_knowledge_artifacts(repo_root).ok();
+    let knowledge_tree = build_knowledge_tree(domains, units);
+    let projection_decisions = plan_projection_intents(
+        &knowledge_tree,
+        &steering.pages.projection_policy(),
+        previous_artifacts
+            .as_ref()
+            .map(|artifacts| artifacts.projection_decisions.as_slice())
+            .unwrap_or_default(),
+    )
+    .map_err(|error| io::Error::other(format!("plan projection intents: {error:?}")))?;
+    let planned_pages = project_page_plans(&knowledge_tree, &projection_decisions)
+        .map_err(|error| io::Error::other(format!("project page plans: {error:?}")))?;
     let affected_knowledge_scope = build_affected_knowledge_scope(
         previous_artifacts.as_ref(),
         &previous_state,
@@ -609,8 +619,11 @@ fn build_affected_knowledge_scope(
         })
         .map(|page| page.id.clone())
         .collect::<BTreeSet<_>>();
-    if let Some(previous_tree) = previous_tree {
-        for previous_page in plan_pages_from_knowledge_tree(previous_tree) {
+    if let (Some(previous_tree), Some(previous_artifacts)) = (previous_tree, previous_artifacts) {
+        let previous_pages =
+            project_page_plans(previous_tree, &previous_artifacts.projection_decisions)
+                .unwrap_or_default();
+        for previous_page in previous_pages {
             if previous_page
                 .unit_id
                 .as_ref()
@@ -878,7 +891,7 @@ fn has_matching_descendant(
         return false;
     };
 
-    let mut queue = unit.child_unit_ids.iter().cloned().collect::<Vec<_>>();
+    let mut queue = unit.child_unit_ids.to_vec();
     while let Some(child_unit_id) = queue.pop() {
         if candidate_unit_ids.contains(&child_unit_id) {
             return true;
@@ -1050,7 +1063,9 @@ fn build_affected_set(
         .map(|page| (page.id.clone(), page))
         .collect::<BTreeMap<_, _>>();
     let previous_planned_pages = previous_artifacts
-        .map(|artifacts| plan_pages_from_knowledge_tree(&artifacts.knowledge_tree))
+        .and_then(|artifacts| {
+            project_page_plans(&artifacts.knowledge_tree, &artifacts.projection_decisions).ok()
+        })
         .unwrap_or_default();
     let previous_planned_by_id = previous_planned_pages
         .iter()

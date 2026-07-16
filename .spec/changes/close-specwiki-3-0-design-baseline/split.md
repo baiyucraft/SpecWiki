@@ -60,7 +60,7 @@ multi-change
 - 目标：完成 stale、降级、declared knowledge 生命周期、page projection 治理和大仓 compose 可恢复性边界，并对 10 个扩展场景逐项分类。
 - 验收边界：A1 / A6 / A8 / A9 具有状态、authority、恢复、降级和非目标合同；A2 / A3 / A5 / A7 / A10 明确归类为 baseline / next / non-goal，并记录依赖与升级条件；knowledge-unit decomposition 和 provider session 的实际边界不再被历史命名高估。
 - 依赖：close-specwiki-3-0-design-baseline-product-contract、close-specwiki-3-0-design-baseline-runtime-query-contract。
-- 归档状态：[ ] pending
+- 归档状态：[x] archived
 - 后续阶段：使用 `unispec-propose` 创建该 child 的 `proposal.md`
 
 ### 5. close-specwiki-3-0-design-baseline-host-trigger-contract

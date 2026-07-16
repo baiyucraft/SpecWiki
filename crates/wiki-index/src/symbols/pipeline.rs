@@ -416,10 +416,7 @@ fn build_unit_artifacts(
     unit: &ParseUnit,
     parse_context: &mut ParseWorkerContext,
 ) -> Result<ParsedUnitArtifacts, SymbolParseDiagnostic> {
-    let tree = match parse_tree(&unit.resolved_language, &unit.content, parse_context) {
-        Ok(tree) => tree,
-        Err(diagnostic) => return Err(diagnostic),
-    };
+    let tree = parse_tree(&unit.resolved_language, &unit.content, parse_context)?;
 
     if tree.root_node().has_error() {
         return Err(diagnostic(
@@ -481,13 +478,13 @@ impl ParseWorkerContext {
         resolved_language: ResolvedSymbolLanguage,
     ) -> Result<&mut Parser, String> {
         let cache_key = resolved_language.cache_key();
-        if !self.parser_cache.contains_key(&cache_key) {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.parser_cache.entry(cache_key) {
             let mut parser = Parser::new();
             let language = resolved_language.language();
             parser
                 .set_language(&language)
                 .map_err(|error| error.to_string())?;
-            self.parser_cache.insert(cache_key, parser);
+            e.insert(parser);
         }
 
         self.parser_cache
@@ -497,11 +494,11 @@ impl ParseWorkerContext {
 
     fn query_for(&mut self, resolved_language: ResolvedSymbolLanguage) -> Result<&Query, String> {
         let cache_key = resolved_language.cache_key();
-        if !self.query_cache.contains_key(&cache_key) {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.query_cache.entry(cache_key) {
             let language = resolved_language.language();
             let query = Query::new(&language, resolved_language.query_source)
                 .map_err(|error| error.to_string())?;
-            self.query_cache.insert(cache_key, query);
+            e.insert(query);
         }
 
         self.query_cache

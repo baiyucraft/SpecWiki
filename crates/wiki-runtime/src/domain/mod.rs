@@ -10,6 +10,7 @@ pub mod metadata;
 pub mod metadata_mapper;
 pub mod module_tree;
 pub mod relation;
+pub mod research;
 pub mod runtime_profile;
 pub mod stable_id;
 pub mod state;

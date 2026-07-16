@@ -1590,7 +1590,7 @@ fn storybook_api_signal_units_cover_developer_api_topics_without_module_api_spra
             })
             .collect::<Vec<_>>();
         assert!(
-            source_paths.iter().any(|path| *path == expected_path),
+            source_paths.contains(&expected_path),
             "{title} should retain {expected_path}; source_paths={source_paths:?}"
         );
     }
@@ -1611,9 +1611,7 @@ fn storybook_api_signal_units_cover_developer_api_topics_without_module_api_spra
         })
         .collect::<Vec<_>>();
     assert!(
-        decorators_sources
-            .iter()
-            .any(|path| *path == "code/core/src/decorators.ts"),
+        decorators_sources.contains(&"code/core/src/decorators.ts"),
         "Decorators API should keep core implementation source; sources={decorators_sources:?}"
     );
     assert!(
@@ -1754,7 +1752,7 @@ fn types_api_prefers_topic_spine_over_generic_public_contracts() {
         "code/core/src/docs-tools/argTypes/types.ts",
     ] {
         assert!(
-            source_paths.iter().any(|path| *path == expected_path),
+            source_paths.contains(&expected_path),
             "Types API should keep topic spine source {expected_path}; sources={source_paths:?}"
         );
     }
@@ -1764,7 +1762,7 @@ fn types_api_prefers_topic_spine_over_generic_public_contracts() {
         "code/lib/cli-storybook/src/typings.d.ts",
     ] {
         assert!(
-            !source_paths.iter().any(|path| *path == unexpected_path),
+            !source_paths.contains(&unexpected_path),
             "Types API should not be dominated by generic contract source {unexpected_path}; sources={source_paths:?}"
         );
     }
@@ -2037,7 +2035,7 @@ fn dagger_units_capture_runtime_compiler_and_integration_profiles() {
             .collect::<Vec<_>>();
         for expected_path in expected_paths {
             assert!(
-                source_paths.iter().any(|path| *path == expected_path),
+                source_paths.contains(&expected_path),
                 "{title} should retain {expected_path}; source_paths={source_paths:?}"
             );
         }
@@ -2118,7 +2116,7 @@ fn dagger_api_units_keep_topic_spines_under_scope_refinement() {
             .collect::<Vec<_>>();
         for expected_path in expected_paths {
             assert!(
-                source_paths.iter().any(|path| *path == expected_path),
+                source_paths.contains(&expected_path),
                 "{title} should keep non-generic implementation spine {expected_path}; sources={source_paths:?}"
             );
         }

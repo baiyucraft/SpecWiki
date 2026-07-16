@@ -24,8 +24,33 @@ pub struct KnowledgeResearchSummary {
     pub citation_refs: Vec<String>,
     #[serde(default)]
     pub summary_status: KnowledgeResearchSummaryStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_failure_kind: Option<ProviderFailureKind>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub status_reasons: Vec<KnowledgeResearchStatusReason>,
+}
+
+/// `ProviderFailureKind` 将 provider transport/tool/context 失败收敛为正式闭集。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderFailureKind {
+    Unavailable,
+    Transport,
+    Timeout,
+    ToolError,
+    ContextLimit,
+}
+
+impl ProviderFailureKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::Transport => "transport",
+            Self::Timeout => "timeout",
+            Self::ToolError => "tool_error",
+            Self::ContextLimit => "context_limit",
+        }
+    }
 }
 
 /// `KnowledgeResearchSummaryStatus` 是 derived research summary 的正式状态。
@@ -58,6 +83,9 @@ pub enum KnowledgeResearchStatusReasonKind {
     ProviderError,
     InvalidOutput,
     CallBudgetRejected,
+    ProviderNotRun,
+    NoMeaningfulDelta,
+    TurnBudgetExhausted,
 }
 
 impl KnowledgeResearchStatusReasonKind {
@@ -69,6 +97,9 @@ impl KnowledgeResearchStatusReasonKind {
             Self::ProviderError => "provider_error",
             Self::InvalidOutput => "invalid_output",
             Self::CallBudgetRejected => "call_budget_rejected",
+            Self::ProviderNotRun => "provider_not_run",
+            Self::NoMeaningfulDelta => "no_meaningful_delta",
+            Self::TurnBudgetExhausted => "turn_budget_exhausted",
         }
     }
 
@@ -77,9 +108,12 @@ impl KnowledgeResearchStatusReasonKind {
             Self::MissingSummary | Self::MissingSourceRefs | Self::MissingCitationRefs => {
                 KnowledgeResearchSummaryStatus::Degraded
             }
-            Self::ProviderError | Self::InvalidOutput | Self::CallBudgetRejected => {
-                KnowledgeResearchSummaryStatus::Blocked
-            }
+            Self::ProviderError
+            | Self::InvalidOutput
+            | Self::CallBudgetRejected
+            | Self::ProviderNotRun
+            | Self::NoMeaningfulDelta
+            | Self::TurnBudgetExhausted => KnowledgeResearchSummaryStatus::Blocked,
         }
     }
 }
@@ -231,6 +265,38 @@ pub enum DeclaredKnowledgeRecordStatus {
     Replaced,
 }
 
+/// `DeclaredAuthoringState` 独立表达 formal record 与 page authoring block 的绑定状态。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredAuthoringState {
+    #[default]
+    Bound,
+    Detached,
+    Missing,
+}
+
+/// `DeclaredAuthorityState` 是同 kind + canonical scope group 的现行 authority 结论。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredAuthorityState {
+    #[default]
+    Unique,
+    None,
+    Conflict,
+}
+
+/// Authority evaluator 的稳定 reason 闭集。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredAuthorityReasonKind {
+    #[default]
+    UniqueHead,
+    ExplicitlyDeprecated,
+    ParallelHeads,
+    LifecycleHeadAmbiguity,
+    AuthorityAuthoringMissing,
+}
+
 impl DeclaredKnowledgeRecordStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -368,6 +434,8 @@ pub struct DeclaredKnowledgeRecord {
     pub record_kind: DeclaredKnowledgeRecordKind,
     pub scope: DeclaredKnowledgeScope,
     pub status: DeclaredKnowledgeRecordStatus,
+    #[serde(default)]
+    pub authoring_state: DeclaredAuthoringState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relations: Vec<DeclaredKnowledgeRelation>,
     pub source_ref: String,
@@ -387,6 +455,140 @@ pub struct DeclaredKnowledgeRecord {
     pub body: String,
 }
 
+/// `DeclaredAuthorityDecision` 固化 group-level head 结论，供 query/status/restore 共用。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeclaredAuthorityDecision {
+    pub authority_group_id: String,
+    pub record_kind: DeclaredKnowledgeRecordKind,
+    pub scope: DeclaredKnowledgeScope,
+    pub authority_state: DeclaredAuthorityState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub head_record_refs: Vec<String>,
+    #[serde(default)]
+    pub member_record_refs: Vec<String>,
+    pub reason_kind: DeclaredAuthorityReasonKind,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub evaluated_declared_snapshot_id: String,
+}
+
+impl DeclaredAuthorityDecision {
+    pub fn canonicalize(&mut self) {
+        self.scope.canonicalize();
+        self.head_record_refs = sorted_unique(&self.head_record_refs);
+        self.member_record_refs = sorted_unique(&self.member_record_refs);
+        self.evidence_refs = sorted_unique(&self.evidence_refs);
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.authority_group_id.trim().is_empty() || self.member_record_refs.is_empty() {
+            return Err("declared authority decision 缺少 group/member identity".to_string());
+        }
+        match self.authority_state {
+            DeclaredAuthorityState::Unique if self.head_record_refs.len() != 1 => {
+                Err("unique declared authority 必须且只能有一个 head".to_string())
+            }
+            DeclaredAuthorityState::None if !self.head_record_refs.is_empty() => {
+                Err("none declared authority 不允许包含 head".to_string())
+            }
+            DeclaredAuthorityState::Conflict if self.head_record_refs.is_empty() => {
+                Err("conflict declared authority 必须保留候选 head evidence".to_string())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+/// `DeclaredGovernanceEventKind` 描述 declared authority 的可审计生命周期变化。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredGovernanceEventKind {
+    #[default]
+    ConflictOpened,
+    ConflictResolved,
+    AuthoringMissing,
+    AuthoringRestored,
+    AuthoringDetached,
+    AuthorityChanged,
+}
+
+impl DeclaredGovernanceEventKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ConflictOpened => "conflict_opened",
+            Self::ConflictResolved => "conflict_resolved",
+            Self::AuthoringMissing => "authoring_missing",
+            Self::AuthoringRestored => "authoring_restored",
+            Self::AuthoringDetached => "authoring_detached",
+            Self::AuthorityChanged => "authority_changed",
+        }
+    }
+}
+
+/// `DeclaredGovernanceEvent` 是 append-only declared 治理历史中的单个事实事件。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeclaredGovernanceEvent {
+    pub event_id: String,
+    pub sequence: u64,
+    pub event_kind: DeclaredGovernanceEventKind,
+    pub authority_group_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub before_head_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub after_head_refs: Vec<String>,
+    #[serde(default)]
+    pub record_refs: Vec<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub previous_declared_snapshot_id: String,
+    pub current_declared_snapshot_id: String,
+    pub occurred_at: String,
+}
+
+impl DeclaredGovernanceEvent {
+    pub fn canonicalize(&mut self) {
+        self.event_id = self.event_id.trim().to_string();
+        self.authority_group_id = self.authority_group_id.trim().to_string();
+        self.conflict_id = self
+            .conflict_id
+            .take()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        self.before_head_refs = sorted_unique(&self.before_head_refs);
+        self.after_head_refs = sorted_unique(&self.after_head_refs);
+        self.record_refs = sorted_unique(&self.record_refs);
+        self.evidence_refs = sorted_unique(&self.evidence_refs);
+        self.previous_declared_snapshot_id = self.previous_declared_snapshot_id.trim().to_string();
+        self.current_declared_snapshot_id = self.current_declared_snapshot_id.trim().to_string();
+        self.occurred_at = self.occurred_at.trim().to_string();
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.event_id.is_empty() || self.sequence == 0 {
+            return Err("declared governance event 缺少 event/sequence identity".to_string());
+        }
+        if self.authority_group_id.is_empty() || self.record_refs.is_empty() {
+            return Err("declared governance event 缺少 authority group/record refs".to_string());
+        }
+        if self.current_declared_snapshot_id.is_empty() || self.occurred_at.is_empty() {
+            return Err("declared governance event 缺少 current snapshot/time".to_string());
+        }
+        if matches!(
+            self.event_kind,
+            DeclaredGovernanceEventKind::ConflictOpened
+                | DeclaredGovernanceEventKind::ConflictResolved
+        ) && self.conflict_id.is_none()
+        {
+            return Err("declared conflict event 缺少 conflict_id".to_string());
+        }
+        Ok(())
+    }
+}
+
 impl DeclaredKnowledgeRecord {
     pub fn record_id_from_authoring_id(authoring_id: &str) -> String {
         stable_id("declared", authoring_id)
@@ -399,7 +601,7 @@ impl DeclaredKnowledgeRecord {
         for relation in &mut relations {
             relation.canonicalize();
         }
-        relations.sort_by(|left, right| left.canonical_key().cmp(&right.canonical_key()));
+        relations.sort_by_key(|relation| relation.canonical_key());
         relations.dedup_by(|left, right| left.canonical_key() == right.canonical_key());
         self.relations = relations;
         self.source_ref = self.source_ref.trim().to_string();
@@ -436,13 +638,6 @@ impl DeclaredKnowledgeRecord {
                 self.record_id
             ));
         }
-        if replaced_by > 0 && supersedes > 0 {
-            return Err(format!(
-                "declared record '{}' 不允许同时包含 replaced_by 与 supersedes relation",
-                self.record_id
-            ));
-        }
-
         match self.status {
             DeclaredKnowledgeRecordStatus::Active => {
                 if deprecated > 0 || replaced_by > 0 || supersedes > 0 {
@@ -461,9 +656,9 @@ impl DeclaredKnowledgeRecord {
                 }
             }
             DeclaredKnowledgeRecordStatus::Superseded => {
-                if replaced_by == 0 || deprecated > 0 || supersedes > 0 {
+                if replaced_by == 0 || deprecated > 0 {
                     return Err(format!(
-                        "declared record '{}' 为 superseded 时必须且只能使用 replaced_by relation",
+                        "declared record '{}' 为 superseded 时必须至少使用一条 replaced_by relation，且不能 deprecated",
                         self.record_id
                     ));
                 }
@@ -702,6 +897,7 @@ pub enum KnowledgeHealthRecommendedAction {
     Update,
     Rebuild,
     Review,
+    ReviewGovernance,
 }
 
 impl KnowledgeHealthRecommendedAction {
@@ -712,6 +908,7 @@ impl KnowledgeHealthRecommendedAction {
             Self::Update => "update",
             Self::Rebuild => "rebuild",
             Self::Review => "review",
+            Self::ReviewGovernance => "review_governance",
         }
     }
 }
@@ -868,10 +1065,17 @@ pub fn validate_declared_record_snapshot(
                     record.record_id, target
                 ));
             }
-            outgoing_edges
-                .entry(record.authoring_id.clone())
-                .or_default()
-                .push(target.clone());
+            match relation.relation_kind {
+                DeclaredKnowledgeRelationKind::ReplacedBy => outgoing_edges
+                    .entry(record.authoring_id.clone())
+                    .or_default()
+                    .push(target.clone()),
+                DeclaredKnowledgeRelationKind::Supersedes => outgoing_edges
+                    .entry(target.clone())
+                    .or_default()
+                    .push(record.authoring_id.clone()),
+                DeclaredKnowledgeRelationKind::Deprecated => {}
+            }
         }
     }
 
@@ -1012,12 +1216,12 @@ fn detect_declared_cycle(
 mod tests {
     use super::{
         validate_conflict_record_snapshot, validate_declared_record_snapshot,
-        validate_research_summary_snapshot, DeclaredKnowledgeRecord, DeclaredKnowledgeRecordKind,
-        DeclaredKnowledgeRecordStatus, DeclaredKnowledgeRelation, DeclaredKnowledgeRelationKind,
-        DeclaredKnowledgeScope, DeclaredKnowledgeScopeKind, KnowledgeConflictKind,
-        KnowledgeConflictRecord, KnowledgeConflictStatus, KnowledgeHealthSeverity,
-        KnowledgeResearchStatusReason, KnowledgeResearchStatusReasonKind, KnowledgeResearchSummary,
-        KnowledgeResearchSummaryStatus,
+        validate_research_summary_snapshot, DeclaredAuthoringState, DeclaredKnowledgeRecord,
+        DeclaredKnowledgeRecordKind, DeclaredKnowledgeRecordStatus, DeclaredKnowledgeRelation,
+        DeclaredKnowledgeRelationKind, DeclaredKnowledgeScope, DeclaredKnowledgeScopeKind,
+        KnowledgeConflictKind, KnowledgeConflictRecord, KnowledgeConflictStatus,
+        KnowledgeHealthSeverity, KnowledgeResearchStatusReason, KnowledgeResearchStatusReasonKind,
+        KnowledgeResearchSummary, KnowledgeResearchSummaryStatus,
     };
 
     fn sample_scope() -> DeclaredKnowledgeScope {
@@ -1035,6 +1239,7 @@ mod tests {
             record_kind: DeclaredKnowledgeRecordKind::Policy,
             scope: sample_scope(),
             status: DeclaredKnowledgeRecordStatus::Active,
+            authoring_state: DeclaredAuthoringState::Bound,
             relations: Vec::new(),
             source_ref: "manual".to_string(),
             updated_at: "2026-04-14T00:00:00Z".to_string(),
@@ -1061,6 +1266,7 @@ mod tests {
             source_refs: vec!["src/runtime.rs".to_string()],
             citation_refs: vec!["source-runtime".to_string()],
             summary_status: KnowledgeResearchSummaryStatus::Ready,
+            provider_failure_kind: None,
             status_reasons: Vec::new(),
         }
     }

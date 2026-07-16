@@ -8,16 +8,16 @@ use std::path::Path;
 
 use crate::domain::change_set::plan_runtime_changes_with_mode;
 use crate::domain::runtime_profile::{
-    blocker_hint_from, merge_governance_recommended_action, merge_recommended_action,
-    preflight_for_state, summarize_health_signals, FusionReadiness, LayerReadiness, LlmModeHint,
-    RecommendedAction, RestoredLevel, RuntimeGateSummary, RuntimeReadiness,
-    RuntimeSummaryProjection,
+    assess_runtime_reliability, blocker_hint_from, merge_governance_recommended_action,
+    merge_health_readiness, merge_recommended_action, summarize_health_signals, LlmModeHint,
+    RecommendedAction, RuntimeGateSummary, RuntimeReadiness, RuntimeSummaryProjection,
 };
 use crate::domain::steering::{load_steering_config_with_mode, SteeringLoadMode};
 use crate::storage::cache_store::cache_dir;
 use crate::storage::knowledge_artifacts::{
     load_health_signals, restore_runtime_cache_from_artifacts,
 };
+use crate::storage::runtime_commit::recover_runtime_commits;
 use crate::storage::state_store::{index_graph_ready, runtime_mirror_ready};
 use crate::workflows::governance::GovernanceService;
 use crate::workflows::page_render::{
@@ -82,6 +82,7 @@ pub fn run_status_with_mode(
     repo_root: &Path,
     steering_mode: SteeringLoadMode,
 ) -> io::Result<StatusReport> {
+    recover_runtime_commits(repo_root)?;
     let mut plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
     let mut restore_readiness = None;
     if plan.needs_rebuild_reason.as_deref() == Some("cache_missing")
@@ -101,27 +102,39 @@ pub fn run_status_with_mode(
         .flatten()
         .map(RuntimeSummaryProjection::from_summary);
     let gate_summary = load_runtime_gate_summary_for_repo(repo_root).ok().flatten();
-    let health_summary = load_health_signals(repo_root)
-        .ok()
-        .and_then(|signals| summarize_health_signals(&signals));
+    let health_signals = load_health_signals(repo_root).unwrap_or_default();
+    let health_summary = summarize_health_signals(&health_signals);
     let external_state = derive_runtime_state(
         &projected_state,
         runtime_summary.as_ref(),
         gate_summary.as_ref(),
     );
-    let readiness = restore_readiness.unwrap_or_else(|| {
-        readiness_from_state(
-            &external_state,
-            graph_ready,
-            mirror_ready,
-            plan.needs_rebuild_reason.as_deref(),
-        )
-    });
-    let preflight = preflight_for_state(&external_state, graph_ready);
+    let assessment = assess_runtime_reliability(
+        &external_state,
+        graph_ready,
+        mirror_ready,
+        plan.needs_rebuild_reason.as_deref(),
+    );
+    let readiness = merge_health_readiness(
+        restore_readiness
+            .clone()
+            .unwrap_or_else(|| assessment.readiness.clone()),
+        &health_signals,
+    );
     let governance = GovernanceService::new(repo_root).status()?;
     let recommended_action = merge_governance_recommended_action(
         merge_recommended_action(
-            recommended_action_for_readiness(preflight.recommended_action, &readiness),
+            if restore_readiness.is_some() {
+                assess_runtime_reliability(
+                    &external_state,
+                    graph_ready,
+                    mirror_ready,
+                    plan.needs_rebuild_reason.as_deref(),
+                )
+                .core_action
+            } else {
+                assessment.core_action
+            },
             health_summary.as_ref(),
         ),
         &governance,
@@ -151,134 +164,6 @@ pub fn run_status_with_mode(
         gate_summary,
         blocker_hint,
     })
-}
-
-pub(crate) fn readiness_from_state(
-    state: &str,
-    graph_ready: bool,
-    mirror_ready: bool,
-    needs_rebuild_reason: Option<&str>,
-) -> RuntimeReadiness {
-    match state {
-        "fresh" if graph_ready => RuntimeReadiness::ready(None),
-        "fresh" if mirror_ready => RuntimeReadiness {
-            index: LayerReadiness::Missing,
-            knowledge: LayerReadiness::Ready,
-            projection: LayerReadiness::Ready,
-            fusion: FusionReadiness::Degraded,
-            restored_level: RestoredLevel::Level1,
-            snapshot_id: None,
-            reasons: needs_rebuild_reason
-                .map(|reason| vec![reason.to_string()])
-                .unwrap_or_default(),
-        },
-        "stale" | "needs_update" => RuntimeReadiness {
-            index: if graph_ready {
-                LayerReadiness::Ready
-            } else {
-                LayerReadiness::Missing
-            },
-            knowledge: if mirror_ready {
-                LayerReadiness::Ready
-            } else {
-                LayerReadiness::Missing
-            },
-            projection: if mirror_ready {
-                LayerReadiness::Ready
-            } else {
-                LayerReadiness::Missing
-            },
-            fusion: FusionReadiness::Degraded,
-            restored_level: if mirror_ready {
-                RestoredLevel::Level1
-            } else {
-                RestoredLevel::None
-            },
-            snapshot_id: None,
-            reasons: needs_rebuild_reason
-                .map(|reason| vec![reason.to_string()])
-                .unwrap_or_else(|| vec!["runtime_stale".to_string()]),
-        },
-        "runtime_incomplete" if mirror_ready => RuntimeReadiness {
-            index: if graph_ready {
-                LayerReadiness::Ready
-            } else {
-                LayerReadiness::Missing
-            },
-            knowledge: LayerReadiness::Ready,
-            projection: LayerReadiness::Ready,
-            fusion: if graph_ready {
-                FusionReadiness::Degraded
-            } else {
-                FusionReadiness::Degraded
-            },
-            restored_level: if graph_ready {
-                RestoredLevel::Level2
-            } else {
-                RestoredLevel::Level1
-            },
-            snapshot_id: None,
-            reasons: needs_rebuild_reason
-                .map(|reason| vec![reason.to_string()])
-                .unwrap_or_else(|| vec!["runtime_incomplete".to_string()]),
-        },
-        "missing" => RuntimeReadiness::missing("runtime_missing"),
-        "blocker" => RuntimeReadiness::blocked("runtime_blocker"),
-        _ if mirror_ready => RuntimeReadiness {
-            index: if graph_ready {
-                LayerReadiness::Ready
-            } else {
-                LayerReadiness::Missing
-            },
-            knowledge: LayerReadiness::Ready,
-            projection: LayerReadiness::Ready,
-            fusion: if graph_ready {
-                FusionReadiness::Ready
-            } else {
-                FusionReadiness::Degraded
-            },
-            restored_level: if graph_ready {
-                RestoredLevel::Level2
-            } else {
-                RestoredLevel::Level1
-            },
-            snapshot_id: None,
-            reasons: needs_rebuild_reason
-                .map(|reason| vec![reason.to_string()])
-                .unwrap_or_default(),
-        },
-        _ => RuntimeReadiness {
-            index: LayerReadiness::Stale,
-            knowledge: LayerReadiness::Stale,
-            projection: LayerReadiness::Stale,
-            fusion: FusionReadiness::Degraded,
-            restored_level: RestoredLevel::None,
-            snapshot_id: None,
-            reasons: needs_rebuild_reason
-                .map(|reason| vec![reason.to_string()])
-                .unwrap_or_default(),
-        },
-    }
-}
-
-fn recommended_action_for_readiness(
-    current: RecommendedAction,
-    readiness: &RuntimeReadiness,
-) -> RecommendedAction {
-    if current == RecommendedAction::Init {
-        return current;
-    }
-    if readiness.index == LayerReadiness::Ready && readiness.fusion == FusionReadiness::Ready {
-        return current;
-    }
-    match readiness.fusion {
-        FusionReadiness::Ready => current,
-        FusionReadiness::Degraded => match current {
-            RecommendedAction::None => RecommendedAction::Rebuild,
-            action => action,
-        },
-        FusionReadiness::Blocked => RecommendedAction::Rebuild,
-    }
 }
 
 fn derive_runtime_state(

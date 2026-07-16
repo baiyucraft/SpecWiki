@@ -258,10 +258,6 @@ fn is_builtin_or_noise(capture: &RawCallCapture) -> bool {
         || capture
             .receiver_text
             .as_deref()
-            .map(|receiver| {
-                NOISE_RECEIVERS
-                    .iter()
-                    .any(|candidate| *candidate == receiver)
-            })
+            .map(|receiver| NOISE_RECEIVERS.contains(&receiver))
             .unwrap_or(false)
 }

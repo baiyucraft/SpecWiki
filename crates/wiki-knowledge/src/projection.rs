@@ -2,9 +2,14 @@
 //! 这里产出的 `PagePlan` 属于 knowledge 侧，不代表 runtime 持久化真相。
 
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use wiki_model::domain::knowledge::{
     is_official_wiki_relative_path, official_wiki_relative_path, KnowledgeTree, KnowledgeUnit,
     UnitType,
+};
+use wiki_model::domain::projection::{
+    PageProjectionDecision, ProjectionAction, ProjectionEligibility, ProjectionLifecycle,
+    ProjectionPolicy,
 };
 use wiki_model::domain::stable_id::stable_id;
 
@@ -48,14 +53,255 @@ pub struct PagePlan {
     pub merged_module_ids: Vec<String>,
 }
 
-/// 从 KnowledgeTree 生成稳定页面投影列表。
-/// 这是 KnowledgeUnit 主线上的正式 projection decision 入口。
-pub fn plan_pages_from_knowledge_tree(tree: &KnowledgeTree) -> Vec<PagePlan> {
-    tree.processing_order
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionPolicyError {
+    UnknownUnitRef(String),
+    StructuralExclude(String),
+    NonLeafOverride(String),
+    ConflictingOverride(String),
+    InvalidDecision(String),
+}
+
+/// 为每个 unit 生成 deterministic eligibility/lifecycle/action decision。
+pub fn plan_projection_intents(
+    tree: &KnowledgeTree,
+    policy: &ProjectionPolicy,
+    previous: &[PageProjectionDecision],
+) -> Result<Vec<PageProjectionDecision>, ProjectionPolicyError> {
+    let include = normalized_override_refs(&policy.include);
+    let exclude = normalized_override_refs(&policy.exclude);
+    for unit_ref in include.union(&exclude) {
+        let Some(unit) = tree.get_unit(unit_ref) else {
+            return Err(ProjectionPolicyError::UnknownUnitRef(unit_ref.clone()));
+        };
+        if is_structural(&unit.unit_type) && exclude.contains(unit_ref) {
+            return Err(ProjectionPolicyError::StructuralExclude(unit_ref.clone()));
+        }
+        if !is_structural(&unit.unit_type) && !unit.is_leaf() {
+            return Err(ProjectionPolicyError::NonLeafOverride(unit_ref.clone()));
+        }
+        if include.contains(unit_ref) && exclude.contains(unit_ref) {
+            return Err(ProjectionPolicyError::ConflictingOverride(unit_ref.clone()));
+        }
+    }
+
+    let mut budget_selected = BTreeSet::new();
+    let mut candidates_by_domain = BTreeMap::<String, Vec<&KnowledgeUnit>>::new();
+    for unit in tree.units.values() {
+        if is_structural(&unit.unit_type)
+            || !unit.is_leaf()
+            || include.contains(&unit.id)
+            || exclude.contains(&unit.id)
+        {
+            continue;
+        }
+        candidates_by_domain
+            .entry(unit.domain_id.clone())
+            .or_default()
+            .push(unit);
+    }
+    for candidates in candidates_by_domain.values_mut() {
+        candidates.sort_by(|left, right| {
+            projection_priority(right, policy)
+                .partial_cmp(&projection_priority(left, policy))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        budget_selected.extend(
+            candidates
+                .iter()
+                .take(policy.max_projected_leaf_pages_per_domain)
+                .map(|unit| unit.id.clone()),
+        );
+    }
+
+    let previous_by_unit = previous
         .iter()
-        .filter_map(|unit_id| tree.get_unit(unit_id))
-        .map(|unit| knowledge_unit_to_planned_page(unit, tree))
+        .map(|decision| (decision.unit_ref.as_str(), decision))
+        .collect::<BTreeMap<_, _>>();
+    let mut unit_order = tree.processing_order.clone();
+    for unit_id in tree.units.keys() {
+        if !unit_order.contains(unit_id) {
+            unit_order.push(unit_id.clone());
+        }
+    }
+    let mut decisions = Vec::with_capacity(tree.units.len());
+    for unit_id in unit_order {
+        let Some(unit) = tree.get_unit(&unit_id) else {
+            continue;
+        };
+        let relative_path =
+            official_wiki_relative_path(&unit.unit_type, &unit.title, &unit.relative_path);
+        let page_id = stable_id("page", &relative_path);
+        let (eligibility, reason_ref, policy_ref) = if is_structural(&unit.unit_type) {
+            (
+                ProjectionEligibility::Required,
+                "structural_required",
+                "policy:structural",
+            )
+        } else if include.contains(&unit.id) {
+            (
+                ProjectionEligibility::Selected,
+                "explicit_include",
+                "policy:pages.include",
+            )
+        } else if exclude.contains(&unit.id) {
+            (
+                ProjectionEligibility::KnowledgeOnly,
+                "explicit_exclude",
+                "policy:pages.exclude",
+            )
+        } else if budget_selected.contains(&unit.id) {
+            (
+                ProjectionEligibility::Selected,
+                "domain_budget_selected",
+                "policy:pages.max_projected_leaf_pages_per_domain",
+            )
+        } else {
+            (
+                ProjectionEligibility::KnowledgeOnly,
+                "domain_budget_exceeded",
+                "policy:pages.max_projected_leaf_pages_per_domain",
+            )
+        };
+        let (lifecycle, action) =
+            projection_transition(eligibility, previous_by_unit.get(unit.id.as_str()).copied());
+        let policy_seed = canonical_policy_seed(policy);
+        let input_hash = stable_id(
+            "projection-input",
+            format!(
+                "{}:{}:{}:{}:{policy_seed}",
+                unit.id, relative_path, unit.priority, reason_ref
+            ),
+        );
+        let mut decision = PageProjectionDecision {
+            decision_id: stable_id("projection-decision", &unit.id),
+            unit_ref: unit.id.clone(),
+            page_id,
+            relative_path,
+            domain_ref: unit.domain_id.clone(),
+            eligibility,
+            lifecycle,
+            action,
+            reason_refs: vec![reason_ref.to_string()],
+            policy_refs: vec![policy_ref.to_string()],
+            input_hash,
+        };
+        decision.canonicalize();
+        decision
+            .validate()
+            .map_err(|_| ProjectionPolicyError::InvalidDecision(unit.id.clone()))?;
+        decisions.push(decision);
+    }
+    Ok(decisions)
+}
+
+/// 将 required/selected decisions 转为实际 PagePlan。
+pub fn project_page_plans(
+    tree: &KnowledgeTree,
+    decisions: &[PageProjectionDecision],
+) -> Result<Vec<PagePlan>, ProjectionPolicyError> {
+    decisions
+        .iter()
+        .filter(|decision| decision.eligibility.is_projectable())
+        .map(|decision| {
+            let unit = tree
+                .get_unit(&decision.unit_ref)
+                .ok_or_else(|| ProjectionPolicyError::UnknownUnitRef(decision.unit_ref.clone()))?;
+            let page = knowledge_unit_to_planned_page(unit, tree);
+            if page.id != decision.page_id || page.relative_path != decision.relative_path {
+                return Err(ProjectionPolicyError::InvalidDecision(
+                    decision.decision_id.clone(),
+                ));
+            }
+            Ok(page)
+        })
         .collect()
+}
+
+fn normalized_override_refs(
+    overrides: &[wiki_model::domain::projection::PageProjectionOverride],
+) -> BTreeSet<String> {
+    overrides
+        .iter()
+        .map(|entry| entry.unit_ref.trim().to_string())
+        .filter(|unit_ref| !unit_ref.is_empty())
+        .collect()
+}
+
+fn is_structural(unit_type: &UnitType) -> bool {
+    matches!(
+        unit_type,
+        UnitType::Overview | UnitType::Architecture | UnitType::DomainIndex
+    )
+}
+
+fn projection_priority(unit: &KnowledgeUnit, policy: &ProjectionPolicy) -> f32 {
+    let relative_path =
+        official_wiki_relative_path(&unit.unit_type, &unit.title, &unit.relative_path);
+    let boost = policy
+        .priority
+        .iter()
+        .filter(|entry| {
+            let path = entry.path.trim().replace('\\', "/");
+            path == unit.relative_path.replace('\\', "/") || path == relative_path
+        })
+        .map(|entry| entry.boost)
+        .sum::<i32>();
+    unit.priority + boost as f32
+}
+
+fn projection_transition(
+    eligibility: ProjectionEligibility,
+    previous: Option<&PageProjectionDecision>,
+) -> (ProjectionLifecycle, ProjectionAction) {
+    if eligibility.is_projectable() {
+        return match previous.map(|decision| decision.lifecycle) {
+            Some(ProjectionLifecycle::Projected | ProjectionLifecycle::Retiring) => {
+                (ProjectionLifecycle::Projected, ProjectionAction::Retain)
+            }
+            _ => (ProjectionLifecycle::Absent, ProjectionAction::Promote),
+        };
+    }
+    match previous.map(|decision| decision.lifecycle) {
+        Some(ProjectionLifecycle::Projected | ProjectionLifecycle::Retiring) => {
+            (ProjectionLifecycle::Retiring, ProjectionAction::Demote)
+        }
+        Some(ProjectionLifecycle::Retired) => {
+            (ProjectionLifecycle::Retired, ProjectionAction::None)
+        }
+        _ => (ProjectionLifecycle::Absent, ProjectionAction::None),
+    }
+}
+
+fn canonical_policy_seed(policy: &ProjectionPolicy) -> String {
+    let include = normalized_override_refs(&policy.include)
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(",");
+    let exclude = normalized_override_refs(&policy.exclude)
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut priority = policy
+        .priority
+        .iter()
+        .map(|entry| format!("{}:{}", entry.path.trim().replace('\\', "/"), entry.boost))
+        .collect::<Vec<_>>();
+    priority.sort();
+    let mut hints = policy
+        .hint_refs
+        .iter()
+        .map(|hint| hint.trim().to_string())
+        .filter(|hint| !hint.is_empty())
+        .collect::<Vec<_>>();
+    hints.sort();
+    format!(
+        "include={include};exclude={exclude};priority={};hints={};budget={}",
+        priority.join(","),
+        hints.join(","),
+        policy.max_projected_leaf_pages_per_domain
+    )
 }
 
 fn knowledge_unit_to_planned_page(unit: &KnowledgeUnit, tree: &KnowledgeTree) -> PagePlan {

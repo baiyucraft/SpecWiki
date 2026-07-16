@@ -18,6 +18,20 @@ impl<'conn> SqliteKnowledgeStore<'conn> {
     pub fn new(conn: &'conn Connection) -> Self {
         Self { conn }
     }
+
+    pub fn read_page_digest_with_hash(
+        &self,
+        unit_id: &str,
+    ) -> io::Result<Option<(String, Option<String>)>> {
+        sqlite_store::read_page_digest_with_hash(self.conn, unit_id)
+    }
+
+    pub fn read_page_draft_with_hash(
+        &self,
+        unit_id: &str,
+    ) -> io::Result<Option<(String, Option<String>)>> {
+        sqlite_store::read_page_draft_with_hash(self.conn, unit_id)
+    }
 }
 
 impl KnowledgeSnapshotStore for SqliteKnowledgeStore<'_> {

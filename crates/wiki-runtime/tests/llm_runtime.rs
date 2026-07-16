@@ -17,10 +17,10 @@ use wiki_index::symbol_graph::{
 };
 use wiki_index::symbols::ParsedSymbolsSnapshot;
 use wiki_knowledge::domain::research::ResearchStopReason;
-use wiki_knowledge::plan_pages_from_knowledge_tree;
 use wiki_knowledge::planning::{
     build_knowledge_tree, discover_knowledge_domains, plan_knowledge_units,
 };
+use wiki_knowledge::{plan_projection_intents, project_page_plans};
 use wiki_runtime::domain::context::{PageEvidenceGroup, PageEvidenceItem};
 use wiki_runtime::domain::stable_id::stable_id;
 use wiki_runtime::domain::steering::{
@@ -98,19 +98,19 @@ fn plan_pages(
     );
     let units = plan_knowledge_units(&domains, tree, report, mod_ctxs, &planner_config);
     let knowledge_tree = build_knowledge_tree(domains, units);
-    plan_pages_from_knowledge_tree(&knowledge_tree)
+    let decisions =
+        plan_projection_intents(&knowledge_tree, &steering.pages.projection_policy(), &[]).unwrap();
+    project_page_plans(&knowledge_tree, &decisions).unwrap()
 }
 
-fn first_module_page<'a>(pages: &'a [wiki_knowledge::PagePlan]) -> &'a wiki_knowledge::PagePlan {
+fn first_module_page(pages: &[wiki_knowledge::PagePlan]) -> &wiki_knowledge::PagePlan {
     pages
         .iter()
         .find(|page| page.page_type == "module")
         .expect("module page should exist")
 }
 
-fn storybook_addons_page<'a>(
-    pages: &'a [wiki_knowledge::PagePlan],
-) -> &'a wiki_knowledge::PagePlan {
+fn storybook_addons_page(pages: &[wiki_knowledge::PagePlan]) -> &wiki_knowledge::PagePlan {
     pages
         .iter()
         .find(|page| page.relative_path == "插件生态/addons.md")
@@ -275,9 +275,7 @@ impl LlmService for BatchFilePurposeLlmService {
                         let path = item.get("path")?.as_str()?;
                         let purpose = if path.contains("middleware") {
                             "middleware"
-                        } else if path.contains("helper") {
-                            "helper"
-                        } else if path.contains("promote") {
+                        } else if path.contains("helper") || path.contains("promote") {
                             "helper"
                         } else {
                             "utility"
@@ -923,6 +921,19 @@ fn init_uses_provider_research_session_with_tools() {
         .tool_artifact_refs
         .iter()
         .any(|artifact| artifact.tool_name == "read_source_snippets"));
+    for entry in &cache_entries {
+        for forbidden in [
+            "session_id",
+            "session_summary",
+            "recent_turns",
+            "tool_artifact_refs",
+        ] {
+            assert!(
+                !entry.response.contains(forbidden),
+                "request-local session field {forbidden} must not enter the durable LLM cache"
+            );
+        }
+    }
 
     let first_request: serde_json::Value = serde_json::from_str(&requests[0]).unwrap();
     assert!(first_request.get("messages").is_some());

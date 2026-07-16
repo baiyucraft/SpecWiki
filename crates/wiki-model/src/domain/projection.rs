@@ -3,6 +3,163 @@
 
 use serde::{Deserialize, Serialize};
 
+/// `ProjectionEligibility` 表示 knowledge unit 是否应形成正式页面。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionEligibility {
+    Required,
+    Selected,
+    KnowledgeOnly,
+}
+
+impl ProjectionEligibility {
+    pub fn is_projectable(self) -> bool {
+        matches!(self, Self::Required | Self::Selected)
+    }
+}
+
+/// `PageLinkRef` 是用于 projection removal preflight 的结构化内部链接证据。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PageLinkRef {
+    pub source_page_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_section_id: Option<String>,
+    pub source_owner: SectionOwnership,
+    pub target_page_id: String,
+    pub target_path: String,
+    pub content_hash: String,
+}
+
+impl PageLinkRef {
+    pub fn canonicalize(&mut self) {
+        self.source_page_id = self.source_page_id.trim().to_string();
+        self.source_section_id = self
+            .source_section_id
+            .take()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        self.target_page_id = self.target_page_id.trim().to_string();
+        self.target_path = self.target_path.trim().replace('\\', "/");
+        self.content_hash = self.content_hash.trim().to_string();
+    }
+}
+
+/// `ProjectionLifecycle` 表示页面在 projection 回收流程中的正式阶段。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionLifecycle {
+    #[default]
+    Absent,
+    Projected,
+    Retiring,
+    Retired,
+}
+
+/// `ProjectionAction` 是 planner 对 runtime commit 的有限动作建议。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionAction {
+    Promote,
+    Retain,
+    Refresh,
+    Demote,
+    Remove,
+    Block,
+    #[default]
+    None,
+}
+
+/// `PageProjectionOverride` 以 stable unit ref 表达显式 include/exclude。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PageProjectionOverride {
+    pub unit_ref: String,
+}
+
+/// `PageProjectionPriority` 复用 path + boost 语义影响预算内排序。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PageProjectionPriority {
+    pub path: String,
+    pub boost: i32,
+}
+
+/// `ProjectionPolicy` 是不依赖在线遥测的 deterministic 页面预算策略。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ProjectionPolicy {
+    #[serde(default)]
+    pub include: Vec<PageProjectionOverride>,
+    #[serde(default)]
+    pub exclude: Vec<PageProjectionOverride>,
+    #[serde(default)]
+    pub priority: Vec<PageProjectionPriority>,
+    #[serde(default)]
+    pub hint_refs: Vec<String>,
+    #[serde(default = "default_leaf_page_budget")]
+    pub max_projected_leaf_pages_per_domain: usize,
+}
+
+impl Default for ProjectionPolicy {
+    fn default() -> Self {
+        Self {
+            include: Vec::new(),
+            exclude: Vec::new(),
+            priority: Vec::new(),
+            hint_refs: Vec::new(),
+            max_projected_leaf_pages_per_domain: default_leaf_page_budget(),
+        }
+    }
+}
+
+fn default_leaf_page_budget() -> usize {
+    5
+}
+
+/// `PageProjectionDecision` 固化每个 KnowledgeUnit 的 eligibility/lifecycle/action。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PageProjectionDecision {
+    pub decision_id: String,
+    pub unit_ref: String,
+    pub page_id: String,
+    pub relative_path: String,
+    pub domain_ref: String,
+    pub eligibility: ProjectionEligibility,
+    pub lifecycle: ProjectionLifecycle,
+    pub action: ProjectionAction,
+    #[serde(default)]
+    pub reason_refs: Vec<String>,
+    #[serde(default)]
+    pub policy_refs: Vec<String>,
+    pub input_hash: String,
+}
+
+impl PageProjectionDecision {
+    pub fn keeps_formal_page(&self) -> bool {
+        self.eligibility.is_projectable() || self.lifecycle == ProjectionLifecycle::Retiring
+    }
+
+    pub fn canonicalize(&mut self) {
+        self.decision_id = self.decision_id.trim().to_string();
+        self.unit_ref = self.unit_ref.trim().to_string();
+        self.page_id = self.page_id.trim().to_string();
+        self.relative_path = self.relative_path.trim().replace('\\', "/");
+        self.domain_ref = self.domain_ref.trim().to_string();
+        self.reason_refs = sorted_unique(&self.reason_refs);
+        self.policy_refs = sorted_unique(&self.policy_refs);
+        self.input_hash = self.input_hash.trim().to_string();
+    }
+
+    pub fn validate(&self) -> Result<(), ProjectionContractError> {
+        if self.decision_id.is_empty() || self.unit_ref.is_empty() || self.input_hash.is_empty() {
+            return Err(ProjectionContractError::MissingProjectionId);
+        }
+        if self.page_id.is_empty() || self.relative_path.is_empty() {
+            return Err(ProjectionContractError::MissingPageId {
+                projection_id: self.decision_id.clone(),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// `SectionOwnership` 是页面 section 的机器可判定 ownership。
 /// 它跨 metadata、runtime parser、knowledge validation 和 sync result 共用。
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]

@@ -418,19 +418,16 @@ fn resolve_import_capture(
 
     let mut candidates = rewrite_tsconfig_alias(context, &capture.raw_path)
         .into_iter()
-        .chain(rewrite_rust_import(capture).into_iter())
-        .chain(
-            normalize_dependency_target(
-                &capture.file_path,
-                &capture.raw_path,
-                &capture.language,
-                &context.import_aliases,
-            )
-            .into_iter(),
-        )
-        .chain(rewrite_go_module_import(context, &capture.raw_path).into_iter())
-        .chain(rewrite_php_psr4_import(context, &capture.raw_path).into_iter())
-        .chain(rewrite_swift_target_import(context, &capture.raw_path).into_iter())
+        .chain(rewrite_rust_import(capture))
+        .chain(normalize_dependency_target(
+            &capture.file_path,
+            &capture.raw_path,
+            &capture.language,
+            &context.import_aliases,
+        ))
+        .chain(rewrite_go_module_import(context, &capture.raw_path))
+        .chain(rewrite_php_psr4_import(context, &capture.raw_path))
+        .chain(rewrite_swift_target_import(context, &capture.raw_path))
         .map(|candidate| normalize_repo_path(&candidate))
         .collect::<Vec<_>>();
 
@@ -561,11 +558,7 @@ fn resolve_candidate_to_files(
     }
 
     for extension in preferred_extensions(language) {
-        let candidate_with_extension = if extension.starts_with('/') {
-            format!("{candidate}{extension}")
-        } else {
-            format!("{candidate}{extension}")
-        };
+        let candidate_with_extension = format!("{candidate}{extension}");
         for file_path in lookup_suffix(context, &candidate_with_extension) {
             if seen.insert(file_path.clone()) {
                 resolved.push(file_path);

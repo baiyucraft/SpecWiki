@@ -12,30 +12,39 @@ use crate::domain::runtime_profile::{
     FusionReadiness, LayerReadiness, RestoredLevel, RuntimeReadiness,
 };
 use crate::domain::state::{rebuild_state_from_metadata, WikiSectionState, WikiState};
-use crate::generation::managed_sections::{content_hash, parse_wiki_page, PageBlock};
+use crate::generation::managed_sections::{
+    collect_page_link_refs, content_hash, parse_wiki_page, PageBlock, SectionBindingIndex,
+};
 use crate::generation::sections::SectionDraft;
 use crate::storage::cache_store::{
     ensure_cache_dir, ensure_page_cache_dirs, write_module_tree_cache, write_page_context_cache,
     write_page_generation_cache, write_scan_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::metadata_store::{metadata_exists, metadata_path, read_metadata};
+use crate::storage::runtime_commit::{
+    execute_runtime_commit, recover_runtime_commits, RuntimeCommitPlan, RuntimeCommitWrite,
+};
 use crate::storage::sqlite::runtime_store::SqliteRuntimeStore;
 use crate::storage::sqlite_store;
 use crate::storage::state_store::{mark_level1_restored_mirror, write_state};
 use crate::storage::wiki_fs::{remove_cache_db, resolve_page_path, wiki_root};
 use wiki_index::fingerprint::fingerprint_bytes;
 use wiki_index::scanner::{scan_repo, FilePurpose, ScanReport, ScannedFile};
+use wiki_knowledge::declared_authority::{
+    evaluate_declared_authority, reconcile_declared_governance_events,
+};
 use wiki_knowledge::domain::compose::PageDraft;
 use wiki_knowledge::domain::research::{
     validate_page_digest_snapshot, PageDigest, ProjectionDigestStatus, UnitResearch,
 };
-use wiki_knowledge::plan_pages_from_knowledge_tree;
+use wiki_knowledge::project_page_plans;
 use wiki_model::domain::knowledge::{
     KnowledgeDomain, KnowledgeTree, KnowledgeUnit, KnowledgeUnitStatus,
 };
 use wiki_model::domain::knowledge_artifact::{
     validate_conflict_record_snapshot, validate_declared_record_snapshot,
-    validate_research_summary_snapshot, CommittedSnapshotManifest, DeclaredKnowledgeRecord,
+    validate_research_summary_snapshot, CommittedSnapshotManifest, DeclaredAuthoringState,
+    DeclaredAuthorityDecision, DeclaredGovernanceEvent, DeclaredKnowledgeRecord,
     DeclaredKnowledgeRecordStatus, DeclaredKnowledgeRelationKind, KnowledgeConflictKind,
     KnowledgeConflictRecord, KnowledgeConflictStatus, KnowledgeHealthRecommendedAction,
     KnowledgeHealthSeverity, KnowledgeHealthSignal, KnowledgeHealthSignalKind,
@@ -43,8 +52,9 @@ use wiki_model::domain::knowledge_artifact::{
 };
 use wiki_model::domain::module_tree::ModuleTree;
 use wiki_model::domain::projection::{
-    ProjectionDigest, ProjectionDigestStatus as ModelProjectionDigestStatus,
-    ProjectionStatusReason, ProjectionStatusReasonKind,
+    PageLinkRef, PageProjectionDecision, ProjectionDigest,
+    ProjectionDigestStatus as ModelProjectionDigestStatus, ProjectionStatusReason,
+    ProjectionStatusReasonKind,
 };
 use wiki_model::domain::source_citation::SourceCitation;
 
@@ -58,9 +68,13 @@ pub struct KnowledgeArtifactSnapshot {
     pub units: Vec<KnowledgeUnit>,
     pub knowledge_tree: KnowledgeTree,
     pub declared_records: Vec<DeclaredKnowledgeRecord>,
+    pub declared_authority_decisions: Vec<DeclaredAuthorityDecision>,
+    pub declared_governance_events: Vec<DeclaredGovernanceEvent>,
     pub conflict_records: Vec<KnowledgeConflictRecord>,
     pub research_summaries: Vec<KnowledgeResearchSummary>,
     pub page_digests: Vec<PageDigest>,
+    pub projection_decisions: Vec<PageProjectionDecision>,
+    pub page_link_refs: Vec<PageLinkRef>,
     pub projection_digests: Vec<ProjectionDigest>,
     pub runtime_gates: Vec<KnowledgeRuntimeGateRecord>,
     pub health_signals: Vec<KnowledgeHealthSignal>,
@@ -132,8 +146,15 @@ pub struct PersistKnowledgeArtifactsInput<'a> {
     pub declared_records: &'a [DeclaredKnowledgeRecord],
     pub research_summaries: &'a [KnowledgeResearchSummary],
     pub page_digests: &'a [PageDigest],
+    pub projection_decisions: &'a [PageProjectionDecision],
     pub runtime_gates: &'a [UnitRuntimeGate],
     pub health_signals: &'a [KnowledgeHealthSignal],
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimePageWrite {
+    pub relative_path: String,
+    pub content: String,
 }
 
 pub fn knowledge_root(repo_root: &Path) -> PathBuf {
@@ -180,8 +201,24 @@ fn projection_digests_path(repo_root: &Path) -> PathBuf {
     runtime_root(repo_root).join("projection-digests.jsonl")
 }
 
+fn projection_decisions_path(repo_root: &Path) -> PathBuf {
+    runtime_root(repo_root).join("projection-decisions.jsonl")
+}
+
+fn page_link_refs_path(repo_root: &Path) -> PathBuf {
+    runtime_root(repo_root).join("page-link-refs.jsonl")
+}
+
 fn conflict_records_path(repo_root: &Path) -> PathBuf {
     runtime_root(repo_root).join("conflict-records.jsonl")
+}
+
+fn declared_authority_decisions_path(repo_root: &Path) -> PathBuf {
+    runtime_root(repo_root).join("declared-authority-decisions.jsonl")
+}
+
+fn declared_governance_events_path(repo_root: &Path) -> PathBuf {
+    runtime_root(repo_root).join("declared-governance-events.jsonl")
 }
 
 fn runtime_gates_path(repo_root: &Path) -> PathBuf {
@@ -239,8 +276,12 @@ pub fn knowledge_artifacts_exist(repo_root: &Path) -> bool {
         && declared_records_path(repo_root).exists()
         && research_summaries_path(repo_root).exists()
         && page_digests_path(repo_root).exists()
+        && projection_decisions_path(repo_root).exists()
+        && page_link_refs_path(repo_root).exists()
         && projection_digests_path(repo_root).exists()
         && conflict_records_path(repo_root).exists()
+        && declared_authority_decisions_path(repo_root).exists()
+        && declared_governance_events_path(repo_root).exists()
         && runtime_gates_path(repo_root).exists()
         && health_signals_path(repo_root).exists()
         && current_snapshot_manifest_path(repo_root)
@@ -249,6 +290,14 @@ pub fn knowledge_artifacts_exist(repo_root: &Path) -> bool {
 }
 
 pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) -> io::Result<()> {
+    persist_knowledge_artifacts_with_pages(input, &[], &[])
+}
+
+pub fn persist_knowledge_artifacts_with_pages(
+    input: PersistKnowledgeArtifactsInput<'_>,
+    page_writes: &[RuntimePageWrite],
+    page_removals: &[String],
+) -> io::Result<()> {
     fs::create_dir_all(derived_root(input.repo_root))?;
     fs::create_dir_all(runtime_root(input.repo_root))?;
     fs::create_dir_all(declared_root(input.repo_root))?;
@@ -269,22 +318,55 @@ pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) ->
         })
         .collect::<Vec<_>>();
 
-    let metadata_json = serde_json::to_vec_pretty(input.metadata)
-        .map_err(|error| io::Error::other(format!("serialize metadata for artifact: {error}")))?;
-    let metadata_hash = fingerprint_bytes(&metadata_json);
-
     let domains = input
         .knowledge_tree
         .domains
         .values()
         .cloned()
         .collect::<Vec<_>>();
+    let previous_declared_records =
+        read_json_lines_if_exists(&declared_records_path(input.repo_root))?;
+    let previous_conflict_records =
+        read_json_lines_if_exists(&conflict_records_path(input.repo_root))?;
+    let previous_authority_decisions =
+        read_json_lines_if_exists(&declared_authority_decisions_path(input.repo_root))?;
+    let previous_governance_events =
+        read_json_lines_if_exists(&declared_governance_events_path(input.repo_root))?;
+    let previous_declared_snapshot_id = if previous_declared_records.is_empty() {
+        String::new()
+    } else {
+        compute_declared_snapshot_id(&previous_declared_records)?
+    };
+    let declared_snapshot_id = compute_declared_snapshot_id(input.declared_records)?;
     let conflict_records = derive_declared_conflicts(input.declared_records, input.generated_at);
+    let mut declared_authority_decisions = evaluate_declared_authority(input.declared_records)
+        .map_err(|error| io::Error::other(format!("evaluate declared authority: {error}")))?;
+    for decision in &mut declared_authority_decisions {
+        decision.evaluated_declared_snapshot_id = declared_snapshot_id.clone();
+        decision.canonicalize();
+        decision.validate().map_err(|error| {
+            io::Error::other(format!("validate declared authority decision: {error}"))
+        })?;
+    }
+    let declared_governance_events = reconcile_declared_governance_events(
+        &previous_governance_events,
+        &previous_authority_decisions,
+        &declared_authority_decisions,
+        &previous_declared_records,
+        input.declared_records,
+        &previous_conflict_records,
+        &conflict_records,
+        &previous_declared_snapshot_id,
+        &declared_snapshot_id,
+        input.generated_at,
+    )
+    .map_err(|error| io::Error::other(format!("reconcile declared governance: {error}")))?;
     let units = materialize_unit_contracts(
         input.knowledge_tree,
         input.declared_records,
         input.research_summaries,
         input.page_digests,
+        input.projection_decisions,
         &runtime_gates,
         input.generated_at,
     );
@@ -301,6 +383,8 @@ pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) ->
         io::Error::other(format!("validate page digest metadata binding: {error}"))
     })?;
     let projection_digests = build_projection_digests_from_page_digests(input.page_digests)?;
+    validate_projection_decisions(input.knowledge_tree, input.projection_decisions)?;
+    let page_link_refs = build_page_link_refs(input.repo_root, input.metadata, page_writes)?;
     let mut health_signals = build_minimal_health_signals(
         &domains,
         &units,
@@ -317,18 +401,20 @@ pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) ->
         health_by_id.insert(signal.signal_id.clone(), signal.clone());
     }
     let health_signals = health_by_id.into_values().collect::<Vec<_>>();
-    let declared_snapshot_id = compute_declared_snapshot_id(input.declared_records)?;
     let knowledge_snapshot_id = compute_knowledge_snapshot_id(
         input.knowledge_tree,
         input.declared_records,
+        &declared_authority_decisions,
+        &declared_governance_events,
         &conflict_records,
         input.research_summaries,
         input.page_digests,
+        input.projection_decisions,
+        &page_link_refs,
         &runtime_gates,
         &health_signals,
         input.facts_input_hash,
     )?;
-    let snapshot_id = compute_committed_snapshot_id(input.facts_input_hash);
     let page_hashes = input
         .metadata
         .wiki_items
@@ -344,10 +430,26 @@ pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) ->
         .map(|gate| gate.unit_id.clone())
         .collect::<Vec<_>>();
     let projection_snapshot_id = fingerprint_bytes(
-        serde_json::to_vec(&projection_digests)
-            .map_err(|error| io::Error::other(format!("serialize projection snapshot: {error}")))?
-            .as_slice(),
+        serde_json::to_vec(&(
+            input.projection_decisions,
+            &projection_digests,
+            &page_link_refs,
+        ))
+        .map_err(|error| io::Error::other(format!("serialize projection snapshot: {error}")))?
+        .as_slice(),
     );
+    let snapshot_id = compute_committed_snapshot_id(
+        input.facts_input_hash,
+        &declared_snapshot_id,
+        &knowledge_snapshot_id,
+        &projection_snapshot_id,
+        &page_hashes,
+    )?;
+    let mut committed_metadata = input.metadata.clone();
+    committed_metadata.current_snapshot_id = Some(snapshot_id.clone());
+    let metadata_json = serde_json::to_vec_pretty(&committed_metadata)
+        .map_err(|error| io::Error::other(format!("serialize metadata for artifact: {error}")))?;
+    let metadata_hash = fingerprint_bytes(&metadata_json);
     let manifest = CommittedSnapshotManifest {
         schema_version: ARTIFACT_SCHEMA_VERSION.to_string(),
         snapshot_id: snapshot_id.clone(),
@@ -364,33 +466,141 @@ pub fn persist_knowledge_artifacts(input: PersistKnowledgeArtifactsInput<'_>) ->
         projection_digest_refs,
         runtime_gate_refs,
         status: "committed".to_string(),
-        page_count: input.metadata.wiki_items.len(),
+        page_count: committed_metadata.wiki_items.len(),
         unit_count: units.len(),
     };
 
-    write_json(&knowledge_domains_path(input.repo_root), &domains)?;
-    write_json_lines(&knowledge_units_path(input.repo_root), &units)?;
-    write_json(&knowledge_tree_path(input.repo_root), input.knowledge_tree)?;
-    write_json_lines(
-        &declared_records_path(input.repo_root),
-        input.declared_records,
+    recover_runtime_commits(input.repo_root)?;
+    let base_snapshot_id = read_metadata(input.repo_root)
+        .ok()
+        .and_then(|metadata| metadata.current_snapshot_id);
+    let mut writes = vec![
+        runtime_commit_write(
+            input.repo_root,
+            &knowledge_domains_path(input.repo_root),
+            serialize_json(&domains)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &knowledge_units_path(input.repo_root),
+            serialize_json_lines(&units)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &knowledge_tree_path(input.repo_root),
+            serialize_json(input.knowledge_tree)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &declared_records_path(input.repo_root),
+            serialize_json_lines(input.declared_records)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &research_summaries_path(input.repo_root),
+            serialize_json_lines(input.research_summaries)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &page_digests_path(input.repo_root),
+            serialize_json_lines(input.page_digests)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &projection_decisions_path(input.repo_root),
+            serialize_json_lines(input.projection_decisions)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &page_link_refs_path(input.repo_root),
+            serialize_json_lines(&page_link_refs)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &projection_digests_path(input.repo_root),
+            serialize_json_lines(&projection_digests)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &conflict_records_path(input.repo_root),
+            serialize_json_lines(&conflict_records)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &declared_authority_decisions_path(input.repo_root),
+            serialize_json_lines(&declared_authority_decisions)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &declared_governance_events_path(input.repo_root),
+            serialize_json_lines(&declared_governance_events)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &runtime_gates_path(input.repo_root),
+            serialize_json_lines(&runtime_gates)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &health_signals_path(input.repo_root),
+            serialize_json_lines(&health_signals)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &snapshot_manifest_path(input.repo_root, &snapshot_id),
+            serialize_yaml(&manifest)?,
+            false,
+        )?,
+        runtime_commit_write(
+            input.repo_root,
+            &metadata_path(input.repo_root),
+            metadata_json,
+            true,
+        )?,
+    ];
+    writes.extend(page_writes.iter().map(|write| RuntimeCommitWrite {
+        relative_path: format!(
+            ".wiki/{}",
+            write
+                .relative_path
+                .trim_start_matches(".wiki/")
+                .replace('\\', "/")
+        ),
+        content: write.content.as_bytes().to_vec(),
+        commit_pointer: false,
+    }));
+    let removals = page_removals
+        .iter()
+        .map(|path| {
+            format!(
+                ".wiki/{}",
+                path.trim_start_matches(".wiki/").replace('\\', "/")
+            )
+        })
+        .collect::<Vec<_>>();
+    let plan = RuntimeCommitPlan::capture(
+        input.repo_root,
+        format!("snapshot-{}", &snapshot_id[..16]),
+        base_snapshot_id,
+        snapshot_id,
+        writes,
+        removals,
     )?;
-    write_json_lines(
-        &research_summaries_path(input.repo_root),
-        input.research_summaries,
-    )?;
-    write_json_lines(&page_digests_path(input.repo_root), input.page_digests)?;
-    write_json_lines(
-        &projection_digests_path(input.repo_root),
-        &projection_digests,
-    )?;
-    write_json_lines(&conflict_records_path(input.repo_root), &conflict_records)?;
-    write_json_lines(&runtime_gates_path(input.repo_root), &runtime_gates)?;
-    write_json_lines(&health_signals_path(input.repo_root), &health_signals)?;
-    write_yaml(
-        &snapshot_manifest_path(input.repo_root, &snapshot_id),
-        &manifest,
-    )
+    execute_runtime_commit(input.repo_root, &plan, None)
 }
 
 pub fn load_knowledge_artifacts(repo_root: &Path) -> io::Result<KnowledgeArtifactSnapshot> {
@@ -399,9 +609,15 @@ pub fn load_knowledge_artifacts(repo_root: &Path) -> io::Result<KnowledgeArtifac
         units: read_json_lines(&knowledge_units_path(repo_root))?,
         knowledge_tree: read_json(&knowledge_tree_path(repo_root))?,
         declared_records: read_json_lines(&declared_records_path(repo_root))?,
+        declared_authority_decisions: read_json_lines(&declared_authority_decisions_path(
+            repo_root,
+        ))?,
+        declared_governance_events: read_json_lines(&declared_governance_events_path(repo_root))?,
         conflict_records: read_json_lines(&conflict_records_path(repo_root))?,
         research_summaries: read_json_lines(&research_summaries_path(repo_root))?,
         page_digests: read_json_lines(&page_digests_path(repo_root))?,
+        projection_decisions: read_json_lines(&projection_decisions_path(repo_root))?,
+        page_link_refs: read_json_lines(&page_link_refs_path(repo_root))?,
         projection_digests: read_json_lines(&projection_digests_path(repo_root))?,
         runtime_gates: read_json_lines(&runtime_gates_path(repo_root))?,
         health_signals: read_json_lines(&health_signals_path(repo_root))?,
@@ -506,14 +722,152 @@ fn validate_projection_digest_snapshot_binding(
         return Err(io::Error::other("projection digest refs mismatch"));
     }
     let projection_snapshot_id = fingerprint_bytes(
-        serde_json::to_vec(&artifacts.projection_digests)
-            .map_err(|error| {
-                io::Error::other(format!("serialize model projection digests: {error}"))
-            })?
-            .as_slice(),
+        serde_json::to_vec(&(
+            &artifacts.projection_decisions,
+            &artifacts.projection_digests,
+            &artifacts.page_link_refs,
+        ))
+        .map_err(|error| io::Error::other(format!("serialize model projection digests: {error}")))?
+        .as_slice(),
     );
     if artifacts.snapshot_manifest.projection_snapshot_id != projection_snapshot_id {
         return Err(io::Error::other("projection snapshot id mismatch"));
+    }
+    Ok(())
+}
+
+fn validate_projection_decisions(
+    knowledge_tree: &KnowledgeTree,
+    decisions: &[PageProjectionDecision],
+) -> io::Result<()> {
+    if decisions.len() != knowledge_tree.units.len() {
+        return Err(io::Error::other(
+            "projection decisions must cover every knowledge unit",
+        ));
+    }
+    let mut unit_refs = BTreeSet::new();
+    for decision in decisions {
+        decision.validate().map_err(|error| {
+            io::Error::other(format!("validate projection decision: {error:?}"))
+        })?;
+        if knowledge_tree.get_unit(&decision.unit_ref).is_none() {
+            return Err(io::Error::other(
+                "projection decision references unknown unit",
+            ));
+        }
+        if !unit_refs.insert(decision.unit_ref.as_str()) {
+            return Err(io::Error::other("duplicate projection decision unit ref"));
+        }
+    }
+    Ok(())
+}
+
+fn build_page_link_refs(
+    repo_root: &Path,
+    metadata: &WikiMetadata,
+    page_writes: &[RuntimePageWrite],
+) -> io::Result<Vec<PageLinkRef>> {
+    let page_id_by_path = metadata
+        .wiki_items
+        .iter()
+        .map(|item| {
+            (
+                item.path.trim_start_matches(".wiki/").replace('\\', "/"),
+                item.id.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut refs = Vec::new();
+    let pending_content = page_writes
+        .iter()
+        .map(|write| {
+            (
+                write
+                    .relative_path
+                    .trim_start_matches(".wiki/")
+                    .replace('\\', "/"),
+                write.content.as_str(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for item in &metadata.wiki_items {
+        let relative_path = item.path.trim_start_matches(".wiki/").replace('\\', "/");
+        let content = match pending_content.get(&relative_path) {
+            Some(content) => (*content).to_string(),
+            None => fs::read_to_string(resolve_page_path(repo_root, &item.path))?,
+        };
+        let parsed = parse_wiki_page(&content, &SectionBindingIndex::default());
+        refs.extend(collect_page_link_refs(
+            &item.id,
+            item.path.trim_start_matches(".wiki/"),
+            &parsed,
+            &page_id_by_path,
+        ));
+    }
+    refs.sort_by(|left, right| {
+        (
+            left.source_page_id.as_str(),
+            left.target_page_id.as_str(),
+            left.source_section_id.as_deref().unwrap_or_default(),
+        )
+            .cmp(&(
+                right.source_page_id.as_str(),
+                right.target_page_id.as_str(),
+                right.source_section_id.as_deref().unwrap_or_default(),
+            ))
+    });
+    refs.dedup();
+    validate_page_link_refs(&refs, metadata)?;
+    Ok(refs)
+}
+
+fn validate_page_link_refs(refs: &[PageLinkRef], metadata: &WikiMetadata) -> io::Result<()> {
+    let page_ids = metadata
+        .wiki_items
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<BTreeSet<_>>();
+    for link_ref in refs {
+        if !page_ids.contains(link_ref.source_page_id.as_str())
+            || !page_ids.contains(link_ref.target_page_id.as_str())
+            || link_ref.content_hash.is_empty()
+        {
+            return Err(io::Error::other("page link ref binding mismatch"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_declared_governance_snapshot(artifacts: &KnowledgeArtifactSnapshot) -> io::Result<()> {
+    let declared_snapshot_id = &artifacts.snapshot_manifest.declared_snapshot_id;
+    let mut group_ids = BTreeSet::new();
+    for decision in &artifacts.declared_authority_decisions {
+        decision.validate().map_err(|error| {
+            io::Error::other(format!("validate declared authority decision: {error}"))
+        })?;
+        if decision.evaluated_declared_snapshot_id != *declared_snapshot_id {
+            return Err(io::Error::other(
+                "declared authority decision snapshot mismatch",
+            ));
+        }
+        if !group_ids.insert(decision.authority_group_id.as_str()) {
+            return Err(io::Error::other("duplicate declared authority group"));
+        }
+    }
+
+    let mut event_ids = BTreeSet::new();
+    for (index, event) in artifacts.declared_governance_events.iter().enumerate() {
+        event.validate().map_err(|error| {
+            io::Error::other(format!("validate declared governance event: {error}"))
+        })?;
+        if event.sequence != index as u64 + 1 {
+            return Err(io::Error::other(
+                "declared governance event sequence mismatch",
+            ));
+        }
+        if !event_ids.insert(event.event_id.as_str()) {
+            return Err(io::Error::other("duplicate declared governance event"));
+        }
     }
     Ok(())
 }
@@ -549,8 +903,21 @@ pub fn restore_runtime_cache_from_artifacts(repo_root: &Path) -> io::Result<Rest
     {
         return Ok(RestoreOutcome::blocked("conflict_snapshot_mismatch"));
     }
+    if validate_declared_governance_snapshot(&artifacts).is_err() {
+        return Ok(RestoreOutcome::blocked(
+            "declared_governance_snapshot_mismatch",
+        ));
+    }
     if validate_page_digest_snapshot(&artifacts.page_digests).is_err() {
         return Ok(RestoreOutcome::blocked("projection_digest_mismatch"));
+    }
+    if validate_projection_decisions(&artifacts.knowledge_tree, &artifacts.projection_decisions)
+        .is_err()
+    {
+        return Ok(RestoreOutcome::blocked("projection_decision_mismatch"));
+    }
+    if validate_page_link_refs(&artifacts.page_link_refs, &metadata).is_err() {
+        return Ok(RestoreOutcome::blocked("page_link_snapshot_mismatch"));
     }
     if validate_page_digests_match_metadata(&metadata, &artifacts.page_digests).is_err() {
         return Ok(RestoreOutcome::blocked(
@@ -563,9 +930,13 @@ pub fn restore_runtime_cache_from_artifacts(repo_root: &Path) -> io::Result<Rest
     let knowledge_snapshot_id = compute_knowledge_snapshot_id(
         &artifacts.knowledge_tree,
         &artifacts.declared_records,
+        &artifacts.declared_authority_decisions,
+        &artifacts.declared_governance_events,
         &artifacts.conflict_records,
         &artifacts.research_summaries,
         &artifacts.page_digests,
+        &artifacts.projection_decisions,
+        &artifacts.page_link_refs,
         &artifacts.runtime_gates,
         &artifacts.health_signals,
         &artifacts.snapshot_manifest.facts_input_hash,
@@ -640,6 +1011,7 @@ pub fn restore_runtime_cache_from_artifacts(repo_root: &Path) -> io::Result<Rest
         repo_root,
         &rebuilt_state,
         &artifacts.knowledge_tree,
+        &artifacts.projection_decisions,
         &artifacts.page_digests,
         &artifacts.research_summaries,
     )?;
@@ -671,6 +1043,7 @@ fn rebuild_runtime_summary(artifacts: &KnowledgeArtifactSnapshot) -> PipelineRun
         "runtime_incomplete".to_string()
     };
     PipelineRuntimeSummary {
+        resume_identity: Default::default(),
         facts_input_hash: artifacts.snapshot_manifest.facts_input_hash.clone(),
         workflow_action: artifacts.snapshot_manifest.workflow_action.clone(),
         runtime_state,
@@ -707,6 +1080,7 @@ fn materialize_unit_contracts(
     declared_records: &[DeclaredKnowledgeRecord],
     research_summaries: &[KnowledgeResearchSummary],
     page_digests: &[PageDigest],
+    projection_decisions: &[PageProjectionDecision],
     runtime_gates: &[KnowledgeRuntimeGateRecord],
     generated_at: &str,
 ) -> Vec<KnowledgeUnit> {
@@ -721,6 +1095,15 @@ fn materialize_unit_contracts(
     let gate_by_unit = runtime_gates
         .iter()
         .map(|gate| (gate.unit_id.clone(), gate))
+        .collect::<BTreeMap<_, _>>();
+    let projection_expected_by_unit = projection_decisions
+        .iter()
+        .map(|decision| {
+            (
+                decision.unit_ref.as_str(),
+                decision.eligibility.is_projectable(),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     let mut declared_refs_by_unit = BTreeMap::<String, BTreeSet<String>>::new();
     let mut projection_refs_by_unit = BTreeMap::<String, BTreeSet<String>>::new();
@@ -759,11 +1142,16 @@ fn materialize_unit_contracts(
             unit.derived_research_ref =
                 research.map(|summary| format!("research-summary:{}", summary.unit_id));
             unit.projection_refs = projection_refs.into_iter().collect();
-            unit.source_refs = materialize_source_refs(&unit, digest);
-            unit.citation_refs = materialize_citation_refs(digest);
+            unit.source_refs = materialize_source_refs(&unit, digest, research);
+            unit.citation_refs = materialize_citation_refs(digest, research);
             unit.updated_at = generated_at.to_string();
 
-            let (status, invalidation_reason) = derive_unit_status(research, digest, gate);
+            let projection_expected = projection_expected_by_unit
+                .get(unit.id.as_str())
+                .copied()
+                .unwrap_or(false);
+            let (status, invalidation_reason) =
+                derive_unit_status(research, digest, gate, projection_expected);
             unit.status = status;
             unit.invalidation_reason = invalidation_reason;
             unit
@@ -771,7 +1159,11 @@ fn materialize_unit_contracts(
         .collect()
 }
 
-fn materialize_source_refs(unit: &KnowledgeUnit, digest: Option<&PageDigest>) -> Vec<String> {
+fn materialize_source_refs(
+    unit: &KnowledgeUnit,
+    digest: Option<&PageDigest>,
+    research: Option<&KnowledgeResearchSummary>,
+) -> Vec<String> {
     if !unit.scope.source_ids.is_empty() {
         return unit
             .scope
@@ -793,13 +1185,19 @@ fn materialize_source_refs(unit: &KnowledgeUnit, digest: Option<&PageDigest>) ->
                 .into_iter()
                 .collect()
         })
+        .or_else(|| research.map(|summary| summary.source_refs.clone()))
         .unwrap_or_default()
 }
 
-fn materialize_citation_refs(digest: Option<&PageDigest>) -> Vec<String> {
+fn materialize_citation_refs(
+    digest: Option<&PageDigest>,
+    research: Option<&KnowledgeResearchSummary>,
+) -> Vec<String> {
     let mut refs = BTreeSet::new();
     let Some(digest) = digest else {
-        return Vec::new();
+        return research
+            .map(|summary| summary.citation_refs.clone())
+            .unwrap_or_default();
     };
 
     for citation in &digest.citations {
@@ -826,6 +1224,7 @@ fn derive_unit_status(
     research_summary: Option<&KnowledgeResearchSummary>,
     page_digest: Option<&PageDigest>,
     gate: Option<&KnowledgeRuntimeGateRecord>,
+    projection_expected: bool,
 ) -> (KnowledgeUnitStatus, Option<String>) {
     if let Some(gate) = gate {
         if gate.blocked_reason.is_some() || !gate.missing_dependencies.is_empty() {
@@ -865,6 +1264,9 @@ fn derive_unit_status(
             );
         }
         KnowledgeResearchSummaryStatus::Ready => {}
+    }
+    if !projection_expected {
+        return (KnowledgeUnitStatus::Active, None);
     }
     let Some(page_digest) = page_digest else {
         return (
@@ -1039,6 +1441,19 @@ fn build_minimal_health_signals(
     }
 
     for record in declared_records {
+        if record.authoring_state == DeclaredAuthoringState::Missing {
+            signals.push(build_health_signal(
+                "declared-authoring",
+                KnowledgeHealthSignalKind::GovernanceConflict,
+                KnowledgeHealthSeverity::Warning,
+                &format!("declared:{}", record.record_id),
+                KnowledgeHealthRecommendedAction::ReviewGovernance,
+                &format!(
+                    "active declared authority '{}' is missing from authoring surface",
+                    record.record_id
+                ),
+            ));
+        }
         if record.status == DeclaredKnowledgeRecordStatus::Active {
             continue;
         }
@@ -1063,7 +1478,7 @@ fn build_minimal_health_signals(
             KnowledgeHealthSignalKind::GovernanceConflict,
             conflict.severity,
             &format!("conflict:{}", conflict.conflict_id),
-            KnowledgeHealthRecommendedAction::Review,
+            KnowledgeHealthRecommendedAction::ReviewGovernance,
             &conflict.reason,
         ));
     }
@@ -1142,16 +1557,34 @@ fn compute_declared_snapshot_id(records: &[DeclaredKnowledgeRecord]) -> io::Resu
     Ok(fingerprint_bytes(&snapshot))
 }
 
-pub fn compute_committed_snapshot_id(facts_input_hash: &str) -> String {
-    fingerprint_bytes(format!("committed-snapshot:{facts_input_hash}").as_bytes())
+pub fn compute_committed_snapshot_id(
+    facts_input_hash: &str,
+    declared_snapshot_id: &str,
+    knowledge_snapshot_id: &str,
+    projection_snapshot_id: &str,
+    page_hashes: &BTreeMap<String, String>,
+) -> io::Result<String> {
+    let seed = serde_json::to_vec(&(
+        facts_input_hash,
+        declared_snapshot_id,
+        knowledge_snapshot_id,
+        projection_snapshot_id,
+        page_hashes,
+    ))
+    .map_err(|error| io::Error::other(format!("serialize committed snapshot seed: {error}")))?;
+    Ok(fingerprint_bytes(&seed))
 }
 
 fn compute_knowledge_snapshot_id(
     knowledge_tree: &KnowledgeTree,
     declared_records: &[DeclaredKnowledgeRecord],
+    declared_authority_decisions: &[DeclaredAuthorityDecision],
+    declared_governance_events: &[DeclaredGovernanceEvent],
     conflict_records: &[KnowledgeConflictRecord],
     research_summaries: &[KnowledgeResearchSummary],
     page_digests: &[PageDigest],
+    projection_decisions: &[PageProjectionDecision],
+    page_link_refs: &[PageLinkRef],
     runtime_gates: &[KnowledgeRuntimeGateRecord],
     health_signals: &[KnowledgeHealthSignal],
     facts_input_hash: &str,
@@ -1159,9 +1592,13 @@ fn compute_knowledge_snapshot_id(
     let snapshot_seed = serde_json::to_vec(&(
         knowledge_tree,
         declared_records,
+        declared_authority_decisions,
+        declared_governance_events,
         conflict_records,
         research_summaries,
         page_digests,
+        projection_decisions,
+        page_link_refs,
         runtime_gates,
         health_signals,
         facts_input_hash,
@@ -1381,10 +1818,12 @@ fn restore_page_caches(
     repo_root: &Path,
     rebuilt_state: &WikiState,
     knowledge_tree: &KnowledgeTree,
+    projection_decisions: &[PageProjectionDecision],
     page_digests: &[PageDigest],
     research_summaries: &[KnowledgeResearchSummary],
 ) -> io::Result<()> {
-    let planned_pages = plan_pages_from_knowledge_tree(knowledge_tree)
+    let planned_pages = project_page_plans(knowledge_tree, projection_decisions)
+        .unwrap_or_default()
         .into_iter()
         .map(|page| (page.id.clone(), page))
         .collect::<BTreeMap<_, _>>();
@@ -1395,9 +1834,11 @@ fn restore_page_caches(
     let research_by_unit = research_summaries
         .iter()
         .map(|summary| {
-            let mut research = UnitResearch::default();
-            research.unit_id = summary.unit_id.clone();
-            research.input_hash = summary.input_hash.clone();
+            let research = UnitResearch {
+                unit_id: summary.unit_id.clone(),
+                input_hash: summary.input_hash.clone(),
+                ..UnitResearch::default()
+            };
             (summary.unit_id.clone(), research)
         })
         .collect::<BTreeMap<_, _>>();
@@ -1825,36 +2266,45 @@ fn infer_file_purpose(path: &str) -> FilePurpose {
     FilePurpose::Utility
 }
 
-fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(value)
-        .map_err(|error| io::Error::other(format!("serialize {}: {error}", path.display())))?;
-    fs::write(path, json)
+fn serialize_json<T: Serialize>(value: &T) -> io::Result<Vec<u8>> {
+    serde_json::to_vec_pretty(value)
+        .map_err(|error| io::Error::other(format!("serialize json artifact: {error}")))
 }
 
-fn write_json_lines<T: Serialize>(path: &Path, values: &[T]) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut output = String::new();
+fn serialize_json_lines<T: Serialize>(values: &[T]) -> io::Result<Vec<u8>> {
+    let mut output = Vec::new();
     for value in values {
-        output.push_str(&serde_json::to_string(value).map_err(|error| {
-            io::Error::other(format!("serialize jsonl {}: {error}", path.display()))
-        })?);
-        output.push('\n');
+        output.extend(
+            serde_json::to_vec(value)
+                .map_err(|error| io::Error::other(format!("serialize jsonl artifact: {error}")))?,
+        );
+        output.push(b'\n');
     }
-    fs::write(path, output)
+    Ok(output)
 }
 
-fn write_yaml<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let yaml = serde_yaml::to_string(value)
-        .map_err(|error| io::Error::other(format!("serialize yaml {}: {error}", path.display())))?;
-    fs::write(path, yaml)
+fn serialize_yaml<T: Serialize>(value: &T) -> io::Result<Vec<u8>> {
+    serde_yaml::to_string(value)
+        .map(String::into_bytes)
+        .map_err(|error| io::Error::other(format!("serialize yaml artifact: {error}")))
+}
+
+fn runtime_commit_write(
+    repo_root: &Path,
+    absolute_path: &Path,
+    content: Vec<u8>,
+    commit_pointer: bool,
+) -> io::Result<RuntimeCommitWrite> {
+    let relative_path = absolute_path
+        .strip_prefix(repo_root)
+        .map_err(|_| io::Error::other("runtime artifact path escapes repository"))?
+        .to_string_lossy()
+        .replace('\\', "/");
+    Ok(RuntimeCommitWrite {
+        relative_path,
+        content,
+        commit_pointer,
+    })
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<T> {
@@ -1893,4 +2343,12 @@ fn read_json_lines<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<Ve
                 .map_err(|error| io::Error::other(format!("parse {}: {error}", path.display())))
         })
         .collect()
+}
+
+fn read_json_lines_if_exists<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<Vec<T>> {
+    if path.is_file() {
+        read_json_lines(path)
+    } else {
+        Ok(Vec::new())
+    }
 }

@@ -51,6 +51,12 @@ pub struct LanguageProcessorManager {
     processors: Vec<Box<dyn LanguageProcessor>>,
 }
 
+impl Default for LanguageProcessorManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LanguageProcessorManager {
     /// 构建默认语言处理器集合。
     ///

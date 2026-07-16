@@ -720,6 +720,7 @@ fn init_runtime_tables(conn: &Connection) -> io::Result<()> {
         CREATE TABLE IF NOT EXISTS pipeline_checkpoint (
             checkpoint_id         TEXT PRIMARY KEY,
             facts_input_hash      TEXT NOT NULL,
+            resume_identity_json  TEXT NOT NULL,
             interrupted_stage     TEXT NOT NULL,
             interrupted_target_id TEXT,
             error_message         TEXT,
@@ -3789,7 +3790,7 @@ pub fn write_knowledge_units(
     conn: &Connection,
     units: &[crate::domain::knowledge::KnowledgeUnit],
 ) -> io::Result<()> {
-    let mut remaining = units.iter().cloned().collect::<Vec<_>>();
+    let mut remaining = units.to_vec();
     let mut inserted = BTreeSet::new();
 
     while !remaining.is_empty() {
@@ -3956,6 +3957,22 @@ pub fn read_page_digest(conn: &Connection, unit_id: &str) -> io::Result<Option<S
     .map_err(|e| io::Error::other(format!("read_page_digest({unit_id}): {e}")))
 }
 
+pub fn read_page_digest_with_hash(
+    conn: &Connection,
+    unit_id: &str,
+) -> io::Result<Option<(String, Option<String>)>> {
+    if !table_exists(conn, "page_digests")? {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT digest, content_hash FROM page_digests WHERE unit_id = ?1",
+        params![unit_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+    .map_err(|e| io::Error::other(format!("read_page_digest_with_hash({unit_id}): {e}")))
+}
+
 pub fn clear_page_digests(conn: &Connection) -> io::Result<()> {
     if !table_exists(conn, "page_digests")? {
         return Ok(());
@@ -4004,6 +4021,22 @@ pub fn read_page_draft(conn: &Connection, unit_id: &str) -> io::Result<Option<St
     )
     .optional()
     .map_err(|e| io::Error::other(format!("read_page_draft({unit_id}): {e}")))
+}
+
+pub fn read_page_draft_with_hash(
+    conn: &Connection,
+    unit_id: &str,
+) -> io::Result<Option<(String, Option<String>)>> {
+    if !table_exists(conn, "page_drafts")? {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT draft, content_hash FROM page_drafts WHERE unit_id = ?1",
+        params![unit_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+    .map_err(|e| io::Error::other(format!("read_page_draft_with_hash({unit_id}): {e}")))
 }
 
 pub fn clear_page_drafts(conn: &Connection) -> io::Result<()> {
@@ -4102,6 +4135,7 @@ pub fn write_pipeline_checkpoint(
     conn: &Connection,
     checkpoint_id: &str,
     facts_input_hash: &str,
+    resume_identity_json: &str,
     interrupted_stage: &str,
     interrupted_target_id: Option<&str>,
     error_message: Option<&str>,
@@ -4110,11 +4144,12 @@ pub fn write_pipeline_checkpoint(
         .map_err(|e| io::Error::other(format!("clear checkpoint before write: {e}")))?;
     conn.execute(
         "INSERT INTO pipeline_checkpoint
-         (checkpoint_id, facts_input_hash, interrupted_stage, interrupted_target_id, error_message)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+         (checkpoint_id, facts_input_hash, resume_identity_json, interrupted_stage, interrupted_target_id, error_message)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             checkpoint_id,
             facts_input_hash,
+            resume_identity_json,
             interrupted_stage,
             interrupted_target_id,
             error_message,
@@ -4124,14 +4159,24 @@ pub fn write_pipeline_checkpoint(
     Ok(())
 }
 
+#[allow(clippy::type_complexity)]
 pub fn read_pipeline_checkpoint(
     conn: &Connection,
-) -> io::Result<Option<(String, String, String, Option<String>, Option<String>)>> {
+) -> io::Result<
+    Option<(
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    )>,
+> {
     if !table_exists(conn, "pipeline_checkpoint")? {
         return Ok(None);
     }
     conn.query_row(
-        "SELECT checkpoint_id, facts_input_hash, interrupted_stage,
+        "SELECT checkpoint_id, facts_input_hash, resume_identity_json, interrupted_stage,
                 interrupted_target_id, error_message
          FROM pipeline_checkpoint LIMIT 1",
         [],
@@ -4142,6 +4187,7 @@ pub fn read_pipeline_checkpoint(
                 row.get(2)?,
                 row.get(3)?,
                 row.get(4)?,
+                row.get(5)?,
             ))
         },
     )

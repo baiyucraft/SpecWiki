@@ -35,6 +35,18 @@ const DECLARED_RUNTIME_CONFLICT_BLOCK: &str = concat!(
     "<!-- wiki:declared:end -->\n"
 );
 
+const DECLARED_RUNTIME_CONFLICT_DEPRECATED_BLOCK: &str = concat!(
+    "\n<!-- wiki:declared id=repo-runtime-contract-v2 kind=policy scope=repo status=deprecated deprecated=true source=manual -->\n",
+    "原并行 policy 已显式废弃。\n",
+    "<!-- wiki:declared:end -->\n"
+);
+
+const DECLARED_DEPRECATED_ONLY_BLOCK: &str = concat!(
+    "\n<!-- wiki:declared id=repo-runtime-deprecated kind=policy scope=repo status=deprecated deprecated=true source=manual -->\n",
+    "deprecated runtime contract.\n",
+    "<!-- wiki:declared:end -->\n"
+);
+
 const DECLARED_LIFECYCLE_BLOCKS: &str = concat!(
     "\n<!-- wiki:declared id=runtime-active kind=policy scope=module:runtime status=active source=manual -->\n",
     "runtime active contract.\n",
@@ -108,6 +120,7 @@ fn remove_all_declared_blocks_from_first_managed_section(repo_root: &std::path::
     let new_content = content
         .replace(DECLARED_RUNTIME_BLOCK, "")
         .replace(DECLARED_RUNTIME_CONFLICT_BLOCK, "")
+        .replace(DECLARED_RUNTIME_CONFLICT_DEPRECATED_BLOCK, "")
         .replace(DECLARED_QUERY_BLOCK, "");
     fs::write(&overview_path, &new_content).unwrap();
 }
@@ -134,7 +147,9 @@ fn set_declared_blocks_in_first_managed_section_path(
     let mut new_content = content[..pos]
         .replace(DECLARED_RUNTIME_BLOCK, "")
         .replace(DECLARED_RUNTIME_CONFLICT_BLOCK, "")
+        .replace(DECLARED_RUNTIME_CONFLICT_DEPRECATED_BLOCK, "")
         .replace(DECLARED_QUERY_BLOCK, "")
+        .replace(DECLARED_DEPRECATED_ONLY_BLOCK, "")
         .replace(DECLARED_LIFECYCLE_BLOCKS, "");
     new_content.push_str(declared_blocks);
     new_content.push_str(&content[pos..]);
@@ -155,6 +170,7 @@ fn set_declared_blocks_in_first_managed_section_without_owner_change(
     let mut new_content = content[..pos]
         .replace(DECLARED_RUNTIME_BLOCK, "")
         .replace(DECLARED_RUNTIME_CONFLICT_BLOCK, "")
+        .replace(DECLARED_RUNTIME_CONFLICT_DEPRECATED_BLOCK, "")
         .replace(DECLARED_QUERY_BLOCK, "");
     new_content.push_str(declared_blocks);
     new_content.push_str(&content[pos..]);
@@ -346,7 +362,7 @@ fn init_outputs_managed_markers() {
     for entry in fs::read_dir(repo_root.join(".wiki")).unwrap() {
         let entry = entry.unwrap();
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "md") {
+        if path.extension().is_some_and(|ext| ext == "md") {
             let content = fs::read_to_string(&path).unwrap();
             assert!(
                 content.contains("<!-- wiki:managed:start"),
@@ -679,7 +695,10 @@ fn sync_clears_conflict_artifact_when_conflicting_declared_removed() {
     run_sync(repo_root).unwrap();
     assert_eq!(load_conflict_records(repo_root).unwrap().len(), 1);
 
-    insert_declared_block_into_first_managed_section(repo_root);
+    set_declared_blocks_in_first_managed_section(
+        repo_root,
+        &format!("{DECLARED_RUNTIME_BLOCK}{DECLARED_RUNTIME_CONFLICT_DEPRECATED_BLOCK}"),
+    );
     let sync_result = run_sync(repo_root).unwrap();
     let sync_json = serde_json::to_value(&sync_result).unwrap();
 
@@ -691,7 +710,42 @@ fn sync_clears_conflict_artifact_when_conflicting_declared_removed() {
 }
 
 #[test]
-fn sync_prunes_removed_declared_records_after_full_delete() {
+fn sync_preserves_declared_conflict_open_resolved_and_reopened_history() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+    let history_path = repo_root.join(".wiki/.knowledge/runtime/declared-governance-events.jsonl");
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    insert_conflicting_declared_blocks_into_first_managed_section(repo_root);
+    run_sync(repo_root).unwrap();
+    let opened = fs::read_to_string(&history_path).expect("conflict opened history");
+    assert!(opened.contains("conflict_opened"));
+
+    set_declared_blocks_in_first_managed_section(
+        repo_root,
+        &format!("{DECLARED_RUNTIME_BLOCK}{DECLARED_RUNTIME_CONFLICT_DEPRECATED_BLOCK}"),
+    );
+    run_sync(repo_root).unwrap();
+    let resolved = fs::read_to_string(&history_path).expect("conflict resolved history");
+    assert!(resolved.contains("conflict_resolved"));
+    let resolved_lines = resolved.lines().count();
+
+    run_sync(repo_root).unwrap();
+    assert_eq!(
+        fs::read_to_string(&history_path).unwrap().lines().count(),
+        resolved_lines,
+        "no-op sync must not duplicate governance events"
+    );
+
+    insert_conflicting_declared_blocks_into_first_managed_section(repo_root);
+    run_sync(repo_root).unwrap();
+    let reopened = fs::read_to_string(&history_path).unwrap();
+    assert_eq!(reopened.matches("conflict_opened").count(), 2);
+}
+
+#[test]
+fn sync_preserves_missing_authority_record_after_full_block_delete() {
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
 
@@ -710,45 +764,10 @@ fn sync_prunes_removed_declared_records_after_full_delete() {
     let sync_result = run_sync(repo_root).unwrap();
     let sync_json = serde_json::to_value(&sync_result).unwrap();
 
-    assert_eq!(
-        sync_json["page_outcomes"][0]["result_kind"], "declared_writeback",
-        "warnings = {:?}, sync = {:?}",
-        sync_result.warnings, sync_json
-    );
+    assert_eq!(sync_json["page_outcomes"][0]["result_kind"], "conflict");
     assert_eq!(
         sync_json["page_outcomes"][0]["recommended_action"],
-        "update"
-    );
-    assert_eq!(
-        sync_json["page_outcomes"][0]["declared_record_ids"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-
-    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
-    assert!(artifacts.declared_records.is_empty());
-}
-
-#[test]
-fn sync_prunes_removed_declared_records_after_partial_delete() {
-    let fixture = tempdir().unwrap();
-    let repo_root = fixture.path();
-
-    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
-    run_init(repo_root).unwrap();
-    insert_two_declared_blocks_into_first_managed_section(repo_root);
-    run_sync(repo_root).unwrap();
-
-    keep_only_second_declared_block(repo_root);
-    let sync_result = run_sync(repo_root).unwrap();
-    let sync_json = serde_json::to_value(&sync_result).unwrap();
-
-    assert_eq!(
-        sync_json["page_outcomes"][0]["result_kind"], "declared_writeback",
-        "warnings = {:?}, sync = {:?}",
-        sync_result.warnings, sync_json
+        "review_governance"
     );
     assert_eq!(
         sync_json["page_outcomes"][0]["declared_record_ids"]
@@ -761,8 +780,91 @@ fn sync_prunes_removed_declared_records_after_partial_delete() {
     let artifacts = load_knowledge_artifacts(repo_root).unwrap();
     assert_eq!(artifacts.declared_records.len(), 1);
     assert_eq!(
-        artifacts.declared_records[0].authoring_id,
-        "marker:repo-query-contract"
+        artifacts.declared_records[0].authoring_state,
+        wiki_model::domain::knowledge_artifact::DeclaredAuthoringState::Missing
+    );
+
+    insert_declared_block_into_first_managed_section(repo_root);
+    let rebound = run_sync(repo_root).unwrap();
+    assert_eq!(
+        serde_json::to_value(&rebound).unwrap()["page_outcomes"][0]["result_kind"],
+        "declared_writeback"
+    );
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(
+        artifacts.declared_records[0].authoring_state,
+        wiki_model::domain::knowledge_artifact::DeclaredAuthoringState::Bound
+    );
+}
+
+#[test]
+fn sync_preserves_missing_authority_record_after_partial_block_delete() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    insert_two_declared_blocks_into_first_managed_section(repo_root);
+    run_sync(repo_root).unwrap();
+
+    keep_only_second_declared_block(repo_root);
+    let sync_result = run_sync(repo_root).unwrap();
+    let sync_json = serde_json::to_value(&sync_result).unwrap();
+
+    assert_eq!(sync_json["page_outcomes"][0]["result_kind"], "conflict");
+    assert_eq!(
+        sync_json["page_outcomes"][0]["declared_record_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(artifacts.declared_records.len(), 2);
+    let missing = artifacts
+        .declared_records
+        .iter()
+        .find(|record| record.authoring_id == "marker:repo-runtime-contract")
+        .expect("removed authority record must remain formal");
+    assert_eq!(
+        missing.authoring_state,
+        wiki_model::domain::knowledge_artifact::DeclaredAuthoringState::Missing
+    );
+    let retained = artifacts
+        .declared_records
+        .iter()
+        .find(|record| record.authoring_id == "marker:repo-query-contract")
+        .expect("remaining authoring block");
+    assert_eq!(
+        retained.authoring_state,
+        wiki_model::domain::knowledge_artifact::DeclaredAuthoringState::Bound
+    );
+}
+
+#[test]
+fn sync_detaches_deprecated_record_without_pruning_history() {
+    let fixture = tempdir().unwrap();
+    let repo_root = fixture.path();
+
+    fs::write(repo_root.join("main.rs"), "fn main() {}").unwrap();
+    run_init(repo_root).unwrap();
+    mark_first_managed_section_declared(repo_root);
+    set_declared_blocks_in_first_managed_section(repo_root, DECLARED_DEPRECATED_ONLY_BLOCK);
+    run_sync(repo_root).unwrap();
+
+    set_declared_blocks_in_first_managed_section(repo_root, "");
+    let detached = run_sync(repo_root).unwrap();
+    let detached_json = serde_json::to_value(&detached).unwrap();
+    assert_eq!(
+        detached_json["page_outcomes"][0]["result_kind"],
+        "declared_writeback"
+    );
+    let artifacts = load_knowledge_artifacts(repo_root).unwrap();
+    assert_eq!(artifacts.declared_records.len(), 1);
+    assert_eq!(
+        artifacts.declared_records[0].authoring_state,
+        wiki_model::domain::knowledge_artifact::DeclaredAuthoringState::Detached
     );
 }
 

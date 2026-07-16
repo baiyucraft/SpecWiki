@@ -18,11 +18,10 @@ use crate::storage::cache_store::{
     read_page_context_cache, read_page_generation_cache, write_module_tree_cache, write_scan_cache,
 };
 use crate::storage::knowledge_artifacts::{
-    compute_committed_snapshot_id, knowledge_artifacts_exist, load_knowledge_artifacts,
-    persist_knowledge_artifacts, restore_runtime_cache_from_artifacts,
-    PersistKnowledgeArtifactsInput,
+    knowledge_artifacts_exist, load_knowledge_artifacts, persist_knowledge_artifacts,
+    restore_runtime_cache_from_artifacts, PersistKnowledgeArtifactsInput,
 };
-use crate::storage::metadata_store::write_metadata;
+use crate::storage::runtime_commit::recover_runtime_commits;
 use crate::storage::sqlite_store;
 use crate::storage::state_store::{load_or_rebuild_state, write_state};
 use crate::storage::wiki_fs::resolve_page_path;
@@ -35,10 +34,11 @@ use wiki_knowledge::declared_writeback::{
     DeclaredWritebackDecision,
 };
 use wiki_model::domain::knowledge_artifact::{
-    validate_declared_record_snapshot, DeclaredKnowledgeRecord, DeclaredKnowledgeRecordKind,
-    DeclaredKnowledgeRecordStatus, DeclaredKnowledgeRelation, DeclaredKnowledgeRelationKind,
-    DeclaredKnowledgeScope, DeclaredKnowledgeScopeKind, KnowledgeHealthRecommendedAction,
-    KnowledgeHealthSeverity, KnowledgeHealthSignal, KnowledgeHealthSignalKind,
+    validate_declared_record_snapshot, DeclaredAuthoringState, DeclaredKnowledgeRecord,
+    DeclaredKnowledgeRecordKind, DeclaredKnowledgeRecordStatus, DeclaredKnowledgeRelation,
+    DeclaredKnowledgeRelationKind, DeclaredKnowledgeScope, DeclaredKnowledgeScopeKind,
+    KnowledgeHealthRecommendedAction, KnowledgeHealthSeverity, KnowledgeHealthSignal,
+    KnowledgeHealthSignalKind,
 };
 use wiki_model::domain::projection::{SectionOwnership, SyncResultKind};
 use wiki_model::domain::stable_id::stable_id;
@@ -51,7 +51,7 @@ fn recommended_action_for_sync_result(kind: SyncResultKind) -> &'static str {
         SyncResultKind::DeclaredWriteback => "update",
         SyncResultKind::MetadataOnly => "none",
         SyncResultKind::IllegalDrift => "rebuild",
-        SyncResultKind::Conflict => "resolve",
+        SyncResultKind::Conflict => "review_governance",
         SyncResultKind::Stale => "update",
     }
 }
@@ -127,6 +127,7 @@ pub fn run_sync_with_mode(
     repo_root: &Path,
     steering_mode: SteeringLoadMode,
 ) -> io::Result<SyncReport> {
+    recover_runtime_commits(repo_root)?;
     let mut wiki_state = load_or_rebuild_state(repo_root)?;
     let mut synced_pages = Vec::new();
     let mut all_warnings = Vec::new();
@@ -194,7 +195,10 @@ pub fn run_sync_with_mode(
             .collect();
         page.summary = extract_summary_from_parsed(&parsed);
 
-        if analysis.result_kind == SyncResultKind::DeclaredWriteback {
+        if matches!(
+            analysis.result_kind,
+            SyncResultKind::DeclaredWriteback | SyncResultKind::Conflict
+        ) {
             declared_writeback_records
                 .insert(page.page_id.clone(), analysis.declared_records.clone());
         }
@@ -226,13 +230,7 @@ pub fn run_sync_with_mode(
         generated_at: generated_at.clone(),
         last_indexed_commit: current_commit(repo_root),
     };
-    let mut metadata = export_metadata(&wiki_state, &export_context);
-    if let Ok(artifacts) = load_knowledge_artifacts(repo_root) {
-        metadata.current_snapshot_id = Some(compute_committed_snapshot_id(
-            &artifacts.snapshot_manifest.facts_input_hash,
-        ));
-    }
-    write_metadata(repo_root, &metadata)?;
+    let metadata = export_metadata(&wiki_state, &export_context);
 
     let steering = load_steering_config_with_mode(repo_root, steering_mode);
     let (ignore_paths, include_paths) = steering.scan_boundary();
@@ -291,6 +289,7 @@ fn persist_sync_artifacts(
         declared_records: &declared_records,
         research_summaries: &artifacts.research_summaries,
         page_digests: &artifacts.page_digests,
+        projection_decisions: &artifacts.projection_decisions,
         runtime_gates: &runtime_gates,
         health_signals: custom_health_signals,
     })
@@ -370,22 +369,35 @@ fn analyze_sync_page(
         }
     }
 
+    let missing_authority = reconcile_missing_declared_records(
+        previous_page_declared_records,
+        &mut declared_records,
+        &mut reasons,
+    );
     let snapshot_diff =
         diff_page_declared_snapshot(previous_page_declared_records, &declared_records);
     let has_declared_lifecycle_change = !snapshot_diff.affected_declared_record_ids.is_empty();
     let result_kind = if illegal_drift {
         SyncResultKind::IllegalDrift
+    } else if missing_authority {
+        SyncResultKind::Conflict
     } else if has_declared_lifecycle_change {
         SyncResultKind::DeclaredWriteback
     } else {
         SyncResultKind::MetadataOnly
     };
-    let committed_declared_record_ids = if result_kind == SyncResultKind::DeclaredWriteback {
+    let committed_declared_record_ids = if matches!(
+        result_kind,
+        SyncResultKind::DeclaredWriteback | SyncResultKind::Conflict
+    ) {
         snapshot_diff.affected_declared_record_ids.clone()
     } else {
         Vec::new()
     };
-    let stale_unit_ids = if result_kind == SyncResultKind::DeclaredWriteback {
+    let stale_unit_ids = if matches!(
+        result_kind,
+        SyncResultKind::DeclaredWriteback | SyncResultKind::Conflict
+    ) {
         let mut unit_ids = snapshot_diff.stale_unit_ids;
         if unit_ids.is_empty() {
             if let Some(unit_id) = unit_id {
@@ -396,7 +408,10 @@ fn analyze_sync_page(
     } else {
         Vec::new()
     };
-    let stale_projection_ids = if result_kind == SyncResultKind::DeclaredWriteback {
+    let stale_projection_ids = if matches!(
+        result_kind,
+        SyncResultKind::DeclaredWriteback | SyncResultKind::Conflict
+    ) {
         let mut projection_ids = snapshot_diff.stale_projection_ids;
         if projection_ids.is_empty() {
             projection_ids.push(page.page_id.clone());
@@ -422,6 +437,42 @@ fn analyze_sync_page(
         stale_projection_ids,
         health_signals,
     }
+}
+
+fn reconcile_missing_declared_records(
+    previous_records: &[DeclaredKnowledgeRecord],
+    current_records: &mut Vec<DeclaredKnowledgeRecord>,
+    reasons: &mut Vec<String>,
+) -> bool {
+    let current_ids = current_records
+        .iter()
+        .map(|record| record.record_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut retained = Vec::new();
+    let mut missing_authority = false;
+    for previous in previous_records {
+        if current_ids.contains(previous.record_id.as_str()) {
+            continue;
+        }
+        let mut record = previous.clone();
+        if matches!(
+            record.status,
+            DeclaredKnowledgeRecordStatus::Active | DeclaredKnowledgeRecordStatus::Replaced
+        ) {
+            record.authoring_state = DeclaredAuthoringState::Missing;
+            missing_authority = true;
+            reasons.push(format!(
+                "declared authority block '{}' 消失，formal record 已保留并等待治理复核",
+                record.authoring_id
+            ));
+        } else {
+            record.authoring_state = DeclaredAuthoringState::Detached;
+        }
+        retained.push(record);
+    }
+    current_records.extend(retained);
+    current_records.sort_by(|left, right| left.record_id.cmp(&right.record_id));
+    missing_authority
 }
 
 #[derive(Debug, Default)]
@@ -564,6 +615,19 @@ fn build_sync_health_signals(
             } else {
                 reasons.join("; ")
             },
+        });
+    }
+    if result_kind == SyncResultKind::Conflict {
+        signals.push(KnowledgeHealthSignal {
+            signal_id: stable_id(
+                "health",
+                format!("declared-authority:missing:{}", page.page_id),
+            ),
+            signal_kind: KnowledgeHealthSignalKind::GovernanceConflict,
+            severity: KnowledgeHealthSeverity::Warning,
+            target_ref: format!("page:{}", page.page_id),
+            recommended_action: KnowledgeHealthRecommendedAction::ReviewGovernance,
+            reason: reasons.join("; "),
         });
     }
     signals
@@ -847,7 +911,7 @@ fn parse_relation_targets(value: Option<String>) -> io::Result<Vec<String>> {
     };
     let mut targets = value
         .split(',')
-        .map(|item| canonical_marker_id(item))
+        .map(canonical_marker_id)
         .collect::<io::Result<Vec<_>>>()?;
     targets.sort();
     targets.dedup();
@@ -920,18 +984,22 @@ fn resolve_declared_lifecycle(
             target_record_ref: None,
         });
     }
-    relations.extend(replaced_by.iter().cloned().map(|target_record_ref| {
-        DeclaredKnowledgeRelation {
-            relation_kind: DeclaredKnowledgeRelationKind::ReplacedBy,
-            target_record_ref: Some(format!("marker:{target_record_ref}")),
-        }
-    }));
-    relations.extend(supersedes.iter().cloned().map(|target_record_ref| {
-        DeclaredKnowledgeRelation {
-            relation_kind: DeclaredKnowledgeRelationKind::Supersedes,
-            target_record_ref: Some(format!("marker:{target_record_ref}")),
-        }
-    }));
+    relations.extend(
+        replaced_by
+            .iter()
+            .map(|target_record_ref| DeclaredKnowledgeRelation {
+                relation_kind: DeclaredKnowledgeRelationKind::ReplacedBy,
+                target_record_ref: Some(format!("marker:{target_record_ref}")),
+            }),
+    );
+    relations.extend(
+        supersedes
+            .iter()
+            .map(|target_record_ref| DeclaredKnowledgeRelation {
+                relation_kind: DeclaredKnowledgeRelationKind::Supersedes,
+                target_record_ref: Some(format!("marker:{target_record_ref}")),
+            }),
+    );
 
     Ok((inferred_status, relations))
 }

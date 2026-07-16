@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -27,14 +27,15 @@ use crate::storage::cache_store::{
     write_page_generation_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::knowledge_artifacts::{
-    compute_committed_snapshot_id, load_knowledge_artifacts, persist_knowledge_artifacts,
-    PersistKnowledgeArtifactsInput,
+    load_knowledge_artifacts, persist_knowledge_artifacts_with_pages,
+    PersistKnowledgeArtifactsInput, RuntimePageWrite,
 };
-use crate::storage::metadata_store::write_metadata;
+use crate::storage::metadata_store::read_metadata;
+use crate::storage::runtime_commit::recover_runtime_commits;
 use crate::storage::sqlite::runtime_store::SqliteRuntimeStore;
 use crate::storage::sqlite_store;
 use crate::storage::state_store::{write_facts_snapshot, write_state};
-use crate::storage::wiki_fs::{resolve_page_path, write_page};
+use crate::storage::wiki_fs::{remove_cache_db, resolve_page_path};
 use crate::workflows::init::{
     ancestor_ids_for_page, build_minimal_page_context, current_timestamp,
     find_or_build_planned_page, page_provenance, source_paths_for_page,
@@ -125,6 +126,7 @@ pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
             "repo root must be an existing directory",
         ));
     }
+    recover_runtime_commits(repo_root)?;
 
     let shared_sink = Rc::new(RefCell::new(progress_sink));
     let started_at = Instant::now();
@@ -136,10 +138,19 @@ pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
     // 在清理前，读取旧页面的磁盘内容用于 user section 恢复
     let old_page_contents = read_old_page_contents(repo_root);
     let previous_artifacts = load_knowledge_artifacts(repo_root).ok();
+    let previous_page_paths = read_metadata(repo_root)
+        .map(|metadata| {
+            metadata
+                .wiki_items
+                .into_iter()
+                .map(|item| item.path)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
     // 清理旧 runtime
     reporter.phase("clear_runtime", "清理旧运行时");
-    crate::storage::wiki_fs::remove_runtime_with_cache_mode(repo_root, steering.llm.cache_mode)?;
+    remove_cache_db(repo_root)?;
     debug_trace::begin_session(action, repo_root, &steering.debug)?;
 
     // 全量 pipeline
@@ -266,6 +277,13 @@ pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
     let digests = pipeline.digests;
     let unit_researches = pipeline.unit_researches;
     let knowledge_tree = pipeline.knowledge_tree;
+    let mut projection_decisions = pipeline.projection_decisions;
+    for decision in &mut projection_decisions {
+        if decision.eligibility.is_projectable() {
+            decision.lifecycle = wiki_model::domain::projection::ProjectionLifecycle::Projected;
+            decision.action = wiki_model::domain::projection::ProjectionAction::Retain;
+        }
+    }
     let pages_by_id: BTreeMap<String, _> = pipeline
         .planned_pages
         .iter()
@@ -280,6 +298,7 @@ pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
 
     let mut page_results = Vec::new();
     let mut generated_pages = Vec::new();
+    let mut pending_page_writes = Vec::new();
     let mut all_warnings = Vec::new();
     let generated_at = current_timestamp();
     let mut ancestor_ids_by_page = BTreeMap::new();
@@ -306,7 +325,10 @@ pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
             None => rendered.content.clone(),
         };
 
-        write_page(repo_root, &planned_page.relative_path, &final_content)?;
+        pending_page_writes.push(RuntimePageWrite {
+            relative_path: planned_page.relative_path.clone(),
+            content: final_content.clone(),
+        });
         let page_path = format!(".wiki/{}", planned_page.relative_path);
         generated_pages.push(page_path);
         let ancestor_ids = ancestor_ids_for_page(&planned_page, &ancestor_ids_by_page);
@@ -378,10 +400,7 @@ pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
         last_indexed_commit: current_commit(repo_root),
     };
     let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
-    let mut metadata = export_metadata(&state, &export_context);
-    metadata.current_snapshot_id = Some(compute_committed_snapshot_id(&facts_input_hash));
-    reporter.phase("write_metadata", "写入元数据");
-    write_metadata(repo_root, &metadata)?;
+    let metadata = export_metadata(&state, &export_context);
     finalize_pipeline_runtime(repo_root, action, generated_pages.len())?;
     let conn = sqlite_store::open_db(repo_root)?;
     let runtime_store = SqliteRuntimeStore::new(&conn);
@@ -417,21 +436,40 @@ pub fn run_rebuild_with_progress_and_llm_as_with_mode<'a>(
         })
         .unwrap_or_default();
     let health_signals = Vec::new();
-    let page_digests = digests.values().cloned().collect::<Vec<_>>();
+    let projected_unit_ids = projection_decisions
+        .iter()
+        .filter(|decision| decision.keeps_formal_page())
+        .map(|decision| decision.unit_ref.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let page_digests = digests
+        .values()
+        .filter(|digest| projected_unit_ids.contains(digest.unit_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
     let runtime_gates = runtime_store.read_unit_runtime_gates()?;
-    persist_knowledge_artifacts(PersistKnowledgeArtifactsInput {
-        repo_root,
-        workflow_action: action,
-        generated_at: &generated_at,
-        facts_input_hash: &facts_input_hash,
-        metadata: &metadata,
-        knowledge_tree: &knowledge_tree,
-        declared_records: &declared_records,
-        research_summaries: &research_summaries,
-        page_digests: &page_digests,
-        runtime_gates: &runtime_gates,
-        health_signals: &health_signals,
-    })?;
+    let generated_page_set = generated_pages.iter().cloned().collect::<BTreeSet<_>>();
+    let page_removals = previous_page_paths
+        .into_iter()
+        .filter(|path| !generated_page_set.contains(path))
+        .collect::<Vec<_>>();
+    persist_knowledge_artifacts_with_pages(
+        PersistKnowledgeArtifactsInput {
+            repo_root,
+            workflow_action: action,
+            generated_at: &generated_at,
+            facts_input_hash: &facts_input_hash,
+            metadata: &metadata,
+            knowledge_tree: &knowledge_tree,
+            declared_records: &declared_records,
+            research_summaries: &research_summaries,
+            page_digests: &page_digests,
+            projection_decisions: &projection_decisions,
+            runtime_gates: &runtime_gates,
+            health_signals: &health_signals,
+        },
+        &pending_page_writes,
+        &page_removals,
+    )?;
     let runtime_summary =
         load_runtime_summary_for_repo(repo_root)?.map(RuntimeSummaryProjection::from_summary);
     runtime_store.clear_pipeline_checkpoint()?;

@@ -201,7 +201,7 @@ pub struct PageToolArtifactRef {
     pub summary: String,
 }
 
-/// `PageResearchSessionState` 是 research session 的可复用压缩状态。
+/// `PageResearchSessionState` 是单次 provider request 内部的有界压缩状态，不得持久化。
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PageResearchSessionState {
     /// 本次 research session 的稳定 ID。

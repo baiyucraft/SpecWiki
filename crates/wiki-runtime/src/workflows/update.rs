@@ -17,11 +17,15 @@ use crate::domain::checkpoint::{compute_facts_input_hash, PipelineStage};
 use crate::domain::metadata::DirtyState;
 use crate::domain::metadata_mapper::{export_metadata, ExportContext};
 use crate::domain::runtime_profile::{LlmExecutionMode, RuntimeSummaryProjection};
-use crate::domain::state::{assemble_state_from_pages, build_page_state, PageBuildResult};
+use crate::domain::stable_id::stable_id;
+use crate::domain::state::{
+    assemble_state_from_pages, build_page_state, PageBuildResult, WikiPageState,
+};
 use crate::domain::steering::{load_steering_config_with_mode, SteeringLoadMode};
 use crate::generation::context::{build_module_contexts_with_graph, build_repo_context_with_graph};
 use crate::generation::managed_sections::{
-    merge_sections, parse_wiki_page, ManagedSectionBlock, SectionBindingIndex,
+    collect_page_link_refs, merge_sections, parse_wiki_page, ManagedSectionBlock,
+    SectionBindingIndex,
 };
 use crate::generation::renderer::{assemble_page_from_merge, render_page_draft};
 use crate::llm::{LlmRuntime, LlmService};
@@ -31,17 +35,17 @@ use crate::storage::cache_store::{
     PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::knowledge_artifacts::{
-    compute_committed_snapshot_id, load_knowledge_artifacts, persist_knowledge_artifacts,
+    load_knowledge_artifacts, persist_knowledge_artifacts_with_pages,
     restore_runtime_cache_from_artifacts, KnowledgeArtifactSnapshot,
-    PersistKnowledgeArtifactsInput,
+    PersistKnowledgeArtifactsInput, RuntimePageWrite,
 };
-use crate::storage::metadata_store::write_metadata;
+use crate::storage::runtime_commit::recover_runtime_commits;
 use crate::storage::sqlite::{index_store::SqliteIndexStore, runtime_store::SqliteRuntimeStore};
 use crate::storage::sqlite_store;
 use crate::storage::state_store::{
     facts_snapshot_ready, write_facts_snapshot, write_facts_snapshot_for_files, write_state,
 };
-use crate::storage::wiki_fs::{resolve_page_path, write_page};
+use crate::storage::wiki_fs::resolve_page_path;
 use crate::workflows::governance::GovernanceService;
 use crate::workflows::init::{
     ancestor_ids_for_page, build_minimal_page_context, current_timestamp, page_provenance,
@@ -55,6 +59,7 @@ use crate::workflows::page_render::{
 use crate::workflows::progress::{
     NoopProgressSink, ProgressSink, SharedProgressSink, WorkflowProgressEvent, WorkflowReporter,
 };
+use crate::workflows::projection_governance::reconcile_retiring_page;
 use crate::workflows::rebuild::run_rebuild_with_progress_and_llm_as_with_mode;
 use crate::workflows::release_scope::project_external_runtime_state;
 use crate::workflows::research_provider::select_runtime_research_provider;
@@ -69,7 +74,13 @@ use wiki_index::symbol_graph::{
     analyze_symbol_graph, build_graph_summary, resolve_symbol_graph, ResolvedGraphSnapshot,
 };
 use wiki_index::symbols::{ParsedSymbolsSnapshot, SymbolTable};
+use wiki_knowledge::{plan_projection_intents, project_page_plans};
 use wiki_model::domain::governance::GovernanceSummary;
+use wiki_model::domain::knowledge_artifact::{
+    KnowledgeHealthRecommendedAction, KnowledgeHealthSeverity, KnowledgeHealthSignal,
+    KnowledgeHealthSignalKind,
+};
+use wiki_model::domain::projection::{PageLinkRef, ProjectionAction, ProjectionLifecycle};
 use wiki_model::domain::update_scope::{AffectedKnowledgeScope, ScopeEscalationLevel};
 
 /// 小范围符号变更仍走 scoped graph refresh；超过阈值直接回退全量图刷新，避免增量拼接丢边。
@@ -158,6 +169,7 @@ pub fn run_update_with_progress_and_llm_as_with_mode<'a>(
     llm_service: Option<&'a mut dyn LlmService>,
     steering_mode: SteeringLoadMode,
 ) -> io::Result<UpdateReport> {
+    recover_runtime_commits(repo_root)?;
     let started_at = Instant::now();
     let steering = load_steering_config_with_mode(repo_root, steering_mode);
     debug_trace::begin_session(action, repo_root, &steering.debug)?;
@@ -575,18 +587,28 @@ fn apply_incremental_update<'a>(
             &steering,
         )
     });
+    let previous_artifacts = load_knowledge_artifacts(repo_root).ok();
     let update_page_targets = if matches!(
         plan.affected_knowledge_scope.escalation.level,
         ScopeEscalationLevel::LocalRefresh
     ) {
         plan.affected_set.affected_page_ids.clone()
     } else {
-        wiki_knowledge::plan_pages_from_knowledge_tree(&planned_knowledge_tree)
+        let decisions = plan_projection_intents(
+            &planned_knowledge_tree,
+            &steering.pages.projection_policy(),
+            previous_artifacts
+                .as_ref()
+                .map(|artifacts| artifacts.projection_decisions.as_slice())
+                .unwrap_or_default(),
+        )
+        .map_err(|error| io::Error::other(format!("plan projection intents: {error:?}")))?;
+        project_page_plans(&planned_knowledge_tree, &decisions)
+            .map_err(|error| io::Error::other(format!("project page plans: {error:?}")))?
             .into_iter()
             .map(|page| page.id)
             .collect::<Vec<_>>()
     };
-    let previous_artifacts = load_knowledge_artifacts(repo_root).ok();
     let pipeline = if let Some(previous_artifacts) = previous_artifacts.as_ref() {
         run_scoped_compose_pipeline_for_update(
             action,
@@ -601,6 +623,7 @@ fn apply_incremental_update<'a>(
             &graph_summary,
             &steering,
             &planned_knowledge_tree,
+            &previous_artifacts.projection_decisions,
             &previous_artifacts.page_digests,
             &plan.affected_knowledge_scope,
             &update_page_targets,
@@ -635,6 +658,7 @@ fn apply_incremental_update<'a>(
     );
     let unit_researches = pipeline.unit_researches;
     let knowledge_tree = pipeline.knowledge_tree;
+    let mut projection_decisions = pipeline.projection_decisions;
     let research_summaries = merge_research_summaries_for_update(
         &knowledge_tree,
         previous_artifacts.as_ref(),
@@ -678,6 +702,8 @@ fn apply_incremental_update<'a>(
     let mut ancestor_ids_by_page = BTreeMap::new();
     let mut next_pages = Vec::new();
     let mut touched_paths = BTreeSet::new();
+    let mut pending_page_writes = Vec::new();
+    let mut page_removals = Vec::new();
     let page_total = explicit_affected_page_ids.len();
     let mut rendered_pages = 0usize;
 
@@ -732,12 +758,15 @@ fn apply_incremental_update<'a>(
 
         let content_hash = fingerprint_bytes(final_content.as_bytes());
 
-        write_page(repo_root, &planned_page.relative_path, &final_content)?;
+        pending_page_writes.push(RuntimePageWrite {
+            relative_path: planned_page.relative_path.clone(),
+            content: final_content.clone(),
+        });
         if let Some(previous_page) = previous_page {
             if previous_page.path != current_page_path {
                 let previous_disk_path = resolve_page_path(repo_root, &previous_page.path);
                 if previous_disk_path.exists() {
-                    fs::remove_file(previous_disk_path)?;
+                    page_removals.push(previous_page.path.clone());
                 }
                 touched_paths.insert(previous_page.path.clone());
             }
@@ -774,7 +803,7 @@ fn apply_incremental_update<'a>(
             content_hash,
             source_paths: source_paths_for_page(&scan_report, &page_context),
             ancestor_ids,
-            provenance: page_provenance(&planned_page, &page_context, &scan_report),
+            provenance: page_provenance(planned_page, &page_context, &scan_report),
             sections: rendered.sections,
         }));
         touched_paths.insert(current_page_path);
@@ -787,11 +816,78 @@ fn apply_incremental_update<'a>(
         );
     }
 
+    for decision in &mut projection_decisions {
+        if decision.eligibility.is_projectable() {
+            decision.lifecycle = ProjectionLifecycle::Projected;
+            decision.action = ProjectionAction::Retain;
+        }
+    }
+    let live_link_refs = collect_live_page_link_refs(
+        repo_root,
+        &next_pages,
+        &previous_pages,
+        &pending_page_writes,
+    )?;
+    let mut projection_health_signals = Vec::new();
     for removed_page_id in removed_page_ids {
         if let Some(previous_page) = previous_pages.get(&removed_page_id) {
             let disk_path = resolve_page_path(repo_root, &previous_page.path);
+            let content = fs::read_to_string(&disk_path)?;
+            let parsed = parse_wiki_page(&content, &SectionBindingIndex::default());
+            let preflight = reconcile_retiring_page(
+                &removed_page_id,
+                &parsed,
+                &declared_records,
+                &live_link_refs,
+            );
+            if preflight.is_blocked() {
+                if !next_pages
+                    .iter()
+                    .any(|page| page.page_id == removed_page_id)
+                {
+                    next_pages.push((*previous_page).clone());
+                }
+                if let Some(decision) = projection_decisions
+                    .iter_mut()
+                    .find(|decision| decision.page_id == removed_page_id)
+                {
+                    decision.lifecycle = ProjectionLifecycle::Retiring;
+                    decision.action = ProjectionAction::Block;
+                    decision
+                        .reason_refs
+                        .extend(preflight.blockers.iter().map(|blocker| {
+                            format!("protection:{:?}", blocker.kind).to_ascii_lowercase()
+                        }));
+                    decision.canonicalize();
+                }
+                let evidence = preflight
+                    .blockers
+                    .iter()
+                    .map(|blocker| blocker.evidence_ref.clone())
+                    .collect::<Vec<_>>();
+                projection_health_signals.push(KnowledgeHealthSignal {
+                    signal_id: stable_id(
+                        "health",
+                        format!("projection-retiring:{removed_page_id}"),
+                    ),
+                    signal_kind: KnowledgeHealthSignalKind::GovernanceConflict,
+                    severity: KnowledgeHealthSeverity::Warning,
+                    target_ref: format!("projection:{removed_page_id}"),
+                    recommended_action: KnowledgeHealthRecommendedAction::ReviewGovernance,
+                    reason: format!("projection removal blocked by {}", evidence.join(",")),
+                });
+                continue;
+            }
             if disk_path.exists() {
-                fs::remove_file(disk_path)?;
+                page_removals.push(previous_page.path.clone());
+            }
+            if let Some(decision) = projection_decisions
+                .iter_mut()
+                .find(|decision| decision.page_id == removed_page_id)
+            {
+                decision.lifecycle = ProjectionLifecycle::Retired;
+                decision.action = ProjectionAction::Remove;
+                decision.canonicalize();
             }
             remove_page_caches(repo_root, &removed_page_id)?;
             touched_paths.insert(previous_page.path.clone());
@@ -825,29 +921,40 @@ fn apply_incremental_update<'a>(
         last_indexed_commit: current_commit(repo_root),
     };
     let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
-    let mut metadata = export_metadata(&next_state, &export_context);
-    metadata.current_snapshot_id = Some(compute_committed_snapshot_id(&facts_input_hash));
-    reporter.phase("write_metadata", "写入元数据");
-    write_metadata(repo_root, &metadata)?;
+    let metadata = export_metadata(&next_state, &export_context);
     finalize_pipeline_runtime(repo_root, action, next_pages.len())?;
     let conn = sqlite_store::open_db(repo_root)?;
     let runtime_store = SqliteRuntimeStore::new(&conn);
-    let page_digests = digests.values().cloned().collect::<Vec<_>>();
+    let projected_unit_ids = projection_decisions
+        .iter()
+        .filter(|decision| decision.keeps_formal_page())
+        .map(|decision| decision.unit_ref.as_str())
+        .collect::<BTreeSet<_>>();
+    let page_digests = digests
+        .values()
+        .filter(|digest| projected_unit_ids.contains(digest.unit_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
     let runtime_gates = runtime_store.read_unit_runtime_gates()?;
-    let health_signals = Vec::new();
-    persist_knowledge_artifacts(PersistKnowledgeArtifactsInput {
-        repo_root,
-        workflow_action: action,
-        generated_at: &generated_at,
-        facts_input_hash: &facts_input_hash,
-        metadata: &metadata,
-        knowledge_tree: &knowledge_tree,
-        declared_records: &declared_records,
-        research_summaries: &research_summaries,
-        page_digests: &page_digests,
-        runtime_gates: &runtime_gates,
-        health_signals: &health_signals,
-    })?;
+    let health_signals = projection_health_signals;
+    persist_knowledge_artifacts_with_pages(
+        PersistKnowledgeArtifactsInput {
+            repo_root,
+            workflow_action: action,
+            generated_at: &generated_at,
+            facts_input_hash: &facts_input_hash,
+            metadata: &metadata,
+            knowledge_tree: &knowledge_tree,
+            declared_records: &declared_records,
+            research_summaries: &research_summaries,
+            page_digests: &page_digests,
+            projection_decisions: &projection_decisions,
+            runtime_gates: &runtime_gates,
+            health_signals: &health_signals,
+        },
+        &pending_page_writes,
+        &page_removals,
+    )?;
     runtime_store.clear_pipeline_checkpoint()?;
 
     Ok((
@@ -858,6 +965,64 @@ fn apply_incremental_update<'a>(
             None => LlmExecutionMode::DeterministicOnly,
         },
     ))
+}
+
+fn collect_live_page_link_refs(
+    repo_root: &Path,
+    source_pages: &[WikiPageState],
+    target_pages: &BTreeMap<String, &WikiPageState>,
+    pending_page_writes: &[RuntimePageWrite],
+) -> io::Result<Vec<PageLinkRef>> {
+    let page_id_by_path = target_pages
+        .values()
+        .map(|page| {
+            (
+                page.path.trim_start_matches(".wiki/").replace('\\', "/"),
+                page.page_id.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut refs = Vec::new();
+    let pending_content = pending_page_writes
+        .iter()
+        .map(|write| {
+            (
+                write
+                    .relative_path
+                    .trim_start_matches(".wiki/")
+                    .replace('\\', "/"),
+                write.content.as_str(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for page in source_pages {
+        let relative_path = page.path.trim_start_matches(".wiki/").replace('\\', "/");
+        let content = match pending_content.get(&relative_path) {
+            Some(content) => (*content).to_string(),
+            None => fs::read_to_string(resolve_page_path(repo_root, &page.path))?,
+        };
+        let parsed = parse_wiki_page(&content, &SectionBindingIndex::default());
+        refs.extend(collect_page_link_refs(
+            &page.page_id,
+            page.path.trim_start_matches(".wiki/"),
+            &parsed,
+            &page_id_by_path,
+        ));
+    }
+    refs.sort_by(|left, right| {
+        (
+            left.source_page_id.as_str(),
+            left.target_page_id.as_str(),
+            left.source_section_id.as_deref().unwrap_or_default(),
+        )
+            .cmp(&(
+                right.source_page_id.as_str(),
+                right.target_page_id.as_str(),
+                right.source_section_id.as_deref().unwrap_or_default(),
+            ))
+    });
+    refs.dedup();
+    Ok(refs)
 }
 
 /// 从磁盘旧页面中解析 user sections，与新生成的 managed sections 合并。

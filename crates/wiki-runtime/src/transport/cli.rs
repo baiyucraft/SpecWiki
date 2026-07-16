@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
@@ -99,7 +99,7 @@ pub fn dispatch_with_runtime<'a>(
                 return CoreResponse::typed_error_with_data(
                     CoreErrorKind::InvalidArgument,
                     "cli_init cannot start with failed bootstrap",
-                    serde_json::to_value(&bootstrap).unwrap_or_else(|_| json!(null)),
+                    serde_json::to_value(&bootstrap).unwrap_or(serde_json::Value::Null),
                 );
             }
             let init = run_init_with_progress_and_llm_as_with_mode(
@@ -379,7 +379,7 @@ fn encode_result(result: std::io::Result<serde_json::Value>) -> CoreResponse {
 
 /// 为长流程终态编码结果；失败时尽量补齐 runtime 摘要与 blocker 线索。
 fn encode_long_result(
-    repo_root: &PathBuf,
+    repo_root: &Path,
     result: std::io::Result<serde_json::Value>,
 ) -> CoreResponse {
     match result {
@@ -400,7 +400,7 @@ fn encode_long_result(
             if let Some(runtime_summary) = runtime_summary {
                 data.insert(
                     "runtime_summary".to_string(),
-                    serde_json::to_value(runtime_summary).unwrap_or_else(|_| json!(null)),
+                    serde_json::to_value(runtime_summary).unwrap_or(serde_json::Value::Null),
                 );
             }
             if let Some(blocker_hint) = blocker_hint {

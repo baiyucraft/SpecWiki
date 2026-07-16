@@ -30,6 +30,9 @@ multiChange:
       dependsOn:
         - close-specwiki-3-0-design-baseline-product-contract
         - close-specwiki-3-0-design-baseline-runtime-query-contract
+      archiveStatus: archived
+      archivedAt: 2026-07-16T10:02:58.157Z
+      archivedTo: .spec/archive/2026-07-16-close-specwiki-3-0-design-baseline-reliability-lifecycle
     - id: close-specwiki-3-0-design-baseline-host-trigger-contract
       order: 5
       dependsOn:

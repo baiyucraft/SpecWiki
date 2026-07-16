@@ -408,7 +408,7 @@ fn research_unit_structural(
     seed_section_evidence_clusters(&mut section_plan, &evidence_clusters);
 
     if let Some(first_section) = section_plan.first_mut() {
-        if !(first_section.intent.trim().is_empty() && !unit.scope.docs_anchors.is_empty()) {
+        if !first_section.intent.trim().is_empty() || unit.scope.docs_anchors.is_empty() {
             let mut overview_parts = Vec::new();
             if !positioning.trim().is_empty() {
                 overview_parts.push(positioning.clone());
@@ -441,6 +441,7 @@ fn research_unit_structural(
         diagram_suggestions: Vec::new(),
         key_sources,
         provider_stop_reason: None,
+        provider_failure_kind: None,
         provider_session_stats: None,
         input_hash: String::new(),
     }
@@ -1019,13 +1020,12 @@ fn structural_selection_policy(
                 Some(TopicFocusKind::TypeSystem)
             );
             let implementation_spine_focus = api_surface_prefers_implementation_spine(topic_focus);
-            let (contract_minimum, implementation_minimum) = if type_system_focus {
-                (1, 2)
-            } else if implementation_spine_focus {
-                (1, 2)
-            } else {
-                (2, 0)
-            };
+            let (contract_minimum, implementation_minimum) =
+                if type_system_focus || implementation_spine_focus {
+                    (1, 2)
+                } else {
+                    (2, 0)
+                };
             minimum_roles.push((KeySourceRole::Contract, contract_minimum));
             if implementation_minimum > 0 {
                 minimum_roles.push((KeySourceRole::Implementation, implementation_minimum));
@@ -1391,13 +1391,12 @@ fn topic_focus_score(topic_focus: Option<&TopicFocusHints>, path: &str, basename
     if shared_anchor >= 2 {
         score += 60;
     }
-    if matches!(topic_focus.kind, Some(TopicFocusKind::TypeSystem)) {
-        if path.contains("/preview-api/")
+    if matches!(topic_focus.kind, Some(TopicFocusKind::TypeSystem))
+        && (path.contains("/preview-api/")
             || path.contains("/manager-api/")
-            || path.contains("/csf/")
-        {
-            score += 180;
-        }
+            || path.contains("/csf/"))
+    {
+        score += 180;
     }
 
     if is_generic_topic_basename(basename) {
@@ -2455,7 +2454,7 @@ fn is_reference_outline_heading(title: &str) -> bool {
 }
 
 fn docs_path_is_localized(path: &str) -> bool {
-    path.chars().any(|character| !character.is_ascii())
+    !path.is_ascii()
 }
 
 fn strip_markdown_frontmatter(content: &str) -> String {
@@ -2901,7 +2900,7 @@ fn build_evidence_clusters_from_scope(
             .collect();
 
         clusters.push(EvidenceCluster {
-            cluster_key: stable_id("evidence-cluster", &format!("{}:key-sources", unit.id)),
+            cluster_key: stable_id("evidence-cluster", format!("{}:key-sources", unit.id)),
             label: "关键源码".to_string(),
             citations,
         });
@@ -2909,7 +2908,7 @@ fn build_evidence_clusters_from_scope(
 
     if !doc_reference_citations.is_empty() {
         clusters.push(EvidenceCluster {
-            cluster_key: stable_id("evidence-cluster", &format!("{}:docs-references", unit.id)),
+            cluster_key: stable_id("evidence-cluster", format!("{}:docs-references", unit.id)),
             label: "文档引用的实现入口".to_string(),
             citations: doc_reference_citations.iter().take(8).cloned().collect(),
         });
@@ -2938,7 +2937,7 @@ fn build_evidence_clusters_from_scope(
 
         if !citations.is_empty() {
             clusters.push(EvidenceCluster {
-                cluster_key: stable_id("evidence-cluster", &format!("{}:api-surface", unit.id)),
+                cluster_key: stable_id("evidence-cluster", format!("{}:api-surface", unit.id)),
                 label: "公共 API".to_string(),
                 citations,
             });
@@ -2972,7 +2971,7 @@ fn build_evidence_clusters_from_scope(
 
         if !citations.is_empty() {
             clusters.push(EvidenceCluster {
-                cluster_key: stable_id("evidence-cluster", &format!("{}:config-surface", unit.id)),
+                cluster_key: stable_id("evidence-cluster", format!("{}:config-surface", unit.id)),
                 label: "配置入口".to_string(),
                 citations,
             });
@@ -3006,7 +3005,7 @@ fn build_evidence_clusters_from_scope(
 
         if !citations.is_empty() {
             clusters.push(EvidenceCluster {
-                cluster_key: stable_id("evidence-cluster", &format!("{}:docs-anchor", unit.id)),
+                cluster_key: stable_id("evidence-cluster", format!("{}:docs-anchor", unit.id)),
                 label: "文档入口".to_string(),
                 citations,
             });

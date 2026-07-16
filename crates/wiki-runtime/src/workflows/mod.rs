@@ -6,6 +6,7 @@ pub mod governance;
 pub mod init;
 pub mod page_render;
 pub mod progress;
+pub mod projection_governance;
 pub mod query;
 pub mod rebuild;
 pub mod release_scope;

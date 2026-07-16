@@ -32,9 +32,7 @@ impl LlmService for ScanBatchFilePurposeService {
                 let path = item.get("path")?.as_str()?;
                 let purpose = if path.contains("middleware") {
                     "middleware"
-                } else if path.contains("helper") {
-                    "helper"
-                } else if path.contains("promote") {
+                } else if path.contains("helper") || path.contains("promote") {
                     "helper"
                 } else {
                     "utility"

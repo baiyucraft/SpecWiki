@@ -494,7 +494,12 @@ fn query_returns_graph_context_for_symbol_hits() {
     );
     assert_eq!(
         query.answer.answer_mode,
-        wiki_runtime::domain::runtime_profile::AnswerMode::Direct
+        wiki_runtime::domain::runtime_profile::AnswerMode::Direct,
+        "readiness={:?}, state={}, trust={:?}, action={:?}",
+        query.readiness,
+        query.runtime_state,
+        query.query_trust,
+        query.recommended_action
     );
     assert_eq!(
         query.answer.answer_trust,
@@ -922,7 +927,7 @@ fn workflows_write_graph_phase_diagnostics_and_unresolved_refs() {
     let snapshot = sqlite_store::read_current_graph_snapshot(repo_root)
         .unwrap()
         .unwrap();
-    assert_eq!(snapshot.source_fingerprint.is_empty(), false);
+    assert!(!snapshot.source_fingerprint.is_empty());
 }
 
 #[test]

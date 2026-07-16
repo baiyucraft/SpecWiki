@@ -59,11 +59,11 @@ pub fn section_title_for_key(page_type: &str, section_key: &str) -> Option<&'sta
 /// # 返回
 /// - 返回稳定的 section ID。
 pub fn section_id_for_title(page_id: &str, title: &str) -> String {
-    stable_id("section", &format!("{page_id}:{title}"))
+    stable_id("section", format!("{page_id}:{title}"))
 }
 
 pub fn section_id_for_key(page_id: &str, section_key: &str) -> String {
-    stable_id("section", &format!("{page_id}:{section_key}"))
+    stable_id("section", format!("{page_id}:{section_key}"))
 }
 
 /// 为当前页面构建稳定的 section 草稿集合。

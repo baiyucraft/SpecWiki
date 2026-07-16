@@ -29,14 +29,14 @@ use crate::storage::cache_store::{
     write_page_generation_cache, PageContextCacheEntry, PageGenerationCacheEntry,
 };
 use crate::storage::knowledge_artifacts::{
-    compute_committed_snapshot_id, persist_knowledge_artifacts, PersistKnowledgeArtifactsInput,
+    persist_knowledge_artifacts_with_pages, PersistKnowledgeArtifactsInput, RuntimePageWrite,
 };
 use crate::storage::metadata_store::metadata_exists;
-use crate::storage::metadata_store::write_metadata;
+use crate::storage::runtime_commit::recover_runtime_commits;
 use crate::storage::sqlite::runtime_store::SqliteRuntimeStore;
 use crate::storage::sqlite_store;
 use crate::storage::state_store::{write_facts_snapshot, write_state};
-use crate::storage::wiki_fs::{remove_runtime_with_cache_mode, write_page};
+use crate::storage::wiki_fs::remove_runtime_with_cache_mode;
 use crate::workflows::page_render::{
     finalize_pipeline_runtime, load_runtime_summary_for_repo, persist_runtime_blocker_for_repo,
     plan_runtime_knowledge_tree, run_compose_pipeline_with_action,
@@ -139,6 +139,7 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
             "repo root must be an existing directory",
         ));
     }
+    recover_runtime_commits(repo_root)?;
 
     let shared_sink = Rc::new(RefCell::new(progress_sink));
     let started_at = Instant::now();
@@ -278,7 +279,14 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
     let _digests = pipeline.digests;
     let unit_researches = pipeline.unit_researches;
     let knowledge_tree = pipeline.knowledge_tree;
+    let mut projection_decisions = pipeline.projection_decisions;
     let pages = pipeline.planned_pages;
+    for decision in &mut projection_decisions {
+        if decision.eligibility.is_projectable() {
+            decision.lifecycle = wiki_model::domain::projection::ProjectionLifecycle::Projected;
+            decision.action = wiki_model::domain::projection::ProjectionAction::Retain;
+        }
+    }
     let pages_by_id: BTreeMap<String, _> =
         pages.iter().map(|p| (p.id.clone(), p.clone())).collect();
 
@@ -291,6 +299,7 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
 
     let mut page_results = Vec::new();
     let mut generated_pages = Vec::new();
+    let mut pending_page_writes = Vec::new();
     let generated_at = current_timestamp();
     let mut ancestor_ids_by_page = BTreeMap::new();
 
@@ -300,7 +309,10 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
         let content_hash = wiki_index::fingerprint::fingerprint_bytes(rendered.content.as_bytes());
 
         let planned_page = find_or_build_planned_page(draft, &pages_by_id)?;
-        write_page(repo_root, &planned_page.relative_path, &rendered.content)?;
+        pending_page_writes.push(RuntimePageWrite {
+            relative_path: planned_page.relative_path.clone(),
+            content: rendered.content.clone(),
+        });
         let page_path = format!(".wiki/{}", planned_page.relative_path);
         generated_pages.push(page_path);
         let page_context = build_minimal_page_context(
@@ -380,10 +392,7 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
         last_indexed_commit: current_commit(repo_root),
     };
     let facts_input_hash = compute_facts_input_hash(&scan_report, &module_tree);
-    let mut metadata = export_metadata(&state, &export_context);
-    metadata.current_snapshot_id = Some(compute_committed_snapshot_id(&facts_input_hash));
-    reporter.phase("write_metadata", "写入元数据");
-    write_metadata(repo_root, &metadata)?;
+    let metadata = export_metadata(&state, &export_context);
     finalize_pipeline_runtime(repo_root, action, generated_pages.len())?;
     let conn = sqlite_store::open_db(repo_root)?;
     let runtime_store = SqliteRuntimeStore::new(&conn);
@@ -398,21 +407,35 @@ pub fn run_init_with_progress_and_llm_as_with_mode<'a>(
         .collect::<Vec<_>>();
     let declared_records = Vec::new();
     let health_signals = Vec::new();
-    let page_digests = _digests.values().cloned().collect::<Vec<_>>();
+    let projected_unit_ids = projection_decisions
+        .iter()
+        .filter(|decision| decision.keeps_formal_page())
+        .map(|decision| decision.unit_ref.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let page_digests = _digests
+        .values()
+        .filter(|digest| projected_unit_ids.contains(digest.unit_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
     let runtime_gates = runtime_store.read_unit_runtime_gates()?;
-    persist_knowledge_artifacts(PersistKnowledgeArtifactsInput {
-        repo_root,
-        workflow_action: action,
-        generated_at: &generated_at,
-        facts_input_hash: &facts_input_hash,
-        metadata: &metadata,
-        knowledge_tree: &knowledge_tree,
-        declared_records: &declared_records,
-        research_summaries: &research_summaries,
-        page_digests: &page_digests,
-        runtime_gates: &runtime_gates,
-        health_signals: &health_signals,
-    })?;
+    persist_knowledge_artifacts_with_pages(
+        PersistKnowledgeArtifactsInput {
+            repo_root,
+            workflow_action: action,
+            generated_at: &generated_at,
+            facts_input_hash: &facts_input_hash,
+            metadata: &metadata,
+            knowledge_tree: &knowledge_tree,
+            declared_records: &declared_records,
+            research_summaries: &research_summaries,
+            page_digests: &page_digests,
+            projection_decisions: &projection_decisions,
+            runtime_gates: &runtime_gates,
+            health_signals: &health_signals,
+        },
+        &pending_page_writes,
+        &[],
+    )?;
     let runtime_summary =
         load_runtime_summary_for_repo(repo_root)?.map(RuntimeSummaryProjection::from_summary);
     runtime_store.clear_pipeline_checkpoint()?;
@@ -711,9 +734,19 @@ mod tests {
         PageDiagramDigest, PageDigest, PageSectionDigest, ProjectionDigestStatus, SourceCitation,
         UnitResearch,
     };
-    use wiki_knowledge::plan_pages_from_knowledge_tree;
+    use wiki_knowledge::{plan_projection_intents, project_page_plans};
 
     static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn default_projection_pages(tree: &KnowledgeTree) -> Vec<wiki_knowledge::PagePlan> {
+        let decisions = plan_projection_intents(
+            tree,
+            &wiki_model::domain::projection::ProjectionPolicy::default(),
+            &[],
+        )
+        .unwrap();
+        project_page_plans(tree, &decisions).unwrap()
+    }
 
     struct EnvVarGuard {
         key: &'static str,
@@ -767,7 +800,7 @@ mod tests {
         tree.add_unit(child.clone());
         tree.processing_order = vec![child.id.clone(), parent.id.clone()];
 
-        let planned_pages = plan_pages_from_knowledge_tree(&tree);
+        let planned_pages = default_projection_pages(&tree);
         let planned_page = planned_pages
             .iter()
             .find(|page| page.unit_id.as_deref() == Some(parent.id.as_str()))
@@ -886,7 +919,7 @@ mod tests {
         tree.add_unit(parent_with_child.clone());
         tree.add_unit(child.clone());
         tree.build_processing_order();
-        let planned_pages = wiki_knowledge::plan_pages_from_knowledge_tree(&tree);
+        let planned_pages = default_projection_pages(&tree);
         let planned_page = planned_pages
             .iter()
             .find(|page| page.unit_id.as_deref() == Some(parent_with_child.id.as_str()))
@@ -939,7 +972,7 @@ mod tests {
         let mut tree = KnowledgeTree::new(unit.id.clone());
         tree.add_unit(unit.clone());
         tree.build_processing_order();
-        let planned_page = wiki_knowledge::plan_pages_from_knowledge_tree(&tree)
+        let planned_page = default_projection_pages(&tree)
             .into_iter()
             .next()
             .expect("planned page should exist");
@@ -971,7 +1004,7 @@ mod tests {
             "核心运行时/运行时.md",
         );
         sqlite_store::write_knowledge_domains(&conn, &[domain]).unwrap();
-        sqlite_store::write_knowledge_units(&conn, &[unit.clone()]).unwrap();
+        sqlite_store::write_knowledge_units(&conn, std::slice::from_ref(&unit)).unwrap();
         sqlite_store::runtime_meta_set(
             &conn,
             "pipeline_runtime_summary",
@@ -1048,7 +1081,7 @@ mod tests {
             "核心运行时/运行时.md",
         );
         sqlite_store::write_knowledge_domains(&conn, &[domain]).unwrap();
-        sqlite_store::write_knowledge_units(&conn, &[unit.clone()]).unwrap();
+        sqlite_store::write_knowledge_units(&conn, std::slice::from_ref(&unit)).unwrap();
         sqlite_store::runtime_meta_set(
             &conn,
             "pipeline_runtime_summary",
@@ -1099,7 +1132,7 @@ mod tests {
             "核心运行时/运行时.md",
         );
         sqlite_store::write_knowledge_domains(&conn, &[domain]).unwrap();
-        sqlite_store::write_knowledge_units(&conn, &[unit.clone()]).unwrap();
+        sqlite_store::write_knowledge_units(&conn, std::slice::from_ref(&unit)).unwrap();
         sqlite_store::runtime_meta_set(
             &conn,
             "pipeline_runtime_summary",

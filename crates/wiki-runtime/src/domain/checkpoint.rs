@@ -1,5 +1,60 @@
 use serde::{Deserialize, Serialize};
 
+/// Pipeline working state 的完整复用身份。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PipelineResumeIdentity {
+    pub contract_version: String,
+    pub workflow_action: String,
+    pub facts_input_hash: String,
+    pub knowledge_tree_hash: String,
+    pub research_contract_hash: String,
+    pub resume_key: String,
+}
+
+impl PipelineResumeIdentity {
+    pub fn new(
+        workflow_action: impl Into<String>,
+        facts_input_hash: impl Into<String>,
+        knowledge_tree_hash: impl Into<String>,
+        research_contract_hash: impl Into<String>,
+    ) -> Self {
+        let workflow_action = workflow_action.into();
+        let facts_input_hash = facts_input_hash.into();
+        let knowledge_tree_hash = knowledge_tree_hash.into();
+        let research_contract_hash = research_contract_hash.into();
+        let contract_version = "pipeline-resume-v1".to_string();
+        let resume_key = crate::domain::stable_id::stable_id(
+            "resume",
+            format!(
+                "{contract_version}:{workflow_action}:{facts_input_hash}:{knowledge_tree_hash}:{research_contract_hash}"
+            ),
+        );
+        Self {
+            contract_version,
+            workflow_action,
+            facts_input_hash,
+            knowledge_tree_hash,
+            research_contract_hash,
+            resume_key,
+        }
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.contract_version == "pipeline-resume-v1"
+            && !self.workflow_action.is_empty()
+            && !self.facts_input_hash.is_empty()
+            && !self.knowledge_tree_hash.is_empty()
+            && !self.research_contract_hash.is_empty()
+            && *self
+                == Self::new(
+                    &self.workflow_action,
+                    &self.facts_input_hash,
+                    &self.knowledge_tree_hash,
+                    &self.research_contract_hash,
+                )
+    }
+}
+
 /// Pipeline 中断的阶段标识。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PipelineStage {
@@ -29,6 +84,7 @@ impl PipelineStage {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "knowledge_planning" => Some(Self::KnowledgePlanning),
@@ -49,6 +105,7 @@ impl PipelineStage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineCheckpoint {
     pub checkpoint_id: String,
+    pub resume_identity: PipelineResumeIdentity,
     /// Facts 层输入的哈希，用于判断检查点是否仍然有效。
     pub facts_input_hash: String,
     /// 中断发生的 pipeline 阶段。
@@ -61,7 +118,7 @@ pub struct PipelineCheckpoint {
 
 impl PipelineCheckpoint {
     pub fn new(
-        facts_input_hash: impl Into<String>,
+        resume_identity: PipelineResumeIdentity,
         stage: PipelineStage,
         target_id: Option<String>,
         error_message: Option<String>,
@@ -69,9 +126,10 @@ impl PipelineCheckpoint {
         Self {
             checkpoint_id: crate::domain::stable_id::stable_id(
                 "checkpoint",
-                &format!("{:?}", std::time::SystemTime::now()),
+                format!("{:?}", std::time::SystemTime::now()),
             ),
-            facts_input_hash: facts_input_hash.into(),
+            facts_input_hash: resume_identity.facts_input_hash.clone(),
+            resume_identity,
             interrupted_stage: stage,
             interrupted_target_id: target_id,
             error_message,
@@ -82,6 +140,8 @@ impl PipelineCheckpoint {
 /// workflow 级 runtime readiness 摘要。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PipelineRuntimeSummary {
+    #[serde(default)]
+    pub resume_identity: PipelineResumeIdentity,
     pub facts_input_hash: String,
     #[serde(default)]
     pub workflow_action: String,
@@ -159,4 +219,55 @@ pub fn compute_facts_input_hash(
         hasher_input.extend_from_slice(module.kind.as_bytes());
     }
     fingerprint_bytes(&hasher_input)
+}
+
+pub fn compute_knowledge_tree_hash(
+    tree: &wiki_model::domain::knowledge::KnowledgeTree,
+) -> std::io::Result<String> {
+    let mut normalized = tree.clone();
+    normalized.processing_order = normalized.units.keys().cloned().collect();
+    for unit in normalized.units.values_mut() {
+        unit.updated_at.clear();
+        unit.child_unit_ids.sort();
+        unit.planner_signal_bundles
+            .sort_by(|left, right| left.key.cmp(&right.key));
+        unit.scope.module_ids.sort();
+        unit.scope.source_ids.sort();
+        unit.scope.symbol_ids.sort();
+        unit.scope.relation_ids.sort();
+        unit.declared_record_refs.sort();
+        unit.projection_refs.sort();
+        unit.source_refs.sort();
+        unit.citation_refs.sort();
+    }
+    for domain in normalized.domains.values_mut() {
+        domain.source_modules.sort();
+        domain.source_files.sort();
+    }
+    let serialized = serde_json::to_vec(&normalized).map_err(|error| {
+        std::io::Error::other(format!("serialize stable knowledge tree: {error}"))
+    })?;
+    Ok(wiki_index::fingerprint::fingerprint_bytes(&serialized))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PipelineResumeIdentity;
+
+    #[test]
+    fn resume_identity_changes_for_each_contract_dimension() {
+        let identity = |action, facts, tree, contract| {
+            PipelineResumeIdentity::new(action, facts, tree, contract)
+        };
+        let base = identity("init", "facts-a", "tree-a", "contract-a");
+        assert_eq!(base, identity("init", "facts-a", "tree-a", "contract-a"));
+        for changed in [
+            identity("rebuild", "facts-a", "tree-a", "contract-a"),
+            identity("init", "facts-b", "tree-a", "contract-a"),
+            identity("init", "facts-a", "tree-b", "contract-a"),
+            identity("init", "facts-a", "tree-a", "contract-b"),
+        ] {
+            assert_ne!(base.resume_key, changed.resume_key);
+        }
+    }
 }

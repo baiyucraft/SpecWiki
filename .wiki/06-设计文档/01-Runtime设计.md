@@ -126,6 +126,45 @@ symbol -> graph -> declared knowledge -> derived knowledge -> page
 - 未承诺完整 knowledge system
 - 未承诺 provider-backed 大仓库样本已稳定完成 full compose
 
+## Reliability 生命周期 authority
+
+`wiki-runtime` 的 `ReliabilityAssessment` 是 freshness、consumability、公开状态、query trust、recommended action 与 workflow preflight 的唯一决策 authority。`status/query/sync/update/rebuild/restore` 只能投影同一 assessment，不能根据局部字符串、单个 `Ok` 或 cache 是否存在二次推导。
+
+### 双轴与证据优先级
+
+- `freshness` 回答产物是否对应当前 live source、branch、facts 与 formal snapshot。
+- `consumability` 回答当前 route 是否仍有足够 provenance 可以受限消费。
+- stale 但可查询的 route 必须暴露 stale provenance；missing/blocked route 不得伪造命中。
+- recommended action 是单值输出。Declared authoring drift 或 governance conflict 需要先 `sync/review_governance`，不能被一般 `update` 或 `rebuild` 覆盖。
+
+| 层 | Freshness authority | 可消费条件 | Fail-closed 条件 | 恢复入口 |
+| --- | --- | --- | --- | --- |
+| facts/index | live scan、source/branch fingerprint、graph snapshot | 当前 route 有真实 index evidence | fingerprint drift、graph missing/blocked | `update` / `rebuild` / `init` |
+| declared | formal declared snapshot、authority decision、authoring state | record 合法且 group authority 可判定 | illegal relation、authority missing/conflict | `sync` / `review_governance` |
+| derived research | input hash、provider outcome、unit gate | production 有有效 provider output | provider failure、invalid/no output、contract mismatch | 原 workflow action |
+| page projection | projection decision、digest、page/link binding | eligible 且 digest ready、page hash 匹配 | retiring protection、illegal drift、dangling managed link | `update` / `rebuild` |
+| metadata/runtime mirror | composite committed snapshot pointer | manifest 与 formal/page hashes 一致 | pointer/manifest drift、半提交 | runtime commit recovery / restore |
+| local cache/checkpoint | 完整 pipeline resume identity | 只复用完整匹配 unit commit point | identity mismatch、半写或错 unit/page/path | 丢弃 working state 后重算 |
+
+### Provider failure 与正式成功
+
+Provider 的 unavailable、transport、timeout、tool error 与 context limit 是稳定 failure kind。Production research 只有通过 quality gate 的有效 output 才能进入正式成功；development structural fallback 是显式 diagnostic，不能提升 readiness、query trust 或进程终态。
+
+### Resume 与 session 边界
+
+```text
+compose_resume.granularity = knowledge_unit
+compose_resume.current_unit = restart
+provider_session.scope = request_local
+provider_session.persistence = forbidden
+```
+
+Pipeline resume identity 由 workflow action、facts input、稳定 knowledge tree 与 research contract 共同决定。只有完整 matching research cache 和带共同 commit ref 的 draft/digest pair 可以复用；当前中断 unit 从 provider request 起点重跑。Provider 内部 bounded session 只属于一次 page research 调用，不进入 checkpoint、SQLite working cache、formal artifacts 或跨 workflow 恢复合同。
+
+### Runtime commit
+
+Page write/removal、formal artifacts、metadata、composite snapshot 与 local mirror 通过 repo-local lock 和 immutable commit plan 提交。Commit pointer 最后写入：pointer 前故障回滚，pointer 后故障 roll-forward；恢复必须幂等。Journal 只存在于 `.wiki/.cache/runtime-commits`，不成为 formal truth。
+
 ## 包边界与依赖合同
 
 ### 依赖方向

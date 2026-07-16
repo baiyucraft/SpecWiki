@@ -320,6 +320,7 @@ pub fn scan_repo_with_boundary_and_assist(
 ///
 /// # 错误
 /// - 当目录遍历、文件类型判断或文件读取失败时返回错误。
+#[allow(clippy::too_many_arguments)]
 fn visit_dir(
     root: &Path,
     dir: &Path,

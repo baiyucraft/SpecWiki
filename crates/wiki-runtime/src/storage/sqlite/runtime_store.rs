@@ -4,7 +4,9 @@ use std::io;
 
 use rusqlite::Connection;
 
-use crate::domain::checkpoint::{PipelineCheckpoint, PipelineStage, UnitRuntimeGate};
+use crate::domain::checkpoint::{
+    PipelineCheckpoint, PipelineResumeIdentity, PipelineStage, UnitRuntimeGate,
+};
 use crate::storage::sqlite_store;
 
 /// `SqliteRuntimeStore` 用于包装 runtime 自有表的访问。
@@ -39,10 +41,13 @@ impl<'conn> SqliteRuntimeStore<'conn> {
     }
 
     pub fn write_pipeline_checkpoint(&self, checkpoint: &PipelineCheckpoint) -> io::Result<()> {
+        let resume_identity_json = serde_json::to_string(&checkpoint.resume_identity)
+            .map_err(|error| io::Error::other(format!("serialize resume identity: {error}")))?;
         sqlite_store::write_pipeline_checkpoint(
             self.conn,
             &checkpoint.checkpoint_id,
             &checkpoint.facts_input_hash,
+            &resume_identity_json,
             checkpoint.interrupted_stage.as_str(),
             checkpoint.interrupted_target_id.as_deref(),
             checkpoint.error_message.as_deref(),
@@ -53,6 +58,7 @@ impl<'conn> SqliteRuntimeStore<'conn> {
         let Some((
             checkpoint_id,
             facts_input_hash,
+            resume_identity_json,
             interrupted_stage,
             interrupted_target_id,
             error_message,
@@ -65,8 +71,16 @@ impl<'conn> SqliteRuntimeStore<'conn> {
                 "unknown pipeline stage in checkpoint: {interrupted_stage}"
             ))
         })?;
+        let resume_identity: PipelineResumeIdentity = serde_json::from_str(&resume_identity_json)
+            .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("parse checkpoint resume identity: {error}"),
+            )
+        })?;
         Ok(Some(PipelineCheckpoint {
             checkpoint_id,
+            resume_identity,
             facts_input_hash,
             interrupted_stage: stage,
             interrupted_target_id,

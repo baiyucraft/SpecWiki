@@ -111,6 +111,7 @@ fn knowledge_artifacts_roundtrip_preserves_declared_and_health_records() {
                 selectors: vec!["formal".to_string(), "runtime".to_string()],
             },
             status: wiki_model::domain::knowledge_artifact::DeclaredKnowledgeRecordStatus::Active,
+            authoring_state: Default::default(),
             relations: Vec::new(),
             source_ref: "manual".to_string(),
             updated_at: generated_at.clone(),
@@ -144,6 +145,7 @@ fn knowledge_artifacts_roundtrip_preserves_declared_and_health_records() {
         declared_records: &declared_records,
         research_summaries: &before.research_summaries,
         page_digests: &before.page_digests,
+        projection_decisions: &before.projection_decisions,
         runtime_gates: &runtime_gates,
         health_signals: &health_signals,
     })
@@ -170,9 +172,13 @@ fn knowledge_artifacts_roundtrip_preserves_declared_and_health_records() {
         projection_refs
     );
     let projection_snapshot_id = wiki_index::fingerprint::fingerprint_bytes(
-        serde_json::to_vec(&after.projection_digests)
-            .unwrap()
-            .as_slice(),
+        serde_json::to_vec(&(
+            &after.projection_decisions,
+            &after.projection_digests,
+            &after.page_link_refs,
+        ))
+        .unwrap()
+        .as_slice(),
     );
     assert_eq!(
         after.snapshot_manifest.projection_snapshot_id,
@@ -577,6 +583,7 @@ fn artifact_roundtrip_persists_declared_conflict_records() {
                 selectors: Vec::new(),
             },
             status: wiki_model::domain::knowledge_artifact::DeclaredKnowledgeRecordStatus::Active,
+            authoring_state: Default::default(),
             relations: Vec::new(),
             source_ref: "manual".to_string(),
             updated_at: generated_at.clone(),
@@ -598,6 +605,7 @@ fn artifact_roundtrip_persists_declared_conflict_records() {
                 selectors: Vec::new(),
             },
             status: wiki_model::domain::knowledge_artifact::DeclaredKnowledgeRecordStatus::Active,
+            authoring_state: Default::default(),
             relations: Vec::new(),
             source_ref: "manual".to_string(),
             updated_at: generated_at.clone(),
@@ -620,6 +628,7 @@ fn artifact_roundtrip_persists_declared_conflict_records() {
         declared_records: &declared_records,
         research_summaries: &before.research_summaries,
         page_digests: &before.page_digests,
+        projection_decisions: &before.projection_decisions,
         runtime_gates: &runtime_gates,
         health_signals: &[],
     })
@@ -674,6 +683,7 @@ fn restore_refuses_invalid_conflict_snapshot() {
                 selectors: Vec::new(),
             },
             status: wiki_model::domain::knowledge_artifact::DeclaredKnowledgeRecordStatus::Active,
+            authoring_state: Default::default(),
             relations: Vec::new(),
             source_ref: "manual".to_string(),
             updated_at: generated_at.clone(),
@@ -695,6 +705,7 @@ fn restore_refuses_invalid_conflict_snapshot() {
                 selectors: Vec::new(),
             },
             status: wiki_model::domain::knowledge_artifact::DeclaredKnowledgeRecordStatus::Active,
+            authoring_state: Default::default(),
             relations: Vec::new(),
             source_ref: "manual".to_string(),
             updated_at: generated_at.clone(),
@@ -717,6 +728,7 @@ fn restore_refuses_invalid_conflict_snapshot() {
         declared_records: &declared_records,
         research_summaries: &before.research_summaries,
         page_digests: &before.page_digests,
+        projection_decisions: &before.projection_decisions,
         runtime_gates: &runtime_gates,
         health_signals: &[],
     })

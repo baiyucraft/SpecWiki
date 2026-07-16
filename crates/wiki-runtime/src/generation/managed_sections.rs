@@ -4,9 +4,12 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::{Component, Path, PathBuf};
 
 use wiki_index::fingerprint::fingerprint_bytes;
-use wiki_model::domain::projection::{SectionBinding, SectionOwnership, SyncResultKind};
+use wiki_model::domain::projection::{
+    PageLinkRef, SectionBinding, SectionOwnership, SyncResultKind,
+};
 
 // ---------------------------------------------------------------------------
 // Marker 协议常量
@@ -173,6 +176,140 @@ impl ParsedWikiPage {
             })
             .collect()
     }
+}
+
+/// 从真实 page blocks 提取结构化内部 Markdown links，供 removal preflight 使用。
+pub fn collect_page_link_refs(
+    source_page_id: &str,
+    source_relative_path: &str,
+    parsed: &ParsedWikiPage,
+    page_id_by_path: &BTreeMap<String, String>,
+) -> Vec<PageLinkRef> {
+    let mut refs = Vec::new();
+    for block in &parsed.blocks {
+        let (section_id, owner, body) = match block {
+            PageBlock::Managed(block) => (
+                Some(block.section_id.clone()),
+                block.owner_kind,
+                block.body.as_str(),
+            ),
+            PageBlock::User(block) => {
+                (None, SectionOwnership::ManualUnmanaged, block.body.as_str())
+            }
+        };
+        for target in scan_markdown_link_targets(body) {
+            let Some(target_path) = resolve_internal_link_path(source_relative_path, &target)
+            else {
+                continue;
+            };
+            let Some(target_page_id) = page_id_by_path.get(&target_path) else {
+                continue;
+            };
+            let mut link_ref = PageLinkRef {
+                source_page_id: source_page_id.to_string(),
+                source_section_id: section_id.clone(),
+                source_owner: owner,
+                target_page_id: target_page_id.clone(),
+                target_path: format!(".wiki/{target_path}"),
+                content_hash: content_hash(body),
+            };
+            link_ref.canonicalize();
+            refs.push(link_ref);
+        }
+    }
+    refs.sort_by(|left, right| {
+        (
+            left.source_page_id.as_str(),
+            left.source_section_id.as_deref().unwrap_or_default(),
+            left.target_page_id.as_str(),
+            left.content_hash.as_str(),
+        )
+            .cmp(&(
+                right.source_page_id.as_str(),
+                right.source_section_id.as_deref().unwrap_or_default(),
+                right.target_page_id.as_str(),
+                right.content_hash.as_str(),
+            ))
+    });
+    refs.dedup();
+    refs
+}
+
+fn scan_markdown_link_targets(body: &str) -> Vec<String> {
+    let bytes = body.as_bytes();
+    let mut targets = Vec::new();
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        if bytes[index] != b']' || bytes[index + 1] != b'(' {
+            index += 1;
+            continue;
+        }
+        let start = index + 2;
+        let mut end = start;
+        let mut escaped = false;
+        while end < bytes.len() {
+            if !escaped && bytes[end] == b')' {
+                break;
+            }
+            escaped = !escaped && bytes[end] == b'\\';
+            if bytes[end] != b'\\' {
+                escaped = false;
+            }
+            end += 1;
+        }
+        if end >= bytes.len() {
+            break;
+        }
+        let raw = body[start..end].trim();
+        let target = if let Some(stripped) = raw.strip_prefix('<') {
+            stripped.split_once('>').map(|(value, _)| value)
+        } else {
+            raw.split_whitespace().next()
+        };
+        if let Some(target) = target.filter(|value| !value.is_empty()) {
+            targets.push(target.to_string());
+        }
+        index = end + 1;
+    }
+    targets
+}
+
+fn resolve_internal_link_path(source_relative_path: &str, raw_target: &str) -> Option<String> {
+    let target = raw_target
+        .split(['#', '?'])
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .replace('\\', "/");
+    if target.is_empty()
+        || target.starts_with('#')
+        || target.contains("://")
+        || target.starts_with("mailto:")
+    {
+        return None;
+    }
+    let target = target.trim_start_matches('/').trim_start_matches(".wiki/");
+    let joined = if raw_target.starts_with('/') || raw_target.starts_with(".wiki/") {
+        PathBuf::from(target)
+    } else {
+        Path::new(source_relative_path)
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join(target)
+    };
+    let mut segments = Vec::new();
+    for component in joined.components() {
+        match component {
+            Component::Normal(value) => segments.push(value.to_string_lossy().to_string()),
+            Component::ParentDir => {
+                segments.pop()?;
+            }
+            Component::CurDir => {}
+            Component::Prefix(_) | Component::RootDir => return None,
+        }
+    }
+    let normalized = segments.join("/");
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 #[derive(Debug, Clone)]

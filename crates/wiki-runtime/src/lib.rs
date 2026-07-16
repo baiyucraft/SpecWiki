@@ -1,6 +1,8 @@
 //! `wiki-runtime` 是 Repo Wiki 的运行时编排层。
 //! 它负责仓库扫描、模块拆分、页面生成、运行时状态维护，以及对外 JSON 协议分发。
 
+#![allow(clippy::too_many_arguments)]
+
 pub mod debug_trace;
 pub mod domain;
 pub mod generation;

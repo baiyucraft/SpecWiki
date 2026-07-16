@@ -38,17 +38,13 @@ impl SourceRange {
 /// symbol 事实的来源类别。
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SymbolSourceKind {
     Parser,
     Heuristic,
     Recovered,
+    #[default]
     Unknown,
-}
-
-impl Default for SymbolSourceKind {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 /// symbol 事实的解析来源和诊断。
@@ -64,9 +60,11 @@ pub struct SymbolProvenance {
 /// graph pipeline 的可诊断阶段。
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum GraphPhase {
     Scan,
     Structure,
+    #[default]
     Parse,
     ResolveImports,
     ResolveCalls,
@@ -79,7 +77,9 @@ pub enum GraphPhase {
 /// raw capture 的类别。
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum RawCaptureKind {
+    #[default]
     Import,
     Call,
     Heritage,
@@ -88,7 +88,9 @@ pub enum RawCaptureKind {
 /// unresolved reference 的类别。
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ReferenceKind {
+    #[default]
     Import,
     Call,
     Heritage,
@@ -108,12 +110,6 @@ pub struct RawCaptureBase {
     pub parser_id: String,
     pub parser_version: String,
     pub diagnostics: Vec<String>,
-}
-
-impl Default for RawCaptureKind {
-    fn default() -> Self {
-        Self::Import
-    }
 }
 
 impl RawCaptureBase {
@@ -164,18 +160,6 @@ pub struct UnresolvedRef {
     pub candidates: Vec<String>,
     pub reason: String,
     pub diagnostics: Vec<String>,
-}
-
-impl Default for GraphPhase {
-    fn default() -> Self {
-        Self::Parse
-    }
-}
-
-impl Default for ReferenceKind {
-    fn default() -> Self {
-        Self::Import
-    }
 }
 
 /// `SymbolNode` 是当前迭代真正持久化的符号事实。
@@ -262,6 +246,7 @@ impl SymbolNode {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn legacy(
         symbol_id: String,
         name: String,

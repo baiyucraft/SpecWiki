@@ -244,6 +244,61 @@ pub struct RuntimePreflight {
     pub recommended_action: RecommendedAction,
 }
 
+/// Runtime 内部用于区分“内容是否当前”与“物理上是否仍可受限消费”的 freshness。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerFreshness {
+    Current,
+    Stale,
+    Unknown,
+    Invalid,
+}
+
+/// Runtime 内部的单层消费能力；它不直接扩张公开 query DTO。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerConsumability {
+    Ready,
+    Degraded,
+    Missing,
+    Rebuilding,
+    Blocked,
+}
+
+/// Reliability reducer 当前评估的正式层和工作层闭集。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReliabilityLayer {
+    Facts,
+    Index,
+    Declared,
+    Derived,
+    Projection,
+    MetadataMirror,
+    Cache,
+}
+
+/// 单层 assessment 同时保存 freshness 与 consumability，避免 stale 被误报为 ready。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct LayerAssessment {
+    pub layer: ReliabilityLayer,
+    pub freshness: LayerFreshness,
+    pub consumability: LayerConsumability,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
+}
+
+/// status/query/workflow preflight 共用的内部 reliability 决策结果。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ReliabilityAssessment {
+    pub runtime_state: String,
+    pub layers: Vec<LayerAssessment>,
+    pub readiness: RuntimeReadiness,
+    pub preflight: RuntimePreflight,
+    pub core_action: RecommendedAction,
+    pub trust_ceiling: QueryTrust,
+}
+
 /// gate 摘要里保留的稳定 blocker 片段，避免宿主依赖完整内部 gate 结构。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RuntimeGateBlocker {
@@ -325,6 +380,197 @@ pub fn preflight_for_state(state: &str, facts_ready: bool) -> RuntimePreflight {
             recommended_action: RecommendedAction::Rebuild,
         },
     }
+}
+
+/// 把已收集的 runtime state、graph 和 mirror evidence 一次投影为共享 assessment。
+///
+/// 该函数只负责决策，不读取文件系统。调用方必须先完成 restore 和 live evidence 收集。
+pub fn assess_runtime_reliability(
+    state: &str,
+    graph_ready: bool,
+    mirror_ready: bool,
+    reason: Option<&str>,
+) -> ReliabilityAssessment {
+    let readiness = readiness_for_state(state, graph_ready, mirror_ready, reason);
+    let preflight = preflight_for_state(state, graph_ready);
+    let core_action = action_for_readiness(preflight.recommended_action, &readiness);
+    let trust_ceiling = readiness.query_trust();
+    let layers = assess_layers(state, graph_ready, mirror_ready, reason);
+
+    ReliabilityAssessment {
+        runtime_state: state.to_string(),
+        layers,
+        readiness,
+        preflight,
+        core_action,
+        trust_ceiling,
+    }
+}
+
+fn readiness_for_state(
+    state: &str,
+    graph_ready: bool,
+    mirror_ready: bool,
+    reason: Option<&str>,
+) -> RuntimeReadiness {
+    let reasons = || {
+        reason
+            .map(|value| vec![value.to_string()])
+            .unwrap_or_default()
+    };
+    match state {
+        "fresh" if graph_ready => RuntimeReadiness::ready(None),
+        "fresh" if mirror_ready => RuntimeReadiness {
+            index: LayerReadiness::Missing,
+            knowledge: LayerReadiness::Ready,
+            projection: LayerReadiness::Ready,
+            fusion: FusionReadiness::Degraded,
+            restored_level: RestoredLevel::Level1,
+            snapshot_id: None,
+            reasons: reasons(),
+        },
+        "stale" | "needs_update" => RuntimeReadiness {
+            index: if graph_ready {
+                LayerReadiness::Stale
+            } else {
+                LayerReadiness::Missing
+            },
+            knowledge: if mirror_ready {
+                LayerReadiness::Stale
+            } else {
+                LayerReadiness::Missing
+            },
+            projection: if mirror_ready {
+                LayerReadiness::Stale
+            } else {
+                LayerReadiness::Missing
+            },
+            fusion: FusionReadiness::Degraded,
+            restored_level: if mirror_ready {
+                RestoredLevel::Level1
+            } else {
+                RestoredLevel::None
+            },
+            snapshot_id: None,
+            reasons: reason
+                .map(|value| vec![value.to_string()])
+                .unwrap_or_else(|| vec!["runtime_stale".to_string()]),
+        },
+        "runtime_incomplete" if mirror_ready => RuntimeReadiness {
+            index: if graph_ready {
+                LayerReadiness::Rebuilding
+            } else {
+                LayerReadiness::Missing
+            },
+            knowledge: LayerReadiness::Rebuilding,
+            projection: LayerReadiness::Rebuilding,
+            fusion: FusionReadiness::Degraded,
+            restored_level: if graph_ready {
+                RestoredLevel::Level2
+            } else {
+                RestoredLevel::Level1
+            },
+            snapshot_id: None,
+            reasons: reason
+                .map(|value| vec![value.to_string()])
+                .unwrap_or_else(|| vec!["runtime_incomplete".to_string()]),
+        },
+        "missing" => RuntimeReadiness::missing("runtime_missing"),
+        "blocker" | "needs_rebuild" => RuntimeReadiness::blocked(
+            reason
+                .map(str::to_string)
+                .unwrap_or_else(|| "runtime_blocker".to_string()),
+        ),
+        _ if mirror_ready => RuntimeReadiness {
+            index: if graph_ready {
+                LayerReadiness::Ready
+            } else {
+                LayerReadiness::Missing
+            },
+            knowledge: LayerReadiness::Ready,
+            projection: LayerReadiness::Ready,
+            fusion: if graph_ready {
+                FusionReadiness::Ready
+            } else {
+                FusionReadiness::Degraded
+            },
+            restored_level: if graph_ready {
+                RestoredLevel::Level2
+            } else {
+                RestoredLevel::Level1
+            },
+            snapshot_id: None,
+            reasons: reasons(),
+        },
+        _ => RuntimeReadiness {
+            index: LayerReadiness::Stale,
+            knowledge: LayerReadiness::Stale,
+            projection: LayerReadiness::Stale,
+            fusion: FusionReadiness::Degraded,
+            restored_level: RestoredLevel::None,
+            snapshot_id: None,
+            reasons: reasons(),
+        },
+    }
+}
+
+fn action_for_readiness(
+    current: RecommendedAction,
+    readiness: &RuntimeReadiness,
+) -> RecommendedAction {
+    if current == RecommendedAction::Init {
+        return current;
+    }
+    match readiness.fusion {
+        FusionReadiness::Ready => current,
+        FusionReadiness::Degraded => match current {
+            RecommendedAction::None => RecommendedAction::Rebuild,
+            action => action,
+        },
+        FusionReadiness::Blocked => RecommendedAction::Rebuild,
+    }
+}
+
+fn assess_layers(
+    state: &str,
+    graph_ready: bool,
+    mirror_ready: bool,
+    reason: Option<&str>,
+) -> Vec<LayerAssessment> {
+    let stale = matches!(state, "stale" | "needs_update");
+    let invalid = matches!(state, "blocker" | "needs_rebuild");
+    let rebuilding = state == "runtime_incomplete";
+    let layer = |layer, available: bool, follows_source: bool| {
+        let (freshness, consumability) = if invalid {
+            (LayerFreshness::Invalid, LayerConsumability::Blocked)
+        } else if rebuilding {
+            (LayerFreshness::Unknown, LayerConsumability::Rebuilding)
+        } else if stale && follows_source {
+            (LayerFreshness::Stale, LayerConsumability::Degraded)
+        } else if available {
+            (LayerFreshness::Current, LayerConsumability::Ready)
+        } else {
+            (LayerFreshness::Unknown, LayerConsumability::Missing)
+        };
+        LayerAssessment {
+            layer,
+            freshness,
+            consumability,
+            reasons: reason
+                .map(|value| vec![value.to_string()])
+                .unwrap_or_default(),
+        }
+    };
+
+    vec![
+        layer(ReliabilityLayer::Facts, graph_ready, true),
+        layer(ReliabilityLayer::Index, graph_ready, true),
+        layer(ReliabilityLayer::Declared, mirror_ready, false),
+        layer(ReliabilityLayer::Derived, mirror_ready, true),
+        layer(ReliabilityLayer::Projection, mirror_ready, true),
+        layer(ReliabilityLayer::MetadataMirror, mirror_ready, false),
+        layer(ReliabilityLayer::Cache, mirror_ready, true),
+    ]
 }
 
 /// 当前阶段 query trust 只基于 runtime state 与 facts readiness 做最小判断。
@@ -437,7 +683,11 @@ pub fn summarize_health_signals(
             recommended_action = signal.recommended_action;
         }
         if signal.signal_kind == KnowledgeHealthSignalKind::GovernanceConflict
-            && signal.recommended_action == KnowledgeHealthRecommendedAction::Review
+            && matches!(
+                signal.recommended_action,
+                KnowledgeHealthRecommendedAction::Review
+                    | KnowledgeHealthRecommendedAction::ReviewGovernance
+            )
         {
             has_governance_conflict_review = true;
         }
@@ -446,7 +696,7 @@ pub fn summarize_health_signals(
     if has_governance_conflict_review
         && recommended_action != KnowledgeHealthRecommendedAction::Rebuild
     {
-        recommended_action = KnowledgeHealthRecommendedAction::Review;
+        recommended_action = KnowledgeHealthRecommendedAction::ReviewGovernance;
     }
 
     Some(KnowledgeHealthSummary {
@@ -457,6 +707,33 @@ pub fn summarize_health_signals(
         highest_severity: Some(highest_severity),
         recommended_action,
     })
+}
+
+/// 将 formal health evidence 投影回公共 readiness，不改变无关 core layer。
+pub fn merge_health_readiness(
+    mut readiness: RuntimeReadiness,
+    signals: &[KnowledgeHealthSignal],
+) -> RuntimeReadiness {
+    let projection_governance_blocked = signals.iter().any(|signal| {
+        signal.signal_kind == KnowledgeHealthSignalKind::GovernanceConflict
+            && signal.target_ref.starts_with("projection:")
+    });
+    if projection_governance_blocked {
+        readiness.projection = LayerReadiness::Conflict;
+        if readiness.fusion == FusionReadiness::Ready {
+            readiness.fusion = FusionReadiness::Degraded;
+        }
+        if !readiness
+            .reasons
+            .iter()
+            .any(|reason| reason == "projection_governance_blocked")
+        {
+            readiness
+                .reasons
+                .push("projection_governance_blocked".to_string());
+        }
+    }
+    readiness
 }
 
 /// 合并 readiness 驱动与 health 驱动的推荐动作。
@@ -474,15 +751,9 @@ pub fn merge_recommended_action(
         return current;
     }
 
-    let promoted = match health_summary.recommended_action {
+    match health_summary.recommended_action {
         KnowledgeHealthRecommendedAction::None => current,
-        KnowledgeHealthRecommendedAction::Sync => {
-            if current == RecommendedAction::None {
-                RecommendedAction::Sync
-            } else {
-                current
-            }
-        }
+        KnowledgeHealthRecommendedAction::Sync => RecommendedAction::Sync,
         KnowledgeHealthRecommendedAction::Update => match current {
             RecommendedAction::None | RecommendedAction::Sync => RecommendedAction::Update,
             _ => current,
@@ -495,9 +766,14 @@ pub fn merge_recommended_action(
                 current
             }
         }
-    };
-
-    promoted
+        KnowledgeHealthRecommendedAction::ReviewGovernance => {
+            if matches!(current, RecommendedAction::None | RecommendedAction::Review) {
+                RecommendedAction::ReviewGovernance
+            } else {
+                current
+            }
+        }
+    }
 }
 
 /// 合并 core runtime 与治理状态的产品级建议动作。
@@ -538,21 +814,25 @@ fn health_action_rank(action: KnowledgeHealthRecommendedAction) -> u8 {
     match action {
         KnowledgeHealthRecommendedAction::None => 0,
         KnowledgeHealthRecommendedAction::Review => 1,
-        KnowledgeHealthRecommendedAction::Sync => 2,
-        KnowledgeHealthRecommendedAction::Update => 3,
-        KnowledgeHealthRecommendedAction::Rebuild => 4,
+        KnowledgeHealthRecommendedAction::ReviewGovernance => 2,
+        KnowledgeHealthRecommendedAction::Sync => 3,
+        KnowledgeHealthRecommendedAction::Update => 4,
+        KnowledgeHealthRecommendedAction::Rebuild => 5,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_governance_recommended_action, summarize_health_signals, RecommendedAction};
+    use super::{
+        merge_governance_recommended_action, merge_recommended_action, summarize_health_signals,
+        RecommendedAction,
+    };
     use wiki_model::domain::governance::{
         GovernanceReadiness, GovernanceRecommendedAction, GovernanceSummary,
     };
     use wiki_model::domain::knowledge_artifact::{
         KnowledgeHealthRecommendedAction, KnowledgeHealthSeverity, KnowledgeHealthSignal,
-        KnowledgeHealthSignalKind,
+        KnowledgeHealthSignalKind, KnowledgeHealthSummary,
     };
 
     fn governance_summary(
@@ -605,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn governance_conflict_promotes_health_summary_to_review() {
+    fn governance_conflict_promotes_health_summary_to_review_governance() {
         let summary = summarize_health_signals(&[
             KnowledgeHealthSignal {
                 signal_id: "signal:derived".to_string(),
@@ -628,7 +908,7 @@ mod tests {
 
         assert_eq!(
             summary.recommended_action,
-            KnowledgeHealthRecommendedAction::Review
+            KnowledgeHealthRecommendedAction::ReviewGovernance
         );
     }
 
@@ -657,6 +937,23 @@ mod tests {
         assert_eq!(
             summary.recommended_action,
             KnowledgeHealthRecommendedAction::Rebuild
+        );
+    }
+
+    #[test]
+    fn pending_declared_sync_precedes_stale_source_update() {
+        let health = KnowledgeHealthSummary {
+            total_signals: 1,
+            degraded: true,
+            counts_by_kind: Default::default(),
+            counts_by_severity: Default::default(),
+            highest_severity: Some(KnowledgeHealthSeverity::Warning),
+            recommended_action: KnowledgeHealthRecommendedAction::Sync,
+        };
+
+        assert_eq!(
+            merge_recommended_action(RecommendedAction::Update, Some(&health)),
+            RecommendedAction::Sync
         );
     }
 }

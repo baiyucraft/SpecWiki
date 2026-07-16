@@ -394,7 +394,7 @@ struct PendingDependencyEdge {
 /// 这一步专门解决混合仓库场景：目录没有出现在固定白名单里，但明明是独立模块。
 fn discover_meaningful_top_level_roots(
     report: &ScanReport,
-    mut llm_runtime: Option<&mut dyn FactsAssist>,
+    llm_runtime: Option<&mut dyn FactsAssist>,
 ) -> Vec<String> {
     let mut stats_by_root = BTreeMap::new();
 
@@ -440,7 +440,7 @@ fn discover_meaningful_top_level_roots(
         });
     }
 
-    if let Some(llm_runtime) = llm_runtime.as_deref_mut() {
+    if let Some(llm_runtime) = llm_runtime {
         if let Ok(decisions) = llm_runtime.decide_top_level_promotions(&consult_candidates) {
             for (candidate, decision) in consult_candidates.into_iter().zip(decisions.into_iter()) {
                 if decision.unwrap_or(false) {
@@ -960,7 +960,7 @@ fn build_cross_module_edges(
     report: &ScanReport,
     modules: &[ModuleNode],
     graph_summary: &GraphSummary,
-    mut llm_runtime: Option<&mut dyn FactsAssist>,
+    llm_runtime: Option<&mut dyn FactsAssist>,
 ) -> Vec<RelationEdge> {
     let mut edges: BTreeMap<String, RelationEdge> = BTreeMap::new();
     let mut pending_heuristic_edges = Vec::<PendingDependencyEdge>::new();
@@ -979,7 +979,6 @@ fn build_cross_module_edges(
 
     if !pending_heuristic_edges.is_empty() {
         let keep_results = llm_runtime
-            .as_deref_mut()
             .and_then(|llm_runtime| {
                 let inputs = pending_heuristic_edges
                     .iter()

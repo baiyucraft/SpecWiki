@@ -10,9 +10,10 @@ use std::path::Path;
 use crate::domain::change_set::plan_runtime_changes_with_mode;
 use crate::domain::module_tree::ModuleNode;
 use crate::domain::runtime_profile::{
-    merge_governance_recommended_action, merge_recommended_action, query_trust_for,
-    summarize_health_signals, AnswerEnvelope, AnswerMode, AnswerSupportingRef, AnswerTrust,
-    FusionReadiness, LayerReadiness, QueryMode, QueryTrust, RecommendedAction, RuntimeReadiness,
+    assess_runtime_reliability, merge_governance_recommended_action, merge_health_readiness,
+    merge_recommended_action, summarize_health_signals, AnswerEnvelope, AnswerMode,
+    AnswerSupportingRef, AnswerTrust, FusionReadiness, QueryMode, QueryTrust, RecommendedAction,
+    RuntimeReadiness,
 };
 use crate::domain::state::{WikiPageState, WikiState};
 use crate::domain::steering::SteeringLoadMode;
@@ -20,17 +21,17 @@ use crate::storage::cache_store::cache_dir;
 use crate::storage::knowledge_artifacts::{
     load_health_signals, load_knowledge_artifacts, restore_runtime_cache_from_artifacts,
 };
+use crate::storage::runtime_commit::recover_runtime_commits;
 use crate::storage::sqlite::index_store::SqliteIndexStore;
 use crate::storage::state_store::{index_graph_ready, load_or_rebuild_state, runtime_mirror_ready};
 use crate::storage::wiki_fs::{is_official_page_path, resolve_page_path};
 use crate::workflows::governance::GovernanceService;
 use crate::workflows::release_scope::project_external_runtime_state;
 use wiki_index::query::{self as index_query, IndexQueryRequest, MatchBasis};
-use wiki_knowledge::plan_pages_from_knowledge_tree;
+use wiki_knowledge::declared_authority::evaluate_declared_authority;
+use wiki_knowledge::project_page_plans;
 use wiki_model::domain::governance::GovernanceSummary;
-use wiki_model::domain::knowledge_artifact::{
-    DeclaredKnowledgeRecordStatus, KnowledgeHealthSignal, KnowledgeHealthSignalKind,
-};
+use wiki_model::domain::knowledge_artifact::{KnowledgeHealthSignal, KnowledgeHealthSignalKind};
 use wiki_model::domain::query::{
     QueryConfidence, QueryProvenance, QueryProvenanceLayer, QueryProvenanceState,
     QueryRankingBasis, QueryRefKind, QueryResultDto, QueryRouteGroup, QueryRouteTag,
@@ -307,6 +308,7 @@ pub fn run_query_with_mode(
     term: &str,
     steering_mode: SteeringLoadMode,
 ) -> io::Result<QueryReport> {
+    recover_runtime_commits(repo_root)?;
     let governance_service = GovernanceService::new(repo_root);
     let governance = governance_service.status()?;
     let mut plan = plan_runtime_changes_with_mode(repo_root, steering_mode)?;
@@ -326,24 +328,21 @@ pub fn run_query_with_mode(
         }
     }
     let runtime_state = project_external_runtime_state(repo_root, plan.state(), mirror_ready);
-    let readiness = restore_readiness.unwrap_or_else(|| {
-        crate::workflows::status::readiness_from_state(
-            &runtime_state,
-            graph_ready,
-            mirror_ready,
-            plan.needs_rebuild_reason.as_deref(),
-        )
-    });
+    let assessment = assess_runtime_reliability(
+        &runtime_state,
+        graph_ready,
+        mirror_ready,
+        plan.needs_rebuild_reason.as_deref(),
+    );
     let health_signals = load_health_signals(repo_root).unwrap_or_default();
+    let readiness = merge_health_readiness(
+        restore_readiness.unwrap_or_else(|| assessment.readiness.clone()),
+        &health_signals,
+    );
+    let base_query_trust = readiness.query_trust();
     let has_governance_conflict = contains_governance_conflict(&health_signals);
     let health_summary = summarize_health_signals(&health_signals);
-    let base_action = if readiness.fusion == FusionReadiness::Ready {
-        RecommendedAction::None
-    } else if readiness.index == LayerReadiness::Missing {
-        RecommendedAction::Rebuild
-    } else {
-        RecommendedAction::Update
-    };
+    let base_action = assessment.core_action;
     let core_recommended_action = merge_recommended_action(base_action, health_summary.as_ref());
     let recommended_action = if has_governance_conflict {
         RecommendedAction::ReviewGovernance
@@ -359,7 +358,7 @@ pub fn run_query_with_mode(
             readiness.clone(),
             recommended_action,
             core_recommended_action,
-            effective_query_trust(&runtime_state, graph_ready, core_recommended_action, false),
+            effective_query_trust(base_query_trust, core_recommended_action, false),
             governance,
         ));
     }
@@ -433,17 +432,15 @@ pub fn run_query_with_mode(
         (false, true, false) => QueryMode::KnowledgeFirst,
         _ => QueryMode::IndexFirst,
     };
-    let query_trust = match query_trust_for(&runtime_state, graph_ready) {
+    let query_trust = match base_query_trust {
         QueryTrust::Blocked if has_index_hits || !matches.is_empty() => {
             QueryTrust::StaleButQueryable
         }
-        QueryTrust::Ready
-            if core_recommended_action != RecommendedAction::None
-                && (has_index_hits || !matches.is_empty()) =>
-        {
-            QueryTrust::StaleButQueryable
-        }
-        trust => trust,
+        trust => effective_query_trust(
+            trust,
+            core_recommended_action,
+            has_index_hits || !matches.is_empty(),
+        ),
     };
     let matched_modules = project_module_matches(&index_result);
     let matched_sources = project_source_matches(&index_result);
@@ -469,6 +466,11 @@ pub fn run_query_with_mode(
     let answer_action = if has_governance_conflict || results.iter().any(is_governance_query_result)
     {
         recommended_action
+    } else if query_trust == QueryTrust::Ready
+        && core_recommended_action == RecommendedAction::Review
+        && !has_page_fallback
+    {
+        RecommendedAction::None
     } else {
         core_recommended_action
     };
@@ -592,8 +594,6 @@ fn degraded_query_without_index(
     };
     let query_mode = if has_page_fallback {
         QueryMode::PageFallback
-    } else if has_knowledge_hits {
-        QueryMode::KnowledgeFirst
     } else {
         QueryMode::KnowledgeFirst
     };
@@ -668,13 +668,20 @@ fn contains_governance_conflict(health_signals: &[KnowledgeHealthSignal]) -> boo
 }
 
 fn effective_query_trust(
-    runtime_state: &str,
-    facts_ready: bool,
+    base_trust: QueryTrust,
     recommended_action: RecommendedAction,
     has_hits: bool,
 ) -> QueryTrust {
-    match query_trust_for(runtime_state, facts_ready) {
-        QueryTrust::Ready if recommended_action != RecommendedAction::None && has_hits => {
+    match base_trust {
+        QueryTrust::Ready
+            if has_hits
+                && matches!(
+                    recommended_action,
+                    RecommendedAction::Update
+                        | RecommendedAction::Rebuild
+                        | RecommendedAction::Sync
+                ) =>
+        {
             QueryTrust::StaleButQueryable
         }
         trust => trust,
@@ -797,10 +804,12 @@ fn collect_knowledge_matches(
     let Ok(artifacts) = load_knowledge_artifacts(repo_root) else {
         return Vec::new();
     };
-    let planned_pages = plan_pages_from_knowledge_tree(&artifacts.knowledge_tree)
-        .into_iter()
-        .map(|page| (page.id.clone(), page))
-        .collect::<BTreeMap<_, _>>();
+    let planned_pages =
+        project_page_plans(&artifacts.knowledge_tree, &artifacts.projection_decisions)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|page| (page.id.clone(), page))
+            .collect::<BTreeMap<_, _>>();
     let module_index = state
         .map(|runtime| {
             runtime
@@ -909,9 +918,21 @@ fn collect_declared_knowledge_matches(
     needle: &str,
     page_index: &BTreeMap<String, &WikiPageState>,
 ) -> Vec<QueryMatch> {
+    let authoritative_record_ids = evaluate_declared_authority(records)
+        .map(|decisions| {
+            decisions
+                .into_iter()
+                .filter(|decision| {
+                    decision.authority_state
+                        == wiki_model::domain::knowledge_artifact::DeclaredAuthorityState::Unique
+                })
+                .flat_map(|decision| decision.head_record_refs)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
     records
         .iter()
-        .filter(|record| record.status == DeclaredKnowledgeRecordStatus::Active)
+        .filter(|record| authoritative_record_ids.contains(&record.record_id))
         .filter_map(|record| {
             let mut reasons = Vec::new();
             if contains_case_insensitive(&record.record_id, needle)
@@ -1448,8 +1469,6 @@ fn build_query_results(
                     QueryRefKind::KnowledgeRecord
                 } else if page.match_mode == "fallback_markdown" {
                     QueryRefKind::RenderedPage
-                } else if page.match_mode == "knowledge_digest" {
-                    QueryRefKind::ProjectionPage
                 } else {
                     QueryRefKind::ProjectionPage
                 },
@@ -1462,8 +1481,6 @@ fn build_query_results(
                         QueryProvenanceLayer::Fallback
                     } else if page.match_mode == "knowledge_declared" {
                         QueryProvenanceLayer::Knowledge
-                    } else if page.match_mode == "knowledge_digest" {
-                        QueryProvenanceLayer::Projection
                     } else {
                         QueryProvenanceLayer::Projection
                     },
@@ -1918,8 +1935,11 @@ fn collect_answer_provenance(
         ))
         && health_signals.iter().any(|signal| {
             signal.signal_kind.as_str() == "governance_conflict"
-            || signal.recommended_action
-                == wiki_model::domain::knowledge_artifact::KnowledgeHealthRecommendedAction::Review
+                || matches!(
+                    signal.recommended_action,
+                    wiki_model::domain::knowledge_artifact::KnowledgeHealthRecommendedAction::Review
+                        | wiki_model::domain::knowledge_artifact::KnowledgeHealthRecommendedAction::ReviewGovernance
+                )
         })
     {
         provenance.insert("governance_conflict".to_string());
@@ -2029,4 +2049,18 @@ fn index_not_ready_error() -> io::Error {
         io::ErrorKind::NotFound,
         "index not ready: facts snapshot missing",
     )
+}
+
+#[cfg(test)]
+mod reliability_tests {
+    use super::effective_query_trust;
+    use crate::domain::runtime_profile::{QueryTrust, RecommendedAction};
+
+    #[test]
+    fn governance_review_does_not_lower_ready_core_query_trust() {
+        assert_eq!(
+            effective_query_trust(QueryTrust::Ready, RecommendedAction::ReviewGovernance, true),
+            QueryTrust::Ready
+        );
+    }
 }

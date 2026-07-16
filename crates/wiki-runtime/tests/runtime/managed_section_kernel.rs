@@ -65,7 +65,7 @@ fn render_parse_roundtrip_preserves_section_binding() {
     let rendered = render_page_with_markers("Repo", &[PageBlock::Managed(block.clone())]);
     let parsed = parse_wiki_page(
         &rendered,
-        &SectionBindingIndex::from_blocks(&[block.clone()]),
+        &SectionBindingIndex::from_blocks(std::slice::from_ref(&block)),
     );
     let roundtripped = parsed.managed_blocks();
 

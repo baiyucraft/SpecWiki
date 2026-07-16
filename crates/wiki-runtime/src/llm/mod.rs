@@ -720,7 +720,7 @@ pub struct PageResearchInput {
     /// 稳定图输入。
     #[serde(default)]
     pub diagram_inputs: Vec<PageDiagramInput>,
-    /// session 当前压缩状态。
+    /// 单次 `research_page` 调用内部的 request-local 压缩状态，不属于 durable resume。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<PageResearchSessionState>,
     /// request 级工具上限；只允许收窄为 `NoTools`，不放大全局 provider 能力。
@@ -801,7 +801,7 @@ pub struct PageResearchRuntimeContext<'a> {
     pub allowed_section_slots: &'a [PageResearchSectionSlot],
 }
 
-/// 单页 research session 的结构化输出。
+/// 单页 research request 的结构化输出；`session` 只在本次调用返回值中存在。
 #[derive(Debug, Clone)]
 pub struct PageResearchSessionOutput {
     pub result: PageResearchResult,
@@ -1909,10 +1909,11 @@ impl<'cfg, 'svc> LlmRuntime<'cfg, 'svc> {
         input: &PageResearchInput,
         runtime: &PageResearchRuntimeContext<'_>,
     ) -> io::Result<PageResearchSessionResult> {
-        if !matches!(
+        if !(matches!(
             input.page_type.as_str(),
             "overview" | "architecture" | "module" | "topic" | "family-index" | "family-child"
-        ) || !(self.service_available() && self.config.enabled)
+        ) && self.service_available()
+            && self.config.enabled)
         {
             return Ok(PageResearchSessionResult::not_run());
         }
@@ -2824,7 +2825,7 @@ where
     LlmPromptRequest {
         request_id: stable_id(
             "llm-request",
-            &format!("{}:{input_hash}", prompt_type.as_str()),
+            format!("{}:{input_hash}", prompt_type.as_str()),
         ),
         prompt_type: prompt_type.as_str().to_string(),
         prompt_version: prompt_type.version().to_string(),
@@ -2866,8 +2867,8 @@ fn prompt_token_limit(prompt_type: PromptType, _config: &LlmConfig) -> usize {
         PromptType::FilePurpose
         | PromptType::TopLevelPromotion
         | PromptType::ModuleKind
-        | PromptType::DependencyEdge => 12_000_usize.max(256),
-        PromptType::PageResearch => 16_000_usize.max(512),
+        | PromptType::DependencyEdge => 12_000_usize,
+        PromptType::PageResearch => 16_000_usize,
     }
 }
 
@@ -4758,7 +4759,7 @@ fn read_tool_snippet(
     Some(TargetedSnippet {
         snippet_id: stable_id(
             "snippet",
-            &format!("{path}:{start}:{bounded_end}:{snippet_kind}"),
+            format!("{path}:{start}:{bounded_end}:{snippet_kind}"),
         ),
         source_id,
         path: path.to_string(),

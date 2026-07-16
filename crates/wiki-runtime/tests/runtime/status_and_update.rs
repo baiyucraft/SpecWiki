@@ -12,8 +12,8 @@ use wiki_knowledge::domain::research::{
 };
 use wiki_model::domain::knowledge::KnowledgeUnitStatus;
 use wiki_model::domain::knowledge_artifact::{
-    KnowledgeHealthSeverity, KnowledgeResearchStatusReason, KnowledgeResearchStatusReasonKind,
-    KnowledgeResearchSummaryStatus,
+    DeclaredAuthoringState, KnowledgeHealthSeverity, KnowledgeResearchStatusReason,
+    KnowledgeResearchStatusReasonKind, KnowledgeResearchSummaryStatus,
 };
 use wiki_runtime::domain::change_set::plan_runtime_changes;
 use wiki_runtime::domain::steering::SteeringLoadMode;
@@ -125,7 +125,8 @@ fn status_restores_runtime_from_formal_artifacts_when_cache_is_missing() {
     fs::remove_dir_all(repo_root.join(".wiki/.cache")).unwrap();
 
     let status = run_status(repo_root).unwrap();
-    assert_eq!(status.state, "fresh");
+    let status_debug = serde_json::to_value(&status).unwrap();
+    assert_eq!(status.state, "fresh", "status={status_debug}");
     assert_eq!(
         serde_json::to_value(&status).unwrap()["readiness"]["index"],
         "missing"
@@ -606,6 +607,7 @@ fn status_projects_degraded_research_summary_into_unit_and_health() {
         declared_records: &before.declared_records,
         research_summaries: &degraded_summaries,
         page_digests: &before.page_digests,
+        projection_decisions: &before.projection_decisions,
         runtime_gates: &runtime_gates,
         health_signals: &[],
     })
@@ -682,6 +684,7 @@ fn status_projects_blocked_research_summary_into_unit_and_health() {
         declared_records: &before.declared_records,
         research_summaries: &blocked_summaries,
         page_digests: &before.page_digests,
+        projection_decisions: &before.projection_decisions,
         runtime_gates: &runtime_gates,
         health_signals: &[],
     })
@@ -758,6 +761,7 @@ fn status_projects_stale_projection_digest_into_unit_and_health() {
         declared_records: &before.declared_records,
         research_summaries: &before.research_summaries,
         page_digests: &stale_digests,
+        projection_decisions: &before.projection_decisions,
         runtime_gates: &runtime_gates,
         health_signals: &[],
     })
@@ -834,6 +838,7 @@ fn status_projects_blocked_projection_digest_into_unit_and_health() {
         declared_records: &before.declared_records,
         research_summaries: &before.research_summaries,
         page_digests: &blocked_digests,
+        projection_decisions: &before.projection_decisions,
         runtime_gates: &runtime_gates,
         health_signals: &[],
     })
@@ -941,7 +946,7 @@ fn update_consumes_declared_health_scope_without_source_dirty_set() {
 }
 
 #[test]
-fn update_consumes_removed_declared_health_scope_without_source_dirty_set() {
+fn update_preserves_missing_declared_health_scope_without_source_dirty_set() {
     let (_env_lock, _index_only) = force_full_runtime();
     let fixture = tempdir().unwrap();
     let repo_root = fixture.path();
@@ -961,15 +966,16 @@ fn update_consumes_removed_declared_health_scope_without_source_dirty_set() {
     let delete_sync = run_sync(repo_root).unwrap();
     let delete_sync_json = serde_json::to_value(&delete_sync).unwrap();
     assert_eq!(
-        delete_sync_json["page_outcomes"][0]["result_kind"], "declared_writeback",
+        delete_sync_json["page_outcomes"][0]["result_kind"], "conflict",
         "warnings = {:?}, sync = {:?}",
         delete_sync.warnings, delete_sync_json
     );
 
     let artifacts_after_delete = load_knowledge_artifacts(repo_root).unwrap();
-    assert!(
-        artifacts_after_delete.declared_records.is_empty(),
-        "declared delete should prune formal records"
+    assert_eq!(
+        artifacts_after_delete.declared_records[0].authoring_state,
+        DeclaredAuthoringState::Missing,
+        "active declared delete must preserve formal authority as missing"
     );
 
     let plan = plan_runtime_changes(repo_root).unwrap();
@@ -1004,10 +1010,15 @@ fn update_consumes_removed_declared_health_scope_without_source_dirty_set() {
     let refreshed_status = run_status(repo_root).unwrap();
     let refreshed_status_json = serde_json::to_value(&refreshed_status).unwrap();
     assert_eq!(refreshed_status.state, "fresh");
-    assert_eq!(refreshed_status_json["recommended_action"], "none");
+    assert_eq!(
+        refreshed_status_json["recommended_action"],
+        "review_governance"
+    );
     assert!(
-        refreshed_status_json["health_summary"].is_null()
-            || refreshed_status_json["health_summary"]["total_signals"] == 0
+        refreshed_status_json["health_summary"]["total_signals"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0
     );
 }
 
@@ -1028,7 +1039,7 @@ fn update_refreshes_stale_runtime_to_fresh() {
     assert_eq!(status.state, "needs_update");
     assert_eq!(
         serde_json::to_value(&status).unwrap()["readiness"]["index"],
-        "ready"
+        "stale"
     );
     assert_eq!(
         status.affected_knowledge_scope.escalation.level.as_str(),

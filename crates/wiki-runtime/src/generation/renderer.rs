@@ -580,6 +580,34 @@ fn render_diagram_sources_block(
     lines.join("\n")
 }
 
+/// 按标题和 section 草稿组装带 managed marker 的整页 Markdown。
+fn assemble_page_from_sections(title: &str, sections: &[SectionDraft]) -> String {
+    let blocks: Vec<PageBlock> = sections
+        .iter()
+        .map(|s| {
+            PageBlock::Managed(ManagedSectionBlock::generated(
+                s.section_id.clone(),
+                s.title.clone(),
+                s.content.clone(),
+            ))
+        })
+        .collect();
+    render_page_with_markers(title, &blocks)
+}
+
+/// 基于 merge plan 组装最终页面 Markdown。
+/// 这是 update / rebuild 保留 user sections 的统一出口。
+///
+/// # 参数
+/// - `title`：页面一级标题。
+/// - `merge_plan`：合并计划，包含 managed + user 区段序列。
+///
+/// # 返回
+/// - 返回可直接写入页面文件的整页 Markdown。
+pub fn assemble_page_from_merge(title: &str, merge_plan: &PageMergePlan) -> String {
+    render_page_with_markers(title, &merge_plan.blocks)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{render_compose_section_content, render_page_draft};
@@ -968,32 +996,4 @@ mod tests {
         assert!(rendered.contains("**关键实现入口**"));
         assert!(rendered.contains("file://src/index.ts#L1-L12"));
     }
-}
-
-/// 按标题和 section 草稿组装带 managed marker 的整页 Markdown。
-fn assemble_page_from_sections(title: &str, sections: &[SectionDraft]) -> String {
-    let blocks: Vec<PageBlock> = sections
-        .iter()
-        .map(|s| {
-            PageBlock::Managed(ManagedSectionBlock::generated(
-                s.section_id.clone(),
-                s.title.clone(),
-                s.content.clone(),
-            ))
-        })
-        .collect();
-    render_page_with_markers(title, &blocks)
-}
-
-/// 基于 merge plan 组装最终页面 Markdown。
-/// 这是 update / rebuild 保留 user sections 的统一出口。
-///
-/// # 参数
-/// - `title`：页面一级标题。
-/// - `merge_plan`：合并计划，包含 managed + user 区段序列。
-///
-/// # 返回
-/// - 返回可直接写入页面文件的整页 Markdown。
-pub fn assemble_page_from_merge(title: &str, merge_plan: &PageMergePlan) -> String {
-    render_page_with_markers(title, &merge_plan.blocks)
 }

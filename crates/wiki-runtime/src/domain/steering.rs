@@ -11,6 +11,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration as TimeDuration, OffsetDateTime};
+use wiki_model::domain::projection::{
+    PageProjectionOverride, PageProjectionPriority, ProjectionPolicy,
+};
 
 /// Steering 配置根结构。
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -65,14 +68,60 @@ pub struct ModuleOverride {
 }
 
 /// 页面优先级和提示配置。
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PagesConfig {
+    /// 强制选中形成页面的 leaf unit。
+    pub include: Vec<PageProjectionOverride>,
+    /// 强制保留在 knowledge-only 的 leaf unit。
+    pub exclude: Vec<PageProjectionOverride>,
     /// 页面优先级提升条目。
     pub priority: Vec<PagePriority>,
     /// 自定义页面提示。
     /// 当前同时服务 deterministic hints 透传和 LLM 增强输入。
     pub hints: Vec<PageHint>,
+    /// 每个 domain 默认可投影的 leaf page 上限。
+    pub max_projected_leaf_pages_per_domain: usize,
+}
+
+impl Default for PagesConfig {
+    fn default() -> Self {
+        Self {
+            include: Vec::new(),
+            exclude: Vec::new(),
+            priority: Vec::new(),
+            hints: Vec::new(),
+            max_projected_leaf_pages_per_domain: 5,
+        }
+    }
+}
+
+impl PagesConfig {
+    pub fn projection_policy(&self) -> ProjectionPolicy {
+        ProjectionPolicy {
+            include: self.include.clone(),
+            exclude: self.exclude.clone(),
+            priority: self
+                .priority
+                .iter()
+                .map(|entry| PageProjectionPriority {
+                    path: entry.path.clone(),
+                    boost: entry.boost,
+                })
+                .collect(),
+            hint_refs: self
+                .hints
+                .iter()
+                .map(|hint| {
+                    format!(
+                        "{}:{}:{}:{}",
+                        hint.page_type, hint.page_id, hint.module_path, hint.hint
+                    )
+                })
+                .collect(),
+            max_projected_leaf_pages_per_domain: self.max_projected_leaf_pages_per_domain,
+        }
+    }
 }
 
 /// debug trace 配置。
@@ -831,9 +880,25 @@ fn apply_raw_llm_provider_model_config(
 fn normalize_steering_config(config: &mut SteeringConfig) {
     normalize_patterns(&mut config.scan.ignore);
     normalize_patterns(&mut config.scan.include);
+    normalize_projection_overrides(&mut config.pages.include);
+    normalize_projection_overrides(&mut config.pages.exclude);
     normalize_page_hints(&mut config.pages.hints);
     normalize_debug_config(&mut config.debug);
     normalize_llm_config(&mut config.llm);
+}
+
+fn normalize_projection_overrides(overrides: &mut Vec<PageProjectionOverride>) {
+    let mut normalized = overrides
+        .drain(..)
+        .map(|mut entry| {
+            entry.unit_ref = entry.unit_ref.trim().to_string();
+            entry
+        })
+        .filter(|entry| !entry.unit_ref.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort_by(|left, right| left.unit_ref.cmp(&right.unit_ref));
+    normalized.dedup_by(|left, right| left.unit_ref == right.unit_ref);
+    *overrides = normalized;
 }
 
 fn normalize_patterns(patterns: &mut Vec<String>) {

@@ -71,7 +71,7 @@ fn test_files_do_not_dominate_module_promotion() {
         .collect();
 
     // The "tests" directory should not appear as a standalone promoted module
-    let has_tests_as_standalone = module_names.iter().any(|name| *name == "tests");
+    let has_tests_as_standalone = module_names.contains(&"tests");
     if has_tests_as_standalone {
         // If it does appear, verify it wasn't promoted due to test files alone
         let tests_module = module_tree

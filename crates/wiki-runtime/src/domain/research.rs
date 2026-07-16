@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::knowledge::DecompositionProfile;
+pub use wiki_knowledge::domain::research::ResearchStopReason;
+pub use wiki_model::domain::knowledge_artifact::ProviderFailureKind;
 
 // ─── ResearchProfile ───────────────────────────────────────
 
@@ -58,32 +60,171 @@ pub fn is_reference_outline_title(title: &str) -> bool {
     canonical_reference_outline_title(title).is_some()
 }
 
-/// provider-backed research session 的停止原因。
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResearchStopReason {
-    NotRun,
-    Completed,
-    NoFurtherToolCalls,
-    NoMeaningfulDelta,
-    TurnBudgetExhausted,
-    CallBudgetRejected,
-    ProviderError,
-    InvalidOutput,
+/// Research outcome reducer 的执行策略，显式隔离 production 与开发 fixture。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionPolicy {
+    Production,
+    Development,
 }
 
-impl ResearchStopReason {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::NotRun => "not_run",
-            Self::Completed => "completed",
-            Self::NoFurtherToolCalls => "no_further_tool_calls",
-            Self::NoMeaningfulDelta => "no_meaningful_delta",
-            Self::TurnBudgetExhausted => "turn_budget_exhausted",
-            Self::CallBudgetRejected => "call_budget_rejected",
-            Self::ProviderError => "provider_error",
-            Self::InvalidOutput => "invalid_output",
+/// Provider research 对当前 workflow 的单值决策。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResearchDecision {
+    Accepted,
+    Diagnostic,
+    Blocked,
+}
+
+/// Reducer 只消费终止原因和有效 output evidence，不读取 structural seed。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResearchOutcomeEvidence {
+    pub execution_policy: ExecutionPolicy,
+    pub stop_reason: ResearchStopReason,
+    pub has_valid_provider_output: bool,
+    pub provider_failure_kind: Option<ProviderFailureKind>,
+}
+
+/// Provider research 的稳定 reducer 结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResearchOutcomeDecision {
+    pub decision: ResearchDecision,
+    pub stop_reason: ResearchStopReason,
+    pub provider_failure_kind: Option<ProviderFailureKind>,
+}
+
+/// 将 provider session 终态归约为 workflow 可消费的单值 decision。
+pub fn reduce_research_outcome(evidence: ResearchOutcomeEvidence) -> ResearchOutcomeDecision {
+    let accepted_stop = matches!(
+        evidence.stop_reason,
+        ResearchStopReason::Completed | ResearchStopReason::NoFurtherToolCalls
+    );
+    let decision = if evidence.has_valid_provider_output && accepted_stop {
+        ResearchDecision::Accepted
+    } else if evidence.execution_policy == ExecutionPolicy::Development {
+        ResearchDecision::Diagnostic
+    } else {
+        ResearchDecision::Blocked
+    };
+    ResearchOutcomeDecision {
+        decision,
+        stop_reason: evidence.stop_reason,
+        provider_failure_kind: evidence.provider_failure_kind,
+    }
+}
+
+/// 将 provider 错误文本归一为稳定 failure kind；原始文本仍保留在 diagnostic evidence。
+pub fn classify_provider_failure_message(message: &str) -> ProviderFailureKind {
+    let normalized = message.to_ascii_lowercase();
+    if normalized.contains("unavailable")
+        || normalized.contains("not configured")
+        || normalized.contains("disabled")
+    {
+        ProviderFailureKind::Unavailable
+    } else if normalized.contains("timeout") || normalized.contains("timed out") {
+        ProviderFailureKind::Timeout
+    } else if normalized.contains("tool")
+        && (normalized.contains("failed") || normalized.contains("error"))
+    {
+        ProviderFailureKind::ToolError
+    } else if normalized.contains("context length")
+        || normalized.contains("context limit")
+        || normalized.contains("too many tokens")
+        || normalized.contains("payload too large")
+    {
+        ProviderFailureKind::ContextLimit
+    } else {
+        ProviderFailureKind::Transport
+    }
+}
+
+#[cfg(test)]
+mod outcome_decision_tests {
+    use super::{
+        classify_provider_failure_message, reduce_research_outcome, ExecutionPolicy,
+        ProviderFailureKind, ResearchDecision, ResearchOutcomeEvidence, ResearchStopReason,
+    };
+
+    const STOP_REASONS: [ResearchStopReason; 8] = [
+        ResearchStopReason::NotRun,
+        ResearchStopReason::Completed,
+        ResearchStopReason::NoFurtherToolCalls,
+        ResearchStopReason::NoMeaningfulDelta,
+        ResearchStopReason::TurnBudgetExhausted,
+        ResearchStopReason::CallBudgetRejected,
+        ResearchStopReason::ProviderError,
+        ResearchStopReason::InvalidOutput,
+    ];
+
+    #[test]
+    fn production_never_accepts_research_without_valid_provider_output() {
+        for stop_reason in STOP_REASONS {
+            let decision = reduce_research_outcome(ResearchOutcomeEvidence {
+                execution_policy: ExecutionPolicy::Production,
+                stop_reason: stop_reason.clone(),
+                has_valid_provider_output: false,
+                provider_failure_kind: None,
+            });
+            assert_ne!(
+                decision.decision,
+                ResearchDecision::Accepted,
+                "production accepted {:?} without provider output",
+                stop_reason
+            );
         }
+    }
+
+    #[test]
+    fn only_successful_stop_reasons_with_valid_output_are_accepted() {
+        for stop_reason in STOP_REASONS {
+            let decision = reduce_research_outcome(ResearchOutcomeEvidence {
+                execution_policy: ExecutionPolicy::Production,
+                stop_reason: stop_reason.clone(),
+                has_valid_provider_output: true,
+                provider_failure_kind: None,
+            });
+            let expected = matches!(
+                stop_reason,
+                ResearchStopReason::Completed | ResearchStopReason::NoFurtherToolCalls
+            );
+            assert_eq!(decision.decision == ResearchDecision::Accepted, expected);
+        }
+    }
+
+    #[test]
+    fn development_without_provider_output_is_diagnostic_not_success() {
+        for stop_reason in STOP_REASONS {
+            let decision = reduce_research_outcome(ResearchOutcomeEvidence {
+                execution_policy: ExecutionPolicy::Development,
+                stop_reason,
+                has_valid_provider_output: false,
+                provider_failure_kind: None,
+            });
+            assert_eq!(decision.decision, ResearchDecision::Diagnostic);
+        }
+    }
+
+    #[test]
+    fn provider_failure_messages_map_to_stable_failure_kinds() {
+        assert_eq!(
+            classify_provider_failure_message("provider unavailable: no configured model"),
+            ProviderFailureKind::Unavailable
+        );
+        assert_eq!(
+            classify_provider_failure_message("network timeout while requesting provider"),
+            ProviderFailureKind::Timeout
+        );
+        assert_eq!(
+            classify_provider_failure_message("tool execution failed: read_source"),
+            ProviderFailureKind::ToolError
+        );
+        assert_eq!(
+            classify_provider_failure_message("maximum context length exceeded"),
+            ProviderFailureKind::ContextLimit
+        );
+        assert_eq!(
+            classify_provider_failure_message("connection reset by peer"),
+            ProviderFailureKind::Transport
+        );
     }
 }
 
@@ -409,5 +550,3 @@ pub struct PageDigest {
     #[serde(default)]
     pub readiness_stage: String,
 }
-
-

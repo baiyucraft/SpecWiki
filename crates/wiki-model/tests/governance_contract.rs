@@ -65,16 +65,14 @@ fn governance_artifact() -> GovernanceArtifactRef {
 
 fn governance_issue() -> GovernanceBlockingIssue {
     let artifact = governance_artifact();
-    let issue = GovernanceBlockingIssue {
+    GovernanceBlockingIssue {
         rule_id: "governance.warning.fixture".to_string(),
         severity: GovernanceIssueSeverity::Warning,
         message: "fixture warning".to_string(),
         change_id: Some("governance-isolation".to_string()),
         artifact_ref: Some(artifact.clone()),
         recommended_action: GovernanceRecommendedAction::ReviewGovernance,
-    };
-
-    issue
+    }
 }
 
 fn governance_summary() -> GovernanceSummary {

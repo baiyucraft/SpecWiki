@@ -7,6 +7,10 @@ fn init_runtime_suite_env() {
 }
 
 // runtime、SQLite、query/update/rebuild 和 markdown merge 相关测试统一走 runtime suite。
+#[path = "runtime/compose_resume_large_fixture.rs"]
+mod compose_resume_large_fixture;
+#[path = "runtime/declared_projection_lifecycle.rs"]
+mod declared_projection_lifecycle;
 #[path = "runtime/editable_runtime.rs"]
 mod editable_runtime;
 #[path = "runtime/knowledge_artifacts_roundtrip.rs"]
@@ -19,6 +23,8 @@ mod metadata_roundtrip;
 mod progress_streaming;
 #[path = "runtime/query_sync_rebuild.rs"]
 mod query_sync_rebuild;
+#[path = "runtime/runtime_commit.rs"]
+mod runtime_commit;
 #[path = "runtime/section_template_integration.rs"]
 mod section_template_integration;
 #[path = "runtime/sqlite_lifecycle.rs"]

@@ -1,8 +1,23 @@
 # knowledge-runtime-health-signals Specification
 
 ## Purpose
-TBD - created by archiving change iteration-12-8-stabilize-knowledge-runtime-contract. Update Purpose after archive.
+
+定义 Runtime 跨层 reliability 与 health signal 合同。Health、freshness、consumability、governance 和 workflow progress 是正交维度；公开 workflow 必须消费同一 reliability assessment，不能用单个模糊状态替代。
 ## Requirements
+### Requirement: Runtime 必须使用统一 reliability assessment
+
+系统 MUST 基于 live facts、formal artifacts、runtime gates、governance evidence 与 local working state 生成唯一 reliability assessment。该 assessment MUST 分离 freshness 与 consumability，并为每个公开 workflow 投影一致的 readiness、trust、reason 与单值 recommended action。Cache 或局部 `Ok` MUST NOT 单独构成正式成功证据。
+
+#### Scenario: stale route 只在真实 provenance 下受限消费
+- **WHEN** formal result 仍存在但其 source/facts fingerprint 已落后于 live repository
+- **THEN** 系统 MUST 将对应 route 标为 stale，而不是 ready/direct-trust
+- **THEN** 只有保留真实 stale provenance 时才可继续返回，并提供 update 或 rebuild 动作
+
+#### Scenario: governance review 不降低无关 ready route
+- **WHEN** declared authority scope 需要治理复核，但 index route 仍有 fresh evidence
+- **THEN** 系统 MUST 保持 index route 的 core trust
+- **THEN** 系统 MUST 以正交 governance action 暴露复核需求
+
 ### Requirement: runtime 必须持久化最小 knowledge health signals
 系统 MUST 为 knowledge runtime 持久化最小 health signals，而不只是报告 runtime 是否存在。最小 health signal 集 MUST 至少覆盖：`orphan_unit`、`missing_provenance`、`derived_stale`、`projection_stale` 与 `declared_derived_divergence`。每条 signal MUST 至少包含稳定 `signal_id`、`signal_kind`、`severity`、`target_ref`、`recommended_action` 与 `reason`。
 

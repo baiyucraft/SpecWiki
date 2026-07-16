@@ -565,7 +565,16 @@ fn child_contract_change_propagates_parent_units() {
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
-    let projected_parent_targets = plan
+    let eligible_propagated_parent_ids = plan
+        .planned_pages
+        .iter()
+        .filter_map(|page| page.unit_id.as_ref())
+        .filter(|unit_id| {
+            propagated_unit_ids.contains(*unit_id) && !direct_unit_ids.contains(*unit_id)
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let projected_parent_target_ids = plan
         .planned_pages
         .iter()
         .filter(|page| projection_target_page_ids.contains(&page.id))
@@ -573,11 +582,12 @@ fn child_contract_change_propagates_parent_units() {
         .filter(|unit_id| {
             propagated_unit_ids.contains(*unit_id) && !direct_unit_ids.contains(*unit_id)
         })
-        .count();
+        .cloned()
+        .collect::<BTreeSet<_>>();
 
-    assert!(
-        projected_parent_targets > 0,
-        "propagated parent units should contribute projection target pages"
+    assert_eq!(
+        projected_parent_target_ids, eligible_propagated_parent_ids,
+        "only projection-eligible propagated parents should contribute page targets"
     );
 }
 

@@ -20,7 +20,9 @@ const DEFAULT_GRAPH_DEPTH: usize = 3;
 /// 正式支持的 index-first 查询意图。
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum IndexQueryIntent {
+    #[default]
     Auto,
     SymbolLookup,
     SourceLookup,
@@ -162,12 +164,6 @@ pub struct IndexQueryResult {
     pub call_edges: Vec<CallEdgeHitView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub impact_slice: Option<ImpactSlice>,
-}
-
-impl Default for IndexQueryIntent {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 /// 执行一次 facts-only 的 index 查询。
@@ -328,6 +324,7 @@ where
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_graph_query<S>(
     store: &S,
     _facts: &FactsContext,
@@ -451,8 +448,8 @@ where
         hits = facts
             .sources
             .iter()
-            .filter_map(|source| match source_match_basis(source, needle) {
-                Some(match_basis) => Some(SourceHit {
+            .filter_map(|source| {
+                source_match_basis(source, needle).map(|match_basis| SourceHit {
                     source_id: source.source_id.clone(),
                     file_id: source.source_id.clone(),
                     path: source.path.clone(),
@@ -466,8 +463,7 @@ where
                     match_basis,
                     score: None,
                     diagnostics: Vec::new(),
-                }),
-                None => None,
+                })
             })
             .collect::<Vec<_>>();
     }
@@ -550,7 +546,7 @@ where
     let truncated = edges.len() >= graph_limit;
     let supporting_edges = edges
         .into_iter()
-        .filter(|edge| direction.map_or(true, |expected| edge.traversal_direction == expected))
+        .filter(|edge| direction.is_none_or(|expected| edge.traversal_direction == expected))
         .map(|edge| map_call_edge_hit(&symbol_index, edge))
         .collect::<Vec<_>>();
     let impact_slice = ImpactSlice {

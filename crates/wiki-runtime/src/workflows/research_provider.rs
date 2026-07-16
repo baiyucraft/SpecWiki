@@ -7,6 +7,10 @@ use crate::domain::context::{
     PageEvidenceItem,
 };
 use crate::domain::knowledge::{KnowledgeTree, KnowledgeUnit, UnitType};
+use crate::domain::research::{
+    classify_provider_failure_message, reduce_research_outcome, ExecutionPolicy, ResearchDecision,
+    ResearchOutcomeEvidence,
+};
 use crate::domain::stable_id::stable_id;
 use crate::domain::steering::{SteeringConfig, SteeringLoadMode};
 use crate::generation::context::build_page_context_with_graph_inputs;
@@ -266,9 +270,11 @@ impl ResearchProvider for ProviderBackedResearchProvider<'_, '_, '_> {
             Ok(result) => result,
             Err(error) => {
                 if self.strict_failure {
+                    let failure_kind = classify_provider_failure_message(&error.to_string());
                     return Err(io::Error::other(format!(
-                        "provider unit research failed for {}: {error}",
-                        unit.id
+                        "provider unit research failed for {} [{}]: {error}",
+                        unit.id,
+                        failure_kind.as_str()
                     )));
                 }
                 mark_provider_error(&mut merged, &page.id, &unit.id, &error);
@@ -287,6 +293,23 @@ impl ResearchProvider for ProviderBackedResearchProvider<'_, '_, '_> {
                 "stats": session_result.stats,
             }),
         );
+        let outcome = reduce_research_outcome(ResearchOutcomeEvidence {
+            execution_policy: if self.strict_failure {
+                ExecutionPolicy::Production
+            } else {
+                ExecutionPolicy::Development
+            },
+            stop_reason: session_result.stop_reason.clone(),
+            has_valid_provider_output: session_result.output.is_some(),
+            provider_failure_kind: None,
+        });
+        if outcome.decision == ResearchDecision::Blocked {
+            return Err(io::Error::other(format!(
+                "provider unit research stopped without valid output for {}: {}",
+                unit.id,
+                session_result.stop_reason.as_str()
+            )));
+        }
         if let Some(output) = session_result.output {
             let mut seed = merged.to_seed();
             merge_provider_seed(&mut seed, &output.result, &page_context, ds.report);
@@ -570,10 +593,7 @@ fn execute_provider_request(
                 let mut runtime = provider.runtime.borrow_mut();
                 runtime.research_page(&retry_input, &retry_context)
             };
-            match retry_attempt {
-                Ok(result) => result,
-                Err(retry_error) => return Err(retry_error),
-            }
+            retry_attempt?
         }
     };
     session_result.stats.retry_input_applied = Some(retry_input_applied);
@@ -798,12 +818,15 @@ fn mark_provider_error(
     error: &io::Error,
 ) {
     research.provider_stop_reason = Some(ResearchStopReason::ProviderError);
+    let failure_kind = classify_provider_failure_message(&error.to_string());
+    research.provider_failure_kind = Some(failure_kind);
     debug_trace::record_json(
         "provider_research_stop",
         &json!({
             "page_id": page_id,
             "unit_id": unit_id,
             "stop_reason": ResearchStopReason::ProviderError.as_str(),
+            "failure_kind": failure_kind.as_str(),
             "error": error.to_string(),
         }),
     );
@@ -828,6 +851,8 @@ fn should_force_no_tools_for_page_type(page_type: &str) -> bool {
 /// 对 provider 输入做 deterministic canonicalization，保证首请求就使用稳定缓存键。
 fn canonicalize_provider_input(input: &PageResearchInput) -> (PageResearchInput, bool) {
     let mut canonical = input.clone();
+    // Provider session 只属于本次 request；unit 恢复必须重新从空 session 开始。
+    canonical.session = None;
     let mut changed = false;
 
     changed |= trim_vec(&mut canonical.facts, RETRY_FACT_LIMIT);
@@ -1251,6 +1276,7 @@ mod tests {
     };
     use crate::domain::context::{
         PageContext, PageDiagramEdge, PageDiagramInput, PageDiagramNode, PageEvidenceGroup,
+        PageResearchSessionState,
     };
     use crate::domain::knowledge::{KnowledgeTree, KnowledgeUnit, UnitScope, UnitType};
     use crate::domain::module_tree::ModuleTree;
@@ -1756,6 +1782,10 @@ mod tests {
             research.provider_stop_reason,
             Some(ResearchStopReason::ProviderError)
         );
+        assert_eq!(
+            research.provider_failure_kind,
+            Some(wiki_model::domain::knowledge_artifact::ProviderFailureKind::Transport)
+        );
         assert_eq!(research.summary, "structural summary");
         assert_eq!(research.positioning, "structural positioning");
     }
@@ -1858,6 +1888,34 @@ mod tests {
         assert_eq!(canonical.summary_inputs.len(), RETRY_SUMMARY_LIMIT);
         assert!(canonical.retry_input_applied);
         assert!(retry.is_none());
+    }
+
+    #[test]
+    fn interrupted_unit_starts_a_new_request_local_session() {
+        let input = PageResearchInput {
+            page_id: "page-resume".to_string(),
+            page_type: "module".to_string(),
+            title: "resume".to_string(),
+            scope: "核心模块/resume.md".to_string(),
+            facts: vec!["fact".to_string()],
+            summary_inputs: Vec::new(),
+            hints: Vec::new(),
+            allowed_section_slots: Vec::new(),
+            evidence_groups: Vec::new(),
+            diagram_inputs: Vec::new(),
+            session: Some(PageResearchSessionState {
+                session_id: "durable-session-must-not-resume".to_string(),
+                session_summary: "old summary".to_string(),
+                recent_turns: Vec::new(),
+                tool_artifact_refs: Vec::new(),
+            }),
+            force_no_tools: false,
+            retry_input_applied: false,
+        };
+
+        let (canonical, _) = canonicalize_provider_input(&input);
+
+        assert!(canonical.session.is_none());
     }
 
     #[test]
@@ -2080,15 +2138,15 @@ mod tests {
         let steering = provider_enabled_steering();
         let mut service = CountingLlmService::default();
         let mut runtime = LlmRuntime::new(Path::new("."), &steering.llm, Some(&mut service));
-        let provider = ProviderBackedResearchProvider {
-            runtime: RefCell::new(&mut runtime),
-            structural: StructuralResearchProvider,
-            strict_failure: false,
+        let research = {
+            let provider = ProviderBackedResearchProvider {
+                runtime: RefCell::new(&mut runtime),
+                structural: StructuralResearchProvider,
+                strict_failure: false,
+            };
+            provider.research_unit(&unit, &ds, &[]).unwrap()
         };
 
-        let research = provider.research_unit(&unit, &ds, &[]).unwrap();
-
-        drop(provider);
         drop(runtime);
         assert_eq!(service.calls, 0);
         assert_eq!(

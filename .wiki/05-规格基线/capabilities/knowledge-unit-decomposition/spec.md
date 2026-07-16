@@ -1,20 +1,27 @@
 # knowledge-unit-decomposition Specification
 
 ## Purpose
-TBD - created by archiving change iteration-9-5-provider-first-research-evidence-and-unit-decomposition. Update Purpose after archive.
+
+定义当前 KnowledgeUnit 确定性启发式 decomposition 的真实边界。Planner 使用稳定代码、文档和 graph signals 选择受控 profile 与 parent/child 单元，但不承诺覆盖任意仓库的通用 typed surface 已完整实现。
+
+```text
+decomposition.kind = deterministic_heuristic
+decomposition.generic_typed_surface = not_complete
+large_repository.full_compose = bounded_fixture_only
+```
 ## Requirements
-### Requirement: planner 必须按真实信号执行通用 KnowledgeUnit 中粒度拆分
-系统 MUST 基于真实代码结构、模块划分、调用关系、docs anchors、public API surface、config surface、testing/example/tutorial 目录与 graph facts 规划 KnowledgeUnit 中粒度拆分，而不是继续主要依赖 `module / topic / family` 旧页面语义。planner MUST 先判定 `DecompositionProfile`，再生成与之匹配的 leaf / parent KnowledgeUnit。
+### Requirement: planner 必须按稳定信号执行确定性启发式拆分
+系统 MUST 基于当前已支持的代码结构、模块划分、调用关系、docs anchors、public API、config、testing/example/tutorial 与 graph signals 规划 KnowledgeUnit。Planner MUST 先判定受控 `DecompositionProfile`，再生成匹配的 leaf / parent KnowledgeUnit；未识别信号 MUST 保守落入现有 profile 或 knowledge-only unit，不得声称已完成通用 typed surface。
 
 #### Scenario: docs-heavy 仓库按 API 与配置面拆出独立单元
 - **WHEN** 某个 docs-heavy 仓库同时存在稳定的 docs anchors、public API exports 和配置入口
-- **THEN** planner MUST 将这些信号拆分到不同的 `DecompositionProfile`
-- **THEN** 系统 MUST 生成独立的 API、配置、指南类 KnowledgeUnit，而不是把它们合并进单一 `ConceptGuide`
+- **THEN** planner MUST 在已识别信号满足当前规则时将其拆分到不同的 `DecompositionProfile`
+- **THEN** 未满足规则时 MUST 保持确定性且暴露当前启发式边界，不得用 provider 输出临时发明新类型
 
 #### Scenario: runtime-heavy / compiler-heavy 仓库按运行时、编译链和测试面拆分
 - **WHEN** 某个仓库同时存在 runtime 模块、compiler/codegen 模块、testing/example 目录和稳定的 process/community 信号
-- **THEN** planner MUST 生成对应的 runtime、compiler、testing、example/tutorial 类 KnowledgeUnit
-- **THEN** 这些单元不得被默认折叠回少数大模块页
+- **THEN** planner MUST 为当前已支持的稳定 signals 生成对应 profile 的 KnowledgeUnit
+- **THEN** 自动化证据只证明受控 fixture，不构成任意大仓 full compose 或质量 SLA
 
 ### Requirement: KnowledgeUnit 拆分必须保持 deterministic 且禁止样本硬编码
 系统 MUST 让 `DecompositionProfile`、unit id、相对路径和父子关系仅由稳定 signal 与 planner 规则决定。系统 MUST NOT 基于仓库名、reference 标题、固定目录名白名单或 storybook/dagger 样本特判生成页面集合。
