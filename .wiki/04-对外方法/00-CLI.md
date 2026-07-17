@@ -1,7 +1,7 @@
 ---
 title: CLI
-description: spec-wiki 一级命令、机器协议和退出码合同
-updated: 2026-07-13
+description: spec-wiki 一级命令、Codex-first 宿主入口、机器协议和退出码合同
+updated: 2026-07-17
 owner: docs
 ---
 
@@ -19,6 +19,8 @@ spec-wiki update [--repo-root <path>] [--bridge-stdio]
 ```
 
 `init` 是唯一对外初始化入口，依次完成宿主 bootstrap、repo-local runtime 初始化和 landing status。机器模式不进入交互选择。
+
+Codex 是唯一 reference host，默认文档与兼容验证优先使用 `--host codex`。Claude、CodeBuddy 是 compatible hosts；显式选择任一宿主的 CLI 行为不变。
 
 ## 高级命令
 
@@ -46,6 +48,8 @@ archive 只修改 `.spec` 的 change、parent marker 和 `.spec/.runtime/archive
 - `--bridge-stdio` 强制机器模式，仅适用于 `init/update/rebuild`。
 - 长流程事件流必须按完整 NDJSON 行解析，并且恰好包含一个 terminal event。
 
+`--bridge-stdio` 表示基础 JSON/NDJSON/stdin-stdout forwarding。它不证明 production `research_page` bridge 或多轮 agent-session bridge 已启用，也不授权 durable provider session。
+
 ## 退出码
 
 | 退出码 | 含义 |
@@ -62,4 +66,4 @@ archive 只修改 `.spec` 的 change、parent marker 和 `.spec/.runtime/archive
 - `changes/change/validate` 返回基于单次 live governance evaluation 的结构化 envelope。
 - `archive` 转发 `archiveMode`；仅 resume 额外转发 `archiveOperationId`，human/JSON 输出均直接翻译 Rust archive DTO。
 - JavaScript API 保留 `wikiInit/wikiStatus/wikiQuery/wikiUpdate/wikiSync/wikiRebuild`。
-- 宿主资产保留 `wiki-*` skill identity 和 Claude `/wiki:*` identity，但执行一级 CLI。
+- 三宿主资产统一保留 repo-local `wiki-*` skill identity 并执行一级 CLI；Claude 旧 `/wiki:*` command 路径不属于当前合同。

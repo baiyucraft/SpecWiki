@@ -21,28 +21,28 @@
 - **THEN** 系统 MUST 回退到 deterministic 结果继续完成 workflow
 - **THEN** `init`、`update` 或 `rebuild` 不得因为辅助判断不可用而失败
 
-### Requirement: core 必须优先使用本地 provider 直连，再回退到 Agent bridge
-系统 MUST 同时支持 `wiki-runtime` 直连供应商 API 和通过 Agent bridge 代调用两种 LLM 路径。当 provider 直连配置完整可用时，core MUST 优先使用 provider 直连；只有在 provider 配置缺失或不可用时，系统才 MAY 使用 Agent bridge。两条路径 MUST 共享同一组 prompt 契约、输入哈希和缓存语义。
+### Requirement: core 必须区分 provider 主路径与 bridge transport 能力
+系统 MUST 优先使用 `wiki-runtime` provider 直连。基础 Agent bridge forwarding MAY 传输 `llm_request / llm_response / llm_unavailable`，但当前 production `research_page` bridge 尚未启用；provider 缺失或不可用时 MUST NOT 把 transport 存在自动解释为 production research fallback。未来启用的 bridge path MUST 共享同一组 prompt 契约、输入哈希和缓存语义。
 
 #### Scenario: provider 配置完整时优先直连
 - **WHEN** 当前 workflow 的 LLM 配置中已经解析出可用的 provider 端点、认证信息和模型标识
 - **THEN** core MUST 直接完成对应 LLM 请求
 - **THEN** Agent bridge 即使可用，也不得抢占这次请求
 
-#### Scenario: provider 缺失时回退到 Agent bridge
-- **WHEN** 当前 workflow 未配置可用 provider，但 transport 已协商可用的 Agent bridge
-- **THEN** 系统 MUST 通过 Agent bridge 发起对应请求
-- **THEN** prompt 契约、输入哈希和 `llm_cache` 的 key 语义必须与 provider 直连路径一致
+#### Scenario: provider 缺失但只有基础 bridge transport
+- **WHEN** 当前 production `research_page` 未配置可用 provider，且只有基础 bridge forwarding 可用
+- **THEN** Runtime MUST 返回 `agent_bridge_blocked` 或 reliability contract 定义的失败
+- **THEN** 系统不得伪造 bridge 成功或复用 provider session 继续执行
 
 #### Scenario: provider 直连按配置执行有限并行增强
 - **WHEN** 当前 workflow 走 provider 直连，且某一深度层存在多个未命中缓存的独立页面增强请求
 - **THEN** 系统 MUST 允许这些请求在 `llm.parallel_requests` 限制内有限并行执行
 - **THEN** 超出并行上限的请求 MUST 排队等待，而不是无上限并发
 
-#### Scenario: Agent bridge 继续作为串行回退路径
-- **WHEN** 当前 workflow 没有可用 provider，只能通过 Agent bridge 发起增强请求
-- **THEN** 系统 MAY 继续按串行顺序请求 Agent bridge
-- **THEN** 父子页顺序、缓存语义和 deterministic fallback 不得因为 bridge 路径而改变
+#### Scenario: 未来 production bridge 被显式启用
+- **WHEN** 独立 capability negotiation、实现和 production verification 已允许 `research_page` 使用 bridge
+- **THEN** bridge MUST 服从与 provider path 相同的父子页顺序、结构化结果、cache key 与失败策略
+- **THEN** 启用事实 MUST 有独立证据，不能由 `--bridge-stdio` 参数单独推导
 
 ### Requirement: 系统必须基于稳定页面输入执行可缓存的内容增强
 系统 MUST 在 `build_page_context` 之后、`build_section_drafts` 之前构造 research-driven 页面输入，并对 `overview`、`architecture`、`module` 和 `topic` 页面执行可选的内容增强。页面输入 MUST 只消费稳定的 `PageContext`、dossier、targeted snippets、graph summary、页面 hints 和子页面 rollup，不得重新扫描仓库或绕过现有 planner。增强结果 MUST 能回填到现有 managed sections，并与 deterministic section 模板共享稳定 `section_id`。
@@ -115,15 +115,15 @@
 - **THEN** 系统不得仅凭模型输出写入新的结构图
 
 ### Requirement: debug trace 模式必须记录完整 LLM 请求与响应 JSON
-系统 MUST 在 debug trace 模式下记录完整的 LLM 请求与响应 JSON，覆盖 provider 直连路径和 Agent bridge 路径。provider 路径 MUST 记录发给模型的 HTTP body、原始响应 JSON 以及解析后的 completion；Agent bridge 路径 MUST 记录 `llm_request` 和回写给 core 的会话消息。
+系统 MUST 在 debug trace 模式下记录实际选择且可执行的 LLM 路径。Provider 路径 MUST 记录发给模型的 HTTP body、原始响应 JSON 以及解析后的 completion；若未来 production bridge 实际启用，则该路径 MUST 记录 `llm_request` 和收到的 `llm_response` 或 `llm_unavailable`。
 
 #### Scenario: provider 直连记录完整请求与响应
 - **WHEN** 当前 workflow 走 provider API 直连
 - **THEN** debug trace MUST 记录完整请求 JSON
 - **THEN** debug trace MUST 记录原始 provider 响应 JSON 与解析后的 completion
 
-#### Scenario: Agent bridge 记录会话消息
-- **WHEN** 当前 workflow 走 Agent bridge
+#### Scenario: 已启用的 Agent bridge 记录 transport 消息
+- **WHEN** 当前 workflow 实际选择并执行已验证的 production Agent bridge
 - **THEN** debug trace MUST 记录发出的 `llm_request`
 - **THEN** debug trace MUST 记录收到的 `llm_response` 或 `llm_unavailable`
 
@@ -140,18 +140,18 @@
 - **THEN** 系统 MUST 优先保留关键源码片段、evidence rollup 和 child rollup
 - **THEN** 系统不得优先保留低价值标签噪音而裁掉这些输入
 
-### Requirement: LLM 执行路径必须统一受预算、batch 和 session contract 约束
-系统 MUST 让 provider 直连与 provider tool-calling 至少共享同一套 budget、batch、显式 session 和 structured result contract；后续 agent-bridge 也 MUST 复用同一套 contract。相同页面输入的 cache key 语义 MUST 与执行路径解耦。显式 session state MUST 在每轮 research 请求中带上稳定 `session_id`，并允许同页重复生成复用 `session_summary`、`recent_turns` 和 `tool_artifact_refs`。
+### Requirement: LLM 执行路径必须统一受预算、batch 和 request-local session contract 约束
+系统 MUST 让 provider 直连与 provider tool-calling 共享同一套 budget、batch、request-local session 和 structured result contract；未来启用的 agent-bridge 也 MUST 复用相同边界。相同页面输入的 cache key 语义 MUST 与执行路径解耦。Session state 只在单次 `research_page` 调用内有效，内部可多轮，但不得跨调用持久化或复用。
 
 #### Scenario: provider 直连与 provider-tools 共享 structured result
 - **WHEN** 同一页面在 provider 直连增强与 provider tool-calling research session 之间切换
 - **THEN** 两条路径 MUST 共享相同的 structured result schema 和 cache key 语义
 - **THEN** 系统不得因为 provider 执行模式变化而重新定义页面研究结果结构
 
-#### Scenario: 同页重复 research 复用显式 session state
+#### Scenario: 同页重复 research 重建 request-local session
 - **WHEN** 同一页面在输入未变化的情况下重复执行 research
-- **THEN** 系统 MUST 继续使用稳定 `session_id` 和压缩后的 session state 参与请求
-- **THEN** 系统不得把上一轮原始长对话全文重新无上限灌入下一轮
+- **THEN** 新调用 MUST 从 `session=None` 开始，并可依赖 cache key 或 durable dossier/context 避免无意义工作
+- **THEN** 系统 MUST NOT 复用上一调用的 `session_id`、summary、turns 或 tool refs
 
 ### Requirement: `response_format` 必须默认顶层发送，并与 prompt 内 schema 形成双保险
 系统 MUST 默认在 provider 请求顶层发送 `response_format`，并继续在 prompt 中保留等价的 `response_schema` 说明。`response_format` 不应被建模为与 tools 相同的 capability 分层；其目标是为最终结构化结果提供默认约束，而不是决定是否进入 tool/session 路径。

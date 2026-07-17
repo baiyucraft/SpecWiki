@@ -8,6 +8,23 @@ import path from "node:path";
 
 export type SupportedHost = "codex" | "claude" | "codebuddy";
 
+/** 宿主相对 Codex-first 合同的兼容角色。 */
+export type HostCompatibilityRole = "reference" | "compatible";
+
+/** 单宿主真实可观测的 trigger/delivery 能力声明。 */
+export type HostTriggerCapabilities = {
+  /** 是否通过 repo-local skill discovery 暴露公开 action。 */
+  nativeSkillDiscovery: "supported";
+  /** 是否存在项目可控的用户 prompt 检查机制。 */
+  promptInspection: "none" | "user_prompt_submit";
+  /** 会话启动时是否注入固定 orientation context。 */
+  sessionStartContext: "none" | "orientation";
+  /** 是否需要写入受管宿主 settings。 */
+  settingsIntegration: "none" | "managed_settings";
+  /** Trigger decision 的宿主投递机制。 */
+  deterministicDelivery: "skill_guidance" | "generated_hook";
+};
+
 export type HostDefinition = {
   /** 宿主稳定 ID。 */
   id: SupportedHost;
@@ -15,6 +32,10 @@ export type HostDefinition = {
   displayName: string;
   /** 项目根目录下用于检测该宿主的目录。 */
   detectDir: string;
+  /** 当前宿主是 reference 还是 compatible projection。 */
+  compatibilityRole: HostCompatibilityRole;
+  /** 必须与实际生成 assets 一致的 trigger 能力。 */
+  triggerCapabilities: HostTriggerCapabilities;
 };
 
 /** 当前 iteration-11-6 明确支持的宿主注册表。 */
@@ -23,16 +44,40 @@ export const HOSTS: readonly HostDefinition[] = [
     id: "codex",
     displayName: "Codex",
     detectDir: ".codex",
+    compatibilityRole: "reference",
+    triggerCapabilities: {
+      nativeSkillDiscovery: "supported",
+      promptInspection: "none",
+      sessionStartContext: "none",
+      settingsIntegration: "none",
+      deterministicDelivery: "skill_guidance",
+    },
   },
   {
     id: "claude",
     displayName: "Claude Code",
     detectDir: ".claude",
+    compatibilityRole: "compatible",
+    triggerCapabilities: {
+      nativeSkillDiscovery: "supported",
+      promptInspection: "none",
+      sessionStartContext: "none",
+      settingsIntegration: "none",
+      deterministicDelivery: "skill_guidance",
+    },
   },
   {
     id: "codebuddy",
     displayName: "CodeBuddy",
     detectDir: ".codebuddy",
+    compatibilityRole: "compatible",
+    triggerCapabilities: {
+      nativeSkillDiscovery: "supported",
+      promptInspection: "user_prompt_submit",
+      sessionStartContext: "orientation",
+      settingsIntegration: "managed_settings",
+      deterministicDelivery: "generated_hook",
+    },
   },
 ] as const;
 

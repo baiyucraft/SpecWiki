@@ -1,7 +1,7 @@
 ---
 title: 01-快速上手
-description: spec-wiki 的最短上手路径
-updated: 2026-05-25
+description: spec-wiki 的 Codex-first 最短上手路径
+updated: 2026-07-17
 owner: docs
 ---
 
@@ -14,6 +14,7 @@ owner: docs
 - `spec-wiki` 是 Repo Wiki Core + Agents 项目。
 - 它提供 TS CLI 与 Rust runtime：CLI 负责统一初始化、宿主 bootstrap 和 runtime forwarding，Rust crates 负责事实扫描、知识组织、运行时生命周期和查询。
 - 当前包名仍为 `spec-wiki`；UniSpec 只管理项目变更治理，不改变产品包名。
+- 宿主接入以 Codex 为唯一 reference host 和默认文档示例；Claude、CodeBuddy 是 compatible hosts。
 
 ## 环境前提
 
@@ -43,6 +44,8 @@ cargo test
 | `spec-wiki status --repo-root .` | 查看 Wiki runtime、index、knowledge 和治理 readiness |
 | `spec-wiki query "runtime"` | 查询代码、知识、页面和治理证据引用 |
 | `spec-wiki update --repo-root .` | 变化后刷新 runtime |
+
+Codex 初始化后生成 `.codex/skills/wiki-*/SKILL.md`。Claude 对应 `.claude/skills/wiki-*/SKILL.md`；CodeBuddy 对应 `.codebuddy/skills/wiki-*/SKILL.md` 并额外包含宿主专属 hooks/settings。CodeBuddy 的额外机制不改变共享 action 或 Runtime 合同。
 
 ## 推荐阅读路径
 

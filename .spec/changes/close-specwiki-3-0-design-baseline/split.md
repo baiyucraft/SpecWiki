@@ -68,7 +68,7 @@ multi-change
 - 目标：建立 Codex、Claude、CodeBuddy 共用的 trigger taxonomy、HostAdapter capability matrix、query 消费模板和触发测试语料。
 - 验收边界：存在单一 should-trigger / should-not-trigger / ambiguous 规范源；三个宿主对同一语料的决策可比较；宿主只薄消费正式 Runtime DTO；provider research session 与未来 host-agent bridge 明确分层。
 - 依赖：close-specwiki-3-0-design-baseline-runtime-query-contract。
-- 归档状态：[ ] pending
+- 归档状态：[x] archived
 - 后续阶段：使用 `unispec-propose` 创建该 child 的 `proposal.md`
 
 ### 6. close-specwiki-3-0-design-baseline-documentation-closure

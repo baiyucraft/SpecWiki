@@ -1,13 +1,15 @@
 ---
 title: spec-wiki Wiki
-description: Repo Wiki Core 与 Agents 体系的长期项目知识入口
-updated: 2026-05-25
+description: Repo Wiki Core 与 Codex-first Agents 体系的长期项目知识入口
+updated: 2026-07-17
 owner: docs
 ---
 
 # spec-wiki Wiki
 
 `spec-wiki` 构建 Repo Wiki Core + Agents 体系：扫描代码仓库，生成并持续维护 `.wiki/`，让人和 Agent 共享同一层项目知识。
+
+宿主接入采用 Codex-first：Codex 是唯一 reference host，Claude 与 CodeBuddy 是 compatible hosts。宿主角色、真实资产路径和 trigger/bridge/provider session 边界以 [02-Agents设计](./06-设计文档/02-Agents设计.md) 为准。
 
 本次文档整理只更新长期文档层，不生成或更新 runtime 产物 `.wiki/.knowledge/**`、`.wiki/.cache/**` 或 `wiki.metadata.json`。完整初始化统一通过 `spec-wiki init` 进入；runtime 构建是该入口内部阶段，不再作为另一套用户初始化入口描述。
 
@@ -49,6 +51,7 @@ flowchart LR
 | 理解核心分层 | [03-模块指南](./03-模块指南/INDEX.md) |
 | 查总体设计和场景边界 | [06-设计文档](./06-设计文档/INDEX.md) |
 | 查 Runtime query 稳定合同 | [06-Runtime查询合同](./06-设计文档/06-Runtime查询合同.md) |
+| 查宿主 trigger 稳定合同 | [host-trigger-contract](./05-规格基线/capabilities/host-trigger-contract/spec.md) |
 | 使用 CLI 或 runtime 命令 | [00-CLI](./04-对外方法/00-CLI.md) |
 | 查配置和运行时产物边界 | [01-配置与运行时产物](./04-对外方法/01-配置与运行时产物.md) |
 | 编写或推进 UniSpec change | [02-UniSpec开发规范](./00-文档约定/02-UniSpec开发规范.md) |

@@ -65,3 +65,19 @@ test("sync 与 rebuild skill 使用正式公开入口文案", () => {
   expect(rebuildSkill).toContain("`rebuild` is the explicit full runtime rebuild entry point. It does not replace `update`.");
   expect(rebuildSkill).not.toContain("formal guarantee");
 });
+
+test("shared skills project semantic and explicit-only trigger policies", () => {
+  for (const action of ["query", "status"] as const) {
+    const skill = renderHostActionSkill(action);
+    expect(skill).toContain("Trigger policy: semantic or explicit");
+    expect(skill).toContain("does not execute from trigger guidance alone");
+  }
+
+  for (const action of ["init", "update", "sync", "rebuild"] as const) {
+    const hostSkill = renderHostActionSkill(action);
+    const codeBuddySkill = renderCodeBuddyActionSkill(action);
+    expect(hostSkill).toContain("Trigger policy: explicit request only");
+    expect(hostSkill).toContain("Do not select or run this action from a description, discussion, or ambiguous request");
+    expect(codeBuddySkill).toContain("Trigger policy: explicit request only");
+  }
+});

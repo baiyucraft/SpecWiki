@@ -1,15 +1,20 @@
 # page-research-dossier Specification
 
 ## Purpose
-TBD - created by archiving change iteration-9-2-dossier-session-and-llm-budget-controls. Update Purpose after archive.
+定义页面 Research 前的稳定 dossier 输入与结构化 `PageResearchResult` 合同。Dossier 由 durable facts、evidence 与 child rollup 组装，不保存或复用 request-local provider session。
 ## Requirements
 ### Requirement: 系统必须在页面规划与渲染之间引入稳定的 dossier 层
-系统 MUST 在 `RepoContext / ModuleContext` 与正式页面生成之间引入稳定的 `RepoDossier`、`ModuleDossier`、`TopicDossier` 和 `PageResearchResult`。dossier MUST 基于 deterministic facts、graph summary、section-scoped evidence layer、child rollup 和显式 session state 组装，而不是只把这些输入压平成字符串 facts 后直接交给 LLM。dossier 中的源码材料 MUST 以 `TargetedSnippet` 集合表达，并围绕 symbol 定义、call/process trace、entry point、关键接口/实现对和高价值 child 引用定点提取，而不是继续默认使用文件头预览。
+系统 MUST 在 `RepoContext / ModuleContext` 与正式页面生成之间引入稳定的 `RepoDossier`、`ModuleDossier`、`TopicDossier` 和 `PageResearchResult`。dossier MUST 基于 deterministic facts、graph summary、section-scoped evidence layer 和 child rollup 组装，而不是只把这些输入压平成字符串 facts 后直接交给 LLM。dossier 中的源码材料 MUST 以 `TargetedSnippet` 集合表达，并围绕 symbol 定义、call/process trace、entry point、关键接口/实现对和高价值 child 引用定点提取。Request-local provider session 不属于 dossier input 或 stable identity。
 
 #### Scenario: overview、architecture、module 或 topic 页构建稳定 dossier
 - **WHEN** 系统为 `overview`、`architecture`、`module` 或 `topic` 页构建页面输入
-- **THEN** dossier MUST 至少包含 `key_sources`、`key_symbols`、`targeted_snippets`、`cross_module_edges`、`process_candidates`、`evidence_rollup`、`diagram_rollup`、`child_rollup` 和 `session_state`
+- **THEN** dossier MUST 至少包含 `key_sources`、`key_symbols`、`targeted_snippets`、`cross_module_edges`、`process_candidates`、`evidence_rollup`、`diagram_rollup` 和 `child_rollup`
 - **THEN** dossier MUST 具有稳定 identity 与 input hash，便于缓存和增量更新
+
+#### Scenario: Dossier 不携带 provider session
+- **WHEN** 系统为恢复或重试的 research unit 重建 dossier
+- **THEN** dossier MUST 只使用 durable facts/evidence/context
+- **THEN** dossier MUST NOT 包含上一调用的 `session_id`、summary、turns 或 tool refs
 
 #### Scenario: 同一页重复生成时 dossier identity 保持稳定
 - **WHEN** 同一页面的 dossier 输入未发生变化

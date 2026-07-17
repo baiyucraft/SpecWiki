@@ -58,12 +58,17 @@
 - **THEN** 系统 MUST NOT 静默退回 full `init` 并把该结果标记为 restore 成功
 
 ### Requirement: 最小正式知识产物集不得混入工作态缓存
-系统 MUST 让 `.wiki/.knowledge/**` 保持正式知识产物定位。`declared/**`、`derived/**` 与 `runtime/**` 都属于正式 snapshot 的组成部分，但 `page_drafts`、`llm_cache`、临时 session state、工作中的 compose artifact 和其它本地工作态缓存 MUST NOT 进入 `.wiki/.knowledge/**`。
+系统 MUST 让 `.wiki/.knowledge/**` 保持正式知识产物定位。`declared/**`、`derived/**` 与 `runtime/**` 都属于正式 snapshot 的组成部分，但 `page_drafts`、`llm_cache`、工作中的 compose artifact 和其它本地工作态缓存 MUST NOT 进入 `.wiki/.knowledge/**`。Provider session state 既不得进入正式知识产物，也不得作为本地 working cache 持久化。
 
 #### Scenario: 工作态缓存继续留在 `.cache`
-- **WHEN** 系统持久化 `page_drafts`、`llm_cache`、临时 session state 或其它工作态缓存
+- **WHEN** 系统持久化 `page_drafts`、`llm_cache` 或其它允许恢复的工作态缓存
 - **THEN** 这些对象 MUST 继续留在 `.wiki/.cache/**` 或等价本地 working state
 - **THEN** 系统 MUST NOT 把它们升级为 `.wiki/.knowledge/**` 的正式对象
+
+#### Scenario: Provider session 不进入任何 durable layer
+- **WHEN** 单次 `research_page` 调用产生 session id、turns 或 tool refs
+- **THEN** `.wiki/.cache/**`、`.wiki/.knowledge/**`、checkpoint 和 metadata MUST NOT 持久化这些字段
+- **THEN** workflow resume MUST 从 `session=None` 开始
 
 ### Requirement: `KnowledgeUnit` 正式产物必须携带最小合同字段
 系统 MUST 让 `.wiki/.knowledge/derived/knowledge-units.jsonl` 或等价正式 artifact 中的每个 `KnowledgeUnit` 携带最小合同字段。该最小合同 MUST 至少覆盖 `unit_id`、`domain_id`、`unit_kind`、`declared_record_refs`、`derived_research_ref`、`projection_refs`、`source_refs`、`citation_refs`、`status`、`updated_at` 与 `invalidation_reason`。系统 MUST NOT 继续把 `KnowledgeUnit` 写成只够 planner 内部消费的弱对象。

@@ -58,18 +58,18 @@
 - **THEN** 响应 MUST 返回 `recommended_action = sync` 或 `recommended_action = rebuild`
 - **THEN** 宿主 MUST 能直接消费这些推荐动作，而不需要自行重建一套 host-side 状态机
 
-### Requirement: `query` 必须以 `index -> knowledge -> page fallback` 结果为正式稳定合同
-系统 MUST 将 `query` 的正式稳定合同收敛到外部 `term-only`、内部 `index -> knowledge -> page fallback` 的结果路由。宿主与用户当前版本可稳定依赖的字段 MUST 继续以 `query_mode`、`query_trust`、`recommended_action`、`matched_pages` 和 `provenance_summary` 为主；其中 `provenance_summary` MUST 至少能稳定区分 `index_hit`、`knowledge_hit` 与 `page_fallback` 三类 route tags。其他实现可见字段 MAY 出现，但 MUST NOT 脱离该 route 语义漂移成新的公开 payload。
+### Requirement: `query` 必须以 canonical route groups 为正式稳定合同
+系统 MUST 将 `query` 的公开输入保持为非空 `term-only`，并以 `readiness`、`query_mode`、`query_trust`、`recommended_action`、`governance`、`route_groups` 和 `answer` 作为 canonical response。`route_groups` MUST 是唯一结果 authority；已删除的顶层 `matched_pages`、`provenance_summary`、`summary`、`hits` 或平铺 `results` MUST NOT 作为兼容字段继续暴露。
 
-#### Scenario: `query` 优先返回 index 与 knowledge 命中
-- **WHEN** 用户执行 `spec-wiki query`，且当前 query 同时存在 facts/index 或 formal knowledge 命中
-- **THEN** 响应 MUST 优先体现 `index` 与 `knowledge` 层结果
-- **THEN** 调用方 MUST 能从 `provenance_summary` 看出当前命中属于 `index_hit` 或 `knowledge_hit`，而不是 page fallback 伪装
+#### Scenario: `query` 返回分组结果与 Runtime answer
+- **WHEN** 用户执行 `spec-wiki query`，且当前 query 存在一个或多个 route 命中
+- **THEN** 响应 MUST 在 `route_groups` 中按 Runtime 定义的组内 rank 提供结果与 supporting refs
+- **THEN** 调用方 MUST 使用 Runtime `answer`，不得在宿主层重建 route、ranking 或结论
 
-#### Scenario: 只有页面兜底时显式保留 fallback 语义
-- **WHEN** 当前 query 没有足够的 index 或 knowledge 命中，只能依赖页面内容兜底
-- **THEN** `query` MUST 继续返回可消费结果
-- **THEN** 调用方 MUST 能稳定读取到 `page_fallback` provenance 与后续推荐动作
+#### Scenario: 合法 term 无命中
+- **WHEN** query 输入合法但没有任何 route 命中
+- **THEN** `route_groups` MUST 序列化为空数组并返回 empty `answer`
+- **THEN** 系统不得伪装 typed failure，也不得恢复已删除旧字段
 
 ### Requirement: `sync` 必须作为正式公开 workflow 同步页面回写
 系统 MUST 将 `sync` 作为正式公开 workflow，用于把 `.wiki` 受管页面的人工编辑、managed drift 与 section 结构变化同步回 runtime state、metadata 与本地 cache。`sync` 只处理页面层 contract，不得被表述成源码扫描、knowledge refresh 或普通增量更新的替代物。

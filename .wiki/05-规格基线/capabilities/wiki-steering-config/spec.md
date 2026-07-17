@@ -21,13 +21,13 @@
 - **THEN** 系统 MUST 输出明确的解析错误信息
 - **THEN** 系统 MUST 回退到默认值继续运行，不得中断 pipeline
 
-### Requirement: steering 与本地 dev 配置必须支持 phase-specific LLM budget 和 cache mode
-系统 MUST 允许通过 `.wiki/config.yaml` 配置 phase-specific LLM budget、并行度、session 限制和 cache mode。系统在显式开发模式开启时，还 MUST 允许 repo 根 `wiki.dev.yaml` 以最高优先级覆盖 repo 级共享配置中对应的 `llm` 字段。
+### Requirement: steering 与本地 dev 配置必须支持统一 LLM budget 和 cache mode
+系统 MUST 允许通过 `.wiki/config.yaml` 配置 `parallel_requests`、`max_research_calls`、`max_compose_calls`、`page_research_max_turns`、`cache_ttl_seconds` 和 `cache_mode`。系统在显式开发模式开启时，还 MUST 允许 repo 根 `wiki.dev.yaml` 以最高优先级覆盖 repo 级共享配置中对应的 `llm` 字段。
 
-#### Scenario: dev 配置覆盖 phase-specific budget
-- **WHEN** 显式开发模式已开启，且 `wiki.dev.yaml` 中声明 `uncertainty_gate_max_input_tokens`、`page_enrichment_max_input_tokens` 或 `session_max_context_tokens`
+#### Scenario: dev 配置覆盖 Research/Compose budget
+- **WHEN** 显式开发模式已开启，且 `wiki.dev.yaml` 中声明 `max_research_calls`、`max_compose_calls` 或 `page_research_max_turns`
 - **THEN** 系统 MUST 以本地 dev 配置为准
-- **THEN** 对应 workflow MUST 使用这些预算参与请求裁剪和降级
+- **THEN** 对应 workflow MUST 使用这些上限约束调用次数或单次 `research_page` 的最大轮次
 
 #### Scenario: 配置 cache mode 控制 cold/warm 行为
 - **WHEN** steering 中声明 `llm.cache_mode`，或在显式开发模式下 `wiki.dev.yaml` 中声明该字段
@@ -79,21 +79,21 @@
 
 #### Scenario: 用户级配置与 learned state 使用固定最小字段集
 - **WHEN** 系统读取 `~/.spec-wiki/config.yaml` 或 `~/.spec-wiki/state.yaml`
-- **THEN** `config.yaml` MUST 至少支持 provider、budget、parallelism、cache mode 和 session 开关这些字段
+- **THEN** `config.yaml` MUST 至少支持 provider/model、Research/Compose budget、parallelism、request-local turn limit 和 cache mode
 - **THEN** `state.yaml` MUST 至少支持 `api_base`、`provider/model`、`tools_mode`、`detected_at`、`reason`、`ttl_hours`
 
-### Requirement: steering 与本地 dev 配置必须拆分阶段开关和并行度
-系统 MUST 允许分别配置 `uncertainty_gate`、`content_enrichment` 和 research session 的开关及并行度，而不是只保留一个总开关或单个 `parallel_requests`。
+### Requirement: steering 与本地 dev 配置必须使用统一正式 LLM 字段
+系统 MUST 使用 `enabled`、`model`、`parallel_requests`、`max_research_calls`、`max_compose_calls`、`page_research_max_turns`、`cache_ttl_seconds`、`cache_mode`、`allow_mermaid` 和 `providers` 作为正式 LLM 配置面。旧 `uncertainty_gate_*`、`content_enrichment_*`、`session_enabled`、`session_max_*` 与 page-enrichment 并行字段不属于当前 schema。
 
-#### Scenario: 单独关闭 uncertainty gate
-- **WHEN** 用户在 steering 中关闭 `uncertainty_gate`，或在显式开发模式下于 `wiki.dev.yaml` 中关闭 `uncertainty_gate`
-- **THEN** 系统 MUST 跳过对应阶段
-- **THEN** `content_enrichment` 或 research session 仍 MAY 继续执行
+#### Scenario: 读取废弃 LLM 子开关
+- **WHEN** 配置包含旧 uncertainty/content/session 子开关或预算字段
+- **THEN** 系统 MUST 忽略或报告 warning，而不得重新启用旧分阶段语义
+- **THEN** 正式 workflow MUST 只消费当前 LLM 字段
 
-#### Scenario: 分别配置 gate 和 page/session 并行度
-- **WHEN** 配置中声明 `uncertainty_gate_parallel_requests`、`page_enrichment_parallel_requests` 或 session 对应并行限制
-- **THEN** 系统 MUST 分别在对应阶段使用这些上限
-- **THEN** 系统不得把所有阶段都套用同一个并行值
+#### Scenario: 配置 request-local 最大轮次
+- **WHEN** 配置声明 `page_research_max_turns`
+- **THEN** 系统 MUST 只用它限制单次 `research_page` 调用内部轮次
+- **THEN** 该字段 MUST NOT 授权跨调用 session resume 或持久化
 
 ## REMOVED Requirements
 
@@ -122,22 +122,22 @@
 - **THEN** 系统 MUST 在该次 workflow 中按新配置重新执行扫描边界判断
 - **THEN** 新旧扫描边界差异 MUST 能反映到后续的模块树、页面规划和 change_set 结果中
 
-### Requirement: steering 配置必须支持 LLM 增强控制项与页面提示
-系统 MUST 允许用户通过 `.wiki/config.yaml` 的 `llm` 配置块控制 LLM 增强行为。`llm` 配置块 MUST 至少支持是否启用内容增强、是否启用 Uncertainty Gate、单次 workflow 的最大真实调用次数，以及与图生成相关的开关或模式。系统还 MUST 允许通过 `pages.hints` 为不同页面类型追加提示语，并把这些提示作为页面增强输入的一部分。
+### Requirement: steering 配置必须支持正式 LLM 控制项与页面提示
+系统 MUST 允许用户通过 `.wiki/config.yaml` 的 `llm` 配置块控制正式 provider-backed Research/Compose。`llm` 配置块 MUST 至少支持总开关、provider/model、并行度、Research/Compose 调用上限、单页 request-local 最大轮次、cache 和 Mermaid 控制。系统还 MUST 允许通过 `pages.hints` 为不同页面类型追加提示语，并把这些提示作为页面输入的一部分。
 
-#### Scenario: steering 显式关闭 LLM 增强
-- **WHEN** steering 配置中声明关闭 LLM 内容增强或 Uncertainty Gate
-- **THEN** 系统 MUST 跳过对应 LLM 阶段
-- **THEN** workflow MUST 回退到纯 deterministic 行为，而不是尝试隐式调用 LLM
+#### Scenario: 正式 workflow 未启用 LLM
+- **WHEN** 正式 `init`、`update` 或 `rebuild` 没有启用可用 provider-backed LLM
+- **THEN** workflow MUST 按 Runtime reliability contract 返回 blocked/error 并保留检查点
+- **THEN** 系统不得把测试或显式开发模式的 deterministic provider 伪装为正式成功
 
-#### Scenario: steering 限制单次 workflow 的真实调用次数
-- **WHEN** steering 配置中声明了最大真实调用次数
-- **THEN** 系统 MUST 在达到该上限后停止发起新的真实 LLM 请求
-- **THEN** 后续待处理项 MUST 回退到 deterministic 结果或缓存结果
+#### Scenario: steering 分别限制 Research 与 Compose 调用次数
+- **WHEN** steering 配置声明 `max_research_calls` 或 `max_compose_calls`
+- **THEN** 系统 MUST 在对应阶段达到上限后停止发起新的真实 LLM 请求
+- **THEN** 后续行为 MUST 服从 Runtime reliability policy，不得由配置层伪造成功
 
 #### Scenario: steering 配置 provider 直连并行度
 - **WHEN** steering 中声明了 `llm.parallel_requests`，或在显式开发模式下 `wiki.dev.yaml` 中声明了该字段
-- **THEN** 系统 MUST 仅把该值用作 provider 直连路径下的同层页面增强并行上限
+- **THEN** 系统 MUST 仅把该值用作 provider 直连路径下的请求并行上限
 - **THEN** 当值缺失、非法或小于 `1` 时，系统 MUST 回退到安全默认值而不是创建无上限并发
 
 #### Scenario: pages.hints 参与页面增强输入

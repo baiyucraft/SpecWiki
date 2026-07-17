@@ -219,9 +219,9 @@ test("runBootstrapInit writes CodeBuddy skills, hooks, and settings without crea
   expect(
     readFileSync(path.join(repoRoot, ".codebuddy", "hooks", "spec-wiki", "session-start.mjs"), "utf8"),
   ).toContain("additionalContext");
-  expect(userPromptHook).toContain("authoritative runtime data");
-  expect(userPromptHook).toContain("stable structured runtime fields");
-  expect(userPromptHook).toContain("shared rules live in hooks and action skill guardrails");
+  expect(userPromptHook).toContain("The shared trigger contract selected the wiki-");
+  expect(userPromptHook).toContain("this hook only supplies context and does not execute the CLI");
+  expect(userPromptHook).not.toContain("const lowered = rawInput");
   expect(existsSync(path.join(repoRoot, ".codebuddy", "commands", "wiki", "init.md"))).toBe(false);
   expect(existsSync(legacySharedSkillPath)).toBe(false);
   expect(readFileSync(legacySyncSkillPath, "utf8")).toContain("name: wiki-sync");

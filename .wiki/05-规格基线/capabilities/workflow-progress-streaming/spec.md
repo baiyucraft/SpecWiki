@@ -56,36 +56,36 @@
 - **THEN** 长流程不得再为了同一个请求额外输出 `llm_request` 事件
 
 ### Requirement: LLM 会话扩展不得破坏终态唯一性和 progress 顺序
-无论是否协商 LLM 桥接，长流程事件流都 MUST 保持现有的终态唯一性约束。`llm_request` 事件只能出现在终态之前；每次请求 MUST 对应一个成功响应、不可用响应或超时回退；workflow 结束时系统 MUST 仍然输出且只输出一个最终 `result` 或 `error` 事件。progress 事件的相对顺序 MUST 与真实 workflow 阶段一致，不得因为 LLM 会话而伪造额外业务阶段。
+无论是否协商 LLM 桥接，长流程事件流都 MUST 保持现有的终态唯一性约束。`llm_request` 事件只能出现在终态之前；每次请求 MUST 对应一个成功响应、不可用响应或超时结果；workflow 结束时系统 MUST 仍然输出且只输出一个最终 `result` 或 `error` 事件。是否继续或失败 MUST 服从 action/reliability policy，不能由 transport 擅自保证回退成功。progress 事件的相对顺序 MUST 与真实 workflow 阶段一致。
 
 #### Scenario: `llm_request` 不改变最终终态语义
 - **WHEN** 工作流过程中发生一个或多个 `llm_request`
 - **THEN** workflow 结束时系统 MUST 仍然输出且只输出一个最终 `result` 或 `error`
 - **THEN** 调用方 MUST 能像当前一样恢复最终 `CoreResponse`
 
-#### Scenario: LLM 回退后 progress 仍可观测
-- **WHEN** 某个 `llm_request` 因不可用、超时或回退而未得到有效响应
-- **THEN** 系统 MUST 继续输出后续 progress 事件和最终终态事件
-- **THEN** progress 阶段顺序 MUST 反映真实 workflow，而不是停留在未完成状态
+#### Scenario: LLM 请求失败后按 policy 结束
+- **WHEN** 某个 `llm_request` 因不可用或超时未得到有效响应
+- **THEN** 允许回退时系统 MAY 继续输出后续 progress；不允许回退时 MUST 输出最终 error/blocked
+- **THEN** 两种路径都 MUST 保持终态唯一并反映真实 workflow 阶段
 
-### Requirement: progress/event stream 必须支持 bounded research session 事件
-系统 MUST 在开启 provider research session 时，通过现有 workflow event stream 暴露 bounded session 事件。事件流 MUST 至少支持 `agent_session_start`、`agent_message`、`agent_tool_call`、`agent_tool_result`、`agent_final`、`agent_abort`，并继续保持最终终态唯一。后续 agent-bridge 路径 MAY 复用同一事件集。
+### Requirement: Agent session 事件必须保持 reserved，直到 active bridge 支持
+`agent_session_start`、`agent_message`、`agent_tool_call`、`agent_tool_result`、`agent_final`、`agent_abort` 当前只属于保留的 DTO/parser 扩展面，active bridge path 不得输出或接受完整事件集。Provider 内部 request-local session 不等于 host event stream。未来启用必须有独立 transport negotiation 与 verification，并继续保持最终终态唯一。
 
-#### Scenario: research session 期间输出结构化 session 事件
-- **WHEN** 当前 workflow 对某个页面执行 research session
-- **THEN** 系统 MUST 按到达顺序输出该 session 的结构化事件
+#### Scenario: 当前 provider 内部执行 research session
+- **WHEN** 当前 workflow 在单次 `research_page` 调用内执行多轮 provider/tool loop
+- **THEN** host event stream MUST NOT 因此自动输出 reserved agent-session events
 - **THEN** workflow 结束时仍 MUST 只输出一个最终 `result` 或 `error`
 
-#### Scenario: 未协商 research session 时保持普通 progress 流
-- **WHEN** 调用方未声明支持 session 事件
-- **THEN** 系统 MAY 回退到不启用 session 的路径
-- **THEN** event stream 不得无意义输出未协商的 session 事件
+#### Scenario: active bridge 收到 reserved event
+- **WHEN** 当前 active bridge 收到未启用的 agent-session event
+- **THEN** transport MUST 明确拒绝该 event
+- **THEN** 不得把 parser 壳误报为 production capability
 
 ### Requirement: progress/event stream 必须实时暴露 LLM usage snapshot
 系统 MUST 在普通 workflow 模式下实时暴露 LLM usage snapshot，而不是只在 debug trace 中可见。每次真实 LLM 请求完成后，对应 progress 或等价可观测事件 MUST 刷新累计 usage。
 
 #### Scenario: 请求完成后实时刷新 usage snapshot
-- **WHEN** workflow 中某次真实 provider 或 agent-bridge 请求完成
+- **WHEN** workflow 中某次真实 provider 请求，或未来已验证并实际启用的 agent-bridge 请求完成
 - **THEN** 对应 event stream MUST 刷新累计 `request_count`、`input_tokens`、`output_tokens`、`total_tokens`
 - **THEN** 调用方 MUST 能在 workflow 尚未结束时观察到 usage 增长
 

@@ -1,0 +1,260 @@
+{
+  "$schema": "spec-wiki/host-trigger-corpus/v1",
+  "contractVersion": "host-trigger/v1",
+  "revision": 1,
+  "semanticCases": [
+    {
+      "id": "zh-query-repo-map-001",
+      "locale": "zh-CN",
+      "tags": ["implicit", "query"],
+      "input": { "kind": "user_prompt", "text": "帮我定位认证模块的调用路径" },
+      "expected": { "decision": "should_trigger", "targetAction": "query", "reason": "semantic_query_request" }
+    },
+    {
+      "id": "en-query-repo-map-001",
+      "locale": "en",
+      "tags": ["implicit", "query"],
+      "input": { "kind": "user_prompt", "text": "Show me where the auth module is implemented" },
+      "expected": { "decision": "should_trigger", "targetAction": "query", "reason": "semantic_query_request" }
+    },
+    {
+      "id": "zh-status-readiness-001",
+      "locale": "zh-CN",
+      "tags": ["implicit", "status"],
+      "input": { "kind": "user_prompt", "text": "Wiki 是否已经就绪，需要 update 吗？" },
+      "expected": { "decision": "should_trigger", "targetAction": "status", "reason": "semantic_status_request" }
+    },
+    {
+      "id": "en-status-readiness-001",
+      "locale": "en",
+      "tags": ["implicit", "status"],
+      "input": { "kind": "user_prompt", "text": "Show whether the repo wiki is stale" },
+      "expected": { "decision": "should_trigger", "targetAction": "status", "reason": "semantic_status_request" }
+    },
+    {
+      "id": "en-query-explicit-001",
+      "locale": "en",
+      "tags": ["explicit", "query"],
+      "input": { "kind": "user_prompt", "text": "spec-wiki query auth module" },
+      "expected": { "decision": "should_trigger", "targetAction": "query", "reason": "explicit_action_request" }
+    },
+    {
+      "id": "en-query-missing-term-001",
+      "locale": "en",
+      "tags": ["explicit", "ambiguous"],
+      "input": { "kind": "user_prompt", "text": "spec-wiki query" },
+      "expected": { "decision": "ambiguous", "targetAction": "query", "reason": "missing_query_term" }
+    },
+    {
+      "id": "en-query-punctuation-only-term-001",
+      "locale": "en",
+      "tags": ["explicit", "ambiguous", "punctuation"],
+      "input": { "kind": "user_prompt", "text": "spec-wiki query?" },
+      "expected": { "decision": "ambiguous", "targetAction": "query", "reason": "missing_query_term" }
+    },
+    {
+      "id": "en-query-colon-only-term-001",
+      "locale": "en",
+      "tags": ["explicit", "ambiguous", "punctuation"],
+      "input": { "kind": "user_prompt", "text": "spec-wiki query:" },
+      "expected": { "decision": "ambiguous", "targetAction": "query", "reason": "missing_query_term" }
+    },
+    {
+      "id": "zh-query-punctuation-only-term-001",
+      "locale": "zh-CN",
+      "tags": ["explicit", "ambiguous", "punctuation"],
+      "input": { "kind": "user_prompt", "text": "查询？" },
+      "expected": { "decision": "ambiguous", "targetAction": "query", "reason": "missing_query_term" }
+    },
+    {
+      "id": "en-status-explicit-001",
+      "locale": "en",
+      "tags": ["explicit", "status"],
+      "input": { "kind": "user_prompt", "text": "/wiki:status" },
+      "expected": { "decision": "should_trigger", "targetAction": "status", "reason": "explicit_action_request" }
+    },
+    {
+      "id": "en-init-explicit-001",
+      "locale": "en",
+      "tags": ["explicit", "mutation"],
+      "input": { "kind": "user_prompt", "text": "spec-wiki init" },
+      "expected": { "decision": "should_trigger", "targetAction": "init", "reason": "explicit_action_request" }
+    },
+    {
+      "id": "zh-update-explicit-001",
+      "locale": "zh-CN",
+      "tags": ["explicit", "mutation"],
+      "input": { "kind": "user_prompt", "text": "请更新一下wiki" },
+      "expected": { "decision": "should_trigger", "targetAction": "update", "reason": "explicit_action_request" }
+    },
+    {
+      "id": "en-sync-explicit-001",
+      "locale": "en",
+      "tags": ["explicit", "mutation"],
+      "input": { "kind": "user_prompt", "text": "please run spec-wiki sync" },
+      "expected": { "decision": "should_trigger", "targetAction": "sync", "reason": "explicit_action_request" }
+    },
+    {
+      "id": "en-rebuild-explicit-001",
+      "locale": "en",
+      "tags": ["explicit", "mutation"],
+      "input": { "kind": "user_prompt", "text": "please run spec-wiki rebuild" },
+      "expected": { "decision": "should_trigger", "targetAction": "rebuild", "reason": "explicit_action_request" }
+    },
+    {
+      "id": "en-rebuild-discussion-001",
+      "locale": "en",
+      "tags": ["implicit", "mutation-guard"],
+      "input": { "kind": "user_prompt", "text": "how does rebuild work?" },
+      "expected": { "decision": "should_not_trigger", "targetAction": null, "reason": "mutation_requires_explicit_request" }
+    },
+    {
+      "id": "zh-update-discussion-001",
+      "locale": "zh-CN",
+      "tags": ["implicit", "mutation-guard"],
+      "input": { "kind": "user_prompt", "text": "怎么更新 wiki 比较安全" },
+      "expected": { "decision": "should_not_trigger", "targetAction": null, "reason": "mutation_requires_explicit_request" }
+    },
+    {
+      "id": "zh-opt-out-001",
+      "locale": "zh-CN",
+      "tags": ["negative"],
+      "input": { "kind": "user_prompt", "text": "不要查询 wiki" },
+      "expected": { "decision": "should_not_trigger", "targetAction": null, "reason": "explicit_opt_out" }
+    },
+    {
+      "id": "en-opt-out-001",
+      "locale": "en",
+      "tags": ["negative"],
+      "input": { "kind": "user_prompt", "text": "do not use the wiki" },
+      "expected": { "decision": "should_not_trigger", "targetAction": null, "reason": "explicit_opt_out" }
+    },
+    {
+      "id": "en-positive-opt-out-conflict-001",
+      "locale": "en",
+      "tags": ["ambiguous", "conflict"],
+      "input": { "kind": "user_prompt", "text": "query auth but do not use the wiki" },
+      "expected": { "decision": "ambiguous", "targetAction": null, "reason": "conflicting_intent" }
+    },
+    {
+      "id": "en-multi-action-conflict-001",
+      "locale": "en",
+      "tags": ["ambiguous", "conflict"],
+      "input": { "kind": "user_prompt", "text": "spec-wiki update and spec-wiki rebuild" },
+      "expected": { "decision": "ambiguous", "targetAction": null, "reason": "conflicting_intent" }
+    },
+    {
+      "id": "en-query-status-conflict-001",
+      "locale": "en",
+      "tags": ["ambiguous", "conflict"],
+      "input": { "kind": "user_prompt", "text": "show me which module is used and whether wiki is stale" },
+      "expected": { "decision": "ambiguous", "targetAction": null, "reason": "conflicting_intent" }
+    },
+    {
+      "id": "en-bare-wiki-001",
+      "locale": "en",
+      "tags": ["ambiguous", "insufficient"],
+      "input": { "kind": "user_prompt", "text": "wiki" },
+      "expected": { "decision": "ambiguous", "targetAction": null, "reason": "insufficient_context" }
+    },
+    {
+      "id": "en-near-collision-module-001",
+      "locale": "en",
+      "tags": ["negative", "near-collision"],
+      "input": { "kind": "user_prompt", "text": "module.exports = value" },
+      "expected": { "decision": "should_not_trigger", "targetAction": null, "reason": "no_supported_intent" }
+    },
+    {
+      "id": "en-near-collision-path-001",
+      "locale": "en",
+      "tags": ["negative", "near-collision"],
+      "input": { "kind": "user_prompt", "text": "classpath status quo" },
+      "expected": { "decision": "should_not_trigger", "targetAction": null, "reason": "no_supported_intent" }
+    },
+    {
+      "id": "en-mutation-discussion-leading-action-001",
+      "locale": "en",
+      "tags": ["negative", "mutation-guard", "near-collision"],
+      "input": { "kind": "user_prompt", "text": "update me on the release status" },
+      "expected": { "decision": "should_not_trigger", "targetAction": null, "reason": "mutation_requires_explicit_request" }
+    },
+    {
+      "id": "en-intent-substring-collision-001",
+      "locale": "en",
+      "tags": ["negative", "near-collision", "word-boundary"],
+      "input": { "kind": "user_prompt", "text": "the sandwich module is documented" },
+      "expected": { "decision": "should_not_trigger", "targetAction": null, "reason": "no_supported_intent" }
+    },
+    {
+      "id": "en-nfkc-command-001",
+      "locale": "en",
+      "tags": ["normalization", "explicit"],
+      "input": { "kind": "user_prompt", "text": "ＳＰＥＣ－ＷＩＫＩ query auth" },
+      "expected": { "decision": "should_trigger", "targetAction": "query", "reason": "explicit_action_request" }
+    },
+    {
+      "id": "en-empty-input-001",
+      "locale": "en",
+      "tags": ["invalid"],
+      "input": { "kind": "user_prompt", "text": "   " },
+      "expected": { "decision": "ambiguous", "targetAction": null, "reason": "invalid_input" }
+    },
+    {
+      "id": "en-non-string-input-001",
+      "locale": "en",
+      "tags": ["invalid"],
+      "input": { "kind": "user_prompt", "text": null },
+      "expected": { "decision": "ambiguous", "targetAction": null, "reason": "invalid_input" }
+    }
+  ],
+  "adapterCases": [
+    {
+      "id": "codebuddy-query-001",
+      "host": "codebuddy",
+      "event": "UserPromptSubmit",
+      "stdin": "{\"hook_event_name\":\"UserPromptSubmit\",\"user_prompt\":\"帮我定位认证模块的调用路径\",\"transcript_path\":\"C:/tmp/transcript.md\"}",
+      "expectedDecision": { "decision": "should_trigger", "targetAction": "query", "reason": "semantic_query_request" },
+      "expectedDelivery": "action_context"
+    },
+    {
+      "id": "codebuddy-opt-out-001",
+      "host": "codebuddy",
+      "event": "UserPromptSubmit",
+      "stdin": "{\"hook_event_name\":\"UserPromptSubmit\",\"user_prompt\":\"不要查询 wiki\"}",
+      "expectedDecision": { "decision": "should_not_trigger", "targetAction": null, "reason": "explicit_opt_out" },
+      "expectedDelivery": "none"
+    },
+    {
+      "id": "codebuddy-missing-term-001",
+      "host": "codebuddy",
+      "event": "UserPromptSubmit",
+      "stdin": "{\"hook_event_name\":\"UserPromptSubmit\",\"user_prompt\":\"spec-wiki query\"}",
+      "expectedDecision": { "decision": "ambiguous", "targetAction": "query", "reason": "missing_query_term" },
+      "expectedDelivery": "clarification_context"
+    },
+    {
+      "id": "codebuddy-transcript-near-collision-001",
+      "host": "codebuddy",
+      "event": "UserPromptSubmit",
+      "stdin": "{\"hook_event_name\":\"UserPromptSubmit\",\"user_prompt\":\"hello\",\"transcript_path\":\"C:/tmp/wiki-module.md\"}",
+      "expectedDecision": { "decision": "should_not_trigger", "targetAction": null, "reason": "no_supported_intent" },
+      "expectedDelivery": "none"
+    },
+    {
+      "id": "codebuddy-wrong-field-001",
+      "host": "codebuddy",
+      "event": "UserPromptSubmit",
+      "stdin": "{\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"spec-wiki rebuild\"}",
+      "expectedDecision": { "decision": "ambiguous", "targetAction": null, "reason": "invalid_input" },
+      "expectedDelivery": "none"
+    },
+    {
+      "id": "codebuddy-malformed-json-001",
+      "host": "codebuddy",
+      "event": "UserPromptSubmit",
+      "stdin": "{wiki-module",
+      "expectedDecision": { "decision": "ambiguous", "targetAction": null, "reason": "invalid_input" },
+      "expectedDelivery": "none"
+    }
+  ]
+}

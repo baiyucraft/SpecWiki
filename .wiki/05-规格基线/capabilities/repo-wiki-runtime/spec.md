@@ -89,18 +89,18 @@
 - **THEN** `init/update/rebuild` MUST 为本次 workflow 写出调试 trace
 - **THEN** debug trace 关闭时系统不得额外写出调试产物
 
-### Requirement: runtime 必须持久化 dossier、child rollup 与 session 摘要缓存
-系统 MUST 在现有 runtime/state/cache 主链内持久化 dossier、child rollup、`section_plan` 和显式 research session state，而不是新增 `.wiki/` 之外的 sidecar 层。相关 identity/hash MUST 可被 `update`、`rebuild` 和 cache 命中逻辑复用。显式 session state MUST 至少包含 `session_id`、`session_summary`、`recent_turns` 和 `tool_artifact_refs`。
+### Requirement: runtime 必须持久化可恢复材料并禁止持久化 provider session
+系统 MUST 在现有 runtime/state/cache 主链内持久化 dossier、child rollup、`section_plan` 及其可恢复 identity/hash，而不是新增 `.wiki/` 之外的 sidecar 层。Provider session 只属于单次 `research_page` 调用；`session_id`、`session_summary`、`recent_turns`、`tool_artifact_refs` 和原始对话 MUST NOT 进入 durable state。
 
 #### Scenario: dossier、child rollup 与 section_plan 进入现有 cache/state
 - **WHEN** workflow 完成某个页面的 dossier 组装、child rollup 计算或 section 计划生成
 - **THEN** 系统 MUST 把对应 identity、input hash 和必要摘要写入现有 runtime/cache 主链
 - **THEN** 后续 `update` MUST 能基于这些缓存判断是否需要重建父页
 
-#### Scenario: 显式 session state 复用现有 runtime contract
-- **WHEN** research session 生成 `session_id`、`session_summary`、`recent_turns` 或 `tool_artifact_refs`
-- **THEN** 系统 MUST 在现有 cache/state contract 内持久化这些可复用状态
-- **THEN** 系统不得为此新增独立正式 runtime 目录
+#### Scenario: workflow 恢复后重新建立 provider request
+- **WHEN** workflow 从 checkpoint 或 retry 恢复 research unit
+- **THEN** provider request MUST 从 `session=None` 开始，并从 durable dossier/context 重建输入
+- **THEN** checkpoint、cache、`.wiki/` 和 formal artifact MUST NOT 包含上一调用的 session 或 tool state
 
 ### Requirement: LLM cache 生命周期必须与 runtime 清理解耦
 系统 MUST 让 LLM cache 生命周期独立于普通 runtime 清理。`init`、`rebuild` 默认不得隐式清空 LLM cache；当用户显式要求 cold-start 或 cache mode 为 `clear`/`refresh` 时，系统才 MAY 清空或失效对应缓存。
@@ -310,22 +310,22 @@
 - **THEN** runtime MUST 在结果中显式标注 page fallback provenance
 - **THEN** 系统 MUST NOT 把页面命中伪装成 facts 或 formal knowledge 命中
 
-### Requirement: runtime 的 query 结果必须通过稳定 route tags 分离 readiness 与 provenance
-系统 MUST 让 `query` 结果中的 readiness 与 provenance 分层表达。`query_trust`、`recommended_action` 与等价字段 MUST 负责回答“当前结果是否可直接消费、是否需要 update/rebuild”；`provenance_summary` 与等价字段 MUST 负责回答“结果来自 index、knowledge 还是 page fallback”。本轮 `provenance_summary` MUST 至少能稳定区分 `index_hit`、`knowledge_hit` 与 `page_fallback` 三类 route tags。系统 MUST NOT 用单一字段同时承载这两类语义。
+### Requirement: runtime 的 query 结果必须通过 canonical fields 分离 readiness 与 route provenance
+系统 MUST 让 `query` 结果中的 readiness 与 route provenance 分层表达。`readiness`、`query_trust` 与 `recommended_action` 负责回答“当前结果是否可直接消费、是否需要 update/rebuild”；`route_groups` 负责组织各 route 的结果与 supporting refs。`route_groups` MUST 是唯一结果 authority，系统 MUST NOT 恢复已删除的顶层 `provenance_summary` 或用单一字段混合状态与来源语义。
 
 #### Scenario: 恢复态 runtime 可查询但不伪装成 ready
 - **WHEN** 当前 runtime 是基于 `.wiki/.knowledge/** + official page tree + metadata` 恢复出的可查询状态，但当前代码与正式 snapshot 不一致
 - **THEN** `query` MAY 返回可消费结果
 - **THEN** `query_trust` 与 `recommended_action` MUST 提醒调用方该结果处于恢复态或待更新态
-- **THEN** `provenance_summary` MUST 继续只描述命中来源，而不是把恢复态直接编码成 provenance
+- **THEN** `route_groups` MUST 继续只组织实际命中与 refs，不得把恢复态编码为虚假 route
 
-#### Scenario: knowledge 命中可通过稳定 route tags 观测
+#### Scenario: knowledge 命中可通过 route group 观测
 - **WHEN** 某次 query 主要依赖 formal knowledge artifacts 命中，而不是直接 index 命中或页面兜底
-- **THEN** `provenance_summary` MUST 显式标注 `knowledge_hit`
-- **THEN** 验证与宿主消费 MUST 能仅凭稳定 route tags 区分该结果并进行断言
+- **THEN** 对应结果 MUST 位于 Runtime 定义的 knowledge route group 并携带 supporting refs
+- **THEN** 验证与宿主消费 MUST 使用 canonical group identity，不得复制 route enum 或恢复旧 provenance 字段
 
 #### Scenario: page fallback 与 blocker 语义不混层
 - **WHEN** 当前 query 命中了 page fallback，且 runtime 同时存在 `needs_update` 或 blocker 诊断
-- **THEN** 结果 MUST 同时保留 `page_fallback` provenance 与对应推荐动作
+- **THEN** 结果 MUST 同时保留对应 route group 与 Runtime recommended action
 - **THEN** 系统 MUST NOT 因为存在页面兜底就把 blocker/readiness 问题隐藏掉
 

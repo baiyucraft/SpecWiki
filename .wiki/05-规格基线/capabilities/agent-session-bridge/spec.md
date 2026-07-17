@@ -1,102 +1,67 @@
 # agent-session-bridge Specification
 
 ## Purpose
-TBD - created by archiving change iteration-9-2-dossier-session-and-llm-budget-controls. Update Purpose after archive.
+
+定义 provider request-local research session 与 host-agent bridge 的边界。基础 `llm_request / llm_response / llm_unavailable` forwarding 已实现；当前正式 research 主路径是 provider-backed request-local execution，production `research_page` 与多轮 agent-session bridge 尚未启用。本 capability 不授权 durable session resume，也不参与 host trigger decision。
+
 ## Requirements
-### Requirement: 系统必须支持有边界的 research session 协议
-系统 MUST 为 `module` 与 `topic` 页提供有边界的 research session，而不是把 `init` 整条链改成无限自由对话 agent。research session MUST 发生在 dossier 组装之后、正式渲染之前，最终产物 MUST 是结构化 `PageResearchResult`，而不是最终 Markdown。9.2 的首个落地路径 MUST 是 core/provider 直连路径；agent-bridge 可以在后续迭代复用同一协议。
 
-#### Scenario: module 或 topic 页进入 research session
-- **WHEN** 当前页面类型为 `module` 或 `topic`，且本轮 workflow 已开启 research session
-- **THEN** 系统 MUST 先完成 deterministic dossier 组装
-- **THEN** research session 的最终结果 MUST 回填为结构化 `PageResearchResult`
+### Requirement: Provider research session 必须严格 request-local
 
-#### Scenario: 非试点页面不进入多轮 research session
-- **WHEN** 当前页面类型为 `overview`、`architecture` 或其他未纳入试点的页面
-- **THEN** 系统 MAY 继续使用现有单轮增强或纯 deterministic 路径
-- **THEN** 系统不得无边界地把所有页面都升级为多轮 session
+Provider session MAY 在单次 `research_page` 调用内执行有限的 message/tool loop，并以结构化 `PageResearchResult` 结束。临时 correlation id、turn 和 tool-call state 只能在该调用内存在。
 
-### Requirement: `agent_session_v1` 必须提供稳定会话身份与受控事件集
-系统 MUST 为 research session 提供稳定 `session_id` 和受控事件集。协议 MUST 至少支持 `agent_session_start`、`agent_message`、`agent_tool_call`、`agent_tool_result`、`agent_final`、`agent_abort`。会话状态 MUST 以 `session_summary`、`recent_turns` 和 `tool_artifact_refs` 为核心，而不是无上限保留整段对话历史。9.2 的测试面 MUST 先覆盖 provider 直连路径。
+#### Scenario: 单次 request 内执行 tool loop
 
-#### Scenario: 会话消息与工具调用使用同一 session_id
-- **WHEN** core 与 provider-tools 或 agent-bridge 交换 research session 事件
-- **THEN** 同一会话中的消息、tool 调用、tool 结果和最终结果 MUST 共享稳定 `session_id`
-- **THEN** 调用方 MUST 能用该 `session_id` 关联 progress、usage 和 trace
+- **WHEN** provider 为某个 research request 返回受控 tool call
+- **THEN** Runtime MAY 在同一 request 内关联 tool result 与后续 turn
+- **THEN** request 完成或失败后 MUST 丢弃临时 session state
 
-#### Scenario: 会话历史受 recent turn 上限约束
-- **WHEN** 某次 research session 的 turn 数超过配置上限
-- **THEN** 系统 MUST 把较早轮次压缩为 `session_summary`
-- **THEN** 只保留最近有限轮原始消息，而不是无限扩张上下文
+### Requirement: Durable provider session state 必须被禁止
 
-### Requirement: provider-tools 必须先使用受控只读 tool schema，后续 agent-bridge 复用同一 schema
-系统 MUST 先让 provider tool-calling 路径使用受控只读 tool schema。该 schema MUST 设计成后续 agent-bridge 可复用。首批工具 MUST 围绕现有 core facts/state 提供受控读取能力，而不得暴露泛化 shell 或任意文件写入能力。
+系统 MUST NOT 将 `session_id`、`session_summary`、`recent_turns`、`tool_artifact_refs` 或原始对话写入 checkpoint、cache、`.wiki/`、metadata 或宿主资产。Workflow resume MUST 从 `session=None` 开始，并从 durable facts/dossier/context 重建请求。
 
-#### Scenario: provider research session 调用只读源码和图工具
-- **WHEN** provider research session 需要进一步查看源码、模块上下文或 graph 邻域
-- **THEN** 系统 MUST 允许通过受控工具读取 `source_snippets`、模块上下文、symbol neighbors、process trace、page children、evidence group 或 topic candidates
-- **THEN** 工具结果 MUST 优先复用现有 state/cache/context 数据，而不是平行复制另一套事实层
+#### Scenario: 从 checkpoint 恢复 workflow
 
-#### Scenario: 禁止开放泛化 shell 工具
-- **WHEN** provider-tools 或 agent-bridge 建立 research session
-- **THEN** 系统不得默认暴露任意 shell、文件写入或脱离 core facts 的自由工具
-- **THEN** tool 面 MUST 保持只读且受 schema 约束
+- **WHEN** workflow 在进程重启后从 checkpoint 恢复
+- **THEN** 新 provider request MUST 从 `session=None` 开始
+- **THEN** Runtime MUST NOT 恢复上一进程的 turns、tool refs 或 provider conversation identity
 
-#### Scenario: 首批只读工具名称、参数和结果保持稳定
-- **WHEN** 系统在 9.2 中向 provider 或后续 agent-bridge 暴露首批只读工具
-- **THEN** 工具集合 MUST 固定为 `read_source_snippets`、`get_module_context`、`get_symbol_neighbors`、`get_process_trace`、`get_page_children`、`get_evidence_group`、`search_topic_candidates`
-- **THEN** 每个工具的参数和结果字段 MUST 保持稳定，不得在同一迭代内反复变更语义
+### Requirement: Provider tools 必须只读且受 schema 约束
 
-#### Scenario: provider 请求按通用 tool-calling 字段发送工具定义
-- **WHEN** core 通过 provider 直连路径发起 tool-calling research session
-- **THEN** 工具定义 MUST 通过 provider 请求顶层 `tools` 字段发送，并与 `messages` 同级
-- **THEN** 系统不得把工具定义伪装进 `input` 或 `user.content`
+Provider request MAY 使用受控只读工具读取已有 facts、source snippets、module context、symbol graph、process trace、page children 或 evidence。系统 MUST NOT 默认暴露泛化 shell、任意文件写入或绕过 core facts 的工具。
 
-#### Scenario: tool 结果以连续 turn 回灌而不是回塞到 tools 字段
-- **WHEN** provider 返回 tool call，且 core 已完成对应只读工具调用
-- **THEN** 工具结果 MUST 作为后续会话 turn 回灌给模型
-- **THEN** 系统不得把 tool 结果重新写回 `tools` 定义字段
+#### Scenario: Provider 请求源码证据
 
-### Requirement: provider tools 必须支持能力分层降级
-系统 MUST 不假设所有 provider 都原生支持 tools。provider tools 路径 MUST 至少支持 `native_tools`、`emulated_tools` 和 `no_tools` 三种能力层级；当上层配置为 `auto` 时，系统 MUST 按 `native_tools -> emulated_tools -> no_tools` 的顺序显式降级，而不是直接失败。
+- **WHEN** research request 需要补充源码或图关系
+- **THEN** Runtime MUST 只调用已声明的只读 tool schema
+- **THEN** tool result MUST 来自现有 facts/state/context，而不是建立平行事实层
 
-#### Scenario: provider 原生支持 tools 时走 native_tools
-- **WHEN** 当前 provider 能力已声明或探测为支持原生 tools
-- **THEN** 系统 MUST 通过顶层 `tools` / `tool_choice` 发送工具定义
-- **THEN** provider research session MUST 使用原生 tool-calling 语义
+### Requirement: Tool capability 降级不得改变结构化结果合同
 
-#### Scenario: provider 不支持原生 tools 时降级到 emulated_tools
-- **WHEN** 当前 provider 不支持原生 tools，但支持稳定的多轮结构化 JSON 输出
-- **THEN** 系统 MUST 允许通过消息内协议模拟 tool call / tool result 循环
-- **THEN** 上层 tool schema 和最终 `PageResearchResult` schema MUST 保持不变
+Runtime MAY 根据 provider 能力选择 native tools、emulated tools 或 no-tools 路径，但所有路径 MUST 保持结构化 research result、budget、cache key 与可靠性合同。降级不得产生 durable session resume。
 
-#### Scenario: provider 不适合模拟 tools 时降级到 no_tools
-- **WHEN** 当前 provider 既不支持原生 tools，也不适合稳定进行模拟 tools
-- **THEN** 系统 MUST 跳过 research session 的 tool loop
-- **THEN** workflow MUST 回退到单轮增强或 deterministic 路径继续完成
+#### Scenario: Provider 不支持 tools
 
-#### Scenario: emulated_tools 的 envelope 语义对齐 native_tools
-- **WHEN** 系统通过 `emulated_tools` 模式模拟 tool-calling
-- **THEN** assistant 发起工具调用的 envelope MUST 尽量复用 `tool_calls[].id`、`tool_calls[].type`、`tool_calls[].function.name`、`tool_calls[].function.arguments` 这些字段语义
-- **THEN** core 回灌工具结果的 envelope MUST 复用 `tool_call_id` 与工具名，而不是发明一套完全不同的调用关联字段
+- **WHEN** 当前 provider 无可用 tool-calling 能力
+- **THEN** Runtime MAY 使用已验证的 no-tools request 或按 reliability contract 阻断
+- **THEN** 系统不得通过持久化旧 session 弥补能力缺失
 
-#### Scenario: emulated_tools 的最终结果继续返回 PageResearchResult
-- **WHEN** emulated session 完成全部工具调用并准备结束
-- **THEN** 模型最终 envelope MUST 返回结构化 `PageResearchResult`
-- **THEN** 系统不得因为 emulated 模式而把最终结果降级成不受约束的自由文本
+### Requirement: Production research bridge 必须独立协商和验证
 
-#### Scenario: emulated_tools 的 assistant tool-call envelope 使用固定字段形状
-- **WHEN** emulated session 中模型请求调用只读工具
-- **THEN** assistant 消息 MUST 使用 `type = "assistant"`、`content = null` 和 `tool_calls[]`
-- **THEN** 每个 `tool_calls[]` 条目 MUST 包含 `id`、`type = "function"`、`function.name` 和 JSON 字符串形式的 `function.arguments`
+基础 host-agent bridge forwarding 属于已实现 transport capability，但 active path 只接受 `llm_response / llm_unavailable`，不启用完整 agent-session events；production `research_page` 选择 bridge 时当前保持 blocked。只有独立实现、capability negotiation、协议测试和 production verification 证据齐备后，production research bridge 才 MAY 启用。Provider 缺失 MUST NOT 自动推导该路径可用；CodeBuddy hooks/settings 与 `--bridge-stdio` 也不自动证明 production research bridge 可用。
 
-#### Scenario: emulated_tools 的 tool-result envelope 使用固定字段形状
-- **WHEN** core 完成某个 emulated tool call 并回灌结果
-- **THEN** tool 消息 MUST 使用 `type = "tool"`、`tool_call_id`、`name`、`content`
-- **THEN** `content` MUST 为 JSON 字符串，以降低不同 provider 对 object/array content 的兼容差异
+#### Scenario: 未协商 bridge
 
-#### Scenario: emulated_tools 的 final envelope 使用固定字段形状
-- **WHEN** emulated session 完成全部推理并返回最终研究结果
-- **THEN** 最终 envelope MUST 使用 `type = "final"` 与 `result`
-- **THEN** `result` MUST 满足 `PageResearchResult` 的结构约束
+- **WHEN** Runtime 没有可用 provider，且调用方未协商已验证 bridge
+- **THEN** Runtime MUST 按正式 reliability contract 返回 blocked/error 或已定义回退
+- **THEN** 宿主不得伪造 bridge response
 
+### Requirement: Trigger 与 session/bridge identity 必须完全分离
+
+Host trigger 只选择或建议公开 action。Trigger decision、corpus 和 hook output MUST NOT 携带 provider session 或 bridge identity；bridge/provider 也不得把一次 action selection 当作可恢复会话。
+
+#### Scenario: Trigger 建议 query
+
+- **WHEN** host trigger 返回 target action `query`
+- **THEN** 该 decision MUST 不包含 provider turns、tool refs 或 bridge id
+- **THEN** 后续 Runtime request MUST 独立建立自己的 request-local execution context

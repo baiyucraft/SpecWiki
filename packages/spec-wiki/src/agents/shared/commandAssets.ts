@@ -3,10 +3,16 @@
  * 它消费共享 workflow semantics，而不是继续直接读取宿主 markdown 模板。
  */
 import type { WikiAction } from "../../wikiActions.js";
+import { createCodeBuddyUserPromptEvaluator } from "../codebuddy/triggerAdapter.js";
 import {
   getWorkflowActionSemantics,
   type WorkflowActionSemantics,
 } from "./workflowSemantics.js";
+import {
+  getTriggerActionPolicy,
+  HOST_TRIGGER_RUNTIME_CONFIG,
+} from "./triggerContract.js";
+import { createHostTriggerRuntime } from "./triggerRuntime.js";
 
 function renderBulletList(items: string[]): string {
   return items.map((item) => `- ${item}`).join("\n");
@@ -60,6 +66,19 @@ function renderQueryWhenToUse(): string[] {
   return [
     "Use it when the user asks where code lives, what a module does, or which files, modules, symbols, or call paths relate to a concept.",
     "Use it proactively when the agent needs a fast structured map of how code works together before deciding which files to inspect next.",
+    ...renderTriggerPolicyGuidance("query"),
+  ];
+}
+
+function renderTriggerPolicyGuidance(action: WikiAction): string[] {
+  if (getTriggerActionPolicy(action) === "semantic_or_explicit") {
+    return [
+      "Trigger policy: semantic or explicit. The host may suggest this action for a supported semantic request, but it does not execute from trigger guidance alone.",
+    ];
+  }
+
+  return [
+    "Trigger policy: explicit request only. Do not select or run this action from a description, discussion, or ambiguous request.",
   ];
 }
 
@@ -81,23 +100,31 @@ function renderQueryAfterThis(): string[] {
 }
 
 function renderHostActionPurpose(action: WikiAction): string[] {
+  let purpose: string[];
   switch (action) {
     case "status":
-      return ["Check whether the wiki is ready, stale, blocked, or what should happen next."];
+      purpose = ["Check whether the wiki is ready, stale, blocked, or what should happen next."];
+      break;
     case "query":
-      return [
+      purpose = [
         "Use this when the user asks where code lives, what a module does, or which files, modules, symbols, or call paths relate to a concept.",
         "Use it proactively when the agent needs a fast structured map of how code works together before deciding which files to inspect in depth.",
       ];
+      break;
     case "init":
-      return ["Initialize the wiki runtime for a repository that has not been bootstrapped yet."];
+      purpose = ["Initialize the wiki runtime for a repository that has not been bootstrapped yet."];
+      break;
     case "update":
-      return ["Refresh the current knowledge runtime after source changes."];
+      purpose = ["Refresh the current knowledge runtime after source changes."];
+      break;
     case "sync":
-      return ["Sync managed `.wiki` page edits back into runtime state, metadata, and cache."];
+      purpose = ["Sync managed `.wiki` page edits back into runtime state, metadata, and cache."];
+      break;
     case "rebuild":
-      return ["Force a full rebuild of the wiki runtime when the user explicitly asks for it."];
+      purpose = ["Force a full rebuild of the wiki runtime when the user explicitly asks for it."];
+      break;
   }
+  return [...purpose, ...renderTriggerPolicyGuidance(action)];
 }
 
 function _renderHostActionInputs(action: WikiAction): string[] {
@@ -254,14 +281,14 @@ export function renderCodeBuddyActionSkill(action: WikiAction): string {
     ...(action === "query"
       ? [
           ...renderQuerySkillIntro(),
-          renderActionSection("When To Use", [purpose]),
+          renderActionSection("When To Use", [purpose, ...renderTriggerPolicyGuidance(action)]),
           renderActionSection("How To Work", renderQueryHowToWork()),
           renderActionSection("After This", renderQueryAfterThis()),
           renderActionSection("Action Notes", [semantics.actionNote]),
           renderActionSection("Guardrails", guardrails),
         ]
       : [
-          renderActionSection("When To Use", [purpose]),
+          renderActionSection("When To Use", [purpose, ...renderTriggerPolicyGuidance(action)]),
           renderActionSection("Run", semantics.steps),
           renderActionSection("Interpret", [...output, semantics.actionNote]),
           renderActionSection("Guardrails", guardrails),
@@ -269,9 +296,7 @@ export function renderCodeBuddyActionSkill(action: WikiAction): string {
   ].join("\n");
 }
 
-export function renderCodeBuddyHookAdditionalContext(
-  event: "SessionStart" | "UserPromptSubmit",
-): string {
+export function renderCodeBuddyHookAdditionalContext(): string {
   const baseLines = [
     "This repository uses spec-wiki as the shared Repo Wiki runtime.",
     "Prefer the explicit skills wiki-status and wiki-query when the user asks about repo structure, files, modules, symbols, call paths, or when you need a fast structured map of how the code works together.",
@@ -280,21 +305,16 @@ export function renderCodeBuddyHookAdditionalContext(
     "The shared rules live in hooks and action skill guardrails, not in a separate shared CodeBuddy skill.",
   ];
 
-  if (event === "SessionStart") {
-    return baseLines.join(" ");
-  }
-
-  return [
-    ...baseLines,
-    "When in doubt, inspect runtime state first, then answer from the stable structured runtime fields that spec-wiki returns.",
-  ].join(" ");
+  return baseLines.join(" ");
 }
 
 export function renderCodeBuddyHookScript(
   event: "SessionStart" | "UserPromptSubmit",
 ): string {
-  const staticContext = JSON.stringify(renderCodeBuddyHookAdditionalContext(event));
-  const eventName = JSON.stringify(event);
+  const orientationContext = JSON.stringify(renderCodeBuddyHookAdditionalContext());
+  const runtimeConfig = JSON.stringify(HOST_TRIGGER_RUNTIME_CONFIG);
+  const runtimeFactory = createHostTriggerRuntime.toString();
+  const adapterFactory = createCodeBuddyUserPromptEvaluator.toString();
 
   return [
     "import { stdin, stdout } from \"node:process\";",
@@ -303,19 +323,20 @@ export function renderCodeBuddyHookScript(
     "stdin.setEncoding(\"utf8\");",
     "stdin.on(\"data\", (chunk) => chunks.push(chunk));",
     "stdin.on(\"end\", () => {",
-    "  const rawInput = chunks.join(\"\").trim();",
-    `  const eventName = ${eventName};`,
-    `  const additionalContext = ${staticContext};`,
-    "  let shouldInject = eventName === \"SessionStart\";",
-    "",
-    "  if (!shouldInject) {",
-    "    const lowered = rawInput.toLowerCase();",
-    "    shouldInject = [\"结构\", \"模块\", \"文件\", \"路径\", \"符号\", \"调用\", \"概念\", \"query\", \"status\", \"wiki\", \"module\", \"symbol\", \"path\", \"call\"].some((keyword) => lowered.includes(keyword));",
-    "  }",
-    "",
-    "  const payload = shouldInject",
-    "    ? { continue: true, additionalContext }",
-    "    : { continue: true };",
+    ...(event === "SessionStart"
+      ? [
+          `  const payload = { continue: true, additionalContext: ${orientationContext} };`,
+        ]
+      : [
+          `  const createHostTriggerRuntime = ${runtimeFactory};`,
+          `  const createCodeBuddyUserPromptEvaluator = ${adapterFactory};`,
+          `  const triggerRuntime = createHostTriggerRuntime(${runtimeConfig});`,
+          "  const evaluateUserPrompt = createCodeBuddyUserPromptEvaluator(triggerRuntime.evaluate);",
+          "  const result = evaluateUserPrompt(chunks.join(\"\"));",
+          "  const payload = result.additionalContext",
+          "    ? { continue: true, additionalContext: result.additionalContext }",
+          "    : { continue: true };",
+        ]),
     "",
     "  stdout.write(JSON.stringify(payload));",
     "});",

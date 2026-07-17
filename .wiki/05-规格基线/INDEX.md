@@ -1,7 +1,7 @@
 ---
 title: 05-规格基线
 description: spec-wiki 长期 capability 规格基线入口
-updated: 2026-05-25
+updated: 2026-07-17
 owner: docs
 ---
 
@@ -26,6 +26,7 @@ capabilities/<capability>/spec.md
 | adapter-distribution | [spec](./capabilities/adapter-distribution/spec.md) |
 | agent-session-bridge | [spec](./capabilities/agent-session-bridge/spec.md) |
 | codebuddy-agent-integration | [spec](./capabilities/codebuddy-agent-integration/spec.md) |
+| host-trigger-contract | [spec](./capabilities/host-trigger-contract/spec.md) |
 | content-family-planner | [spec](./capabilities/content-family-planner/spec.md) |
 | declared-knowledge-lifecycle | [spec](./capabilities/declared-knowledge-lifecycle/spec.md) |
 | knowledge-first-update | [spec](./capabilities/knowledge-first-update/spec.md) |
