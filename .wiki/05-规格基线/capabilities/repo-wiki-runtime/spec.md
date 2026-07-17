@@ -115,11 +115,11 @@
 - **THEN** 系统 MUST 按配置清空或强制刷新相应缓存
 - **THEN** 失效行为 MUST 能被 trace、progress 或 summary 识别
 
-### Requirement: runtime 必须持久化 family 页面与 parent-child compose 结果
-系统 MUST 在现有 runtime/state/cache 主链内持久化 family index、family child、child page digest 和 parent compose 输入。family 页 MUST 与其他正式页面共用同一套 `page_id`、managed section、cache 和增量更新 contract，而不是引入新的 sidecar 目录。
+### Requirement: runtime 必须持久化 unit 页面投影与 parent-child compose 结果
+系统 MUST 在现有 runtime/state/cache 主链内持久化 domain/unit 页面投影、child page digest 和 parent compose 输入。这些页面投影 MUST 与其他正式页面共用同一套 `page_id`、managed section、cache 和增量更新 contract，而不是引入新的 sidecar 目录或平行 family identity。
 
-#### Scenario: family 页面进入正式 runtime
-- **WHEN** planner 生成 family index 或 family child 页面
+#### Scenario: unit 页面投影进入正式 runtime
+- **WHEN** planner 为 domain index 或 child KnowledgeUnit 生成页面投影
 - **THEN** runtime MUST 为其写入正式页面状态、缓存和 managed sections
 - **THEN** 这些页面 MUST 与 overview、module、topic 一样进入 `.wiki/*.md`
 
@@ -292,23 +292,21 @@
 - **THEN** 对外状态投影 MUST 保持真实诊断态
 - **THEN** 系统 MUST NOT 再把该状态改写为 `index_only`
 
-### Requirement: runtime 的 query route 必须遵循 `index -> knowledge -> page fallback`
-系统 MUST 让 `run_query` 的正式结果按 `index -> knowledge -> page fallback` 路由，而不是继续把 `wiki-index::query` 与页面兜底直接并列。`index` 命中 MUST 继续来自 `wiki-index::query` 的 facts/graph 投影；`knowledge` 命中 MUST 来自正式 `.wiki/.knowledge/**` 与恢复后的 runtime mirror；`matches` 中的页面结果只可作为最后一层 fallback 或补充 provenance。
+### Requirement: runtime 必须按 formal layer fusion 组装 query routes
 
-#### Scenario: 存在 index 命中时优先返回 facts/graph 投影
-- **WHEN** 某次 query 在 `wiki-index::query` 中命中了 symbol、source、module、entrypoint 或 graph 结果
-- **THEN** runtime 返回中的 `matched_symbols`、`matched_sources`、`matched_modules`、`matched_symbol_edges` MUST 优先来自 index 投影
-- **THEN** runtime MUST NOT 再通过 `WikiState` 或页面文本重算一套等价 facts 结果
+系统 MUST 从 facts/index、formal knowledge 和受控 page debug fallback 收集 route-local candidates，并由 Runtime 统一执行 formal layer fusion。各 route MUST 保留自己的 ranking basis、score direction、count、truncation 和 supporting refs；Runtime MUST NOT 把内部 hit DTO 平铺为顶层 transport，也不得把 page fallback 伪装成 facts 或 formal knowledge。
 
-#### Scenario: index 命中不足时回落到 formal knowledge
-- **WHEN** 某次 query 没有足够的 index 命中，但正式 `.wiki/.knowledge/**` 中存在可用的 knowledge 记录、摘要或 projection anchor
-- **THEN** runtime MUST 尝试返回对应的 knowledge 命中
-- **THEN** runtime MUST NOT 直接跳过 knowledge 层而把页面结果当成唯一 fallback
+#### Scenario: facts 与 knowledge routes 同时命中
 
-#### Scenario: page fallback 只能作为最后一层兜底
-- **WHEN** 某次 query 没有足够的 index 或 knowledge 命中，只能通过页面内容补足结果
-- **THEN** runtime MUST 在结果中显式标注 page fallback provenance
-- **THEN** 系统 MUST NOT 把页面命中伪装成 facts 或 formal knowledge 命中
+- **WHEN** 同一次 query 同时获得 index facts 和 formal knowledge candidates
+- **THEN** Runtime MUST 分别组装对应 route groups 并保留 route-local rank
+- **THEN** Runtime MUST NOT 跨 route 直接比较 score 或重建一套全局 matched fields
+
+#### Scenario: page debug fallback 被显式隔离
+
+- **WHEN** formal routes 无可用结果且 Runtime 允许页面调试兜底
+- **THEN** 页面候选 MUST 进入 `rendered_page_debug_fallback` route group
+- **THEN** readiness、query trust 与 recommended action MUST 继续表达真实 runtime 状态
 
 ### Requirement: runtime 的 query 结果必须通过 canonical fields 分离 readiness 与 route provenance
 系统 MUST 让 `query` 结果中的 readiness 与 route provenance 分层表达。`readiness`、`query_trust` 与 `recommended_action` 负责回答“当前结果是否可直接消费、是否需要 update/rebuild”；`route_groups` 负责组织各 route 的结果与 supporting refs。`route_groups` MUST 是唯一结果 authority，系统 MUST NOT 恢复已删除的顶层 `provenance_summary` 或用单一字段混合状态与来源语义。

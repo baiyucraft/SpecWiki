@@ -1,7 +1,7 @@
 # repo-wiki-workflow Specification
 
 ## Purpose
-定义 `spec-wiki v0.2.0` 当前真实公开支持的 workflow 合同。这个规范只描述打包版 CLI 与宿主可依赖的发布面，不把长期的 `Facts -> Knowledge Planning -> Research -> Compose -> Assemble` 完整目标直接当作本版正式承诺。
+定义 `spec-wiki v0.2.0` 已采纳的 product-release contract 所包含的 workflow surface。这个规范描述 CLI 与宿主可以实现和验证的发布承诺，但不把 contract、manifest、staging 或 test report 单独当作 released evidence。
 ## Requirements
 ### Requirement: `init` 与 `update` 的长流程协议必须保持可流式消费
 系统 MUST 让 `init`、`update` 与 `rebuild` 保留可流式消费的事件协议，以便 CLI passthrough 与宿主桥接在不重写业务语义的前提下消费 `progress / result / error`。`status`、`query` 与 `sync` 继续作为短流程 JSON 调用即可。
@@ -11,8 +11,8 @@
 - **THEN** 系统 MUST 允许调用方消费 `progress / result / error` 事件流
 - **THEN** 调用方不得为了当前版本另建一套 workflow 事件语义
 
-### Requirement: 当前正式公开 workflow surface 必须收敛为 `init`、`status`、`update`、`query`、`sync`、`rebuild`
-系统 MUST 把当前版本的公开 CLI workflow 收敛为 `init`、`status`、`update`、`query`、`sync`、`rebuild` 六个入口。README、release 说明、宿主技能、主包帮助文本与公开 action skills MUST 对这六个入口保持一致，不得继续把 `sync` 或 `rebuild` 描述成 internal-only 能力。
+### Requirement: v0.2.0 workflow surface 必须收敛为 `init`、`status`、`update`、`query`、`sync`、`rebuild`
+系统 MUST 把 v0.2.0 product-release contract 的公开 CLI workflow 收敛为 `init`、`status`、`update`、`query`、`sync`、`rebuild` 六个入口。README、versioned release contract、宿主技能、主包帮助文本与公开 action skills MUST 对这六个入口保持一致，不得继续把 `sync` 或 `rebuild` 描述成 internal-only 能力。
 
 #### Scenario: 用户查看当前正式公开 CLI 入口
 - **WHEN** 用户阅读 README、release 说明、宿主技能或主包帮助文本
@@ -24,8 +24,8 @@
 - **THEN** 公开暴露的显式入口 MUST 覆盖 `wiki-init`、`wiki-status`、`wiki-update`、`wiki-query`、`wiki-sync`、`wiki-rebuild`
 - **THEN** 宿主不得继续省略 `wiki-sync` 或 `wiki-rebuild`
 
-### Requirement: 当前正式 release truth sources 必须对齐到同一 workflow 合同
-系统 MUST 让 `README.md`、`README-CN.md`、release note、主包帮助文本、staged README 与主包版本号共同对齐到同一套正式 workflow 合同。当前版本一旦正式采用 `v0.2.0 minimal formal knowledge runtime` 与 6 个公开 workflow，系统 MUST NOT 再允许其中任一 truth source 继续描述旧版 workflow 入口或旧版 runtime contract。
+### Requirement: product-release contract 的公开投影必须对齐到同一 workflow 合同
+系统 MUST 让 `README.md`、`README-CN.md`、versioned release contract、主包帮助文本、staged README 与主包版本号共同对齐到同一套 workflow contract。当前版本采用 `v0.2.0 minimal formal knowledge runtime` 与 6 个公开 workflow 后，系统 MUST NOT 再允许其中任一当前投影继续描述旧版 workflow 入口或旧版 runtime contract。
 
 #### Scenario: 用户读取任一正式 release 文档
 - **WHEN** 用户查看 `README.md`、`README-CN.md`、release note 或 staged README

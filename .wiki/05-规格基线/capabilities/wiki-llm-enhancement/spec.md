@@ -167,7 +167,7 @@
 - **THEN** 该重试不得被视为上层结构 contract 的语义降级
 
 ### Requirement: LLM 增强必须支持 leaf-first/source-fed/research-first compose
-系统 MUST 让 LLM 增强正式支持 `leaf-first/source-fed/research-first compose` 路径。叶子 family 页、叶子模块页和高置信 topic 页 MUST 优先消费一手源码、API/config/docs surface；父页 research/compose MUST 优先消费子页结果。系统不得继续只依赖 page-level summary patch 作为主要增强模式。
+系统 MUST 让 LLM 增强正式支持 `leaf-first/source-fed/research-first compose` 路径。Leaf KnowledgeUnit 的页面投影 MUST 优先消费一手源码、API/config/docs surface；parent unit research/compose MUST 优先消费逐层上卷的子单元结果。系统不得继续只依赖 page-level summary patch 作为主要增强模式。
 
 #### Scenario: 叶子页优先消费一手材料
 - **WHEN** 当前页面为叶子 family child、叶子模块页或高置信 topic 页

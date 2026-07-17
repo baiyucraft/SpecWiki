@@ -1,79 +1,59 @@
 # wiki-bm25-query Specification
 
 ## Purpose
-定义 Wiki 查询面中的 BM25 与全文检索能力边界，说明页面索引、符号索引、结构化结果合并与 graph context 扩展应如何稳定工作。
+
+定义 `wiki-index` 与 Runtime page debug route 使用的 FTS/BM25 检索 substrate、索引刷新和 route-local ranking 边界。该 capability 不拥有 Runtime transport，不得定义公开 request/response，也不把内部 symbol/graph intent 自动提升为公开 query 行为。
 
 ## Requirements
 
-### Requirement: 系统必须在 SQLite 中维护页面全文检索索引
-系统 MUST 在 `.wiki/.cache/wiki-cache.db` 中为 Wiki 页面建立 `wiki_pages_fts` FTS5 虚拟表，并把页面标题、路径以及用于检索的文本字段同步到索引中。系统同时 MUST 为定义类符号维护 `symbols` 与 `symbols_fts`：`symbols_fts` MUST 同步索引至少 `name`、`file_path` 和可用于检索的符号文本字段；符号被新增、修改或删除时，系统 MUST 在同一轮 workflow 中刷新对应的 symbol 索引项。
+### Requirement: 系统必须维护可恢复的 FTS 索引
 
-#### Scenario: init 初始化全文检索 schema
-- **WHEN** 用户首次执行 `init`
-- **THEN** 系统 MUST 创建 `wiki_pages_fts`
-- **THEN** 系统 MUST 同时创建 `symbols` 与 `symbols_fts`
-- **THEN** 对于成功解析出的定义类符号，系统 MUST 在本轮 `init` 中写入对应 `symbols_fts` 记录
+系统 MUST 在 `.wiki/.cache/wiki-cache.db` 中维护页面、源码和符号检索所需的 FTS5 索引。页面标题、路径、可检索文本与 symbol snapshot 变化时，`init / update / sync / rebuild` MUST 按各自职责刷新或删除对应索引项；cache 丢失后 MUST 能从正式 facts/runtime inputs 重建，不得把 FTS 表当作 durable authority。
 
-#### Scenario: update 或 sync 刷新页面索引
-- **WHEN** `update` 或 `sync` 修改了页面标题、路径或用于检索的文本字段
-- **THEN** 系统 MUST 在同一轮 workflow 中刷新对应的 `wiki_pages_fts` 记录
-- **THEN** 过期索引项不得在后续 query 中继续命中
+#### Scenario: init 或 rebuild 建立 FTS schema
 
-#### Scenario: update 或 rebuild 刷新符号索引
-- **WHEN** `update` 或 `rebuild` 导致某个源码文件的 symbol snapshot 变化
-- **THEN** 系统 MUST 在同一轮 workflow 中刷新该文件对应的 `symbols` 和 `symbols_fts`
-- **THEN** 已删除源码文件对应的 symbol 索引项 MUST 被清理
+- **WHEN** runtime 首次初始化或显式重建 cache
+- **THEN** 系统 MUST 创建当前实现需要的页面、源码和符号 FTS schema
+- **THEN** 已解析的 facts snapshot MUST 能生成相应索引记录
 
-### Requirement: query 必须支持 BM25 页面搜索并与结构化结果合并
-系统 MUST 在 `query` workflow 中同时使用 `wiki_pages_fts` 和 `symbols_fts` 执行 BM25 检索，并把命中的页面与符号回填成结构化响应。结构化响应 MUST 显式包含 symbol 视图，而不是只把 symbol 命中折叠为页面或源码。对于 symbol 命中，系统 MUST 至少返回 `symbol_id`、`name`、`label`、`file_path`、`language`、`is_exported` 和 `reasons`；当同一页面或源码同时被 BM25 和结构化匹配命中时，系统 MUST 合并为单个结果，并在 provenance 中保留两类命中来源。
+#### Scenario: update 或 sync 清理过期索引项
 
-#### Scenario: 仅页面标题或路径命中时仍返回页面结果
-- **WHEN** 用户查询词命中了某页面的标题或路径，但没有命中模块、源码或关系的结构化索引
-- **THEN** `query` MUST 仍返回该页面
-- **THEN** 该结果的 provenance MUST 标记为来自 BM25 页面检索
+- **WHEN** source snapshot 或页面投影发生新增、修改或删除
+- **THEN** 对应 FTS 索引 MUST 在本轮 workflow 中刷新
+- **THEN** 已删除对象不得在后续 query 中继续命中
 
-#### Scenario: 仅符号名或符号文件路径命中时返回符号结果
-- **WHEN** 用户查询词命中了某个已索引符号的名称或文件路径，但没有命中页面标题或路径
-- **THEN** `query` MUST 返回对应的 `matched_symbols`
-- **THEN** 每个 symbol 结果 MUST 包含结构化字段和命中原因
+### Requirement: BM25 分数只能在 route 内参与排序
 
-#### Scenario: symbol 命中回填相关源码与页面上下文
-- **WHEN** `symbols_fts` 命中了某个符号，且该符号所在源码文件已被 runtime 索引
-- **THEN** `query` MUST 同步回填该符号相关的源码命中
-- **THEN** 如果存在引用该源码的页面，系统 MUST 尽力回填相关页面或模块上下文
+系统 MUST 把 BM25 score、match basis 和 rank 保留在各自 route 的 ranking contract 内。页面、源码和符号命中 MAY 为 Runtime route assembler 提供候选与 supporting refs，但不同 route 的 score MUST NOT 直接比较、相加或折叠成全局分数。
 
-#### Scenario: BM25 与结构化命中合并
-- **WHEN** 同一页面或源码既被 BM25 检索命中，又被结构化匹配命中
-- **THEN** 系统 MUST 只返回一条对应结果
-- **THEN** 该结果 MUST 同时保留 BM25 与结构化命中的 provenance 信息
+#### Scenario: 同一 route 内按 BM25 排序
 
-#### Scenario: FTS 索引为空时回退到现有结构化匹配
-- **WHEN** `wiki_pages_fts` 或 `symbols_fts` 尚未建立有效数据
-- **THEN** `query` MUST 回退到现有的结构化匹配逻辑
-- **THEN** 系统不得因为某一类 FTS 无结果而报错或返回空响应
+- **WHEN** 同一 route 存在多个 FTS 候选
+- **THEN** route-local BM25 ranking MUST 使用确定的 score direction 和 tie-breaker
+- **THEN** 返回候选 MUST 能解释 match basis、rank 和截断信息
 
-### Requirement: query 必须把 symbol 命中扩展为 graph context
-系统 MUST 在保留页面与 symbol BM25 的基础上，把高置信度 symbol 命中扩展为 graph context。对于命中的 symbol，query MUST 能回填其直接相关的 `IMPORTS / CALLS / EXTENDS / IMPLEMENTS` edges，以及该 symbol 所属或经过的 processes / communities。query 的结构化输出 MUST 把这些 graph 结果作为 first-class 数据返回，而不是只折叠为页面或源码。
+#### Scenario: 多 route 候选交给 Runtime 组装
 
-#### Scenario: symbol 命中回填直接关系边
-- **WHEN** 用户查询词命中了某个已索引 symbol
-- **THEN** query MUST 返回与该 symbol 直接相关的 graph relation 结果
-- **THEN** 这些结果 MUST 至少包含 edge 类型、目标 symbol 和 provenance
+- **WHEN** index、knowledge 或 page debug route 同时存在候选
+- **THEN** 本 capability MUST 只提供各 route 内已排序的候选
+- **THEN** Runtime MUST 通过 canonical `route_groups` 组织结果，不得在本 capability 内创造顶层合并 transport
 
-#### Scenario: symbol 命中回填 process 与 community 上下文
-- **WHEN** 命中的 symbol 参与某个 detected process 或归属于某个 community
-- **THEN** query MUST 返回对应的 process 或 community 摘要
-- **THEN** 返回结果 MUST 说明这些 graph 命中是如何与原始 symbol 命中关联的
+### Requirement: page FTS 只属于受控 debug fallback
 
-### Requirement: query 必须支持基于 edges 的调用链与影响范围扩展
-系统 MUST 基于 `edges` 表提供结构化 graph query 能力，用于从命中 symbol 自动扩展调用链和影响范围。系统 MAY 通过 SQLite CTE 或等价手段实现多跳遍历，但 MUST 对遍历深度和返回规模进行限制，避免 query 因大图膨胀失控。graph query 命中 MUST 与 BM25 / 结构化页面结果合并，并在 provenance 中区分来源。
+系统 MAY 在 Runtime 明确选择 `rendered_page_debug_fallback` 时使用页面 FTS 补充诊断结果。Page FTS MUST NOT 冒充 facts 或 formal knowledge，不得绕过 readiness、query trust、recommended action 或 governance 诊断。
 
-#### Scenario: 命中 symbol 后自动扩展调用链
-- **WHEN** 用户查询词高置信命中某个 symbol，且该 symbol 在 CALLS 图中存在上下游
-- **THEN** query MUST 能返回围绕该 symbol 的有限深度调用链摘要
-- **THEN** 这些 graph 命中 MUST 与已有页面/源码结果合并返回
+#### Scenario: formal routes 无命中时使用 page debug fallback
 
-#### Scenario: graph tables 缺失时回退到现有 BM25 与结构化匹配
-- **WHEN** `edges`、`processes` 或 `communities` 尚未建立有效数据
-- **THEN** query MUST 回退到现有页面 / symbol BM25 与结构化匹配逻辑
-- **THEN** 系统不得因为 graph tables 暂时为空而报错或返回空响应
+- **WHEN** formal index/knowledge routes 无可用结果且 Runtime 允许 debug fallback
+- **THEN** 页面 FTS MAY 返回 route-local 候选与 supporting refs
+- **THEN** route identity MUST 明确为 debug fallback，页面命中不得改写为 formal knowledge
+
+### Requirement: richer index intent 不自动成为公开 query surface
+
+内部 `wiki-index` MAY 使用 symbol/source/module/entrypoint/callers/callees/impact 等受控 intent 构建候选，但公开 CLI 继续只接受非空 `term`。Richer intent 只有在独立 change 定义 Runtime schema、ranking、errors 和 host consumption 后才能进入公开合同。
+
+#### Scenario: CLI 提交 term-only query
+
+- **WHEN** 用户执行公开 `spec-wiki query <term>`
+- **THEN** Runtime MUST 自行选择适用 routes 并返回 canonical response
+- **THEN** 调用方不得通过本 capability 传入内部 intent 或依赖内部 hit DTO

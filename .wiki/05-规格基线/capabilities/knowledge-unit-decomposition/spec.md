@@ -36,6 +36,27 @@ large_repository.full_compose = bounded_fixture_only
 - **THEN** 这些结论 MUST 以 `DecompositionProfile`、signal rule 或 collapse guard 的形式沉淀
 - **THEN** core 中不得出现基于仓库名或 reference 标题的专用 planner 分支
 
+### Requirement: family 信号必须先映射到 KnowledgeUnit
+
+系统 MAY 使用 docs anchors、public API、config、plugin/framework、manifest/workspace 元数据和入口文件识别产品知识域或公共能力域，但 family 只能作为 deterministic signal 或 projection style。Planner MUST 先把这些信号映射为 `KnowledgeDomain / KnowledgeUnit`，再判断是否需要 index/child 页面投影；family 不得绕过 KnowledgeUnit 主线决定正式页面集合。
+
+#### Scenario: docs-heavy 仓库出现 family 风格信号
+
+- **WHEN** 稳定的 docs/API/config/plugin/framework 信号可归并到同一产品知识域
+- **THEN** planner MUST 先生成对应的 `KnowledgeDomain / KnowledgeUnit`
+- **THEN** 只有该 domain 需要稳定 index/child 结构时才 MAY 输出 family 风格页面投影
+- **THEN** 相同信号重复执行时 unit id、relative path 和 parent/child 关系 MUST 保持稳定
+
+### Requirement: family 风格投影必须服从 KnowledgeTree 去重规则
+
+系统 MUST 将 family 风格候选与 API、config、module、guide 等现有 KnowledgeUnit 按主题、关键来源和 section 结构去重。重叠候选 MUST 被收编或抑制；family 风格 index/child 只能是对应 KnowledgeTree 节点的页面投影，不得形成脱离 KnowledgeTree 的平行身份或父子链。
+
+#### Scenario: family 信号与现有 unit 重叠
+
+- **WHEN** family 风格候选与现有 API、config、module 或 guide unit 高度重叠
+- **THEN** planner MUST 收编或抑制重复候选
+- **THEN** 系统 MUST NOT 生成两套近似正式页面或独立父子链
+
 ### Requirement: 高层 parent KnowledgeUnit 必须保持 child-backed 聚合身份
 系统 MUST 将 `Overview`、`Architecture`、`DomainIndex`，以及某个 domain 下 `decomposition_profile = config_surface` 的 parent `KnowledgeUnit`，作为显式的 parent `KnowledgeUnit` 聚合节点处理。系统 MUST 为这些节点维护稳定的 child 集合、逐层上卷输入身份、parent/child 关系以及后续 `UnitResearch` 输入身份，而不是把它们重新退化为仅由页面类型驱动的空壳总览页。系统 MUST NOT 为此引入基于仓库名、reference 标题或固定目录结构的专有 planner 分支。
 

@@ -1,7 +1,7 @@
 # workspace-crate-boundaries Specification
 
 ## Purpose
-TBD - created by archiving change iteration-10-four-package-boundaries-and-foundation-smoke. Update Purpose after archive.
+固定 `wiki-model / wiki-index / wiki-knowledge / wiki-runtime` 四个 Rust crate 的对象归属、依赖方向和公开边界，防止 runtime re-export、helper 偷渡或旧 `wiki-core` 主实现重新形成跨层耦合。
 ## Requirements
 ### Requirement: 工作区必须正式拆成四个 crate 并遵守固定依赖方向
 系统 MUST 将 Rust 工作区正式拆成 `wiki-model`、`wiki-index`、`wiki-knowledge`、`wiki-runtime` 四个 crate，并满足固定依赖方向：`wiki-model <- wiki-index <- wiki-knowledge <- wiki-runtime`。系统 MUST NOT 保留以 `wiki-core` 为中心的单包主实现，也 MUST NOT 引入 `wiki-runtime -> wiki-index/knowledge` 之外的反向依赖。

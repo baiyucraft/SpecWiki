@@ -1,7 +1,7 @@
 # topic-page-planner Specification
 
 ## Purpose
-定义 Repo Wiki 在正式页面规划阶段发现、去重并稳定落盘专题页的职责边界，说明 topic 页面与 family 页面之间的分工、稳定性目标和去重规则。
+定义 Repo Wiki 在正式页面规划阶段发现、去重并稳定落盘专题页的职责边界，说明 topic KnowledgeUnit 与产品域/公共能力信号之间的分工、稳定性目标和去重规则。
 ## Requirements
 ### Requirement: planner 必须支持基于高信号主题的专题页发现
 系统 MUST 在现有 `overview / architecture / module / workflow` 页面之外，支持基于高信号主题发现专题页。专题候选 MUST 至少覆盖三类现有来源：根级核心机制文件簇、模块内能力簇、以及由 detected processes 归纳出的流程主题；9.3 还 MUST 按仓库 archetype 扩展稳定专题页族，例如路由/入口链路页、配置与运行时页、协议/数据模型页、命令树页和部署流程页。专题页的发现 MUST 由 deterministic 规则和现有 graph/module/context 输入驱动，而不是让 LLM 直接决定页面集合。
@@ -34,16 +34,16 @@
 - **THEN** planner MUST 允许抑制该专题页或把其内容合并回父页面
 - **THEN** 系统不得同时生成两个近乎重复的正式页面
 
-### Requirement: 专题页规划必须与 family planner 协同工作
-系统 MUST 让现有 topic planner 与 family planner 协同工作。topic 仍用于表达实现机制、流程主题和 repo archetype 主题；family 用于表达产品知识域、API/config/docs/plugin/framework 树。planner MUST 明确哪类主题进入 family，哪类主题保留为 topic，并在两者重叠时优先收编或抑制重复页面。
+### Requirement: 专题页规划必须与 KnowledgeUnit decomposition 协同工作
+系统 MUST 让 topic planner 与 KnowledgeUnit decomposition 协同工作。Topic unit 用于表达实现机制、流程主题和 repo archetype 主题；产品域/公共能力信号用于形成 domain/unit 或 index/child 页面投影。Planner MUST 明确各类信号的 unit 归属，并在重叠时优先收编或抑制重复页面。
 
 #### Scenario: 产品知识域优先进入 family 而不是 topic
 - **WHEN** 某个候选主题主要由 docs/API/config/plugin/framework 信号驱动
-- **THEN** planner MUST 优先把它归入 family 页面集合
+- **THEN** planner MUST 优先把它归入对应 product domain/unit
 - **THEN** 系统不得再为同一主题额外生成近义 topic 页
 
 #### Scenario: 实现机制和流程主题继续保留为 topic
 - **WHEN** 某个候选主题主要表达请求链、模块能力、核心机制或 repo archetype 机制
 - **THEN** planner MUST 继续把它归为 topic
-- **THEN** family planner 不得抢占这类实现型主题
+- **THEN** product domain signal 不得抢占这类实现型 topic unit
 

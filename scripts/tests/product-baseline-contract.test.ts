@@ -135,20 +135,20 @@ function collectCompletionRuleIssues(baseline: string): string[] {
 }
 
 function collectMaterialBoundaryIssues(baseline: string): string[] {
-  const section = readSection(baseline, "## 稳定材料分类与后续责任");
+  const section = readSection(baseline, "## 稳定材料分类与维护责任");
   return collectMissingMarkers(section, "material boundaries", [
     ".wiki/06-设计文档/**",
     ".wiki/05-规格基线/capabilities/**",
-    ".docs/release/**",
+    ".wiki/04-对外方法/02-v0.2.0发布合同.md",
     "packages/spec-wiki/package.json",
     "crates/*/Cargo.toml",
     ".docs/**",
     ".spec/archive/**",
-    "只读历史证据",
+    "不可改",
     "不作为当前 authority",
-    "documentation-closure",
-    "不执行全库迁移",
-    "Runtime",
+    "authority: none",
+    "每个 capability 必须有有效 Purpose",
+    "Runtime query",
     "核心场景",
     "可靠性生命周期",
     "宿主触发",
@@ -171,6 +171,6 @@ test("completion rules separate one contract domain from the whole program", () 
   expect(collectCompletionRuleIssues(readText(baselinePath))).toEqual([]);
 });
 
-test("material boundaries preserve history and defer repository-wide closure", () => {
+test("material boundaries preserve history after repository-wide closure", () => {
   expect(collectMaterialBoundaryIssues(readText(baselinePath))).toEqual([]);
 });

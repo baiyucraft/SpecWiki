@@ -1,7 +1,7 @@
 # wiki-index-query-surface Specification
 
 ## Purpose
-TBD - created by archiving change iteration-11-index-query-surface-and-agent-intents. Update Purpose after archive.
+定义 `wiki-index` 基于 facts snapshot 的内部查询 substrate、受控 intent 与命中对象边界。该 capability 服务 Runtime route 实现，不把 richer index intent 或内部结果结构提升为公开 CLI request/response 合同。
 ## Requirements
 ### Requirement: `wiki-index` 必须提供统一的 index-first 查询意图
 系统 MUST 在 `wiki-index` 内定义正式查询 contract，至少支持 `auto`、`symbol_lookup`、`source_lookup`、`module_lookup`、`entrypoint_lookup`、`callers`、`callees` 与 `impact_slice`。相同查询场景 MUST 复用同一套 intent 名称与结果类型，`wiki-runtime` 或其他调用方 MUST NOT 再定义平行 taxonomy。

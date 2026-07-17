@@ -60,6 +60,7 @@ workspace validate、`doctor`、`repair` 和 `trace` 尚未注册为当前 CLI �
 | --- | --- |
 | [00-CLI](./00-CLI.md) | CLI 命令、适用场景和常见用法 |
 | [01-配置与运行时产物](./01-配置与运行时产物.md) | 配置文件、`.wiki` runtime 分层和 docs-only Wiki 的边界 |
+| [02-v0.2.0发布合同](./02-v0.2.0发布合同.md) | v0.2.0 product-release identity、公开 surface、制品映射和 release evidence 边界 |
 
 ## 兼容性
 

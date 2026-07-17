@@ -27,7 +27,6 @@ capabilities/<capability>/spec.md
 | agent-session-bridge | [spec](./capabilities/agent-session-bridge/spec.md) |
 | codebuddy-agent-integration | [spec](./capabilities/codebuddy-agent-integration/spec.md) |
 | host-trigger-contract | [spec](./capabilities/host-trigger-contract/spec.md) |
-| content-family-planner | [spec](./capabilities/content-family-planner/spec.md) |
 | declared-knowledge-lifecycle | [spec](./capabilities/declared-knowledge-lifecycle/spec.md) |
 | knowledge-first-update | [spec](./capabilities/knowledge-first-update/spec.md) |
 | knowledge-runtime-artifacts | [spec](./capabilities/knowledge-runtime-artifacts/spec.md) |

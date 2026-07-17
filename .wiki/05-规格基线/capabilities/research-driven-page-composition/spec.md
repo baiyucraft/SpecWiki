@@ -1,7 +1,7 @@
 # research-driven-page-composition Specification
 
 ## Purpose
-TBD - created by archiving change iteration-9-3-targeted-dossier-and-research-driven-pages. Update Purpose after archive.
+定义 KnowledgeUnit research summary、child rollup、projection digest、section plan 与 renderer 之间的正式 compose 边界，确保页面只是受证据约束的知识投影，而不是 research cache、模型 Markdown 或 page-first 真相。
 ## Requirements
 ### Requirement: research 结果必须驱动正式页面 section 结构
 系统 MUST 让 `overview`、`architecture`、`module` 和 `topic` 页在进入 research 后由结构化 `section_plan` 驱动正式页面 section 结构，而不是继续仅把 research 结果当作摘要补丁。`section_plan` MUST 至少包含稳定 `section_key`、`section_title`、`section_summary`、`evidence_refs`、`diagram_refs` 和 `child_refs`，并继续禁止模型直接返回最终 Markdown 页面。
@@ -51,11 +51,11 @@ TBD - created by archiving change iteration-9-3-targeted-dossier-and-research-dr
 - **THEN** 父页不得只消费一句 child summary 后重新组织全部内容
 
 ### Requirement: compose 主链必须支持 leaf-first page composition
-系统 MUST 让 `family-leaf-doc`、叶子模块页和高置信专题页优先完成 research 与 compose，再由 `family-child`、`family-index`、`overview` 和 `architecture` 消费这些叶子结果。系统不得继续让父页主要依赖 surface 清单或扁平 facts 直接成页。
+系统 MUST 让 leaf KnowledgeUnit 优先完成 research 与 compose，再由直接 parent KnowledgeUnit、domain index、overview 和 architecture 消费逐层上卷结果。系统不得继续让父页主要依赖 surface 清单或扁平 facts 直接成页。
 
-#### Scenario: family child 优先消费 leaf doc 结果
-- **WHEN** 某个 `family-child` 下已经存在稳定的 `family-leaf-doc` 结果
-- **THEN** `family-child` 的 compose MUST 优先消费这些 leaf doc 的 `compose plan / key sources / citation plan / child digest`
+#### Scenario: parent unit 优先消费 leaf unit 结果
+- **WHEN** 某个 parent KnowledgeUnit 下已经存在稳定的 leaf unit 结果
+- **THEN** parent compose MUST 优先消费这些 leaf unit 的 `compose plan / key sources / citation plan / child digest`
 - **THEN** 父页不得回退为只消费 surface 路径列表
 
 ### Requirement: compose 计划必须支持 section-scoped citation plan

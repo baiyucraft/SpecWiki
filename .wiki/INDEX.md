@@ -51,6 +51,7 @@ flowchart LR
 | 理解核心分层 | [03-模块指南](./03-模块指南/INDEX.md) |
 | 查总体设计和场景边界 | [06-设计文档](./06-设计文档/INDEX.md) |
 | 查 Runtime query 稳定合同 | [06-Runtime查询合同](./06-设计文档/06-Runtime查询合同.md) |
+| 查 v0.2.0 product-release 合同 | [02-v0.2.0发布合同](./04-对外方法/02-v0.2.0发布合同.md) |
 | 查宿主 trigger 稳定合同 | [host-trigger-contract](./05-规格基线/capabilities/host-trigger-contract/spec.md) |
 | 使用 CLI 或 runtime 命令 | [00-CLI](./04-对外方法/00-CLI.md) |
 | 查配置和运行时产物边界 | [01-配置与运行时产物](./04-对外方法/01-配置与运行时产物.md) |

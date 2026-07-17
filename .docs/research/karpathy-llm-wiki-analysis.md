@@ -1,4 +1,15 @@
+---
+title: Karpathy LLM Wiki 分析
+status: reference
+authority: none
+adoptedRefs:
+  - .wiki/06-设计文档/00-总体设计.md
+updated: 2026-07-17
+---
+
 # Karpathy《LLM Wiki》摘要与对 spec-wiki 的借鉴分析
+
+本文是外部理念参考，所有建议和路线只保留分析价值，不构成 active backlog 或当前设计 authority。已采纳边界以 `adoptedRefs` 指向的 Wiki 页面为准。
 
 ## 背景
 本文分析的原文是 karpathy 于 2026-04-04 发布的 gist：

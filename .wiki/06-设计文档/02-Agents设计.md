@@ -87,12 +87,12 @@ init / status / query / update / sync / rebuild
 
 | 维度 | 当前代码事实 | 已采纳设计目标 |
 | --- | --- | --- |
-| registry | `HostDefinition { id, displayName, detectDir }` | 增加 required `compatibilityRole` 与 trigger capabilities；Codex 唯一 reference |
-| asset planning | `hostAssets.ts` 使用宿主 switch | 保留最小 switch，在返回资产前用公共 validator 校验 role/capability/asset 一致性 |
+| registry | `HostDefinition { id, displayName, detectDir, compatibilityRole, capabilities }`；Codex 唯一 reference | 完整 detect/context/assets HostAdapter 重构另立 change |
+| asset planning | `hostAssets.ts` 保留最小宿主 switch，并用公共 asset validator 校验 role/capability/asset 一致性 | 后续仅在完整 HostAdapter 落地时替换 switch |
 | action semantics | 三宿主复用共享 renderer | 继续以单一 policy/template 派生，不允许宿主私有语义分叉 |
 | Codex | 六个 repo-local action skills | 作为 reference projection，优先验证路径、frontmatter、trigger guidance 与 query canonical fields |
 | Claude | 六个 repo-local action skills；旧 commands 被清理 | 作为 compatible projection，从 shared/Codex reference contract 派生 |
-| CodeBuddy | 六个 skills + SessionStart/UserPromptSubmit hooks + settings | 作为 compatible projection；结构化解析事件，删除 raw JSON substring authority |
+| CodeBuddy | 六个 skills + hooks/settings；CodeBuddy 结构化解析 `user_prompt` 并 fail closed | 作为 compatible projection，不扩张为 reference host |
 | HostAdapter | 尚未完整落地 | 完整 detect/context/assets adapter 重构另立 change，不在 trigger 合同中伪装已实现 |
 
 当前阶段不要求兼容旧 commands、shared skill 或全局 Codex prompt 路径。受管旧资产可在新主路径成立后删除。

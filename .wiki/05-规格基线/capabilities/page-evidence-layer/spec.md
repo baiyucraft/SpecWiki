@@ -25,17 +25,17 @@
 - **THEN** 分组结果 MUST 能被 LLM research、renderer 和 reference 报告复用
 - **THEN** 对仅具备文件级跨度的来源，系统 MUST 显式标记为 coarse span
 
-### Requirement: evidence layer 必须支持 family-scoped provenance 与非代码来源
-系统 MUST 让 evidence layer 支持 family-scoped provenance，并允许 docs anchors、public API surface、config surface 和 type surface 进入正式 evidence 对象。每条 evidence 除现有代码行段外，还 MUST 能标记其所属 family/page scope 和来源类别。
+### Requirement: evidence layer 必须支持 unit-scoped provenance 与非代码来源
+系统 MUST 让 evidence layer 支持 KnowledgeUnit/section/projection-scoped provenance，并允许 docs anchors、public API surface、config surface 和 type surface 进入正式 evidence 对象。每条 evidence 除现有代码行段外，还 MUST 能标记所属 unit、section/page projection scope 和来源类别。
 
-#### Scenario: family 页面引用 docs/API/config 证据
-- **WHEN** family 页主要由 docs、API 或配置入口支撑
+#### Scenario: unit 页面投影引用 docs/API/config 证据
+- **WHEN** 某个 KnowledgeUnit 的页面投影主要由 docs、API 或配置入口支撑
 - **THEN** evidence layer MUST 能表达这些来源
 - **THEN** 页面 evidence block MUST 保留可追溯的路径、锚点或 surface 标识
 
-#### Scenario: family-scoped provenance 在重复生成时稳定
-- **WHEN** 同一 family 页的 evidence 集合未变化
-- **THEN** 对应 evidence identity 与 family scope MUST 保持稳定
+#### Scenario: unit-scoped provenance 在重复生成时稳定
+- **WHEN** 同一 KnowledgeUnit 页面投影的 evidence 集合未变化
+- **THEN** 对应 evidence identity 与 unit/projection scope MUST 保持稳定
 - **THEN** runtime 不得因正文调整而重建无关的 evidence 身份
 
 ### Requirement: evidence layer 必须支持 section-scoped citation

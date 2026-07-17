@@ -76,7 +76,7 @@ multi-change
 - 目标：在前五个合同稳定后收口 capability Purpose、规格命名、roadmap、阶段材料、设计索引和跨文档一致性门禁。
 - 验收边界：执行 product-contract 产出的分类 / 迁移清单；9 个 capability Purpose 不再是归档占位；历史 page/family 术语与当前 KnowledgeUnit-first 合同一致；设计 INDEX 不再把草案标成稳定设计；当前材料只引用合法 authority，不再指向已归档 active change；旧 roadmap 不再把已完成能力标为计划中；阶段存根和质量分析已迁移或删除；一致性检查可阻止版本和状态再次漂移。
 - 依赖：前五个 child 全部完成。
-- 归档状态：[ ] pending
+- 归档状态：[x] archived
 - 后续阶段：使用 `unispec-propose` 创建该 child 的 `proposal.md`
 
 ## 顺序与依赖
