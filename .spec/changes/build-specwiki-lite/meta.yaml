@@ -1,0 +1,14 @@
+id: build-specwiki-lite
+stage: tasks
+deliveryShape: single-change
+artifacts:
+  proposal:
+    status: present
+  design:
+    status: present
+  cases:
+    status: present
+  tasks:
+    status: present
+  metadata:
+    status: present
