@@ -8,7 +8,7 @@ import { afterAll, expect, test } from "vitest";
 import { listPackageFiles, stagePackage } from "../build-dist.mjs";
 
 const root = path.resolve(import.meta.dirname, "../..");
-const output = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-stage-"));
+const output = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-lite-stage-"));
 
 afterAll(() => rmSync(output, { recursive: true, force: true }));
 
@@ -24,6 +24,12 @@ test("stages a TypeScript-only package with assets and no native runtime", () =>
   expect(files.some(file => /(?:^|\/)(?:lib|crates)(?:\/|$)|\.exe$/u.test(file))).toBe(false);
   expect(staged.manifest).not.toHaveProperty("os");
   expect(staged.manifest).not.toHaveProperty("cpu");
+  expect(staged.manifest).toEqual(expect.objectContaining({
+    name: "spec-wiki-lite",
+    version: "0.1.0",
+    engines: { node: ">=20.19.0" },
+    bin: { "spec-wiki-lite": "bin/spec-wiki-lite.js" },
+  }));
 });
 
 test("staged executable exposes the Lite command closure", () => {

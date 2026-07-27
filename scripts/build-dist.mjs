@@ -4,8 +4,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const rootFromScript = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PACKAGE_RELATIVE = path.join("packages", "spec-wiki");
-const STAGED_RELATIVE = path.join("dist", "spec-wiki");
+const PACKAGE_RELATIVE = path.join("packages", "spec-wiki-lite");
+const STAGED_RELATIVE = path.join("dist", "spec-wiki-lite");
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));

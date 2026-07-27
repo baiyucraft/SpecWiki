@@ -98,15 +98,15 @@ tdd
 - [x] 6.1 删除 Rust workspace、四 crate、runtime bridge、旧 Agents 适配和相关测试
 - [x] 6.2 重写 root test/build/stage/pack 脚本为纯 TypeScript `packages/spec-wiki-lite`
 - [x] 6.3 添加 ST-001/ST-007 distribution、tarball inventory 和 current-surface contract tests
-- [ ] 6.4 更新 workspace/lockfile，验证 tarball 不含 native binary 且无 os/cpu 限制
+- [x] 6.4 更新 workspace/lockfile，验证 tarball 不含 native binary 且无 os/cpu 限制
 
 ### CheckList
 
-- [ ] 失败测试已确认
-- [ ] 最小实现后测试通过
-- [ ] 重构后测试仍通过
-- [ ] 本大 task 局部质量检查通过
-- [ ] 注释规范检查完成
+- [x] 失败测试已确认
+- [x] 最小实现后测试通过
+- [x] 重构后测试仍通过
+- [x] 本大 task 局部质量检查通过
+- [x] 注释规范检查完成
 
 ## 7. 当前 Wiki、公开合同与自举闭环
 

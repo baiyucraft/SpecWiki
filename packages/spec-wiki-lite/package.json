@@ -1,16 +1,19 @@
 {
-  "name": "spec-wiki",
+  "name": "spec-wiki-lite",
   "type": "module",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "private": false,
-  "description": "Global CLI for Repo Wiki bootstrap and minimal formal knowledge runtime forwarding.",
+  "description": "TypeScript-only Wiki and staged documentation workflow for Codex repositories.",
   "license": "GPL-3.0-or-later",
   "exports": {
     ".": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "bin": {
-    "spec-wiki": "bin/spec-wiki.js"
+    "spec-wiki-lite": "bin/spec-wiki-lite.js"
+  },
+  "engines": {
+    "node": ">=20.19.0"
   },
   "files": [
     "bin/**",

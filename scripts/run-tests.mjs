@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const packageRoot = path.join(root, "packages", "spec-wiki");
+const packageRoot = path.join(root, "packages", "spec-wiki-lite");
 
 function run(command, args, cwd = root) {
   return new Promise((resolve, reject) => {

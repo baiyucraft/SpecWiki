@@ -14,7 +14,7 @@ const externalModules = new Set([
 export default defineConfig({
   root: __dirname,
   build: {
-    target: "node18",
+    target: "node20",
     outDir: path.resolve(__dirname, "dist"),
     emptyOutDir: true,
     sourcemap: false,

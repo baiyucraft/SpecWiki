@@ -1,5 +1,5 @@
 /**
- * 这个文件负责解析 `spec-wiki` 包根目录并读取发布资产。
+ * 这个文件负责解析 `spec-wiki-lite` 包根目录并读取发布资产。
  * CLI 在源码目录和构建产物目录下都要能稳定找到模板与配置。
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * 从当前模块目录向上回溯 `package.json`，返回 `spec-wiki` 包根目录。
+ * 从当前模块目录向上回溯 `package.json`，返回 `spec-wiki-lite` 包根目录。
  *
  * @returns 返回当前 package 根目录。
  */
