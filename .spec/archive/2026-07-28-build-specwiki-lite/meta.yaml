@@ -1,5 +1,5 @@
 id: build-specwiki-lite
-stage: implementation
+stage: verification
 deliveryShape: single-change
 artifacts:
   proposal:
@@ -9,6 +9,10 @@ artifacts:
   cases:
     status: present
   tasks:
+    status: present
+  review-report:
+    status: present
+  test-report:
     status: present
   metadata:
     status: present
