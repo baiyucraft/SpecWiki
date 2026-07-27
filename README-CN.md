@@ -43,7 +43,7 @@ pnpm install
 pnpm test
 pnpm lint
 pnpm build
-pnpm pack
+pnpm run pack
 ```
 
 发布制品只包含 Node CLI、`dist`、模板、Skills、README 与 LICENSE。本次 change 不执行 npm publish、打 tag 或合并 `lite` 回 `main`。

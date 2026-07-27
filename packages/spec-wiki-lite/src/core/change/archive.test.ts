@@ -88,6 +88,58 @@ function createParentChildFixture(root: string): {
   return { childId, childRoot, parentId, parentRoot };
 }
 
+function createDependentChildrenFixture(root: string): {
+  firstId: string;
+  parentRoot: string;
+  secondId: string;
+} {
+  const parentId = "document-suite";
+  const firstId = "document-suite-first";
+  const secondId = "document-suite-second";
+  const parentRoot = path.join(root, ".spec", "changes", parentId);
+  mkdirSync(parentRoot, { recursive: true });
+  writeFileSync(path.join(parentRoot, "meta.yaml"), [
+    `id: ${parentId}`,
+    "stage: exploration",
+    "deliveryShape: multi-change",
+    "multiChange:",
+    "  role: parent",
+    "  children:",
+    `    - id: ${firstId}`,
+    "      order: 1",
+    "      dependsOn: []",
+    `    - id: ${secondId}`,
+    "      order: 2",
+    `      dependsOn: [${firstId}]`,
+  ].join("\n"), "utf8");
+  writeFileSync(path.join(parentRoot, "split.md"), [
+    "# Split",
+    "",
+    `### 1. ${firstId}`,
+    "- 归档状态：[ ] pending",
+    "",
+    `### 2. ${secondId}`,
+    "- 归档状态：[ ] pending",
+  ].join("\n"), "utf8");
+  for (const [id, order, dependencies] of [
+    [firstId, 1, []],
+    [secondId, 2, [firstId]],
+  ] as const) {
+    const changeRoot = createValidChange(root, id);
+    writeFileSync(path.join(changeRoot, "meta.yaml"), [
+      `id: ${id}`,
+      "stage: verification",
+      "deliveryShape: single-change",
+      "multiChange:",
+      "  role: child",
+      `  parent: ${parentId}`,
+      `  order: ${order}`,
+      `  dependsOn: [${dependencies.join(", ")}]`,
+    ].join("\n"), "utf8");
+  }
+  return { firstId, parentRoot, secondId };
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -108,6 +160,18 @@ test("moves a valid change once and refuses an existing target", async () => {
   createValidChange(root);
   await expect(archiveChange(root, "document-api", fixedClock)).rejects.toThrow("already exists");
   expect(existsSync(source)).toBe(true);
+});
+
+test("uses the local calendar date for the archive directory", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-lite-archive-"));
+  roots.push(root);
+  createValidChange(root);
+  const localBoundaryClock = () => new Date(2026, 6, 28, 0, 5, 0);
+
+  const report = await archiveChange(root, "document-api", localBoundaryClock);
+
+  expect(report.archivedTo).toBe(".spec/archive/2026-07-28-document-api");
+  expect(report.archivedAt).toBe(localBoundaryClock().toISOString());
 });
 
 test("archives a child and records the same target in its active parent", async () => {
@@ -165,4 +229,30 @@ test("rolls back the child and parent when the second parent write fails", async
   expect(existsSync(path.join(root, ".spec", "archive", `2026-07-27-${childId}`))).toBe(false);
   expect(readFileSync(metaPath, "utf8")).toBe(originalMeta);
   expect(readFileSync(splitPath, "utf8")).toBe(originalSplit);
+});
+
+test("blocks a child until every declared dependency is genuinely archived", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-lite-archive-"));
+  roots.push(root);
+  const { firstId, secondId } = createDependentChildrenFixture(root);
+
+  await expect(archiveChange(root, secondId, fixedClock)).rejects.toThrow("dependency is not archived");
+  await archiveChange(root, firstId, fixedClock);
+  await expect(archiveChange(root, secondId, fixedClock)).resolves.toEqual(expect.objectContaining({ id: secondId }));
+});
+
+test("rejects forged parent archive targets", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-lite-archive-"));
+  roots.push(root);
+  const { childId, parentId, parentRoot } = createParentChildFixture(root);
+  await archiveChange(root, childId, fixedClock);
+  const metaPath = path.join(parentRoot, "meta.yaml");
+  const forged = readFileSync(metaPath, "utf8")
+    .replace(/archivedTo: .*/u, "archivedTo: .wiki")
+    .replace(/archivedAt: .*/u, "archivedAt: not-a-date");
+  writeFileSync(metaPath, forged, "utf8");
+  mkdirSync(path.join(root, ".wiki"), { recursive: true });
+
+  await expect(archiveChange(root, parentId, fixedClock)).rejects.toThrow("archive evidence");
+  expect(existsSync(parentRoot)).toBe(true);
 });

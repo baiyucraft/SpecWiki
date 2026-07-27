@@ -1,11 +1,11 @@
 import { mkdirSync } from "node:fs";
-import path from "node:path";
 
 import { syncProjectAssets } from "./core/assets/sync.js";
 import { archiveChange, ChangeNotReadyError } from "./core/change/archive.js";
 import { isArtifactId } from "./core/change/artifacts.js";
 import { showChange } from "./core/change/show.js";
 import { validateChange } from "./core/change/validate.js";
+import { resolveSafePath } from "./core/path.js";
 import { getProjectStatus } from "./core/status.js";
 import { runBootstrapInit } from "./orchestration/init/runInit.js";
 
@@ -175,7 +175,7 @@ async function execute(parsed: ParsedCommand, io: CliIo): Promise<number> {
     return EXIT_CODES.success;
   }
   if (parsed.command === "init") {
-    const projectRoot = path.resolve(io.cwd, parsed.path ?? ".");
+    const projectRoot = resolveSafePath(io.cwd, parsed.path ?? ".");
     mkdirSync(projectRoot, { recursive: true });
     const result = await runBootstrapInit({
       repoRoot: projectRoot,
@@ -205,8 +205,10 @@ async function execute(parsed: ParsedCommand, io: CliIo): Promise<number> {
   }
   if (parsed.command === "show") {
     const result = await showChange(io.cwd, parsed.changeId!, parsed.artifact);
-    parsed.json ? writeJson(io, true, result) : writeHuman(io, `Change ${parsed.changeId}`, result);
-    return EXIT_CODES.success;
+    parsed.json
+      ? writeJson(io, result.change.valid, result)
+      : writeHuman(io, `Change ${parsed.changeId} is ${result.change.valid ? "valid" : "not ready"}`, result);
+    return result.change.valid ? EXIT_CODES.success : EXIT_CODES.notReady;
   }
   if (parsed.command === "validate") {
     const result = await validateChange(io.cwd, parsed.changeId!, { strict: parsed.strict });

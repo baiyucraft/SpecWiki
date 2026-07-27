@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -51,6 +51,25 @@ function createStageFixture(stage: string, deliveryShape = "single-change"): { i
     writeFileSync(path.join(changeRoot, artifactFiles[artifact]), `# ${artifact}\n`, "utf8");
   }
   return { id, root };
+}
+
+function writePassingReports(changeRoot: string): void {
+  writeFileSync(path.join(changeRoot, "review-report.md"), [
+    "---",
+    "review-result: pass",
+    "scope: full",
+    "---",
+    "",
+    "# Review",
+  ].join("\n"), "utf8");
+  writeFileSync(path.join(changeRoot, "test-report.md"), [
+    "---",
+    "verification-result: pass",
+    "scope: full",
+    "---",
+    "",
+    "# Verification",
+  ].join("\n"), "utf8");
 }
 
 afterEach(() => {
@@ -149,6 +168,83 @@ test("strict validation rejects empty required artifacts", async () => {
   const strict = await validateChange(fixture.root, fixture.id, { strict: true });
   expect(strict.valid).toBe(false);
   expect(strict.issues).toContainEqual(expect.objectContaining({ kind: "empty_artifact" }));
+});
+
+test("verification rejects unchecked tasks outside fenced examples", async () => {
+  const fixture = createStageFixture("verification");
+  const changeRoot = path.join(fixture.root, ".spec", "changes", fixture.id);
+  writePassingReports(changeRoot);
+  writeFileSync(path.join(changeRoot, "tasks.md"), [
+    "# Tasks",
+    "",
+    "```md",
+    "- [ ] example only",
+    "```",
+    "",
+    "- [x] implemented",
+    "- [ ] still pending",
+  ].join("\n"), "utf8");
+
+  const result = await validateChange(fixture.root, fixture.id, { strict: true });
+
+  expect(result.valid).toBe(false);
+  expect(result.issues).toContainEqual(expect.objectContaining({ kind: "incomplete_tasks" }));
+});
+
+test("rejects malformed parent and asymmetric child metadata", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-lite-multi-"));
+  roots.push(root);
+  const parentId = "docs-suite";
+  const childId = "docs-suite-first";
+  const parentRoot = path.join(root, ".spec", "changes", parentId);
+  const childRoot = path.join(root, ".spec", "changes", childId);
+  mkdirSync(parentRoot, { recursive: true });
+  mkdirSync(childRoot, { recursive: true });
+  writeFileSync(path.join(parentRoot, "split.md"), "# Split\n", "utf8");
+  writeFileSync(path.join(parentRoot, "meta.yaml"), [
+    `id: ${parentId}`,
+    "stage: exploration",
+    "deliveryShape: multi-change",
+    "multiChange:",
+    "  role: parent",
+    "  children:",
+    `    - id: ${childId}`,
+    "      order: 1",
+    "      dependsOn: [docs-suite-missing]",
+    `    - id: ${childId}`,
+    "      order: 1",
+    "      dependsOn: []",
+  ].join("\n"), "utf8");
+  writeFileSync(path.join(childRoot, "meta.yaml"), [
+    `id: ${childId}`,
+    "stage: exploration",
+    "deliveryShape: single-change",
+    "multiChange:",
+    "  role: child",
+    `  parent: ${parentId}`,
+    "  order: 2",
+    "  dependsOn: []",
+  ].join("\n"), "utf8");
+
+  const parent = await validateChange(root, parentId, { strict: true });
+  const child = await validateChange(root, childId, { strict: true });
+
+  expect(parent.issues).toContainEqual(expect.objectContaining({ kind: "invalid_multi_change" }));
+  expect(child.issues).toContainEqual(expect.objectContaining({ kind: "invalid_multi_change" }));
+});
+
+test.skipIf(process.platform === "win32")("rejects report symlinks that escape the project", async () => {
+  const fixture = createStageFixture("verification");
+  const changeRoot = path.join(fixture.root, ".spec", "changes", fixture.id);
+  const outside = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-lite-outside-"));
+  roots.push(outside);
+  writePassingReports(changeRoot);
+  rmSync(path.join(changeRoot, "review-report.md"));
+  const outsideReport = path.join(outside, "review-report.md");
+  writeFileSync(outsideReport, "---\nreview-result: pass\nscope: full\n---\n", "utf8");
+  symlinkSync(outsideReport, path.join(changeRoot, "review-report.md"), "file");
+
+  await expect(validateChange(fixture.root, fixture.id, { strict: true })).rejects.toThrow("unsafe path");
 });
 
 test("parent changes require only split and metadata", async () => {

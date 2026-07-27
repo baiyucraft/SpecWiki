@@ -43,7 +43,7 @@ pnpm install
 pnpm test
 pnpm lint
 pnpm build
-pnpm pack
+pnpm run pack
 ```
 
 The distribution contains only the Node CLI, `dist`, templates, Skills, README, and LICENSE. This repository does not publish from the `lite` branch as part of the current change.

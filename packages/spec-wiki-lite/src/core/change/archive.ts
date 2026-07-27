@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { parseDocument } from "yaml";
 
 import { resolveSafePath } from "../path.js";
-import { changeDirectory } from "./metadata.js";
+import { changeDirectory, changeFilePath, parseMetadata } from "./metadata.js";
 import { validateChange } from "./validate.js";
 
 export type ArchiveClock = () => Date;
@@ -48,6 +48,13 @@ function stringArray(value: unknown): string[] | undefined {
 
 function sameStrings(left: string[] | undefined, right: string[] | undefined): boolean {
   return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+}
+
+function localCalendarDate(date: Date): string {
+  const year = String(date.getFullYear()).padStart(4, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function atomicWrite(filePath: string, content: string): void {
@@ -95,6 +102,50 @@ function assertSplitArchived(content: string, childId: string, order: number): v
   }
 }
 
+function assertArchiveEvidence(
+  projectRoot: string,
+  parentId: string,
+  value: Record<string, unknown>,
+): void {
+  const dependencies = stringArray(value.dependsOn);
+  if (typeof value.id !== "string"
+    || !Number.isInteger(value.order)
+    || Number(value.order) < 1
+    || !dependencies
+    || value.archiveStatus !== "archived"
+    || typeof value.archivedAt !== "string"
+    || Number.isNaN(Date.parse(value.archivedAt))
+    || typeof value.archivedTo !== "string"
+    || !(new RegExp(`^\\.spec/archive/\\d{4}-\\d{2}-\\d{2}-${value.id}$`, "u")).test(value.archivedTo)) {
+    throw new ChangeNotReadyError(`parent child archive evidence is incomplete: ${String(value.id)}`);
+  }
+  const archiveRoot = resolveSafePath(projectRoot, ".spec/archive");
+  const archivedPath = resolveSafePath(archiveRoot, path.basename(value.archivedTo));
+  if (!existsSync(archivedPath) || !statSync(archivedPath).isDirectory()) {
+    throw new ChangeNotReadyError(`parent child archive target is missing: ${value.archivedTo}`);
+  }
+  const metadataPath = resolveSafePath(archivedPath, "meta.yaml");
+  if (!existsSync(metadataPath) || !statSync(metadataPath).isFile()) {
+    throw new ChangeNotReadyError(`parent child archive metadata is missing: ${value.id}`);
+  }
+  let archivedMetadata: Record<string, unknown>;
+  try {
+    archivedMetadata = parseMetadata(readFileSync(metadataPath, "utf8"));
+  } catch {
+    throw new ChangeNotReadyError(`parent child archive metadata is invalid: ${value.id}`);
+  }
+  const archivedMulti = archivedMetadata.multiChange;
+  if (archivedMetadata.id !== value.id
+    || archivedMetadata.deliveryShape !== "single-change"
+    || !isRecord(archivedMulti)
+    || archivedMulti.role !== "child"
+    || archivedMulti.parent !== parentId
+    || archivedMulti.order !== value.order
+    || !sameStrings(stringArray(archivedMulti.dependsOn), dependencies)) {
+    throw new ChangeNotReadyError(`parent child archive metadata disagrees: ${value.id}`);
+  }
+}
+
 async function prepareParentUpdate(
   projectRoot: string,
   childId: string,
@@ -135,9 +186,19 @@ async function prepareParentUpdate(
     throw new ChangeNotReadyError(`parent already records an archive status for ${childId}`);
   }
 
-  const parentRoot = changeDirectory(projectRoot, parentId);
-  const metaPath = path.join(parentRoot, "meta.yaml");
-  const splitPath = path.join(parentRoot, "split.md");
+  for (const dependency of childDependencies) {
+    const dependencyEntry = parentMulti.children.find(entry => isRecord(entry) && entry.id === dependency);
+    if (!isRecord(dependencyEntry)) {
+      throw new ChangeNotReadyError(`child dependency is not declared by parent: ${dependency}`);
+    }
+    if (dependencyEntry.archiveStatus !== "archived") {
+      throw new ChangeNotReadyError(`child dependency is not archived: ${dependency}`);
+    }
+    assertArchiveEvidence(projectRoot, String(parentId), dependencyEntry);
+  }
+
+  const metaPath = changeFilePath(projectRoot, parentId, "meta.yaml");
+  const splitPath = changeFilePath(projectRoot, parentId, "split.md");
   const originalMeta = readFileSync(metaPath, "utf8");
   const originalSplit = readFileSync(splitPath, "utf8");
   const document = parseDocument(originalMeta);
@@ -165,21 +226,13 @@ function assertParentReady(projectRoot: string, metadata: Record<string, unknown
   }
   const split = readFileSync(splitPath, "utf8");
   for (const value of multi.children) {
-    if (!isRecord(value)
-      || typeof value.id !== "string"
-      || !Number.isInteger(value.order)
-      || value.archiveStatus !== "archived"
-      || typeof value.archivedAt !== "string"
-      || typeof value.archivedTo !== "string") {
+    if (!isRecord(value) || typeof value.id !== "string") {
       throw new ChangeNotReadyError("parent child archive evidence is incomplete");
     }
     if (existsSync(changeDirectory(projectRoot, value.id))) {
-      throw new ChangeNotReadyError(`parent child is still active: ${value.id}`);
+      throw new ChangeNotReadyError(`parent child archive evidence is incomplete; child is still active: ${value.id}`);
     }
-    const archivedPath = resolveSafePath(projectRoot, value.archivedTo);
-    if (!existsSync(archivedPath)) {
-      throw new ChangeNotReadyError(`parent child archive target is missing: ${value.archivedTo}`);
-    }
+    assertArchiveEvidence(projectRoot, String(metadata.id), value);
     assertSplitArchived(split, value.id, Number(value.order));
   }
 }
@@ -196,7 +249,7 @@ export async function archiveChange(
     throw new TypeError("archive clock returned an invalid date");
   }
   const archivedAt = now.toISOString();
-  const archivedTo = `.spec/archive/${archivedAt.slice(0, 10)}-${changeId}`;
+  const archivedTo = `.spec/archive/${localCalendarDate(now)}-${changeId}`;
   const source = changeDirectory(root, changeId);
   const target = resolveSafePath(root, archivedTo);
 
@@ -209,12 +262,12 @@ export async function archiveChange(
 
   const validation = await validateChange(root, changeId, { strict: true });
   if (!validation.valid || !validation.metadata) {
-    throw new ChangeNotReadyError(`change is not ready to archive: ${validation.issues.map(issue => issue.kind).join(", ")}`);
+    throw new ChangeNotReadyError(`change is not ready to archive: ${validation.issues.map(issue => `${issue.kind}: ${issue.message}`).join("; ")}`);
   }
   const multi = validation.metadata.multiChange;
   const isParent = isRecord(multi) && multi.role === "parent";
   if (isParent) {
-    assertParentReady(root, validation.metadata, path.join(source, "split.md"));
+    assertParentReady(root, validation.metadata, changeFilePath(root, changeId, "split.md"));
   } else if (validation.metadata.stage !== "verification" && validation.metadata.stage !== "archive") {
     throw new ChangeNotReadyError(`change is not ready to archive from stage ${String(validation.metadata.stage)}`);
   }

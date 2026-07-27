@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -66,6 +66,42 @@ test("cli rejects unknown hosts and removed commands as usage errors", async () 
   expect(stderr.join("")).toContain("unknown command: query");
 });
 
+test.each(["parent traversal", "absolute path", "junction escape"])(
+  "init rejects %s before creating files outside cwd",
+  async (mode) => {
+    const container = makeTempDir();
+    const cwd = path.join(container, "project");
+    const outside = makeTempDir();
+    mkdirSync(cwd);
+    let input: string;
+    let forbidden: string;
+    if (mode === "parent traversal") {
+      input = "../escape";
+      forbidden = path.join(container, "escape");
+    } else if (mode === "absolute path") {
+      input = path.join(container, "absolute");
+      forbidden = input;
+    } else {
+      const link = path.join(cwd, "linked");
+      symlinkSync(outside, link, "junction");
+      input = "linked/nested";
+      forbidden = path.join(outside, "nested");
+    }
+    const stderr: string[] = [];
+
+    const code = await runCli(["init", input], {
+      cwd,
+      env: process.env,
+      stdout: () => undefined,
+      stderr: text => stderr.push(text),
+    });
+
+    expect(code).toBe(1);
+    expect(stderr.join("")).toContain("unsafe path");
+    expect(existsSync(forbidden)).toBe(false);
+  },
+);
+
 test("json validate returns not-ready on stdout only", async () => {
   const root = makeTempDir();
   const change = path.join(root, ".spec", "changes", "missing-design");
@@ -82,6 +118,22 @@ test("json validate returns not-ready on stdout only", async () => {
 
   const code = await runCli(["validate", "missing-design", "--json"], {
     cwd: root,
+    env: process.env,
+    stdout: text => stdout.push(text),
+    stderr: text => stderr.push(text),
+  });
+
+  expect(code).toBe(2);
+  expect(stderr).toEqual([]);
+  expect(JSON.parse(stdout.join(""))).toEqual(expect.objectContaining({ ok: false }));
+});
+
+test("json show returns not-ready for an invalid or missing change", async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  const code = await runCli(["show", "missing-change", "--json"], {
+    cwd: makeTempDir(),
     env: process.env,
     stdout: text => stdout.push(text),
     stderr: text => stderr.push(text),

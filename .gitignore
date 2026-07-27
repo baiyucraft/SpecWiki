@@ -5,13 +5,7 @@ docs/
 # .spec/
 .worktrees/
 .archive/
-.wiki/.cache/
-.wiki/.knowledge/
-.wiki/pages/
-.wiki/wiki.metadata.json
-**/.wiki/.cache/
-crates/wiki-runtime/tests/fixtures/**/.wiki/
-wiki.dev.yaml
+.tmp/
 
 参考/
 /DESIGN*.md

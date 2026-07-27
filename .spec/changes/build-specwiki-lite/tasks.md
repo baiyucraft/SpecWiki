@@ -112,16 +112,16 @@ tdd
 
 - [x] 7.1 重写 README、总体/Agents/场景、模块和 CLI 文档为 SpecWiki Lite authority
 - [x] 7.2 删除旧 runtime capability current baseline，建立 Lite workflow/distribution capability 与 `v0.1.0` 发布合同
-- [ ] 7.3 运行 ST-002 至 ST-008、lint/build/pack/link/frontmatter/diff 门禁并修复问题
+- [x] 7.3 运行 ST-002 至 ST-008、lint/build/pack/link/frontmatter/diff 门禁并修复问题
 - [ ] 7.4 完成 full review/test reports，使用新 CLI 自举 validate/archive
 
 ### CheckList
 
-- [ ] 失败测试已确认
-- [ ] 最小实现后测试通过
-- [ ] 重构后测试仍通过
-- [ ] 本大 task 局部质量检查通过
-- [ ] 注释规范检查完成
+- [x] 失败测试已确认
+- [x] 最小实现后测试通过
+- [x] 重构后测试仍通过
+- [x] 本大 task 局部质量检查通过
+- [x] 注释规范检查完成
 
 ## 用例到任务映射
 

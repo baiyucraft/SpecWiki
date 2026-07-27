@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -9,9 +9,14 @@ import { inspectWiki } from "./inspect.js";
 
 const roots: string[] = [];
 
-function createBrokenWikiFixture(): string {
+function makeTempDir(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-lite-wiki-"));
   roots.push(root);
+  return root;
+}
+
+function createBrokenWikiFixture(): string {
+  const root = makeTempDir();
   const wiki = path.join(root, ".wiki");
   mkdirSync(path.join(wiki, "missing-index"), { recursive: true });
   writeFileSync(path.join(wiki, "INDEX.md"), [
@@ -71,8 +76,7 @@ test("reports structural wiki issues without runtime fields", async () => {
 });
 
 test("accepts the built-in scaffold and excludes legacy runtime directories", async () => {
-  const root = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-lite-wiki-"));
-  roots.push(root);
+  const root = makeTempDir();
   await syncProjectAssets(root);
   const legacy = path.join(root, ".wiki", ".knowledge");
   mkdirSync(legacy, { recursive: true });
@@ -83,4 +87,20 @@ test("accepts the built-in scaffold and excludes legacy runtime directories", as
   expect(report.ready).toBe(true);
   expect(report.issues).toEqual([]);
   expect(report.pages).not.toContain(".wiki/.knowledge/broken.md");
+});
+
+test("rejects a Wiki junction that escapes the project", async () => {
+  const root = makeTempDir();
+  const outside = makeTempDir();
+  writeFileSync(path.join(outside, "INDEX.md"), [
+    "---",
+    "title: Outside",
+    "description: Outside",
+    "updated: 2026-07-28",
+    "owner: test",
+    "---",
+  ].join("\n"), "utf8");
+  symlinkSync(outside, path.join(root, ".wiki"), "junction");
+
+  await expect(inspectWiki(root)).rejects.toThrow("unsafe path");
 });

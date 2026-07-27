@@ -1,8 +1,6 @@
 import { readFileSync } from "node:fs";
-import path from "node:path";
-
 import { ARTIFACTS, isArtifactId, type ArtifactId } from "./artifacts.js";
-import { changeDirectory } from "./metadata.js";
+import { changeFilePath } from "./metadata.js";
 import { validateChange, type ChangeValidationResult } from "./validate.js";
 
 export type ShowChangeResult = {
@@ -26,7 +24,7 @@ export async function showChange(
   if (!isArtifactId(artifact)) {
     throw new Error(`unknown artifact: ${artifact}`);
   }
-  const artifactPath = path.join(changeDirectory(projectRoot, changeId), ARTIFACTS[artifact]);
+  const artifactPath = changeFilePath(projectRoot, changeId, ARTIFACTS[artifact]);
   return {
     change,
     artifact: {

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { parseYamlFrontmatter } from "../markdown/frontmatter.js";
+import { resolveSafePath } from "../path.js";
 
 const EXCLUDED_DIRECTORIES = new Set([".cache", ".knowledge", "pages"]);
 const REQUIRED_FRONTMATTER = ["title", "description", "updated", "owner"] as const;
@@ -90,10 +91,11 @@ function resolveWikiLink(
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     return "";
   }
-  if (existsSync(candidate) && statSync(candidate).isDirectory()) {
-    return path.join(candidate, "INDEX.md");
+  const safeCandidate = resolveSafePath(wikiRoot, relative || ".");
+  if (existsSync(safeCandidate) && statSync(safeCandidate).isDirectory()) {
+    return resolveSafePath(wikiRoot, path.join(relative, "INDEX.md"));
   }
-  return candidate;
+  return safeCandidate;
 }
 
 function addIssue(issues: WikiIssue[], issue: WikiIssue): void {
@@ -104,10 +106,11 @@ function addIssue(issues: WikiIssue[], issue: WikiIssue): void {
 
 export async function inspectWiki(projectRoot: string): Promise<WikiInspectionReport> {
   const root = path.resolve(projectRoot);
-  const wikiRoot = path.basename(root) === ".wiki" ? root : path.join(root, ".wiki");
+  const wikiRoot = path.basename(root) === ".wiki" ? root : resolveSafePath(root, ".wiki");
   const files = listMarkdownFiles(wikiRoot);
   const issues: WikiIssue[] = [];
-  const pages: ParsedPage[] = files.map((absolutePath) => {
+  const pages: ParsedPage[] = files.map((listedPath) => {
+    const absolutePath = resolveSafePath(wikiRoot, path.relative(wikiRoot, listedPath));
     const content = readFileSync(absolutePath, "utf8");
     return {
       absolutePath,

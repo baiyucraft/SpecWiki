@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
-import path from "node:path";
 
+import { resolveSafePath } from "../path.js";
 import { validateChange, type ChangeValidationResult } from "./validate.js";
 
 export type ChangeStatusReport = {
@@ -8,7 +8,7 @@ export type ChangeStatusReport = {
 };
 
 export async function getChangeStatus(projectRoot: string): Promise<ChangeStatusReport> {
-  const changesRoot = path.join(path.resolve(projectRoot), ".spec", "changes");
+  const changesRoot = resolveSafePath(projectRoot, ".spec/changes");
   if (!existsSync(changesRoot)) {
     return { activeChanges: [] };
   }

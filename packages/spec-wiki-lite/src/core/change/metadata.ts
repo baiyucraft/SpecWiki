@@ -1,6 +1,4 @@
 import { readFileSync } from "node:fs";
-import path from "node:path";
-
 import { parseDocument } from "yaml";
 
 import { assertCanonicalChangeId, resolveSafePath } from "../path.js";
@@ -43,6 +41,11 @@ export function changeDirectory(projectRoot: string, changeId: string): string {
   return resolveSafePath(projectRoot, `.spec/changes/${changeId}`);
 }
 
+export function changeFilePath(projectRoot: string, changeId: string, fileName: string): string {
+  assertCanonicalChangeId(changeId);
+  return resolveSafePath(projectRoot, `.spec/changes/${changeId}/${fileName}`);
+}
+
 export function parseMetadata(content: string): Record<string, unknown> {
   const document = parseDocument(content);
   if (document.errors.length > 0) {
@@ -56,5 +59,5 @@ export function parseMetadata(content: string): Record<string, unknown> {
 }
 
 export function readMetadata(projectRoot: string, changeId: string): Record<string, unknown> {
-  return parseMetadata(readFileSync(path.join(changeDirectory(projectRoot, changeId), "meta.yaml"), "utf8"));
+  return parseMetadata(readFileSync(changeFilePath(projectRoot, changeId, "meta.yaml"), "utf8"));
 }
