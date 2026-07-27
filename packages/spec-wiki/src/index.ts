@@ -1,37 +1,43 @@
-export {
-  detectHosts,
-  HOSTS,
-  parseRequestedHosts,
-  resolveSelectedHosts,
-  type SupportedHost,
-} from "./agents/shared/hosts.js";
-/**
- * 这个文件是 `spec-wiki` 的公开入口。
- * 它汇总 CLI、agents/orchestration 与 runtime 三层的对外导出。
- */
+/** Public API for the TypeScript-only SpecWiki Lite package. */
 export { runBin, type RunBinOptions } from "./bin.js";
-export { type CliIo, runCli } from "./cli.js";
+export { type CliIo, EXIT_CODES, runCli } from "./cli.js";
+export { type AssetSyncOptions, type AssetSyncReport, syncProjectAssets } from "./core/assets/sync.js";
+export {
+  archiveChange,
+  type ArchiveClock,
+  type ArchiveOptions,
+  type ChangeArchiveReport,
+  ChangeNotReadyError,
+} from "./core/change/archive.js";
+export { type ArtifactId, ARTIFACTS, isArtifactId } from "./core/change/artifacts.js";
+export {
+  CHANGE_STAGES,
+  type ChangeMetadata,
+  type ChangeStage,
+  DELIVERY_SHAPES,
+  type DeliveryShape,
+  readMetadata,
+} from "./core/change/metadata.js";
+export { showChange, type ShowChangeResult } from "./core/change/show.js";
+export { type ChangeStatusReport, getChangeStatus } from "./core/change/status.js";
+export {
+  type ChangeIssue,
+  type ChangeIssueKind,
+  type ChangeValidationResult,
+  requiredArtifactsForStage,
+  validateChange,
+  type ValidateChangeOptions,
+} from "./core/change/validate.js";
+export {
+  assertCanonicalChangeId,
+  PathSafetyError,
+  resolveSafePath,
+} from "./core/path.js";
+export { getProjectStatus, type ProjectStatusReport, type SkillStatus } from "./core/status.js";
+export {
+  inspectWiki,
+  type WikiInspectionReport,
+  type WikiIssue,
+  type WikiIssueKind,
+} from "./core/wiki/inspect.js";
 export { type BootstrapInitResult, runBootstrapInit } from "./orchestration/init/runInit.js";
-export { forwardCoreCommand, type ForwardCoreOptions } from "./runtime/forwardCore.js";
-export {
-  type CoreCommand,
-  createCoreInvoker,
-  invokeCore,
-  type InvokeCoreOptions,
-  STREAMING_ACTIONS,
-} from "./runtime/invokeCore.js";
-export {
-  type ArchiveOperationManifest,
-  type ArchiveReport,
-  type CoreResponse,
-  type CoreStreamEvent,
-  parseEventLine,
-  parseResult,
-  responseFromTerminalEvent,
-} from "./runtime/parseResult.js";
-export {
-  collectBinaryCandidates,
-  resolveBinary,
-  type ResolveBinaryOptions,
-} from "./runtime/resolveBinary.js";
-export { createTools, tools } from "./tools.js";

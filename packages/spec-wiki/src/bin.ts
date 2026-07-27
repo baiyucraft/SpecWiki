@@ -20,7 +20,7 @@ export type RunBinOptions = {
 };
 
 /**
- * 运行已发布的 `spec-wiki` 可执行入口。
+ * 运行已发布的 `spec-wiki-lite` 可执行入口。
  *
  * @param options 可选覆盖项，主要给测试使用。
  * @returns 返回 CLI 最终退出码。

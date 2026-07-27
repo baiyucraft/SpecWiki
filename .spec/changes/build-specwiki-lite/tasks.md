@@ -16,82 +16,82 @@ tdd
 
 ## 1. 可安装的 Wiki 与 Codex Skills 资产
 
-- [ ] 1.1 Red: UT-001 写入 asset ownership 与 init/update 幂等失败测试并确认失败
-- [ ] 1.2 Green: UT-001 实现 assets registry、同步器、Wiki scaffold、`.spec` 初始化和八个 Codex Skills
-- [ ] 1.3 Refactor: UT-001 收口 managed/scaffold/skill ownership 与原子写入
+- [x] 1.1 Red: UT-001 写入 asset ownership 与 init/update 幂等失败测试并确认失败
+- [x] 1.2 Green: UT-001 实现 assets registry、同步器、Wiki scaffold、`.spec` 初始化和八个 Codex Skills
+- [x] 1.3 Refactor: UT-001 收口 managed/scaffold/skill ownership 与原子写入
 
 ### CheckList
 
-- [ ] 失败测试已确认
-- [ ] 最小实现后测试通过
-- [ ] 重构后测试仍通过
-- [ ] 本大 task 局部质量检查通过
-- [ ] 注释规范检查完成
+- [x] 失败测试已确认
+- [x] 最小实现后测试通过
+- [x] 重构后测试仍通过
+- [x] 本大 task 局部质量检查通过
+- [x] 注释规范检查完成
 
 ## 2. Wiki 静态健康状态
 
-- [ ] 2.1 Red: UT-002 写入 INDEX/frontmatter/link/orphan/SSOT 失败测试并确认失败
-- [ ] 2.2 Green: UT-002 实现 Markdown/YAML 静态 inspector 和结构化 report
-- [ ] 2.3 Refactor: UT-002 收口 issue taxonomy、目录排除和可达性分析
+- [x] 2.1 Red: UT-002 写入 INDEX/frontmatter/link/orphan/SSOT 失败测试并确认失败
+- [x] 2.2 Green: UT-002 实现 Markdown/YAML 静态 inspector 和结构化 report
+- [x] 2.3 Refactor: UT-002 收口 issue taxonomy、目录排除和可达性分析
 
 ### CheckList
 
-- [ ] 失败测试已确认
-- [ ] 最小实现后测试通过
-- [ ] 重构后测试仍通过
-- [ ] 本大 task 局部质量检查通过
-- [ ] 注释规范检查完成
+- [x] 失败测试已确认
+- [x] 最小实现后测试通过
+- [x] 重构后测试仍通过
+- [x] 本大 task 局部质量检查通过
+- [x] 注释规范检查完成
 
 ## 3. `.spec` 状态、show 与 validate
 
-- [ ] 3.1 Red: UT-003 写入 stage/required artifact 失败测试并确认失败
-- [ ] 3.2 Green: UT-003 实现 metadata parser、stage schema、status/show/validate core
-- [ ] 3.3 Refactor: UT-003 让所有 workflow 消费同一 artifact registry
-- [ ] 3.4 Red: UT-004 写入 verification full/pass 失败测试并确认失败
-- [ ] 3.5 Green: UT-004 实现 YAML frontmatter evidence validation
-- [ ] 3.6 Refactor: UT-004 收口 blocking issue 和 strict validation 语义
+- [x] 3.1 Red: UT-003 写入 stage/required artifact 失败测试并确认失败
+- [x] 3.2 Green: UT-003 实现 metadata parser、stage schema、status/show/validate core
+- [x] 3.3 Refactor: UT-003 让所有 workflow 消费同一 artifact registry
+- [x] 3.4 Red: UT-004 写入 verification full/pass 失败测试并确认失败
+- [x] 3.5 Green: UT-004 实现 YAML frontmatter evidence validation
+- [x] 3.6 Refactor: UT-004 收口 blocking issue 和 strict validation 语义
 
 ### CheckList
 
-- [ ] 失败测试已确认
-- [ ] 最小实现后测试通过
-- [ ] 重构后测试仍通过
-- [ ] 本大 task 局部质量检查通过
-- [ ] 注释规范检查完成
+- [x] 失败测试已确认
+- [x] 最小实现后测试通过
+- [x] 重构后测试仍通过
+- [x] 本大 task 局部质量检查通过
+- [x] 注释规范检查完成
 
 ## 4. 原子 archive 与 multi-change 一致性
 
-- [ ] 4.1 Red: UT-005 写入普通归档和目标冲突失败测试并确认失败
-- [ ] 4.2 Green: UT-005 实现 dated target、precondition 和原子 rename
-- [ ] 4.3 Refactor: UT-005 收口 injected clock 和 archive report
-- [ ] 4.4 Red: UT-006 写入 child/parent 同步失败测试并确认失败
-- [ ] 4.5 Green: UT-006 实现 parent YAML/split 同步和 parent archive gate
-- [ ] 4.6 Refactor: UT-006 增加失败回滚与未知字段保留守卫
+- [x] 4.1 Red: UT-005 写入普通归档和目标冲突失败测试并确认失败
+- [x] 4.2 Green: UT-005 实现 dated target、precondition 和原子 rename
+- [x] 4.3 Refactor: UT-005 收口 injected clock 和 archive report
+- [x] 4.4 Red: UT-006 写入 child/parent 同步失败测试并确认失败
+- [x] 4.5 Green: UT-006 实现 parent YAML/split 同步和 parent archive gate
+- [x] 4.6 Refactor: UT-006 增加失败回滚与未知字段保留守卫
 
 ### CheckList
 
-- [ ] 失败测试已确认
-- [ ] 最小实现后测试通过
-- [ ] 重构后测试仍通过
-- [ ] 本大 task 局部质量检查通过
-- [ ] 注释规范检查完成
+- [x] 失败测试已确认
+- [x] 最小实现后测试通过
+- [x] 重构后测试仍通过
+- [x] 本大 task 局部质量检查通过
+- [x] 注释规范检查完成
 
 ## 5. 路径安全和 Lite CLI
 
-- [ ] 5.1 Red: UT-007 写入 traversal/absolute/symlink escape 失败测试并确认失败
-- [ ] 5.2 Green: UT-007 实现 canonical id、lexical/realpath containment guard
-- [ ] 5.3 Refactor: UT-007 让所有读写入口统一经过 path guard
-- [ ] 5.4 Red: UT-008 写入新命令闭集、Codex-only、退出码失败测试并确认失败
-- [ ] 5.5 Green: UT-008 重写 CLI/bin/package exports 和 human/JSON renderer
-- [ ] 5.6 Refactor: UT-008 删除旧 action/runtime API 并收口错误分类
+- [x] 5.1 Red: UT-007 写入 traversal/absolute/symlink escape 失败测试并确认失败
+- [x] 5.2 Green: UT-007 实现 canonical id、lexical/realpath containment guard
+- [x] 5.3 Refactor: UT-007 让所有读写入口统一经过 path guard
+- [x] 5.4 Red: UT-008 写入新命令闭集、Codex-only、退出码失败测试并确认失败
+- [x] 5.5 Green: UT-008 重写 CLI/bin/package exports 和 human/JSON renderer
+- [x] 5.6 Refactor: UT-008 删除旧 action/runtime API 并收口错误分类
 
 ### CheckList
 
-- [ ] 失败测试已确认
-- [ ] 最小实现后测试通过
-- [ ] 重构后测试仍通过
-- [ ] 本大 task 局部质量检查通过
-- [ ] 注释规范检查完成
+- [x] 失败测试已确认
+- [x] 最小实现后测试通过
+- [x] 重构后测试仍通过
+- [x] 本大 task 局部质量检查通过
+- [x] 注释规范检查完成
 
 ## 6. 删除 index/knowledge/native runtime 并重建发行
 

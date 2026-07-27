@@ -20,6 +20,9 @@
     "build": "vite build",
     "test": "vitest run"
   },
+  "dependencies": {
+    "yaml": "^2.8.2"
+  },
   "devDependencies": {
     "@types/node": "catalog:",
     "eslint": "catalog:",

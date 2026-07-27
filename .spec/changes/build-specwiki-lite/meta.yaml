@@ -1,5 +1,5 @@
 id: build-specwiki-lite
-stage: tasks
+stage: implementation
 deliveryShape: single-change
 artifacts:
   proposal:
