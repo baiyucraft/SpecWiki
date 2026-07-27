@@ -1,8 +1,0 @@
-{
-  "name": "@repo/app",
-  "private": true,
-  "main": "src/main.ts",
-  "dependencies": {
-    "@repo/shared": "workspace:*"
-  }
-}

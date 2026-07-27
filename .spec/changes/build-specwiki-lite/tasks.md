@@ -95,9 +95,9 @@ tdd
 
 ## 6. 删除 index/knowledge/native runtime 并重建发行
 
-- [ ] 6.1 删除 Rust workspace、四 crate、runtime bridge、旧 Agents 适配和相关测试
-- [ ] 6.2 重写 root test/build/stage/pack 脚本为纯 TypeScript `packages/spec-wiki-lite`
-- [ ] 6.3 添加 ST-001/ST-007 distribution、tarball inventory 和 current-surface contract tests
+- [x] 6.1 删除 Rust workspace、四 crate、runtime bridge、旧 Agents 适配和相关测试
+- [x] 6.2 重写 root test/build/stage/pack 脚本为纯 TypeScript `packages/spec-wiki-lite`
+- [x] 6.3 添加 ST-001/ST-007 distribution、tarball inventory 和 current-surface contract tests
 - [ ] 6.4 更新 workspace/lockfile，验证 tarball 不含 native binary 且无 os/cpu 限制
 
 ### CheckList

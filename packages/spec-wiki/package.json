@@ -14,7 +14,10 @@
   },
   "files": [
     "bin/**",
-    "dist/**"
+    "dist/**",
+    "assets/**",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "vite build",
@@ -29,11 +32,5 @@
     "typescript": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:"
-  },
-  "os": [
-    "win32"
-  ],
-  "cpu": [
-    "x64"
-  ]
+  }
 }

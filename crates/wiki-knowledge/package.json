@@ -1,8 +1,0 @@
-{
-  "name": "wiki-knowledge",
-  "private": true,
-  "scripts": {
-    "build": "cargo build -p wiki-knowledge --manifest-path ../../Cargo.toml --target-dir ../../target",
-    "test": "cargo test -p wiki-knowledge --manifest-path ../../Cargo.toml --target-dir ../../target"
-  }
-}

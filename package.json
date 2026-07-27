@@ -7,7 +7,7 @@
     "build": "node scripts/build-dist.mjs",
     "lint": "eslint .",
     "test": "node scripts/run-tests.mjs",
-    "publish": "node scripts/publish-packages.mjs"
+    "pack": "node scripts/build-dist.mjs --pack"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",

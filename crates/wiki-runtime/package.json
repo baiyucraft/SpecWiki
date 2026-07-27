@@ -1,8 +1,0 @@
-{
-  "name": "wiki-runtime",
-  "private": true,
-  "scripts": {
-    "build": "cargo build -p wiki-runtime --manifest-path ../../Cargo.toml --target-dir ../../target",
-    "test": "cargo test -p wiki-runtime --manifest-path ../../Cargo.toml --target-dir ../../target"
-  }
-}

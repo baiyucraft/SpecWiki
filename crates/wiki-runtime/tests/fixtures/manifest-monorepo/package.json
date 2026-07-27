@@ -1,7 +1,0 @@
-{
-  "name": "repo-root",
-  "private": true,
-  "workspaces": [
-    "packages/*"
-  ]
-}
