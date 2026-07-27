@@ -6,7 +6,7 @@ export type ProjectAsset = {
   ownership: AssetOwnership;
 };
 
-const SKILL_NAMES = [
+export const PROJECT_SKILL_NAMES = [
   "wiki-continue",
   "wiki-explore",
   "wiki-propose",
@@ -28,7 +28,7 @@ export const PROJECT_ASSETS: readonly ProjectAsset[] = [
     target: ".wiki/00-conventions/INDEX.md",
     ownership: "managed",
   },
-  ...SKILL_NAMES.map(name => ({
+  ...PROJECT_SKILL_NAMES.map(name => ({
     source: `skills/${name}/SKILL.md`,
     target: `.agents/skills/${name}/SKILL.md`,
     ownership: "skill" as const,

@@ -1,51 +1,48 @@
 ---
 title: 01-快速上手
-description: spec-wiki 的 Codex-first 最短上手路径
-updated: 2026-07-17
+description: SpecWiki Lite 的安装、初始化和日常使用入口
+updated: 2026-07-28
 owner: docs
 ---
 
 # 01-快速上手
 
-本栏目面向首次接手项目的维护者和 Agent，目标是快速判断项目是什么、怎么准备环境、怎么运行验证。
+本栏目面向首次使用 SpecWiki Lite 的维护者和 Codex。目标是用最短路径建立可版本控制的 Wiki 和 change 工作流。
 
 ## 项目定位
 
-- `spec-wiki` 是 Repo Wiki Core + Agents 项目。
-- 它提供 TS CLI 与 Rust runtime：CLI 负责统一初始化、宿主 bootstrap 和 runtime forwarding，Rust crates 负责事实扫描、知识组织、运行时生命周期和查询。
-- 当前包名仍为 `spec-wiki`；UniSpec 只管理项目变更治理，不改变产品包名。
-- 宿主接入以 Codex 为唯一 reference host 和默认文档示例；Claude、CodeBuddy 是 compatible hosts。
+- npm package 和可执行命令均为 `spec-wiki-lite`。
+- 产品是纯 TypeScript 工具，只管理 `.wiki`、`.spec` 和 `.agents/skills`。
+- `.wiki/` 保存正式项目文档；`.spec/` 保存 change 阶段与证据；`.agents/skills` 是唯一 Skills 落点。
+- 产品只支持 Codex。Agent 在需要实现细节时直接读取当前源码，不维护代码扫描或隐藏数据层。
 
-## 环境前提
+## 最短路径
 
-- Node.js / pnpm：根级 `package.json` 声明 `pnpm@10.6.3`。
-- Rust / Cargo：根级 `Cargo.toml` 管理 `wiki-model`、`wiki-index`、`wiki-knowledge`、`wiki-runtime` workspace。
-- Windows x64：`packages/spec-wiki/package.json` 当前发布目标限制为 `win32` / `x64`。
-- 本地 provider、timeout、retry 等调试配置优先参考 `wiki.dev.yaml`。
+```bash
+npm install -g spec-wiki-lite
+spec-wiki-lite init --host codex
+spec-wiki-lite status
+```
 
-## 首次运行
+从源码参与开发时：
 
 ```bash
 pnpm install
-pnpm run build
+pnpm run test
 pnpm run lint
-cargo test
+pnpm run build
 ```
 
-## 常用命令
+## CLI 范围
 
 | 命令 | 用途 |
 | --- | --- |
-| `pnpm run build` | 构建发布产物与 CLI bundle |
-| `pnpm run lint` | 运行 ESLint |
-| `pnpm run test` | 运行工作区测试脚本；依赖本地共享 fixture 时可能需要先准备 `tmp/test/*` |
-| `cargo test` | 运行 Rust workspace 测试 |
-| `spec-wiki init --host codex --repo-root .` | 初始化 SpecWiki，包括宿主 bootstrap、repo-local knowledge runtime 和必要的 Agent 入口 |
-| `spec-wiki status --repo-root .` | 查看 Wiki runtime、index、knowledge 和治理 readiness |
-| `spec-wiki query "runtime"` | 查询代码、知识、页面和治理证据引用 |
-| `spec-wiki update --repo-root .` | 变化后刷新 runtime |
-
-Codex 初始化后生成 `.codex/skills/wiki-*/SKILL.md`。Claude 对应 `.claude/skills/wiki-*/SKILL.md`；CodeBuddy 对应 `.codebuddy/skills/wiki-*/SKILL.md` 并额外包含宿主专属 hooks/settings。CodeBuddy 的额外机制不改变共享 action 或 Runtime 合同。
+| `spec-wiki-lite init [path] [--host codex] [--force]` | 初始化 Wiki、change 目录和八个 Codex Skills |
+| `spec-wiki-lite status [--json]` | 检查 Wiki、Skills 和 active changes |
+| `spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]` | 查看 change 摘要或单个 artifact |
+| `spec-wiki-lite validate <change-id> [--strict] [--json]` | 校验阶段、artifact 和归档证据 |
+| `spec-wiki-lite update [--force] [--json]` | 同步 package 管理的基线与 Skills |
+| `spec-wiki-lite archive <change-id>` | 将验证通过的 change 原子归档 |
 
 ## 推荐阅读路径
 
@@ -53,4 +50,5 @@ Codex 初始化后生成 `.codex/skills/wiki-*/SKILL.md`。Claude 对应 `.claud
 2. [01-启动项目](./01-启动项目.md)
 3. [02-构建项目](./02-构建项目.md)
 4. [03-常见问题](./03-常见问题.md)
-5. [03-模块指南](../03-模块指南/INDEX.md)
+5. [02-开发指南](../02-开发指南/INDEX.md)
+6. [03-模块指南](../03-模块指南/INDEX.md)

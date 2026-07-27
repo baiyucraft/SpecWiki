@@ -1,69 +1,101 @@
 ---
 title: CLI
-description: spec-wiki 一级命令、Codex-first 宿主入口、机器协议和退出码合同
-updated: 2026-07-17
+description: spec-wiki-lite 六个公开命令、参数、输出和退出码
+updated: 2026-07-28
 owner: docs
 ---
 
 # CLI
 
-## 主路径
+## 命令总览
 
-`spec-wiki` 使用一级命令。默认 help 只突出初始化、状态、查询和更新：
-
-```bash
-spec-wiki init [--host <host> | --hosts <host,host>] [--repo-root <path>] [--no-interactive]
-spec-wiki status [--repo-root <path>]
-spec-wiki query <term...> [--repo-root <path>]
-spec-wiki update [--repo-root <path>] [--bridge-stdio]
+```text
+spec-wiki-lite init [path] [--host codex] [--force]
+spec-wiki-lite status [--json]
+spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]
+spec-wiki-lite validate <change-id> [--strict] [--json]
+spec-wiki-lite update [--force] [--json]
+spec-wiki-lite archive <change-id>
 ```
 
-`init` 是唯一对外初始化入口，依次完成宿主 bootstrap、repo-local runtime 初始化和 landing status。机器模式不进入交互选择。
+除 `init [path]` 外，命令都以当前工作目录为项目根。`--help` 或 `-h` 可用于顶层或单个命令，不能与其他参数组合。
 
-Codex 是唯一 reference host，默认文档与兼容验证优先使用 `--host codex`。Claude、CodeBuddy 是 compatible hosts；显式选择任一宿主的 CLI 行为不变。
+## init
 
-## 高级命令
+`init` 创建目标目录，确保 `.wiki`、`.spec/changes`、`.spec/archive` 和 `.agents/skills` 存在，同步登记资产，随后返回项目 status。
 
-`spec-wiki --help-all` 列出已经实现的高级命令；`advanced` 只是 help 分组，不是 namespace。
+- `path` 相对于当前目录解析；省略时使用当前目录。
+- `--host` 只接受 `codex`，省略时同样使用 Codex。
+- `--force` 允许刷新 managed convention；不会覆盖 scaffold 页面或未登记的用户页面。
+- 初始化失败返回恢复提示，可在修复文件写入问题后重试。
 
-```bash
-spec-wiki sync [--repo-root <path>]
-spec-wiki rebuild [--repo-root <path>] [--bridge-stdio]
-spec-wiki changes [--repo-root <path>]
-spec-wiki change <change-id> [--repo-root <path>]
-spec-wiki validate <change-id> [--repo-root <path>]
-spec-wiki archive <change-id> [--dry-run | --apply | --resume <operation-id>] [--repo-root <path>]
+## status
+
+`status` 返回项目聚合状态：
+
+- Wiki 页面清单与 `missing_index / invalid_frontmatter / broken_link / orphan_page / duplicate_ssot` issues。
+- 八个 `wiki-*` Skills 的安装状态。
+- `.spec/changes` 下所有 active changes 的校验结果。
+
+只有三部分全部就绪时，顶层 `ready` 才为 `true`。status 是只读命令。
+
+## show
+
+`show <change-id>` 默认返回 change 校验结果。指定 `--artifact <artifact>` 时，同时返回该 artifact 的路径和原文。
+
+允许的 artifact ID：
+
+```text
+split proposal design cases tasks unit-tests review-report test-report metadata
 ```
 
-`archive` 默认等同于 `--dry-run`，只执行 validate、readiness 评估并返回 operation manifest，不移动 change，也不创建 durable operation。`--apply` 才执行归档写入；部分完成后必须使用报告给出的 `operation-id` 配合 `--resume` 恢复。三种模式互斥，archive 始终是短流程命令。
+Artifact 不存在或无法读取时命令失败；show 不修改 change。
 
-archive 只修改 `.spec` 的 change、parent marker 和 `.spec/.runtime/archive-operations` 操作证据，不调用 Wiki sync/update/rebuild，也不写 `.wiki/**`；Wiki 相关结果仅作为 `wiki_sync_issues` 和 `evidence_refs` 返回。
+## validate
 
-本阶段不注册 workspace validate、`doctor`、`repair` 或 `trace`。
+`validate <change-id>` 校验 ID、`meta.yaml`、stage、delivery shape 和当前 stage 的 required artifacts。
 
-## 输出模式
+- 默认模式要求 required artifacts 存在。
+- `--strict` 额外要求 required artifacts 非空。
+- `verification/archive` stage 的普通 change 还必须具有 full/pass 的 review 与 verification 报告。
+- 校验未通过时仍返回结构化 issues，并使用退出码 `2`。
 
-- 默认输出 human 文本，只翻译 Rust DTO，不重新计算 readiness、outcome 或 recommended action。
-- `--json` 输出 JSON 或 NDJSON。
-- `--bridge-stdio` 强制机器模式，仅适用于 `init/update/rebuild`。
-- 长流程事件流必须按完整 NDJSON 行解析，并且恰好包含一个 terminal event。
+## update
 
-`--bridge-stdio` 表示基础 JSON/NDJSON/stdin-stdout forwarding。它不证明 production `research_page` bridge 或多轮 agent-session bridge 已启用，也不授权 durable provider session。
+`update` 重新执行资产同步：Skills 更新到当前包版本，缺失 scaffold 和 convention 会被补齐，用户页面始终保留。
+
+`--force` 只额外允许覆盖 managed convention，不改变 scaffold 和未登记页面的保护规则。
+
+## archive
+
+`archive <change-id>` 没有预演模式。命令先执行严格校验，再把 active change 移到 `.spec/archive/YYYY-MM-DD-<change-id>`。
+
+- 目标存在时拒绝覆盖。
+- 普通 change 必须位于 `verification` 或 `archive` stage。
+- Child 归档同步 parent metadata 与 split marker，写入失败时回滚。
+- Parent 归档要求全部 children 的 active/archive/marker 证据一致。
+
+## JSON 输出
+
+`status`、`show`、`validate`、`update` 支持 `--json`，输出单行 envelope：
+
+```json
+{"ok":true,"data":{}}
+```
+
+失败时输出：
+
+```json
+{"ok":false,"error":"message"}
+```
+
+`validate --json` 在校验不通过时保留 `data` 中的 issues，并设置 `ok: false`。
 
 ## 退出码
 
 | 退出码 | 含义 |
 | --- | --- |
 | `0` | 成功 |
-| `2` | unified init partial、`validate` 返回 `valid=false`，或 archive 返回 not-ready、precondition changed、conflict、locked、recovery-required |
-| `64` | 缺参、未知命令/参数、非法组合、host 选择失败 |
-| `1` | archive manifest invalid，或其他 domain、workflow、protocol、I/O、internal failure |
-
-## 稳定边界
-
-- `query` 只接受一个或多个位置 token，并合并为查询词。
-- `--host` 可重复，`--hosts` 接受逗号列表，两者互斥。
-- `changes/change/validate` 返回基于单次 live governance evaluation 的结构化 envelope。
-- `archive` 转发 `archiveMode`；仅 resume 额外转发 `archiveOperationId`，human/JSON 输出均直接翻译 Rust archive DTO。
-- JavaScript API 保留 `wikiInit/wikiStatus/wikiQuery/wikiUpdate/wikiSync/wikiRebuild`。
-- 三宿主资产统一保留 repo-local `wiki-*` skill identity 并执行一级 CLI；Claude 旧 `/wiki:*` command 路径不属于当前合同。
+| `1` | 文件系统、解析或执行失败 |
+| `2` | Change 未就绪 |
+| `64` | CLI 用法错误 |

@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { afterEach, expect, test } from "vitest";
 
+import { readPackageAsset } from "../../packageRoot.js";
+import { PROJECT_SKILL_NAMES } from "./registry.js";
 import { syncProjectAssets } from "./sync.js";
 
 const roots: string[] = [];
@@ -58,4 +60,24 @@ test("is idempotent and restores package-owned skills", async () => {
   expect(second.unchanged).toHaveLength(10);
   expect(repaired.updated).toContain(".agents/skills/wiki-continue/SKILL.md");
   expect(readFileSync(skill, "utf8")).toContain("name: wiki-continue");
+});
+
+test("installs every packaged Codex skill byte-for-byte into .agents/skills", async () => {
+  const root = createTempProject();
+
+  await syncProjectAssets(root);
+
+  for (const name of PROJECT_SKILL_NAMES) {
+    const packaged = readPackageAsset(`skills/${name}/SKILL.md`);
+    const installed = readFileSync(path.join(root, ".agents", "skills", name, "SKILL.md"), "utf8");
+    expect(installed).toBe(packaged);
+    expect(packaged).toContain(`name: ${name}`);
+    expect(packaged).toContain("Codex repository");
+    expect(packaged).toContain("## Preconditions");
+    expect(packaged).toContain("## Inputs");
+    expect(packaged).toContain("## Outputs");
+    expect(packaged).toContain("## Pause Conditions");
+    expect(packaged).toContain("## Next Stage");
+    expect(packaged).not.toMatch(/\bspec-wiki\s/u);
+  }
 });

@@ -1,28 +1,39 @@
 ---
 title: 03-模块指南
-description: spec-wiki 的模块边界、KnowledgeUnit 映射和维护入口
-updated: 2026-05-25
+description: SpecWiki Lite 的 TypeScript 模块边界与维护入口
+updated: 2026-07-28
 owner: docs
 ---
 
 # 03-模块指南
 
-本栏目不是包目录说明书。每个模块页必须说明它对应的 KnowledgeDomain / KnowledgeUnit、事实来源和输出层，避免回退到纯 `module/topic/family` 驱动。
+本栏目按稳定职责说明 SpecWiki Lite 的实现。产品只有一个 TypeScript 包，模块之间通过普通函数和结构化返回值协作，不依赖本地服务或平台专属二进制。
 
 ## 模块总览
 
-| 模块 | KnowledgeDomain / KnowledgeUnit | 输出层 | 事实来源 |
-| --- | --- | --- | --- |
-| [00-工作区总览](./00-工作区总览.md) | workspace boundary / package dependency map | 项目级导航 | `Cargo.toml`、`pnpm-workspace.yaml`、`package.json` |
-| [01-wiki-model](./01-wiki-model.md) | shared model / formal state DTO | model 层 | `crates/wiki-model/**` |
-| [02-wiki-index](./02-wiki-index.md) | facts / scanner / symbol index | facts / index 层 | `crates/wiki-index/**` |
-| [03-wiki-knowledge](./03-wiki-knowledge.md) | knowledge planning / research / compose contract | knowledge 层 | `crates/wiki-knowledge/**` |
-| [04-wiki-runtime](./04-wiki-runtime.md) | workflow orchestration / lifecycle / storage / query route | runtime 层 | `crates/wiki-runtime/**` |
-| [05-spec-wiki-cli](./05-spec-wiki-cli.md) | host bootstrap / runtime forwarding / distribution | Agents 接入层 | `packages/spec-wiki/**` |
+| 模块 | 稳定职责 | 事实来源 |
+| --- | --- | --- |
+| [00-工作区总览](./00-工作区总览.md) | 包边界、依赖方向和测试入口 | workspace manifests、根脚本 |
+| [01-assets](./01-assets.md) | 项目目录、模板、Codex Skills 与资产所有权 | `core/assets/**`、`assets/**` |
+| [02-wiki](./02-wiki.md) | `.wiki` Markdown、frontmatter、链接和导航检查 | `core/wiki/**`、`core/markdown/**` |
+| [03-change](./03-change.md) | `.spec` stage、artifact、show、validate 与 archive | `core/change/**` |
+| [04-CLI](./04-CLI.md) | 六个公开命令、输出和退出码 | `cli.ts`、`index.ts`、`bin.ts` |
 
-## 维护建议
+## 依赖方向
 
-- 新增模块页时，先写 KnowledgeDomain / KnowledgeUnit，再写路径。
-- 模块页只写稳定职责和维护入口，不复制实现细节。
-- 公开 CLI、配置和使用方式回链到 [04-对外方法](../04-对外方法/INDEX.md)。
-- 通用测试和注释规则回链到 [02-开发指南](../02-开发指南/INDEX.md)。
+```mermaid
+flowchart LR
+  CLI["CLI"] --> Assets["assets"]
+  CLI --> Wiki["wiki"]
+  CLI --> Change["change"]
+  Assets --> Path["path safety"]
+  Change --> Path
+  Wiki --> Frontmatter["frontmatter"]
+```
+
+## 维护要求
+
+- 行为事实以 `packages/spec-wiki-lite/src/**` 和测试为准。
+- 公开命令、参数和产物变化同步更新[对外方法](../04-对外方法/INDEX.md)。
+- 长期设计边界回链到[总体设计](../06-设计文档/00-总体设计.md)和[Lite 内核设计](../06-设计文档/01-Lite内核设计.md)。
+- `.wiki` 保存正式页面，`.spec` 保存 change 过程；模块实现不得创造第三套项目状态。

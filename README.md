@@ -1,50 +1,51 @@
-# spec-wiki
+# SpecWiki Lite
 
-`spec-wiki` provides a local Repo Wiki shared by people and Agents. It scans a repository, builds the repo-local knowledge runtime under `.wiki/`, and installs managed host assets. Codex is the only reference host; Claude and CodeBuddy are compatible hosts.
+SpecWiki Lite is a TypeScript-only repository Wiki and staged documentation workflow for Codex. It keeps durable project knowledge in `.wiki/`, change evidence in `.spec/`, and eight repo-local workflow skills in `.agents/skills/`.
 
-## Quick Start
+## Install
 
 ```bash
-spec-wiki init --host codex --repo-root .
-spec-wiki status --repo-root .
-spec-wiki query "payment flow" --repo-root .
-spec-wiki update --repo-root .
+npm install -g spec-wiki-lite
+spec-wiki-lite init --host codex
+spec-wiki-lite status
 ```
 
-`init` is the single initialization entry point. It bootstraps the selected host assets, initializes the runtime, and returns a landing status. Repeat `--host` or use a comma-separated `--hosts` value to select multiple hosts.
+Requires Node.js `>=20.19.0`. The initial package version is `0.1.0` and has no OS or CPU restriction.
 
 ## Commands
 
-Default help highlights the main product path:
-
 ```text
-spec-wiki init [--host <host> | --hosts <host,host>] [--repo-root <path>] [--no-interactive]
-spec-wiki status [--repo-root <path>]
-spec-wiki query <term...> [--repo-root <path>]
-spec-wiki update [--repo-root <path>] [--bridge-stdio]
+spec-wiki-lite init [path] [--host codex] [--force]
+spec-wiki-lite status [--json]
+spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]
+spec-wiki-lite validate <change-id> [--strict] [--json]
+spec-wiki-lite update [--force] [--json]
+spec-wiki-lite archive <change-id>
 ```
 
-`spec-wiki --help-all` also lists the implemented advanced and governance commands:
+`init` and `update` synchronize package-owned baselines and Skills. Scaffold pages and user pages are preserved. `status` checks Wiki structure, Skill installation, and active changes without scanning source code or creating a persistent index.
+
+## Repository Model
 
 ```text
-spec-wiki sync [--repo-root <path>]
-spec-wiki rebuild [--repo-root <path>] [--bridge-stdio]
-spec-wiki changes [--repo-root <path>]
-spec-wiki change <change-id> [--repo-root <path>]
-spec-wiki validate <change-id> [--repo-root <path>]
-spec-wiki archive <change-id> [--dry-run | --apply | --resume <operation-id>] [--repo-root <path>]
+.wiki/                         stable project documentation
+.spec/changes/<change-id>/     active workflow evidence
+.spec/archive/<date>-<id>/     immutable archived evidence
+.agents/skills/wiki-*/         Codex workflow skills
 ```
 
-Archive defaults to `--dry-run`; `--apply` performs the write and `--resume <operation-id>` recovers a partial operation. Exit codes are `0` for success, `2` for partial init, invalid validation, or an archive not-ready/recovery outcome, `64` for usage errors, and `1` for domain, workflow, protocol, I/O, or invalid archive failures.
+The Wiki uses `INDEX.md` for navigation. Ordinary pages use stable Markdown links and YAML frontmatter with `title`, `description`, `updated`, and `owner`.
 
-## Runtime Contract
+## Development
 
-The runtime writes formal knowledge, projected pages, metadata, and recoverable cache data under `.wiki/`. Query accepts a non-empty term and returns canonical readiness, governance, `route_groups`, and `answer`; route-local scores are not compared across groups.
+```bash
+pnpm install
+pnpm test
+pnpm lint
+pnpm build
+pnpm pack
+```
 
-The JavaScript API keeps `wikiInit`, `wikiStatus`, `wikiQuery`, `wikiUpdate`, `wikiSync`, and `wikiRebuild`. All hosts receive repo-local `wiki-*` skills that invoke the top-level CLI; host assets do not define a second command or Runtime contract.
+The distribution contains only the Node CLI, `dist`, templates, Skills, README, and LICENSE. This repository does not publish from the `lite` branch as part of the current change.
 
-Long-lived architecture and contribution guidance starts at [.wiki/INDEX.md](./.wiki/INDEX.md). The versioned product surface is defined by the [v0.2.0 release contract](./.wiki/04-对外方法/02-v0.2.0发布合同.md).
-
-## Platform And License
-
-Windows x64 is the v0.2.0 release contract target. The manifest, staged package, build, tests, or dry-run do not by themselves prove a registry release. This project is licensed under GNU GPL v3.0.
+Chinese documentation: [README-CN.md](./README-CN.md).
