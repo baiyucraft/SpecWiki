@@ -233,6 +233,53 @@ test("rejects malformed parent and asymmetric child metadata", async () => {
   expect(child.issues).toContainEqual(expect.objectContaining({ kind: "invalid_multi_change" }));
 });
 
+test("rejects cyclic multi-change dependencies for the parent and children", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-lite-cycle-"));
+  roots.push(root);
+  const parentId = "docs-suite";
+  const firstId = "docs-suite-first";
+  const secondId = "docs-suite-second";
+  const parentRoot = path.join(root, ".spec", "changes", parentId);
+  mkdirSync(parentRoot, { recursive: true });
+  writeFileSync(path.join(parentRoot, "split.md"), "# Split\n", "utf8");
+  writeFileSync(path.join(parentRoot, "meta.yaml"), [
+    `id: ${parentId}`,
+    "stage: exploration",
+    "deliveryShape: multi-change",
+    "multiChange:",
+    "  role: parent",
+    "  children:",
+    `    - id: ${firstId}`,
+    "      order: 1",
+    `      dependsOn: [${secondId}]`,
+    `    - id: ${secondId}`,
+    "      order: 2",
+    `      dependsOn: [${firstId}]`,
+  ].join("\n"), "utf8");
+  for (const [id, order, dependency] of [
+    [firstId, 1, secondId],
+    [secondId, 2, firstId],
+  ] as const) {
+    const childRoot = path.join(root, ".spec", "changes", id);
+    mkdirSync(childRoot, { recursive: true });
+    writeFileSync(path.join(childRoot, "meta.yaml"), [
+      `id: ${id}`,
+      "stage: exploration",
+      "deliveryShape: single-change",
+      "multiChange:",
+      "  role: child",
+      `  parent: ${parentId}`,
+      `  order: ${order}`,
+      `  dependsOn: [${dependency}]`,
+    ].join("\n"), "utf8");
+  }
+
+  for (const id of [parentId, firstId, secondId]) {
+    const result = await validateChange(root, id, { strict: true });
+    expect(result.issues).toContainEqual(expect.objectContaining({ kind: "invalid_multi_change" }));
+  }
+});
+
 test.skipIf(process.platform === "win32")("rejects report symlinks that escape the project", async () => {
   const fixture = createStageFixture("verification");
   const changeRoot = path.join(fixture.root, ".spec", "changes", fixture.id);

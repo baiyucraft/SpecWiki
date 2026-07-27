@@ -256,3 +256,47 @@ test("rejects forged parent archive targets", async () => {
   await expect(archiveChange(root, parentId, fixedClock)).rejects.toThrow("archive evidence");
   expect(existsSync(parentRoot)).toBe(true);
 });
+
+test("rejects a forged child archive that contains metadata only", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-lite-archive-"));
+  roots.push(root);
+  const { childId, childRoot, parentId, parentRoot } = createParentChildFixture(root);
+  rmSync(childRoot, { recursive: true });
+  const archivedTo = `.spec/archive/2026-07-27-${childId}`;
+  const archivedRoot = path.join(root, archivedTo);
+  mkdirSync(archivedRoot, { recursive: true });
+  writeFileSync(path.join(archivedRoot, "meta.yaml"), [
+    `id: ${childId}`,
+    "stage: verification",
+    "deliveryShape: single-change",
+    "multiChange:",
+    "  role: child",
+    `  parent: ${parentId}`,
+    "  order: 1",
+    "  dependsOn: []",
+  ].join("\n"), "utf8");
+  writeFileSync(path.join(parentRoot, "meta.yaml"), [
+    `id: ${parentId}`,
+    "stage: exploration",
+    "deliveryShape: multi-change",
+    "multiChange:",
+    "  role: parent",
+    "  children:",
+    `    - id: ${childId}`,
+    "      order: 1",
+    "      dependsOn: []",
+    "      archiveStatus: archived",
+    "      archivedAt: 2026-07-27T12:00:00.000Z",
+    `      archivedTo: ${archivedTo}`,
+  ].join("\n"), "utf8");
+  writeFileSync(path.join(parentRoot, "split.md"), [
+    "# Split",
+    "",
+    `### 1. ${childId}`,
+    "",
+    "- 归档状态：[x] archived",
+  ].join("\n"), "utf8");
+
+  await expect(archiveChange(root, parentId, fixedClock)).rejects.toThrow("required artifact");
+  expect(existsSync(parentRoot)).toBe(true);
+});

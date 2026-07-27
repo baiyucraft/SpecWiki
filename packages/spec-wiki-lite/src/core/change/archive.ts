@@ -6,7 +6,7 @@ import { parseDocument } from "yaml";
 
 import { resolveSafePath } from "../path.js";
 import { changeDirectory, changeFilePath, parseMetadata } from "./metadata.js";
-import { validateChange } from "./validate.js";
+import { hasUncheckedTasks, reportIsFullPass, validateChange } from "./validate.js";
 
 export type ArchiveClock = () => Date;
 
@@ -136,6 +136,7 @@ function assertArchiveEvidence(
   }
   const archivedMulti = archivedMetadata.multiChange;
   if (archivedMetadata.id !== value.id
+    || (archivedMetadata.stage !== "verification" && archivedMetadata.stage !== "archive")
     || archivedMetadata.deliveryShape !== "single-change"
     || !isRecord(archivedMulti)
     || archivedMulti.role !== "child"
@@ -143,6 +144,21 @@ function assertArchiveEvidence(
     || archivedMulti.order !== value.order
     || !sameStrings(stringArray(archivedMulti.dependsOn), dependencies)) {
     throw new ChangeNotReadyError(`parent child archive metadata disagrees: ${value.id}`);
+  }
+  const requiredFiles = ["proposal.md", "design.md", "system-tests.md", "tasks.md", "review-report.md", "test-report.md"];
+  const files = new Map(requiredFiles.map(fileName => [fileName, resolveSafePath(archivedPath, fileName)]));
+  for (const [fileName, filePath] of files) {
+    if (!existsSync(filePath) || !statSync(filePath).isFile() || statSync(filePath).size === 0) {
+      throw new ChangeNotReadyError(`parent child archive required artifact is missing or empty: ${value.id}/${fileName}`);
+    }
+  }
+  const tasksPath = files.get("tasks.md")!;
+  if (hasUncheckedTasks(readFileSync(tasksPath, "utf8"))) {
+    throw new ChangeNotReadyError(`parent child archive tasks are incomplete: ${value.id}`);
+  }
+  if (!reportIsFullPass(files.get("review-report.md")!, "review-result")
+    || !reportIsFullPass(files.get("test-report.md")!, "verification-result")) {
+    throw new ChangeNotReadyError(`parent child archive reports are not full pass: ${value.id}`);
   }
 }
 

@@ -69,7 +69,7 @@ function emptyArtifactPresence(): Record<ArtifactId, boolean> {
   return Object.fromEntries(Object.keys(ARTIFACTS).map(id => [id, false])) as Record<ArtifactId, boolean>;
 }
 
-function reportIsFullPass(filePath: string, resultField: string): boolean {
+export function reportIsFullPass(filePath: string, resultField: string): boolean {
   const value = parseYamlFrontmatter(readFileSync(filePath, "utf8"));
   return value?.[resultField] === "pass" && value.scope === "full";
 }
@@ -98,7 +98,7 @@ function sameStrings(left: string[] | undefined, right: string[] | undefined): b
   return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
 }
 
-function hasUncheckedTasks(content: string): boolean {
+export function hasUncheckedTasks(content: string): boolean {
   let fence: "```" | "~~~" | undefined;
   return content.replaceAll("\r\n", "\n").split("\n").some((line) => {
     const marker = line.match(/^\s*(```|~~~)/u)?.[1] as "```" | "~~~" | undefined;
@@ -108,6 +108,30 @@ function hasUncheckedTasks(content: string): boolean {
     }
     return fence === undefined && /^\s*[-*+]\s+\[\s\]\s+/u.test(line);
   });
+}
+
+function hasDependencyCycle(entries: Array<Record<string, unknown>>): boolean {
+  const graph = new Map(entries.map(entry => [String(entry.id), stringArray(entry.dependsOn) ?? []]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  function visit(id: string): boolean {
+    if (visiting.has(id)) {
+      return true;
+    }
+    if (visited.has(id)) {
+      return false;
+    }
+    visiting.add(id);
+    for (const dependency of graph.get(id) ?? []) {
+      if (visit(dependency)) {
+        return true;
+      }
+    }
+    visiting.delete(id);
+    visited.add(id);
+    return false;
+  }
+  return [...graph.keys()].some(visit);
 }
 
 function multiChangeMessage(
@@ -150,6 +174,12 @@ function multiChangeMessage(
       if (new Set(dependencies).size !== dependencies.length) {
         return `parent child ${String(value.id)} has duplicate dependencies`;
       }
+    }
+    if (hasDependencyCycle(entries as Array<Record<string, unknown>>)) {
+      return "parent child dependency graph must be acyclic";
+    }
+    for (const value of entries as Array<Record<string, unknown>>) {
+      const dependencies = stringArray(value.dependsOn)!;
       const archived = value.archiveStatus === "archived";
       if (value.archiveStatus !== undefined && !archived) {
         return `parent child ${String(value.id)} has an invalid archive status`;
@@ -200,11 +230,16 @@ function multiChangeMessage(
         || !Array.isArray(parentMulti.children)) {
         return `active parent metadata is invalid for ${changeId}`;
       }
+      const parentMessage = multiChangeMessage(projectRoot, multi.parent, parent);
+      if (parentMessage) {
+        return `active parent metadata is invalid for ${changeId}: ${parentMessage}`;
+      }
       const matches = parentMulti.children.filter(entry => isRecord(entry) && entry.id === changeId);
       const entry = matches[0];
       if (matches.length !== 1
         || !isRecord(entry)
         || entry.order !== multi.order
+        || entry.archiveStatus !== undefined
         || !sameStrings(stringArray(entry.dependsOn), dependencies)) {
         return `parent and child metadata disagree for ${changeId}`;
       }
