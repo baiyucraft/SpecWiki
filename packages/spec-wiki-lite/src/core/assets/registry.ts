@@ -17,12 +17,25 @@ export const PROJECT_SKILL_NAMES = [
   "wiki-archive",
 ] as const;
 
+const PROJECT_SCAFFOLD_WIKI_PATHS = [
+  "INDEX.md",
+  "00-conventions/00-page-template.md",
+  "01-project/INDEX.md",
+  "01-project/00-overview.md",
+  "02-development/INDEX.md",
+  "02-development/00-getting-started.md",
+  "02-development/01-testing.md",
+  "03-architecture/INDEX.md",
+  "03-architecture/00-system-overview.md",
+  "04-reference/INDEX.md",
+] as const;
+
 export const PROJECT_ASSETS: readonly ProjectAsset[] = [
-  {
-    source: "wiki/INDEX.md",
-    target: ".wiki/INDEX.md",
-    ownership: "scaffold",
-  },
+  ...PROJECT_SCAFFOLD_WIKI_PATHS.map(wikiPath => ({
+    source: `wiki/${wikiPath}`,
+    target: `.wiki/${wikiPath}`,
+    ownership: "scaffold" as const,
+  })),
   {
     source: "wiki/00-conventions/INDEX.md",
     target: ".wiki/00-conventions/INDEX.md",

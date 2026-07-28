@@ -15,9 +15,28 @@ owner: docs
 
 | 类型 | 目标 | 更新规则 |
 | --- | --- | --- |
-| `scaffold` | `.wiki/INDEX.md` | 缺失时创建；已有内容始终保留 |
+| `scaffold` | `.wiki/INDEX.md`、项目/开发/架构/参考栏目与页面模板 | 缺失时创建；已有内容始终保留 |
 | `managed` | `.wiki/00-conventions/INDEX.md` | 缺失时创建；仅 `--force` 覆盖 |
 | `skill` | `.agents/skills/wiki-*/SKILL.md` | 缺失时创建；每次同步到当前包版本 |
+
+初始 Wiki scaffold 是：
+
+```text
+.wiki/
+├── INDEX.md
+├── 00-conventions/INDEX.md
+├── 00-conventions/00-page-template.md
+├── 01-project/INDEX.md
+├── 01-project/00-overview.md
+├── 02-development/INDEX.md
+├── 02-development/00-getting-started.md
+├── 02-development/01-testing.md
+├── 03-architecture/INDEX.md
+├── 03-architecture/00-system-overview.md
+└── 04-reference/INDEX.md
+```
+
+内容页只提供结构化填写提示，不推断仓库事实；Codex 后续按需读取源码并直接维护这些正式页面。
 
 同步器同时确保以下目录存在：
 

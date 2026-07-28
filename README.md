@@ -28,11 +28,29 @@ spec-wiki-lite archive <change-id>
 ## Repository Model
 
 ```text
-.wiki/                         stable project documentation
+.wiki/
+├── INDEX.md
+├── 00-conventions/
+│   ├── INDEX.md
+│   └── 00-page-template.md
+├── 01-project/
+│   ├── INDEX.md
+│   └── 00-overview.md
+├── 02-development/
+│   ├── INDEX.md
+│   ├── 00-getting-started.md
+│   └── 01-testing.md
+├── 03-architecture/
+│   ├── INDEX.md
+│   └── 00-system-overview.md
+└── 04-reference/
+    └── INDEX.md
 .spec/changes/<change-id>/     active workflow evidence
 .spec/archive/<date>-<id>/     immutable archived evidence
 .agents/skills/wiki-*/         Codex workflow skills
 ```
+
+The initial Wiki contains prompts rather than invented project facts. Every scaffold page is created only when missing and is never overwritten by `update`, including `update --force`. The managed convention index is the only Wiki baseline that `--force` may refresh.
 
 The Wiki uses `INDEX.md` for navigation. Ordinary pages use stable Markdown links and YAML frontmatter with `title`, `description`, `updated`, and `owner`.
 

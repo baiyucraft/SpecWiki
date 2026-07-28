@@ -18,6 +18,8 @@ test("stages a TypeScript-only package with assets and no native runtime", () =>
 
   expect(files).toContain("dist/index.js");
   expect(files).toContain("assets/wiki/INDEX.md");
+  expect(files).toContain("assets/wiki/01-project/00-overview.md");
+  expect(files).toContain("assets/wiki/03-architecture/00-system-overview.md");
   expect(files).toContain("assets/skills/wiki-continue/SKILL.md");
   expect(files).toContain("README.md");
   expect(files).toContain("LICENSE");

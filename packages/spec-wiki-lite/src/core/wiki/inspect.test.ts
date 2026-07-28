@@ -86,6 +86,8 @@ test("accepts the built-in scaffold and excludes legacy runtime directories", as
 
   expect(report.ready).toBe(true);
   expect(report.issues).toEqual([]);
+  expect(report.pages).toHaveLength(11);
+  expect(report.pages).toContain(".wiki/03-architecture/00-system-overview.md");
   expect(report.pages).not.toContain(".wiki/.knowledge/broken.md");
 });
 

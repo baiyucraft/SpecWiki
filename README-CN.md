@@ -28,11 +28,29 @@ spec-wiki-lite archive <change-id>
 ## 目录模型
 
 ```text
-.wiki/                         稳定项目知识
+.wiki/
+├── INDEX.md
+├── 00-conventions/
+│   ├── INDEX.md
+│   └── 00-page-template.md
+├── 01-project/
+│   ├── INDEX.md
+│   └── 00-overview.md
+├── 02-development/
+│   ├── INDEX.md
+│   ├── 00-getting-started.md
+│   └── 01-testing.md
+├── 03-architecture/
+│   ├── INDEX.md
+│   └── 00-system-overview.md
+└── 04-reference/
+    └── INDEX.md
 .spec/changes/<change-id>/     active workflow 证据
 .spec/archive/<date>-<id>/     已归档历史证据
 .agents/skills/wiki-*/         Codex 工作流 Skills
 ```
+
+初始 Wiki 页面只提供待填写结构，不虚构项目事实。所有 scaffold 页面只在缺失时创建，`update --force` 也不会覆盖；只有 managed convention 索引允许由 `--force` 刷新。
 
 Wiki 使用 `INDEX.md` 组织导航；普通页面通过稳定相对链接连接，并包含 `title/description/updated/owner` YAML frontmatter。
 

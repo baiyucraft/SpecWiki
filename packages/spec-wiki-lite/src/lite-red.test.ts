@@ -27,6 +27,12 @@ test("init creates the Lite wiki, spec directories, and canonical agent skills",
   await runBootstrapInit({ repoRoot: root, hosts: "codex", env: process.env });
 
   expect(existsSync(path.join(root, ".wiki", "INDEX.md"))).toBe(true);
+  expect(existsSync(path.join(root, ".wiki", "00-conventions", "00-page-template.md"))).toBe(true);
+  expect(existsSync(path.join(root, ".wiki", "01-project", "00-overview.md"))).toBe(true);
+  expect(existsSync(path.join(root, ".wiki", "02-development", "00-getting-started.md"))).toBe(true);
+  expect(existsSync(path.join(root, ".wiki", "02-development", "01-testing.md"))).toBe(true);
+  expect(existsSync(path.join(root, ".wiki", "03-architecture", "00-system-overview.md"))).toBe(true);
+  expect(existsSync(path.join(root, ".wiki", "04-reference", "INDEX.md"))).toBe(true);
   expect(existsSync(path.join(root, ".spec", "changes"))).toBe(true);
   expect(existsSync(path.join(root, ".agents", "skills", "wiki-continue", "SKILL.md"))).toBe(true);
   expect(existsSync(path.join(root, ".codex"))).toBe(false);

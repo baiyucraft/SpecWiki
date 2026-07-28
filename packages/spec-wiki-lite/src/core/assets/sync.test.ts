@@ -31,6 +31,8 @@ test("preserves scaffold and user pages while force only replaces managed baseli
   writeFileSync(index, "user-owned index", "utf8");
   const managed = path.join(root, ".wiki", "00-conventions", "INDEX.md");
   writeFileSync(managed, "locally changed baseline", "utf8");
+  const projectOverview = path.join(root, ".wiki", "01-project", "00-overview.md");
+  writeFileSync(projectOverview, "locally completed project overview", "utf8");
 
   const preserved = await syncProjectAssets(root);
   expect(readFileSync(managed, "utf8")).toBe("locally changed baseline");
@@ -40,9 +42,11 @@ test("preserves scaffold and user pages while force only replaces managed baseli
 
   expect(readFileSync(custom, "utf8")).toBe("custom");
   expect(readFileSync(index, "utf8")).toBe("user-owned index");
+  expect(readFileSync(projectOverview, "utf8")).toBe("locally completed project overview");
   expect(readFileSync(managed, "utf8")).toContain("name and navigation conventions");
   expect(report.preserved).toContain(".wiki/custom.md");
   expect(report.preserved).toContain(".wiki/INDEX.md");
+  expect(report.preserved).toContain(".wiki/01-project/00-overview.md");
   expect(report.updated).toContain(".wiki/00-conventions/INDEX.md");
   expect(report.unchanged).toContain(".agents/skills/wiki-continue/SKILL.md");
 });
@@ -56,8 +60,8 @@ test("is idempotent and restores package-owned skills", async () => {
 
   const repaired = await syncProjectAssets(root);
 
-  expect(first.created).toHaveLength(10);
-  expect(second.unchanged).toHaveLength(10);
+  expect(first.created).toHaveLength(19);
+  expect(second.unchanged).toHaveLength(19);
   expect(repaired.updated).toContain(".agents/skills/wiki-continue/SKILL.md");
   expect(readFileSync(skill, "utf8")).toContain("name: wiki-continue");
 });
