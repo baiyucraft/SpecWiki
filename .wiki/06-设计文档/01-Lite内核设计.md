@@ -1,7 +1,7 @@
 ---
 title: Lite 内核设计
 description: 纯 TypeScript 资产、Wiki、change 与路径安全设计
-updated: 2026-07-28
+updated: 2026-07-29
 owner: architecture
 ---
 
@@ -11,9 +11,11 @@ owner: architecture
 
 registry 将文件声明为 `scaffold`、`managed` 或 `skill`。scaffold 与用户页面始终保留；managed 只在 `--force` 时更新；skill 每次同步到当前 package 版本。单文件写入使用同目录临时文件加 rename。
 
+当前模板分别位于 `assets/wiki/zh/**` 与 `assets/wiki/en/**`。`.wiki/config.yaml` 选择目标语言，默认 `zh`；配置通过 YAML document API 更新，保留未知字段。语言迁移先验证来源/目标内容和路径，再以 rollback snapshot 执行登记文件替换。旧 `e830627` 英文 scaffold 由独立 migration baseline 识别。
+
 ## Wiki 检查
 
-检查范围是 `.wiki/**/*.md`，要求根和每个 Markdown 目录存在 `INDEX.md`，页面 frontmatter 包含 `title/description/updated/owner`，相对链接不越界且目标存在，非 INDEX 页面从根导航可达，`source_of_truth` 不重复。
+检查范围是 `.wiki/**/*.md`，要求根和每个 Markdown 目录存在 `INDEX.md`，页面 frontmatter 包含 `title/description/updated/owner`，相对链接不越界且目标存在，非 INDEX 页面从根导航可达，`source_of_truth` 不重复。报告同时包含配置语言和根 bootstrap marker；marker 不影响静态 `wiki.ready`，但会阻止项目级 ready。
 
 ## Change 工作流
 

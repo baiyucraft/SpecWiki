@@ -1,7 +1,7 @@
 ---
 title: 01-快速上手
 description: SpecWiki Lite 的安装、初始化和日常使用入口
-updated: 2026-07-28
+updated: 2026-07-29
 owner: docs
 ---
 
@@ -37,7 +37,7 @@ pnpm run build
 
 | 命令 | 用途 |
 | --- | --- |
-| `spec-wiki-lite init [path] [--host codex] [--force]` | 初始化 Wiki、change 目录和八个 Codex Skills |
+| `spec-wiki-lite init [path] [--host codex] [--language zh\|en] [--force]` | 初始化所选语言 Wiki、配置、change 目录和八个 Skills |
 | `spec-wiki-lite status [--json]` | 检查 Wiki、Skills 和 active changes |
 | `spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]` | 查看 change 摘要或单个 artifact |
 | `spec-wiki-lite validate <change-id> [--strict] [--json]` | 校验阶段、artifact 和归档证据 |

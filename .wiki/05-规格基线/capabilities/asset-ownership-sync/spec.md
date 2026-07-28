@@ -1,7 +1,7 @@
 ---
 title: Asset Ownership Sync
 description: Wiki 基线与 Codex Skills 的幂等 ownership 同步合同
-updated: 2026-07-28
+updated: 2026-07-29
 owner: product
 ---
 
@@ -38,3 +38,8 @@ owner: product
 
 - **WHEN** CLI 同步资产
 - **THEN** 只写 `.wiki`、`.spec` 和 `.agents/skills` 范围，并只接受 `--host codex`
+
+### Requirement: 语言迁移先预检后提交
+
+- **WHEN** `.wiki/config.yaml` 的目标语言与登记资产语言不同
+- **THEN** 系统 MUST 先校验来源内容、目标冲突和路径安全，再执行可回滚迁移

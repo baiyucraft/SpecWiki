@@ -1,7 +1,7 @@
 ---
 title: SpecWiki Lite Wiki
 description: SpecWiki Lite 的长期项目知识与维护入口
-updated: 2026-07-28
+updated: 2026-07-29
 owner: docs
 ---
 
@@ -27,6 +27,7 @@ SpecWiki Lite 是纯 TypeScript 的 `.wiki + .spec + Codex Skills` 工具。它�
 - `.wiki/` 只保存稳定项目知识和导航。
 - `.spec/changes/**` 与 `.spec/archive/**` 保存 change artifact，不复制进 Wiki。
 - `.agents/skills/wiki-*` 是 Codex 工作流资产的唯一安装位置。
+- `.wiki/config.yaml` 是 Wiki 语言和未来 LLM 项目配置的唯一入口。
 - 同一事实只维护一处，其他页面通过摘要和相对链接引用。
 
 ## 关键入口

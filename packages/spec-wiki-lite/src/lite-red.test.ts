@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -21,21 +21,58 @@ afterEach(() => {
   }
 });
 
-test("init creates the Lite wiki, spec directories, and canonical agent skills", async () => {
+test("init creates the default Chinese bootstrap Wiki, config, spec directories, and skills", async () => {
   const root = makeTempDir();
 
   await runBootstrapInit({ repoRoot: root, hosts: "codex", env: process.env });
 
   expect(existsSync(path.join(root, ".wiki", "INDEX.md"))).toBe(true);
-  expect(existsSync(path.join(root, ".wiki", "00-conventions", "00-page-template.md"))).toBe(true);
-  expect(existsSync(path.join(root, ".wiki", "01-project", "00-overview.md"))).toBe(true);
-  expect(existsSync(path.join(root, ".wiki", "02-development", "00-getting-started.md"))).toBe(true);
-  expect(existsSync(path.join(root, ".wiki", "02-development", "01-testing.md"))).toBe(true);
-  expect(existsSync(path.join(root, ".wiki", "03-architecture", "00-system-overview.md"))).toBe(true);
-  expect(existsSync(path.join(root, ".wiki", "04-reference", "INDEX.md"))).toBe(true);
+  expect(existsSync(path.join(root, ".wiki", "00-文档约定", "01-页面模板.md"))).toBe(true);
+  expect(existsSync(path.join(root, ".wiki", "01-快速上手", "INDEX.md"))).toBe(true);
+  expect(existsSync(path.join(root, ".wiki", "02-开发指南", "00-代码注释规范.md"))).toBe(true);
+  expect(existsSync(path.join(root, ".wiki", "03-模块指南", "INDEX.md"))).toBe(true);
+  expect(existsSync(path.join(root, ".wiki", "04-对外方法", "INDEX.md"))).toBe(true);
+  expect(readFileSync(path.join(root, ".wiki", "config.yaml"), "utf8")).toContain("language: zh");
+  expect(readFileSync(path.join(root, ".wiki", "INDEX.md"), "utf8")).toContain("spec-wiki-lite:bootstrap-pending");
   expect(existsSync(path.join(root, ".spec", "changes"))).toBe(true);
   expect(existsSync(path.join(root, ".agents", "skills", "wiki-continue", "SKILL.md"))).toBe(true);
   expect(existsSync(path.join(root, ".codex"))).toBe(false);
+});
+
+test("cli initializes English explicitly and reports bootstrap readiness", async () => {
+  const root = makeTempDir();
+  const initStdout: string[] = [];
+  expect(await runCli(["init", "--language", "en"], {
+    cwd: root,
+    env: process.env,
+    stdout: text => initStdout.push(text),
+    stderr: () => undefined,
+  })).toBe(0);
+  expect(existsSync(path.join(root, ".wiki", "01-quick-start", "INDEX.md"))).toBe(true);
+  expect(readFileSync(path.join(root, ".wiki", "config.yaml"), "utf8")).toContain("language: en");
+
+  const stdout: string[] = [];
+  expect(await runCli(["status", "--json"], {
+    cwd: root,
+    env: process.env,
+    stdout: text => stdout.push(text),
+    stderr: () => undefined,
+  })).toBe(0);
+  expect(JSON.parse(stdout.join("")).data).toEqual(expect.objectContaining({
+    ready: false,
+    wiki: expect.objectContaining({ language: "en", bootstrapPending: true, ready: true }),
+  }));
+
+  const index = path.join(root, ".wiki", "INDEX.md");
+  writeFileSync(index, readFileSync(index, "utf8").replace("<!-- spec-wiki-lite:bootstrap-pending -->", ""), "utf8");
+  const completed: string[] = [];
+  await runCli(["status", "--json"], {
+    cwd: root,
+    env: process.env,
+    stdout: text => completed.push(text),
+    stderr: () => undefined,
+  });
+  expect(JSON.parse(completed.join("")).data.ready).toBe(true);
 });
 
 test("help exposes only the SpecWiki Lite command surface", async () => {
@@ -52,6 +89,7 @@ test("help exposes only the SpecWiki Lite command surface", async () => {
   expect(code).toBe(0);
   expect(stderr).toEqual([]);
   expect(stdout.join("")).toContain("spec-wiki-lite init");
+  expect(stdout.join("")).toContain("--language zh|en");
   expect(stdout.join("")).toContain("spec-wiki-lite show");
   expect(stdout.join("")).not.toMatch(/spec-wiki (query|sync|rebuild)/);
 });
@@ -67,8 +105,11 @@ test("cli rejects unknown hosts and removed commands as usage errors", async () 
   };
 
   expect(await runCli(["init", "--host", "claude"], io)).toBe(64);
+  expect(await runCli(["init", "--language", "fr"], io)).toBe(64);
+  expect(await runCli(["update", "--language", "en"], io)).toBe(64);
   expect(await runCli(["query", "anything"], io)).toBe(64);
   expect(stderr.join("")).toContain("Supported hosts: codex");
+  expect(stderr.join("")).toContain("Supported languages: zh, en");
   expect(stderr.join("")).toContain("unknown command: query");
 });
 

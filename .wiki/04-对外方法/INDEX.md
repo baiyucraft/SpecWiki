@@ -1,7 +1,7 @@
 ---
 title: 04-对外方法
 description: SpecWiki Lite 的 CLI、项目产物和发布合同入口
-updated: 2026-07-28
+updated: 2026-07-29
 owner: docs
 ---
 
@@ -13,7 +13,7 @@ SpecWiki Lite 面向 Codex 仓库提供一个 npm CLI 和八个 repo-local Skill
 
 | 命令 | 用途 |
 | --- | --- |
-| `spec-wiki-lite init [path]` | 初始化项目目录、Wiki scaffold、change 目录和 Codex Skills |
+| `spec-wiki-lite init [path]` | 初始化默认中文或显式英文 Wiki、配置、change 目录和 Skills |
 | `spec-wiki-lite status` | 检查 Wiki、Skills 和 active changes |
 | `spec-wiki-lite show <change-id>` | 查看 change 状态或指定 artifact |
 | `spec-wiki-lite validate <change-id>` | 校验 change metadata、stage 和 required artifacts |

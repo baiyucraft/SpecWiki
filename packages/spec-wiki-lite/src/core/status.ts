@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 
-import { PROJECT_ASSETS } from "./assets/registry.js";
+import { PROJECT_SKILL_ASSETS } from "./assets/registry.js";
 import { getChangeStatus, type ChangeStatusReport } from "./change/status.js";
 import { resolveSafePath } from "./path.js";
 import { inspectWiki, type WikiInspectionReport } from "./wiki/inspect.js";
@@ -23,8 +23,7 @@ export async function getProjectStatus(projectRoot: string): Promise<ProjectStat
     inspectWiki(projectRoot),
     getChangeStatus(projectRoot),
   ]);
-  const skills = PROJECT_ASSETS
-    .filter(asset => asset.ownership === "skill")
+  const skills = PROJECT_SKILL_ASSETS
     .map(asset => ({
       installed: existsSync(resolveSafePath(projectRoot, asset.target)),
       name: asset.target.split("/").at(-2)!,
@@ -32,6 +31,7 @@ export async function getProjectStatus(projectRoot: string): Promise<ProjectStat
     }));
   return {
     ready: wiki.ready
+      && !wiki.bootstrapPending
       && skills.every(skill => skill.installed)
       && changes.activeChanges.every(change => change.valid),
     wiki,

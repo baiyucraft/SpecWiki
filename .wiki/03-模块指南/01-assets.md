@@ -1,7 +1,7 @@
 ---
 title: assets 模块
 description: SpecWiki Lite 项目模板、Codex Skills 和资产所有权规则
-updated: 2026-07-28
+updated: 2026-07-29
 owner: docs
 ---
 
@@ -15,28 +15,39 @@ owner: docs
 
 | 类型 | 目标 | 更新规则 |
 | --- | --- | --- |
-| `scaffold` | `.wiki/INDEX.md`、项目/开发/架构/参考栏目与页面模板 | 缺失时创建；已有内容始终保留 |
-| `managed` | `.wiki/00-conventions/INDEX.md` | 缺失时创建；仅 `--force` 覆盖 |
+| `scaffold` | 根 bootstrap 页、五个栏目索引和代码注释页 | 缺失时创建；已有内容始终保留 |
+| `managed` | SSOT、页面模板和 Lite 工作流页 | 缺失时创建；仅 `--force` 覆盖 |
 | `skill` | `.agents/skills/wiki-*/SKILL.md` | 缺失时创建；每次同步到当前包版本 |
 
-初始 Wiki scaffold 是：
+中文默认 scaffold 是：
 
 ```text
 .wiki/
 ├── INDEX.md
-├── 00-conventions/INDEX.md
-├── 00-conventions/00-page-template.md
-├── 01-project/INDEX.md
-├── 01-project/00-overview.md
-├── 02-development/INDEX.md
-├── 02-development/00-getting-started.md
-├── 02-development/01-testing.md
-├── 03-architecture/INDEX.md
-├── 03-architecture/00-system-overview.md
-└── 04-reference/INDEX.md
+├── config.yaml
+├── 00-文档约定/
+│   ├── INDEX.md
+│   ├── 00-边界与SSOT规则.md
+│   ├── 01-页面模板.md
+│   └── 02-SpecWiki-Lite工作流.md
+├── 01-快速上手/INDEX.md
+├── 02-开发指南/
+│   ├── INDEX.md
+│   └── 00-代码注释规范.md
+├── 03-模块指南/INDEX.md
+└── 04-对外方法/INDEX.md
 ```
 
-内容页只提供结构化填写提示，不推断仓库事实；Codex 后续按需读取源码并直接维护这些正式页面。
+`assets/wiki/zh/**` 与 `assets/wiki/en/**` 提供对称结构。根页包含 bootstrap marker；Codex 后续按需读取仓库并整体替换为正式首页。
+
+## 配置与迁移
+
+- `.wiki/config.yaml` 的 `wiki.language` 是目标语言 SSOT，默认 `zh`。
+- 同语言同步遵守原 ownership；语言变化时先验证来源内容仍等于 package 模板。
+- `assets/migrations/wiki-en-v0/**` 只用于识别提交 `e830627` 的旧英文 scaffold。
+- scaffold 修改、目标冲突或路径逃逸使迁移在写入前失败。
+- 修改过的旧英文 scaffold 可通过显式 `wiki.language: en` 保持英文；此时旧路径按用户内容保留，并安装不冲突的当前英文资产。
+- 迁移执行中断时按 snapshot 回滚登记文件；未登记页面不参与事务。
 
 同步器同时确保以下目录存在：
 
@@ -69,7 +80,7 @@ Skills 只写入 `.agents/skills`。资产层不生成其他宿主入口，也�
 - 所有目标先经过项目根目录 containment 校验。
 - 单文件写入使用同目录临时文件加 rename，避免留下半文件。
 - 未登记的 `.wiki` 文件加入 `preserved`，不会被删除或覆盖。
-- 报告按 `created / updated / unchanged / preserved` 分类并稳定排序。
+- 报告按 `created / updated / unchanged / preserved / removed` 分类并稳定排序。
 
 ## 维护入口
 

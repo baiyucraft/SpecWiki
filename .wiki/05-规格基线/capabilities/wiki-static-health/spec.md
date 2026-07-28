@@ -1,7 +1,7 @@
 ---
 title: Wiki Static Health
 description: 可见 Markdown Wiki 的确定性结构健康合同
-updated: 2026-07-28
+updated: 2026-07-29
 owner: product
 ---
 
@@ -38,3 +38,8 @@ owner: product
 
 - **WHEN** 执行 status
 - **THEN** 只读取可见 Wiki Markdown、Skills 和 active change 元数据，不推断源码内容的新鲜度
+
+### Requirement: bootstrap readiness 独立报告
+
+- **WHEN** 根首页仍含 bootstrap marker
+- **THEN** status MUST 报告语言与 `bootstrapPending: true`，并让项目级 ready 为 false

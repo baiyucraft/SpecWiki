@@ -1,0 +1,18 @@
+id: add-multilingual-wiki-bootstrap
+stage: verification
+deliveryShape: single-change
+artifacts:
+  proposal:
+    status: present
+  design:
+    status: present
+  cases:
+    status: present
+  tasks:
+    status: present
+  review-report:
+    status: present
+  test-report:
+    status: present
+  metadata:
+    status: present

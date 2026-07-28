@@ -10,7 +10,7 @@ Operate only in a Codex repository. Treat `spec-wiki-lite` output and the files 
 ## Preconditions
 
 - The repository has been initialized with `spec-wiki-lite init --host codex`.
-- A change id is named by the user, or exactly one active change can be selected without guessing.
+- A change id is named by the user, exactly one active change can be selected without guessing, or no active change exists while Wiki bootstrap is pending.
 
 ## Inputs
 
@@ -18,6 +18,13 @@ Operate only in a Codex repository. Treat `spec-wiki-lite` output and the files 
 - `spec-wiki-lite show <change-id> --json`
 - `spec-wiki-lite validate <change-id> --strict --json`
 - The selected change's `meta.yaml` and reported artifacts
+
+## Bootstrap Routing
+
+- When there are no active changes and `status.wiki.bootstrapPending` is true, route to `wiki-explore`.
+- `wiki-explore` should inspect repository facts and create the focused change needed to replace the bootstrap task with a final Wiki home and completed section pages.
+- When there are no active changes and bootstrap is complete, report that no change is available to continue.
+- Active changes always use stage routing below; bootstrap does not override their declared stage.
 
 ## Stage Routing
 

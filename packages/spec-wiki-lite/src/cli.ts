@@ -5,6 +5,7 @@ import { archiveChange, ChangeNotReadyError } from "./core/change/archive.js";
 import { isArtifactId } from "./core/change/artifacts.js";
 import { showChange } from "./core/change/show.js";
 import { validateChange } from "./core/change/validate.js";
+import { isWikiLanguage, type WikiLanguage, WIKI_LANGUAGES } from "./core/config.js";
 import { resolveSafePath } from "./core/path.js";
 import { getProjectStatus } from "./core/status.js";
 import { runBootstrapInit } from "./orchestration/init/runInit.js";
@@ -34,6 +35,7 @@ type ParsedCommand = {
   force: boolean;
   strict: boolean;
   host: "codex";
+  language?: WikiLanguage;
   path?: string;
   changeId?: string;
   artifact?: string;
@@ -45,7 +47,7 @@ class CliUsageError extends Error {}
 function defaultHelp(): string {
   return [
     "Usage:",
-    "  spec-wiki-lite init [path] [--host codex] [--force]",
+    "  spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force]",
     "  spec-wiki-lite status [--json]",
     "  spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]",
     "  spec-wiki-lite validate <change-id> [--strict] [--json]",
@@ -125,6 +127,18 @@ function parseArgs(args: string[]): ParsedCommand | undefined {
       index += 1;
       continue;
     }
+    if (argument === "--language") {
+      if (parsed.command !== "init") {
+        throw new CliUsageError("--language is only supported for init");
+      }
+      const language = optionValue(args, index, argument).toLowerCase();
+      if (!isWikiLanguage(language)) {
+        throw new CliUsageError(`unsupported language "${language}". Supported languages: ${WIKI_LANGUAGES.join(", ")}`);
+      }
+      parsed.language = language;
+      index += 1;
+      continue;
+    }
     if (argument === "--artifact") {
       if (parsed.command !== "show") {
         throw new CliUsageError("--artifact is only supported for show");
@@ -142,7 +156,7 @@ function parseArgs(args: string[]): ParsedCommand | undefined {
     positionals.push(argument);
   }
 
-  if (parsed.help && (positionals.length > 0 || parsed.json || parsed.force || parsed.strict || parsed.artifact)) {
+  if (parsed.help && (positionals.length > 0 || parsed.json || parsed.force || parsed.strict || parsed.artifact || parsed.language)) {
     throw new CliUsageError("help cannot be combined with other arguments");
   }
   if (parsed.command === "init") {
@@ -182,6 +196,7 @@ async function execute(parsed: ParsedCommand, io: CliIo): Promise<number> {
       hosts: parsed.host,
       env: io.env,
       force: parsed.force,
+      language: parsed.language,
     });
     if (result.outcome === "failed") {
       io.stderr(`${result.error ?? "project initialization failed"}\n`);

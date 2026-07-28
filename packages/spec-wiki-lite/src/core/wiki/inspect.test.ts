@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -86,9 +86,21 @@ test("accepts the built-in scaffold and excludes legacy runtime directories", as
 
   expect(report.ready).toBe(true);
   expect(report.issues).toEqual([]);
-  expect(report.pages).toHaveLength(11);
-  expect(report.pages).toContain(".wiki/03-architecture/00-system-overview.md");
+  expect(report.language).toBe("zh");
+  expect(report.bootstrapPending).toBe(true);
+  expect(report.pages).toHaveLength(10);
+  expect(report.pages).toContain(".wiki/02-开发指南/00-代码注释规范.md");
   expect(report.pages).not.toContain(".wiki/.knowledge/broken.md");
+
+  const rootIndex = path.join(root, ".wiki", "INDEX.md");
+  writeFileSync(
+    rootIndex,
+    readFileSync(rootIndex, "utf8").replace("<!-- spec-wiki-lite:bootstrap-pending -->", ""),
+    "utf8",
+  );
+  const completed = await inspectWiki(root);
+  expect(completed.bootstrapPending).toBe(false);
+  expect(completed.ready).toBe(true);
 });
 
 test("rejects a Wiki junction that escapes the project", async () => {

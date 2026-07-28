@@ -2,10 +2,12 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { parseYamlFrontmatter } from "../markdown/frontmatter.js";
+import { readProjectConfig, type WikiLanguage } from "../config.js";
 import { resolveSafePath } from "../path.js";
 
 const EXCLUDED_DIRECTORIES = new Set([".cache", ".knowledge", "pages"]);
 const REQUIRED_FRONTMATTER = ["title", "description", "updated", "owner"] as const;
+const BOOTSTRAP_MARKER = "<!-- spec-wiki-lite:bootstrap-pending -->";
 
 export type WikiIssueKind
   = | "missing_index"
@@ -22,6 +24,8 @@ export type WikiIssue = {
 
 export type WikiInspectionReport = {
   ready: boolean;
+  language: WikiLanguage;
+  bootstrapPending: boolean;
   pages: string[];
   issues: WikiIssue[];
 };
@@ -107,6 +111,8 @@ function addIssue(issues: WikiIssue[], issue: WikiIssue): void {
 export async function inspectWiki(projectRoot: string): Promise<WikiInspectionReport> {
   const root = path.resolve(projectRoot);
   const wikiRoot = path.basename(root) === ".wiki" ? root : resolveSafePath(root, ".wiki");
+  const repositoryRoot = path.basename(root) === ".wiki" ? path.dirname(root) : root;
+  const config = readProjectConfig(repositoryRoot);
   const files = listMarkdownFiles(wikiRoot);
   const issues: WikiIssue[] = [];
   const pages: ParsedPage[] = files.map((listedPath) => {
@@ -208,6 +214,8 @@ export async function inspectWiki(projectRoot: string): Promise<WikiInspectionRe
   issues.sort((left, right) => left.path.localeCompare(right.path) || left.kind.localeCompare(right.kind));
   return {
     ready: issues.length === 0,
+    language: config.language,
+    bootstrapPending: pages.some(page => page.absolutePath === path.join(wikiRoot, "INDEX.md") && page.content.includes(BOOTSTRAP_MARKER)),
     pages: pages.map(page => page.path),
     issues,
   };

@@ -1,7 +1,7 @@
 ---
 title: SpecWiki Lite 规格基线
-description: SpecWiki Lite 当前四项稳定 capability 入口
-updated: 2026-07-28
+description: SpecWiki Lite 当前五项稳定 capability 入口
+updated: 2026-07-29
 owner: product
 ---
 
@@ -15,5 +15,6 @@ owner: product
 | `asset-ownership-sync` | [入口](./capabilities/asset-ownership-sync/INDEX.md) |
 | `staged-spec-workflow` | [入口](./capabilities/staged-spec-workflow/INDEX.md) |
 | `codex-skill-distribution` | [入口](./capabilities/codex-skill-distribution/INDEX.md) |
+| `multilingual-wiki-bootstrap` | [入口](./capabilities/multilingual-wiki-bootstrap/INDEX.md) |
 
 Capability 变化必须先通过 `.spec/changes/**`，并保持 README、CLI、Skills、测试和发布合同一致。

@@ -29,6 +29,14 @@ export {
   type ValidateChangeOptions,
 } from "./core/change/validate.js";
 export {
+  DEFAULT_WIKI_LANGUAGE,
+  type ProjectConfig,
+  readProjectConfig,
+  WIKI_LANGUAGES,
+  type WikiLanguage,
+  writeProjectLanguage,
+} from "./core/config.js";
+export {
   assertCanonicalChangeId,
   PathSafetyError,
   resolveSafePath,

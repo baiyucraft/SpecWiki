@@ -1,4 +1,5 @@
 import { syncProjectAssets, type AssetSyncReport } from "../../core/assets/sync.js";
+import type { WikiLanguage } from "../../core/config.js";
 
 export type BootstrapOutcome = "ready" | "failed";
 
@@ -15,6 +16,7 @@ export type BootstrapInitOptions = {
   hosts?: string;
   env: NodeJS.ProcessEnv;
   force?: boolean;
+  language?: WikiLanguage;
 };
 
 export async function runBootstrapInit(
@@ -25,7 +27,10 @@ export async function runBootstrapInit(
   }
 
   try {
-    const assets = await syncProjectAssets(options.repoRoot, { force: options.force });
+    const assets = await syncProjectAssets(options.repoRoot, {
+      force: options.force,
+      language: options.language,
+    });
     return { outcome: "ready", host: "codex", assets };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

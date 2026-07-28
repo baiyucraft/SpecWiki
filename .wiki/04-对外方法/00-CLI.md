@@ -1,7 +1,7 @@
 ---
 title: CLI
 description: spec-wiki-lite 六个公开命令、参数、输出和退出码
-updated: 2026-07-28
+updated: 2026-07-29
 owner: docs
 ---
 
@@ -10,7 +10,7 @@ owner: docs
 ## 命令总览
 
 ```text
-spec-wiki-lite init [path] [--host codex] [--force]
+spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force]
 spec-wiki-lite status [--json]
 spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]
 spec-wiki-lite validate <change-id> [--strict] [--json]
@@ -26,6 +26,7 @@ spec-wiki-lite archive <change-id>
 
 - `path` 相对于当前目录解析；省略时使用当前目录。
 - `--host` 只接受 `codex`，省略时同样使用 Codex。
+- `--language` 只用于 init，默认 `zh`；`en` 生成英文 Wiki 并写入项目配置。
 - `--force` 允许刷新 managed convention；不会覆盖 scaffold 页面或未登记的用户页面。
 - 初始化失败返回恢复提示，可在修复文件写入问题后重试。
 
@@ -33,11 +34,11 @@ spec-wiki-lite archive <change-id>
 
 `status` 返回项目聚合状态：
 
-- Wiki 页面清单与 `missing_index / invalid_frontmatter / broken_link / orphan_page / duplicate_ssot` issues。
+- Wiki 语言、bootstrap 状态、页面清单与 `missing_index / invalid_frontmatter / broken_link / orphan_page / duplicate_ssot` issues。
 - 八个 `wiki-*` Skills 的安装状态。
 - `.spec/changes` 下所有 active changes 的校验结果。
 
-只有三部分全部就绪时，顶层 `ready` 才为 `true`。status 是只读命令。
+只有 Wiki 结构健康、bootstrap 完成、Skills 和 changes 全部就绪时，顶层 `ready` 才为 `true`。status 是只读命令。
 
 ## show
 
@@ -62,9 +63,9 @@ Artifact 不存在或无法读取时命令失败；show 不修改 change。
 
 ## update
 
-`update` 重新执行资产同步：Skills 更新到当前包版本，缺失 scaffold 和 convention 会被补齐，用户页面始终保留。
+`update` 从 `.wiki/config.yaml` 读取目标语言并重新执行资产同步：Skills 更新到当前包版本，缺失 scaffold/managed 页面被补齐，用户页面始终保留。
 
-`--force` 只额外允许覆盖 managed convention，不改变 scaffold 和未登记页面的保护规则。
+语言迁移只处理内容仍等于 package 模板的登记文件；冲突会在写入前失败。`--force` 只额外允许覆盖 managed 页面，不改变 scaffold 和未登记页面的保护规则。
 
 ## archive
 

@@ -1,7 +1,7 @@
 ---
 title: wiki 模块
 description: SpecWiki Lite 对 .wiki Markdown 的确定性静态检查
-updated: 2026-07-28
+updated: 2026-07-29
 owner: docs
 ---
 
@@ -27,6 +27,8 @@ owner: docs
 | 字段 | 含义 |
 | --- | --- |
 | `ready` | 没有任何 Wiki issue 时为 `true` |
+| `language` | `.wiki/config.yaml` 解析后的 `zh` 或 `en` |
+| `bootstrapPending` | 根页仍含一次性 bootstrap marker 时为 `true` |
 | `pages` | 参与检查的项目相对 Markdown 路径 |
 | `issues` | 按路径和 issue kind 稳定排序的问题列表 |
 
@@ -42,7 +44,7 @@ duplicate_ssot
 
 ## 与 status 的关系
 
-项目 `status` 直接组合 Wiki 检查、Skills 安装状态和 active changes 校验结果。Wiki 有任一 issue 时，项目级 `ready` 为 `false`；status 不自动修改页面。
+项目 `status` 组合 Wiki 检查、bootstrap、Skills 和 active changes。Wiki 有 issue 或 bootstrap 尚未完成时，项目级 `ready` 为 `false`；status 不自动修改页面。
 
 ## 维护入口
 

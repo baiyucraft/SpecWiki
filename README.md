@@ -10,12 +10,14 @@ spec-wiki-lite init --host codex
 spec-wiki-lite status
 ```
 
+Initialization uses Chinese Wiki content and paths by default. Use `spec-wiki-lite init --host codex --language en` for English.
+
 Requires Node.js `>=20.19.0`. The initial package version is `0.1.0` and has no OS or CPU restriction.
 
 ## Commands
 
 ```text
-spec-wiki-lite init [path] [--host codex] [--force]
+spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force]
 spec-wiki-lite status [--json]
 spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]
 spec-wiki-lite validate <change-id> [--strict] [--json]
@@ -23,34 +25,36 @@ spec-wiki-lite update [--force] [--json]
 spec-wiki-lite archive <change-id>
 ```
 
-`init` and `update` synchronize package-owned baselines and Skills. Scaffold pages and user pages are preserved. `status` checks Wiki structure, Skill installation, and active changes without scanning source code or creating a persistent index.
+`init` writes `.wiki/config.yaml` and synchronizes localized baselines and Skills. `update` reads `wiki.language` from that config. Scaffold pages and user pages are preserved. `status` checks Wiki structure, bootstrap completion, Skill installation, and active changes without scanning source code or creating a persistent index.
 
 ## Repository Model
 
 ```text
 .wiki/
 ├── INDEX.md
-├── 00-conventions/
+├── config.yaml
+├── 00-文档约定/
 │   ├── INDEX.md
-│   └── 00-page-template.md
-├── 01-project/
+│   ├── 00-边界与SSOT规则.md
+│   ├── 01-页面模板.md
+│   └── 02-SpecWiki-Lite工作流.md
+├── 01-快速上手/
+│   └── INDEX.md
+├── 02-开发指南/
 │   ├── INDEX.md
-│   └── 00-overview.md
-├── 02-development/
-│   ├── INDEX.md
-│   ├── 00-getting-started.md
-│   └── 01-testing.md
-├── 03-architecture/
-│   ├── INDEX.md
-│   └── 00-system-overview.md
-└── 04-reference/
+│   └── 00-代码注释规范.md
+├── 03-模块指南/
+│   └── INDEX.md
+└── 04-对外方法/
     └── INDEX.md
 .spec/changes/<change-id>/     active workflow evidence
 .spec/archive/<date>-<id>/     immutable archived evidence
 .agents/skills/wiki-*/         Codex workflow skills
 ```
 
-The initial Wiki contains prompts rather than invented project facts. Every scaffold page is created only when missing and is never overwritten by `update`, including `update --force`. The managed convention index is the only Wiki baseline that `--force` may refresh.
+The initial root page is a one-time bootstrap task. Codex replaces it with a project-specific home after inspecting repository facts. Until then, `status` reports `bootstrapPending: true` and project `ready: false`.
+
+Scaffold pages are never overwritten. The boundaries/SSOT, page template, and workflow pages are managed baselines that only `update --force` may refresh. Language migration only replaces unchanged packaged assets and fails before writes when user edits conflict.
 
 The Wiki uses `INDEX.md` for navigation. Ordinary pages use stable Markdown links and YAML frontmatter with `title`, `description`, `updated`, and `owner`.
 
