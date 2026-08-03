@@ -1,6 +1,7 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
-import { PROJECT_SKILL_ASSETS } from "./assets/registry.js";
+import { readPackageAsset } from "../packageRoot.js";
+import { PROJECT_SKILL_NAMES, projectSkillAssetsByNameForLanguage } from "./assets/registry.js";
 import { getChangeStatus, type ChangeStatusReport } from "./change/status.js";
 import { resolveSafePath } from "./path.js";
 import { inspectWiki, type WikiInspectionReport } from "./wiki/inspect.js";
@@ -23,12 +24,26 @@ export async function getProjectStatus(projectRoot: string): Promise<ProjectStat
     inspectWiki(projectRoot),
     getChangeStatus(projectRoot),
   ]);
-  const skills = PROJECT_SKILL_ASSETS
-    .map(asset => ({
-      installed: existsSync(resolveSafePath(projectRoot, asset.target)),
-      name: asset.target.split("/").at(-2)!,
-      path: asset.target,
-    }));
+  const skillAssets = projectSkillAssetsByNameForLanguage(wiki.language);
+  const skills = PROJECT_SKILL_NAMES.map((name) => {
+    const assets = skillAssets.get(name) ?? [];
+    const installed = assets.length > 0 && assets.every((asset) => {
+      const target = resolveSafePath(projectRoot, asset.target);
+      if (!existsSync(target)) {
+        return false;
+      }
+      try {
+        return readFileSync(target, "utf8") === readPackageAsset(asset.source);
+      } catch {
+        return false;
+      }
+    });
+    return {
+      installed,
+      name,
+      path: `.agents/skills/${name}/SKILL.md`,
+    };
+  });
   return {
     ready: wiki.ready
       && !wiki.bootstrapPending

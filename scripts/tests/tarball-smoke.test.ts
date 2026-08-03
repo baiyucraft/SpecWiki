@@ -42,8 +42,15 @@ function status(projectRoot: string) {
     data: {
       ready: boolean;
       wiki: { bootstrapPending: boolean; language: string; ready: boolean };
+      skills: Array<{ installed: boolean; name: string; path: string }>;
     };
   }).data;
+}
+
+function countFiles(directory: string): number {
+  return readdirSync(directory, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .length;
 }
 
 beforeAll(() => {
@@ -93,6 +100,10 @@ test("installed tarball initializes both languages and becomes ready after boots
   expect(readFileSync(path.join(enRoot, ".wiki", "01-quick-start", "INDEX.md"), "utf8")).toContain("Quick Start");
   expect(readdirSync(path.join(zhRoot, ".agents", "skills"))).toHaveLength(8);
   expect(readdirSync(path.join(enRoot, ".agents", "skills"))).toHaveLength(8);
+  expect(countFiles(path.join(zhRoot, ".agents", "skills"))).toBe(24);
+  expect(countFiles(path.join(enRoot, ".agents", "skills"))).toBe(24);
+  expect(readFileSync(path.join(zhRoot, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("跨阶段调度");
+  expect(readFileSync(path.join(enRoot, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("Cross-stage routing");
 
   const zhPending = status(zhRoot);
   const enPending = status(enRoot);
@@ -104,6 +115,20 @@ test("installed tarball initializes both languages and becomes ready after boots
     ready: false,
     wiki: expect.objectContaining({ bootstrapPending: true, language: "en", ready: true }),
   }));
+  expect(zhPending.skills.every(skill => skill.installed)).toBe(true);
+  expect(enPending.skills.every(skill => skill.installed)).toBe(true);
+
+  writeFileSync(path.join(zhRoot, ".wiki", "config.yaml"), "version: 1\nwiki:\n  language: en\n", "utf8");
+  run(process.execPath, [executable, "update", "--json"], zhRoot);
+  expect(readFileSync(path.join(zhRoot, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("Cross-stage routing");
+  expect(countFiles(path.join(zhRoot, ".agents", "skills"))).toBe(24);
+  expect(status(zhRoot).skills.every(skill => skill.installed)).toBe(true);
+
+  writeFileSync(path.join(enRoot, ".wiki", "config.yaml"), "version: 1\nwiki:\n  language: zh\n", "utf8");
+  run(process.execPath, [executable, "update", "--json"], enRoot);
+  expect(readFileSync(path.join(enRoot, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("跨阶段调度");
+  expect(countFiles(path.join(enRoot, ".agents", "skills"))).toBe(24);
+  expect(status(enRoot).skills.every(skill => skill.installed)).toBe(true);
 
   const rootIndex = path.join(zhRoot, ".wiki", "INDEX.md");
   writeFileSync(

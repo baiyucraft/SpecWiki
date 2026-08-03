@@ -22,7 +22,10 @@ test("stages a TypeScript-only package with assets and no native runtime", () =>
   expect(files).toContain("assets/wiki/en/INDEX.md");
   expect(files).toContain("assets/wiki/en/01-quick-start/INDEX.md");
   expect(files).toContain("assets/migrations/wiki-en-v0/INDEX.md");
-  expect(files).toContain("assets/skills/wiki-continue/SKILL.md");
+  expect(files).toContain("assets/skills/zh/wiki-continue/SKILL.md");
+  expect(files).toContain("assets/skills/zh/wiki-plan/references/browser-automation.md");
+  expect(files).toContain("assets/skills/en/wiki-continue/SKILL.md");
+  expect(files).toContain("assets/skills/en/wiki-review/references/review-standard.python.md");
   expect(files).toContain("README.md");
   expect(files).toContain("LICENSE");
   expect(files.some(file => /(?:^|\/)(?:lib|crates)(?:\/|$)|\.exe$/u.test(file))).toBe(false);

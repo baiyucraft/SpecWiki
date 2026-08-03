@@ -5,7 +5,11 @@ import path from "node:path";
 import { afterEach, expect, test } from "vitest";
 
 import { readPackageAsset } from "../../packageRoot.js";
-import { LEGACY_EN_V0_ASSETS, PROJECT_SKILL_NAMES } from "./registry.js";
+import {
+  LEGACY_EN_V0_ASSETS,
+  PROJECT_SKILL_NAMES,
+  projectSkillAssetsForLanguage,
+} from "./registry.js";
 import { syncProjectAssets } from "./sync.js";
 
 const roots: string[] = [];
@@ -60,8 +64,8 @@ test("is idempotent and restores package-owned skills", async () => {
 
   const repaired = await syncProjectAssets(root);
 
-  expect(first.created).toHaveLength(19);
-  expect(second.unchanged).toHaveLength(19);
+  expect(first.created).toHaveLength(35);
+  expect(second.unchanged).toHaveLength(35);
   expect(repaired.updated).toContain(".agents/skills/wiki-continue/SKILL.md");
   expect(readFileSync(skill, "utf8")).toContain("name: wiki-continue");
 });
@@ -156,6 +160,23 @@ test.each([
   expect(readFileSync(config, "utf8")).toBe(content);
   expect(readFileSync(sentinel, "utf8")).toBe("user content");
   expect(existsSync(path.join(root, ".wiki", "01-快速上手", "INDEX.md"))).toBe(false);
+  expect(existsSync(path.join(root, ".agents"))).toBe(false);
+});
+
+test("rolls back localized Skill files when sync fails mid-inventory", async () => {
+  const root = createTempProject();
+
+  await expect(syncProjectAssets(root, {}, {
+    beforeOperation: (_operation, index) => {
+      if (index === 15) {
+        throw new Error("injected Skill sync failure");
+      }
+    },
+  })).rejects.toThrow("injected Skill sync failure");
+
+  expect(existsSync(path.join(root, ".agents", "skills", "wiki-continue", "SKILL.md"))).toBe(false);
+  expect(existsSync(path.join(root, ".agents", "skills", "wiki-plan", "references", "tasks-template.md"))).toBe(false);
+  expect(existsSync(path.join(root, ".wiki", "config.yaml"))).toBe(false);
 });
 
 test("rolls back registered files when a migration operation fails", async () => {
@@ -246,17 +267,28 @@ test("installs every packaged Codex skill byte-for-byte into .agents/skills", as
 
   await syncProjectAssets(root);
 
-  for (const name of PROJECT_SKILL_NAMES) {
-    const packaged = readPackageAsset(`skills/${name}/SKILL.md`);
-    const installed = readFileSync(path.join(root, ".agents", "skills", name, "SKILL.md"), "utf8");
+  const assets = projectSkillAssetsForLanguage("zh");
+  expect(assets).toHaveLength(24);
+  for (const asset of assets) {
+    const packaged = readPackageAsset(asset.source);
+    const installed = readFileSync(path.join(root, asset.target), "utf8");
     expect(installed).toBe(packaged);
-    expect(packaged).toContain(`name: ${name}`);
-    expect(packaged).toContain("Codex repository");
-    expect(packaged).toContain("## Preconditions");
-    expect(packaged).toContain("## Inputs");
-    expect(packaged).toContain("## Outputs");
-    expect(packaged).toContain("## Pause Conditions");
-    expect(packaged).toContain("## Next Stage");
     expect(packaged).not.toMatch(/\bspec-wiki\s/u);
   }
+  expect(PROJECT_SKILL_NAMES).toHaveLength(8);
+});
+
+test("switches all registered Skill files with wiki.language and preserves user additions", async () => {
+  const root = createTempProject();
+  await syncProjectAssets(root);
+  const custom = path.join(root, ".agents", "skills", "wiki-plan", "custom.md");
+  writeFileSync(custom, "user extension", "utf8");
+  writeFileSync(path.join(root, ".wiki", "config.yaml"), "version: 1\nwiki:\n  language: en\n", "utf8");
+
+  await syncProjectAssets(root);
+
+  for (const asset of projectSkillAssetsForLanguage("en")) {
+    expect(readFileSync(path.join(root, asset.target), "utf8")).toBe(readPackageAsset(asset.source));
+  }
+  expect(readFileSync(custom, "utf8")).toBe("user extension");
 });

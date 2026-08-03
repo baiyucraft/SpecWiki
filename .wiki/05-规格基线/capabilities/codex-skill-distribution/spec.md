@@ -1,7 +1,7 @@
 ---
 title: Codex Skill Distribution
-description: 八个阶段 Skill 的唯一资产位置和路由合同
-updated: 2026-07-28
+description: 八个双语阶段 Skill、references、唯一资产位置和 readiness 合同
+updated: 2026-08-03
 owner: product
 ---
 
@@ -19,6 +19,27 @@ owner: product
 
 - **WHEN** 同步 package 资产
 - **THEN** `.agents/skills` 包含 `wiki-continue/explore/propose/design/plan/apply/review/archive`
+
+### Requirement: Skill 正文跟随 Wiki 语言
+
+#### Scenario: 选择 zh 或 en
+
+- **WHEN** `.wiki/config.yaml` 的 `wiki.language` 为 `zh|en`
+- **THEN** 8 个 `SKILL.md` 与 16 个登记 references 使用对应语言正文
+- **AND** Skill id、目录、reference 文件名、CLI 和 `.spec` 机器字段保持英文稳定
+
+### Requirement: 登记 Skill 文件受管且完整
+
+#### Scenario: Update 修复 Skill
+
+- **WHEN** 任一登记主文件或 reference 缺失、被修改、旧版本或语言不一致
+- **THEN** 普通 update 将其恢复为目标语言的 package 版本
+- **AND** Skill 目录中用户新增的未登记文件保留
+
+#### Scenario: Status 检查 Skill
+
+- **WHEN** status 计算 `skills[].installed`
+- **THEN** 只有该 Skill 的所有目标语言登记文件存在且内容匹配时为 true
 
 ### Requirement: Continue 只做阶段路由
 
@@ -40,3 +61,12 @@ owner: product
 
 - **WHEN** init 或 update 完成
 - **THEN** Skills 只安装到 `.agents/skills/wiki-*`
+
+### Requirement: 模板与 review standards 闭包
+
+#### Scenario: 使用阶段 Skill
+
+- **WHEN** Skill 引用 `references/<file>.md`
+- **THEN** package 与安装目录包含对应本地化文件
+- **AND** plan 的 browser automation 为工具中立可选指南
+- **AND** review 提供通用、frontend、Go、Java、Python standards 及正式报告模板

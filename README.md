@@ -10,7 +10,7 @@ spec-wiki-lite init --host codex
 spec-wiki-lite status
 ```
 
-Initialization uses Chinese Wiki content and paths by default. Use `spec-wiki-lite init --host codex --language en` for English.
+Initialization uses Chinese Wiki and Skill content by default. Use `spec-wiki-lite init --host codex --language en` for English. The stable `wiki-*` Skill ids, reference filenames, CLI, and `.spec` machine fields remain English in either locale.
 
 Requires Node.js `>=20.19.0`. The initial package version is `0.1.0` and has no OS or CPU restriction.
 
@@ -25,7 +25,7 @@ spec-wiki-lite update [--force] [--json]
 spec-wiki-lite archive <change-id>
 ```
 
-`init` writes `.wiki/config.yaml` and synchronizes localized baselines and Skills. `update` reads `wiki.language` from that config. Scaffold pages and user pages are preserved. `status` checks Wiki structure, bootstrap completion, Skill installation, and active changes without scanning source code or creating a persistent index.
+`init` writes `.wiki/config.yaml` and synchronizes localized Wiki baselines plus the complete localized Skill/reference tree. `update` reads `wiki.language` from that config; changing it switches both Wiki baselines and Skill content. Scaffold pages and user pages are preserved. Registered Skill files are package-owned and repaired on every update, while unregistered user additions remain untouched. `status` checks Wiki structure, bootstrap completion, every registered Skill file byte-for-byte, and active changes without scanning source code or creating a persistent index.
 
 ## Repository Model
 
@@ -49,7 +49,9 @@ spec-wiki-lite archive <change-id>
     └── INDEX.md
 .spec/changes/<change-id>/     active workflow evidence
 .spec/archive/<date>-<id>/     immutable archived evidence
-.agents/skills/wiki-*/         Codex workflow skills
+.agents/skills/wiki-*/
+├── SKILL.md                   localized Codex workflow skill
+└── references/**              localized artifact templates and review standards
 ```
 
 The initial root page is a one-time bootstrap task. Codex replaces it with a project-specific home after inspecting repository facts. Until then, `status` reports `bootstrapPending: true` and project `ready: false`.
@@ -68,6 +70,6 @@ pnpm build
 pnpm run pack
 ```
 
-The distribution contains only the Node CLI, `dist`, templates, Skills, README, and LICENSE. This repository does not publish from the `lite` branch as part of the current change.
+The distribution contains only the Node CLI, `dist`, bilingual Wiki/Skill templates, README, and LICENSE. Each locale ships 8 Skills and 16 registered references (24 Skill files). This repository does not publish from the `lite` branch as part of the current change.
 
 Chinese documentation: [README-CN.md](./README-CN.md).

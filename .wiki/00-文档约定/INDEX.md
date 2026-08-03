@@ -1,7 +1,7 @@
 ---
 title: 文档约定
 description: SpecWiki Lite 的 Wiki 结构、页面模板和 change 规范入口
-updated: 2026-07-28
+updated: 2026-08-03
 owner: docs
 ---
 
@@ -11,7 +11,7 @@ owner: docs
 | --- | --- |
 | [边界与 SSOT 规则](./00-边界与SSOT规则.md) | Wiki、change、Skills 与代码事实边界 |
 | [页面模板](./01-页面模板.md) | 普通页面、栏目和 capability 模板 |
-| [UniSpec 开发规范](./02-UniSpec开发规范.md) | stage、artifact、multi-change 和 archive 规范 |
+| [SpecWiki Lite 工作流](./02-SpecWiki-Lite工作流.md) | Lite CLI、八阶段 Skills、验证与归档基线 |
 | [Agent 协作入口](./03-Agent协作入口.md) | Codex 执行顺序与职责分流 |
 | [文档盘点与沉淀规则](./04-文档盘点与沉淀规则.md) | 当前 authority 和归档后沉淀规则 |
 

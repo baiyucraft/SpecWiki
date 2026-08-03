@@ -19,6 +19,32 @@ export const PROJECT_SKILL_NAMES = [
   "wiki-archive",
 ] as const;
 
+export type ProjectSkillName = (typeof PROJECT_SKILL_NAMES)[number];
+
+const PROJECT_SKILL_REFERENCES: Readonly<Record<ProjectSkillName, readonly string[]>> = {
+  "wiki-continue": [],
+  "wiki-explore": ["research-template.md"],
+  "wiki-propose": ["research-template.md", "proposal-template.md"],
+  "wiki-design": ["research-template.md", "design-template.md"],
+  "wiki-plan": [
+    "system-tests-template.md",
+    "unit-tests-template.md",
+    "tasks-template.md",
+    "browser-automation.md",
+  ],
+  "wiki-apply": [],
+  "wiki-review": [
+    "review-report-template.md",
+    "test-report-template.md",
+    "review-standard.md",
+    "review-standard.frontend.md",
+    "review-standard.go.md",
+    "review-standard.java.md",
+    "review-standard.python.md",
+  ],
+  "wiki-archive": [],
+};
+
 type WikiAssetDefinition = {
   key: string;
   ownership: Exclude<AssetOwnership, "skill">;
@@ -89,14 +115,33 @@ export function projectWikiAssetsForLanguage(language: WikiLanguage): LocalizedW
   }));
 }
 
-export const PROJECT_SKILL_ASSETS: readonly ProjectAsset[] = PROJECT_SKILL_NAMES.map(name => ({
-    source: `skills/${name}/SKILL.md`,
-    target: `.agents/skills/${name}/SKILL.md`,
-    ownership: "skill" as const,
-}));
+export function projectSkillAssetsForLanguage(language: WikiLanguage): ProjectAsset[] {
+  return PROJECT_SKILL_NAMES.flatMap((name) => {
+    const base = `skills/${language}/${name}`;
+    const target = `.agents/skills/${name}`;
+    return [
+      { source: `${base}/SKILL.md`, target: `${target}/SKILL.md`, ownership: "skill" as const },
+      ...PROJECT_SKILL_REFERENCES[name].map(reference => ({
+        source: `${base}/references/${reference}`,
+        target: `${target}/references/${reference}`,
+        ownership: "skill" as const,
+      })),
+    ];
+  });
+}
+
+export function projectSkillAssetsByNameForLanguage(
+  language: WikiLanguage,
+): Map<ProjectSkillName, ProjectAsset[]> {
+  const assets = projectSkillAssetsForLanguage(language);
+  return new Map(PROJECT_SKILL_NAMES.map(name => [
+    name,
+    assets.filter(asset => asset.target.startsWith(`.agents/skills/${name}/`)),
+  ]));
+}
 
 export function projectAssetsForLanguage(language: WikiLanguage): ProjectAsset[] {
-  return [...projectWikiAssetsForLanguage(language), ...PROJECT_SKILL_ASSETS];
+  return [...projectWikiAssetsForLanguage(language), ...projectSkillAssetsForLanguage(language)];
 }
 
 const LEGACY_EN_V0_PATHS = [

@@ -1,7 +1,7 @@
 ---
 title: assets 模块
-description: SpecWiki Lite 项目模板、Codex Skills 和资产所有权规则
-updated: 2026-07-29
+description: SpecWiki Lite 双语项目模板、Codex Skills 和资产所有权规则
+updated: 2026-08-03
 owner: docs
 ---
 
@@ -17,7 +17,7 @@ owner: docs
 | --- | --- | --- |
 | `scaffold` | 根 bootstrap 页、五个栏目索引和代码注释页 | 缺失时创建；已有内容始终保留 |
 | `managed` | SSOT、页面模板和 Lite 工作流页 | 缺失时创建；仅 `--force` 覆盖 |
-| `skill` | `.agents/skills/wiki-*/SKILL.md` | 缺失时创建；每次同步到当前包版本 |
+| `skill` | `.agents/skills/wiki-*/{SKILL.md,references/**}` | 缺失时创建；每次同步到目标语言的当前包版本 |
 
 中文默认 scaffold 是：
 
@@ -42,7 +42,7 @@ owner: docs
 
 ## 配置与迁移
 
-- `.wiki/config.yaml` 的 `wiki.language` 是目标语言 SSOT，默认 `zh`。
+- `.wiki/config.yaml` 的 `wiki.language` 是 Wiki 与 Skill 的共同目标语言 SSOT，默认 `zh`。
 - 同语言同步遵守原 ownership；语言变化时先验证来源内容仍等于 package 模板。
 - `assets/migrations/wiki-en-v0/**` 只用于识别提交 `e830627` 的旧英文 scaffold。
 - scaffold 修改、目标冲突或路径逃逸使迁移在写入前失败。
@@ -60,7 +60,7 @@ owner: docs
 
 ## Codex Skills
 
-Registry 固定安装八个 Skills：
+Registry 固定安装八个 Skills；每种语言登记 8 个主文件和 16 个 references，共 24 个文件：
 
 ```text
 wiki-continue
@@ -73,13 +73,15 @@ wiki-review
 wiki-archive
 ```
 
+package source 位于 `assets/skills/{zh,en}/wiki-*`，安装目标保持 `.agents/skills/wiki-*`。语言切换时全部登记文件直接覆盖为目标语言；用户在 Skill 目录新增的未登记文件不删除。`status` 按 Skill 分组比对每个目标文件与 package 内容，任一 reference 缺失、被修改、旧版本或语言不一致都会使该 Skill 未安装并令项目 not ready。
+
 Skills 只写入 `.agents/skills`。资产层不生成其他宿主入口，也不把项目业务判断写进安装逻辑。
 
 ## 写入安全
 
 - 所有目标先经过项目根目录 containment 校验。
 - 单文件写入使用同目录临时文件加 rename，避免留下半文件。
-- 未登记的 `.wiki` 文件加入 `preserved`，不会被删除或覆盖。
+- 未登记的 `.wiki` 文件加入 `preserved`；未登记的 Skill 用户扩展也不会被删除或覆盖。
 - 报告按 `created / updated / unchanged / preserved / removed` 分类并稳定排序。
 
 ## 维护入口

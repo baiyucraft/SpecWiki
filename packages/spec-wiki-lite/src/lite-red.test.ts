@@ -36,6 +36,9 @@ test("init creates the default Chinese bootstrap Wiki, config, spec directories,
   expect(readFileSync(path.join(root, ".wiki", "INDEX.md"), "utf8")).toContain("spec-wiki-lite:bootstrap-pending");
   expect(existsSync(path.join(root, ".spec", "changes"))).toBe(true);
   expect(existsSync(path.join(root, ".agents", "skills", "wiki-continue", "SKILL.md"))).toBe(true);
+  expect(existsSync(path.join(root, ".agents", "skills", "wiki-plan", "references", "tasks-template.md"))).toBe(true);
+  expect(existsSync(path.join(root, ".agents", "skills", "wiki-review", "references", "review-standard.python.md"))).toBe(true);
+  expect(readFileSync(path.join(root, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("跨阶段调度");
   expect(existsSync(path.join(root, ".codex"))).toBe(false);
 });
 
@@ -50,6 +53,7 @@ test("cli initializes English explicitly and reports bootstrap readiness", async
   })).toBe(0);
   expect(existsSync(path.join(root, ".wiki", "01-quick-start", "INDEX.md"))).toBe(true);
   expect(readFileSync(path.join(root, ".wiki", "config.yaml"), "utf8")).toContain("language: en");
+  expect(readFileSync(path.join(root, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("Cross-stage routing");
 
   const stdout: string[] = [];
   expect(await runCli(["status", "--json"], {
