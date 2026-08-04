@@ -37,7 +37,8 @@ description: 把已接受的设计转换为 normal/failure/boundary 系统测试
 1. 如果当前请求没有明确模式，先询问：“本次选择 `tdd` 还是 `direct`？”；已有明确选择时不得重复询问。
 2. 在 tasks 中写入稳定字段 `implementation-mode: tdd` 或 `implementation-mode: direct`。
 3. `tdd` 按 Red → Green → Refactor 编排，并要求相关 Red 失败证据；`direct` 按 Implement → Verify → Refactor 编排，不要求 Red 证据。
-4. 每个 task 映射 ST/UT、成功标准与验证命令；两种模式都必须完成测试、review、verification 和 archive 门禁。
+4. `direct` 参考结构化实现清单：按能力块/验收目标拆分编号大 task，每个大 task 都有 `### CheckList`，小 task 以动词开头并指向具体模块、文件、接口、配置或数据流。
+5. 每个 task 映射 ST/UT、成功标准与验证命令；两种模式都必须完成测试、review、verification 和 archive 门禁。
 
 ## 浏览器自动化
 
@@ -47,7 +48,7 @@ description: 把已接受的设计转换为 normal/failure/boundary 系统测试
 
 - `system-tests.md`
 - 选择 `tdd` 时输出 `unit-tests.md`；选择 `direct` 时可省略
-- `tasks.md` 与合法 `implementation-mode`
+- `tasks.md` 与合法 `implementation-mode`、任务总览、编号大 task、checklist、用例映射、执行顺序和暂缓事项
 - planning 完成后 stage tasks，strict validate 通过
 
 ## 暂停条件

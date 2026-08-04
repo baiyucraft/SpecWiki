@@ -19,6 +19,13 @@ test.each(locales)("%s workflow makes TDD optional and removes readiness confirm
 
   expect(tasks).toMatch(/implementation-mode:\s*<tdd\|direct>/u);
   expect(tasks).toMatch(/tdd[\s\S]*direct|direct[\s\S]*tdd/u);
+  expect(tasks).toMatch(/任务总览|Task Overview/iu);
+  expect(tasks).toMatch(/##\s+1\.|##\s+1\s/u);
+  expect(tasks).toMatch(/###\s+CheckList/iu);
+  expect(tasks).toMatch(/用例到任务映射|Case-to-task mapping/iu);
+  expect(tasks).toMatch(/执行顺序|Execution order/iu);
+  expect(tasks).toMatch(/暂缓事项|Deferred items/iu);
+  expect(tasks).toMatch(/direct[\s\S]*(模块|文件|接口|配置|数据流)|direct[\s\S]*(module|file|interface|config|data flow)/iu);
   expect(tasks).not.toContain("implementation-ready");
   expect(plan).toMatch(/tdd[\s\S]*(direct|选择|choose)|direct[\s\S]*(tdd|选择|choose)/iu);
   expect(plan).toMatch(/明确时不重复询问|明确不重复询问|不得重复询问|already specified|do not ask again|without asking/iu);

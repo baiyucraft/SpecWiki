@@ -37,7 +37,8 @@ Own only `design`, `cases`, and `tasks`. Before writing tasks, select exactly on
 1. If the current request does not specify a mode, ask once: “Choose `tdd` or `direct` for this change.” Do not ask again when it is already explicit.
 2. Record the stable field `implementation-mode: tdd` or `implementation-mode: direct` in tasks.
 3. `tdd` uses Red → Green → Refactor and requires relevant Red failure evidence; `direct` uses Implement → Verify → Refactor and does not require Red evidence.
-4. Map each task to ST/UT, success criteria, and commands; both modes still require tests, review, verification, and archive gates.
+4. `direct` follows a structured implementation checklist: split by capability block/success target into numbered large tasks, give every large task a `### CheckList`, and start small tasks with verbs that name concrete modules, files, interfaces, configuration, or data flows.
+5. Map each task to ST/UT, success criteria, and commands; both modes still require tests, review, verification, and archive gates.
 
 ## Browser Automation
 
@@ -47,7 +48,7 @@ Browser tooling is optional evidence. Use it only when the project starts safely
 
 - `system-tests.md`
 - `unit-tests.md` when `tdd` is selected; it may be omitted for `direct`
-- `tasks.md` with a valid `implementation-mode`
+- `tasks.md` with a valid `implementation-mode`, task overview, numbered large tasks, checklists, case mapping, execution order, and deferred items
 - Stage tasks and successful strict validation when planning is complete
 
 ## Pause Conditions
