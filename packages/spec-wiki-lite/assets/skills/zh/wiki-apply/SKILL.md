@@ -1,6 +1,6 @@
 ---
 name: wiki-apply
-description: 执行已授权且 implementation-ready 的 SpecWiki Lite 任务计划，按 TDD 更新证据并处理 scope drift 与失败回退。
+description: 执行已授权且 implementation-mode 合法的 SpecWiki Lite 任务计划，按选定模式更新证据并处理 scope drift 与失败回退。
 ---
 
 # Wiki Apply
@@ -10,7 +10,7 @@ description: 执行已授权且 implementation-ready 的 SpecWiki Lite 任务计
 ## 前置条件
 
 - change 是 standalone/child `single-change`，stage 为 `tasks` 或 `implementation`。
-- `tasks.md` 完整且 `implementation-ready: true`。
+- `tasks.md` 完整且 `implementation-mode` 为 `tdd` 或 `direct`。
 - 用户已授权实施；strict validate 无 planning blocker。
 
 ## 输入
@@ -25,14 +25,13 @@ description: 执行已授权且 implementation-ready 的 SpecWiki Lite 任务计
 - 实现需要改变 goals/non-goals/success criteria 时回到 `wiki-propose`；改变关键设计时回 `wiki-design`；只需改 cases/tasks 时回 `wiki-plan`。
 - path safety、数据丢失或外部状态风险不在授权内时暂停。
 
-## TDD 工作流
+## 实现模式
 
 1. 设置 `stage: implementation`，保留未知 metadata 字段。
-2. Red：先运行相关失败测试，确认它因目标行为缺失而失败；基础设施故障不算 Red。
-3. Green：实现最小完整行为，运行 focused tests。
-4. Refactor：收口类型、错误码、文件操作和重复逻辑，保持覆盖。
-5. 每项证据通过后立即勾选 tasks 并记录命令/结果；失败 task 保持未完成。
-6. 完成 declared focused、aggregate、lint、typecheck、build、pack 与 diff gates。
+2. `tdd`：先运行相关失败测试，确认它因目标行为缺失而失败；基础设施故障不算 Red；再执行 Green，最后 Refactor。
+3. `direct`：直接实现最小完整行为，执行 Verify，再做 Refactor；不要求预先 Red 证据。
+4. 每项证据通过后立即勾选 tasks 并记录命令/结果；失败 task 保持未完成。
+5. 两种模式都必须完成 declared focused、aggregate、lint、typecheck、build、pack 与 diff gates。
 
 ## 失败回退
 

@@ -5,7 +5,7 @@ description: Convert an accepted design into normal, failure, and boundary syste
 
 # Wiki Plan
 
-Own only `design`, `cases`, and `tasks`. The plan must cover every success criterion and support Red/Green/Refactor execution.
+Own only `design`, `cases`, and `tasks`. Before writing tasks, select exactly one implementation mode: `tdd` or `direct`; do not choose for the user.
 
 ## Preconditions
 
@@ -28,16 +28,16 @@ Own only `design`, `cases`, and `tasks`. The plan must cover every success crite
 
 ## TDD Unit Tests
 
-- When automation is appropriate, use `UT-*` and identify Test/Modify, relevant Red failure, minimal Green behavior, and Refactor guard.
+- Generate `unit-tests.md` only for `tdd`, using `UT-*` with Test/Modify, Red rationale, the minimal Green behavior, and Refactor guards.
+- For `direct`, still generate system tests and verification mappings, but do not require prior Red failure evidence.
 - Map every UT to an ST, success criterion, or safety boundary; avoid implementation-detail-only coverage.
 
 ## Tasks
 
-1. Red: add a relevant test that fails because the target behavior is absent; record evidence.
-2. Green: implement the smallest complete path in dependency order.
-3. Refactor: consolidate types, errors, duplication, documentation, and aggregate verification.
-4. Map each task to ST/UT, success criteria, and commands.
-5. Set `implementation-ready: true` only when the user has authorized implementation; otherwise pause with false.
+1. If the current request does not specify a mode, ask once: “Choose `tdd` or `direct` for this change.” Do not ask again when it is already explicit.
+2. Record the stable field `implementation-mode: tdd` or `implementation-mode: direct` in tasks.
+3. `tdd` uses Red → Green → Refactor and requires relevant Red failure evidence; `direct` uses Implement → Verify → Refactor and does not require Red evidence.
+4. Map each task to ST/UT, success criteria, and commands; both modes still require tests, review, verification, and archive gates.
 
 ## Browser Automation
 
@@ -46,8 +46,8 @@ Browser tooling is optional evidence. Use it only when the project starts safely
 ## Outputs
 
 - `system-tests.md`
-- `unit-tests.md` when TDD applies
-- `tasks.md` with an implementation-ready signal
+- `unit-tests.md` when `tdd` is selected; it may be omitted for `direct`
+- `tasks.md` with a valid `implementation-mode`
 - Stage tasks and successful strict validation when planning is complete
 
 ## Pause Conditions
@@ -58,4 +58,4 @@ Browser tooling is optional evidence. Use it only when the project starts safely
 
 ## Next Stage
 
-Use `wiki-apply` only with `implementation-ready: true`.
+Use `wiki-apply` when tasks are complete, `implementation-mode` is valid, and the current user has explicitly authorized implementation. Missing or invalid mode routes back to this skill.

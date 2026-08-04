@@ -40,6 +40,8 @@ spec-wiki-lite validate <change-id> --strict --json
 
 ## Stage 路由
 
+`implementation-mode` 只接受 `tdd` 或 `direct`：合法值直接进入 `wiki-apply`，缺失或非法值回到 `wiki-plan`。
+
 | 当前状态 | 目标 Skill |
 | --- | --- |
 | `exploration`，scope/split/research 未完成 | `wiki-explore` |
@@ -48,8 +50,8 @@ spec-wiki-lite validate <change-id> --strict --json
 | `proposal` / `delivery`，proposal 完成 | `wiki-design` |
 | `design`，设计未完成 | `wiki-design` |
 | `design` / `cases` | `wiki-plan` |
-| `tasks`，未 `implementation-ready: true` | `wiki-plan` |
-| `tasks`，已授权实现 | `wiki-apply` |
+| `tasks`，缺失或非法 `implementation-mode` | `wiki-plan` |
+| `tasks`，mode 合法且当前请求已授权实现 | `wiki-apply` |
 | `implementation`，任务或局部验证未完成 | `wiki-apply` |
 | `implementation` / `review` | `wiki-review` |
 | `verification`，缺 full/pass 证据 | `wiki-review` |

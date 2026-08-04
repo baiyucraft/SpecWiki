@@ -5,7 +5,7 @@ description: 把已接受的设计转换为 normal/failure/boundary 系统测试
 
 # Wiki Plan
 
-只负责 `design`、`cases`、`tasks` 阶段。计划必须覆盖成功标准并允许实施者按 Red/Green/Refactor 执行。
+只负责 `design`、`cases`、`tasks` 阶段。计划必须覆盖成功标准，并在生成 tasks 前确定一次实现模式：可选 `tdd` 或 `direct`，默认不替用户选择。
 
 ## 前置条件
 
@@ -28,16 +28,16 @@ description: 把已接受的设计转换为 normal/failure/boundary 系统测试
 
 ## TDD Unit Tests
 
-- 适合自动化时使用 `UT-*`，明确 Test/Modify、Red 原因、Green 最小行为和 Refactor 守护。
+- 只有选择 `tdd` 时才生成 `unit-tests.md`，使用 `UT-*`，明确 Test/Modify、Red 原因、Green 最小行为和 Refactor 守护。
+- 选择 `direct` 时仍生成 system tests 和验证映射，但不要求先取得 Red 失败证据。
 - 每个 UT 映射到 ST、成功标准或安全边界；不要只追求实现细节覆盖。
 
 ## Tasks
 
-1. Red：先增加能因目标缺失而失败的相关测试，并记录失败证据。
-2. Green：按依赖顺序实现最小完整主链。
-3. Refactor：收口类型、错误、重复逻辑、文档和聚合验证。
-4. 每个 task 映射 ST/UT、成功标准与验证命令。
-5. 只有用户授权实现时写 `implementation-ready: true`；否则保持 false 并暂停。
+1. 如果当前请求没有明确模式，先询问：“本次选择 `tdd` 还是 `direct`？”；已有明确选择时不得重复询问。
+2. 在 tasks 中写入稳定字段 `implementation-mode: tdd` 或 `implementation-mode: direct`。
+3. `tdd` 按 Red → Green → Refactor 编排，并要求相关 Red 失败证据；`direct` 按 Implement → Verify → Refactor 编排，不要求 Red 证据。
+4. 每个 task 映射 ST/UT、成功标准与验证命令；两种模式都必须完成测试、review、verification 和 archive 门禁。
 
 ## 浏览器自动化
 
@@ -46,8 +46,8 @@ description: 把已接受的设计转换为 normal/failure/boundary 系统测试
 ## 输出
 
 - `system-tests.md`
-- TDD 适用时的 `unit-tests.md`
-- `tasks.md` 与 `implementation-ready` signal
+- 选择 `tdd` 时输出 `unit-tests.md`；选择 `direct` 时可省略
+- `tasks.md` 与合法 `implementation-mode`
 - planning 完成后 stage tasks，strict validate 通过
 
 ## 暂停条件
@@ -58,4 +58,4 @@ description: 把已接受的设计转换为 normal/failure/boundary 系统测试
 
 ## 下一阶段
 
-只有 `implementation-ready: true` 时使用 `wiki-apply`。
+tasks 完整、`implementation-mode` 合法且当前用户明确授权实现时使用 `wiki-apply`；缺失或非法 mode 必须回到本 Skill。

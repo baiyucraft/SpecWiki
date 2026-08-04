@@ -1,6 +1,6 @@
 ---
 name: wiki-apply
-description: Execute an authorized, implementation-ready SpecWiki Lite task plan with TDD evidence, scope-drift handling, and safe failure recovery.
+description: Execute an authorized SpecWiki Lite task plan with a valid implementation mode, mode-specific evidence, scope-drift handling, and safe failure recovery.
 ---
 
 # Wiki Apply
@@ -10,7 +10,7 @@ Implement only confirmed tasks. You may edit source, tests, package assets, and 
 ## Preconditions
 
 - The change is a standalone or child `single-change` at `tasks` or `implementation`.
-- `tasks.md` is complete with `implementation-ready: true`.
+- `tasks.md` is complete with `implementation-mode: tdd` or `implementation-mode: direct`.
 - The user authorized implementation and strict validation has no planning blocker.
 
 ## Inputs
@@ -25,14 +25,13 @@ Implement only confirmed tasks. You may edit source, tests, package assets, and 
 - Return to `wiki-propose` for goal/non-goal/success changes, `wiki-design` for key design changes, or `wiki-plan` for case/task-only changes.
 - Pause for unapproved path-safety, data-loss, or external-state risk.
 
-## TDD Workflow
+## Implementation modes
 
 1. Set `stage: implementation` while preserving unknown metadata.
-2. Red: run a relevant failure proving the target behavior is absent; infrastructure failure is not Red evidence.
-3. Green: implement the smallest complete behavior and run focused tests.
-4. Refactor: consolidate types, errors, file operations, and duplication without losing coverage.
-5. Check each task and record command/result immediately after evidence passes; failed tasks remain open.
-6. Run declared focused, aggregate, lint, typecheck, build, pack, and diff gates.
+2. `tdd`: run a relevant failure proving the target behavior is absent; infrastructure failure is not Red evidence; then perform Green and Refactor.
+3. `direct`: implement the smallest complete behavior, run Verify, then Refactor; prior Red evidence is not required.
+4. Check each task and record command/result immediately after evidence passes; failed tasks remain open.
+5. Both modes must run the declared focused, aggregate, lint, typecheck, build, pack, and diff gates.
 
 ## Failure Recovery
 

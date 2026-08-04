@@ -1,9 +1,8 @@
 # <change-id> 实现任务
 
-implementation-ready: false
-implementation-mode: tdd
+implementation-mode: <tdd|direct>
 
-## Red
+## tdd 模式：Red
 
 - [ ] R1 <新增测试；映射 UT/ST/成功标准>
 - [ ] R2 运行 focused tests，记录相关 Red 失败。
@@ -26,4 +25,4 @@ implementation-mode: tdd
 | --- | --- | --- | --- |
 | <criterion> | ST-01 / UT-01 | G1 | <command/path> |
 
-> 只有用户已授权实现且所有 planning blocker 解决后，才把 `implementation-ready` 改为 true。
+> 选择 `direct` 时省略 Red 小节，使用 Implement → Verify → Refactor；两种模式都必须通过测试、review、verification 和 archive 门禁。

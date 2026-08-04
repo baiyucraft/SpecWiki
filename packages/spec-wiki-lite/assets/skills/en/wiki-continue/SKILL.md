@@ -40,6 +40,8 @@ File existence is supporting evidence only. It never overrides metadata consiste
 
 ## Stage Routing
 
+`implementation-mode` accepts only `tdd` or `direct`: a valid value routes directly to `wiki-apply`, while a missing or invalid value routes back to `wiki-plan`.
+
 | Current state | Target Skill |
 | --- | --- |
 | `exploration`, scope/split/research incomplete | `wiki-explore` |
@@ -48,8 +50,8 @@ File existence is supporting evidence only. It never overrides metadata consiste
 | `proposal` / `delivery`, proposal complete | `wiki-design` |
 | `design`, design incomplete | `wiki-design` |
 | `design` / `cases` | `wiki-plan` |
-| `tasks`, no `implementation-ready: true` | `wiki-plan` |
-| `tasks`, implementation authorized | `wiki-apply` |
+| `tasks`, missing or invalid `implementation-mode` | `wiki-plan` |
+| `tasks`, valid mode and implementation authorized in the current request | `wiki-apply` |
 | `implementation`, tasks or focused checks incomplete | `wiki-apply` |
 | `implementation` / `review` | `wiki-review` |
 | `verification`, full/pass evidence missing | `wiki-review` |

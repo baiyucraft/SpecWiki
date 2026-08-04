@@ -22,6 +22,8 @@ wiki-archive
 
 `wiki-continue` 以 `status/show/strict validate` 为权威：有 active change 时按 stage、artifact、parent/child order 与 dependencies 路由；没有 active change但 `wiki.bootstrapPending` 为 true 时路由 `wiki-explore`。其余 Skills 分别负责 exploration、proposal、design、plan、apply、review 与 archive，不允许调度入口直接推进 stage 或签发证据。
 
+实现模式由 `wiki-plan` 在生成 tasks 前询问一次，可选 `tdd` 或 `direct`；当前请求已明确模式时不重复询问。tasks 记录稳定字段 `implementation-mode`。`tdd` 采用 Red → Green → Refactor，`direct` 采用 Implement → Verify → Refactor；合法 mode 的 tasks 直接路由 `wiki-apply`，缺失或非法 mode 回到 `wiki-plan`。两种模式都保留用户授权、strict validate、测试、review、verification 和 archive 门禁。
+
 `.wiki/config.yaml` 的 `wiki.language` 同时选择 Wiki 与 Skill 正文，默认 `zh`，可选 `en`。Skill id、目录、reference 文件名、CLI、artifact 文件名和 metadata 字段不翻译。package 每种语言登记 24 个 Skill 文件：8 个 `SKILL.md` 与 16 个 references。
 
 ```text

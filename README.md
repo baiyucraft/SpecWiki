@@ -27,6 +27,10 @@ spec-wiki-lite archive <change-id>
 
 `init` writes `.wiki/config.yaml` and synchronizes localized Wiki baselines plus the complete localized Skill/reference tree. `update` reads `wiki.language` from that config; changing it switches both Wiki baselines and Skill content. Scaffold pages and user pages are preserved. Registered Skill files are package-owned and repaired on every update, while unregistered user additions remain untouched. `status` checks Wiki structure, bootstrap completion, every registered Skill file byte-for-byte, and active changes without scanning source code or creating a persistent index.
 
+### Implementation mode
+
+`wiki-plan` asks once whether the change should use `tdd` or `direct` unless the current request already specifies it. The choice is recorded as `implementation-mode` in `tasks.md`. `tdd` uses Red → Green → Refactor; `direct` uses Implement → Verify → Refactor. A complete tasks artifact with a valid mode routes directly to `wiki-apply`, while authorization, strict validation, review, verification, and archive gates remain required.
+
 ## Repository Model
 
 ```text

@@ -1,9 +1,8 @@
 # <change-id> Implementation Tasks
 
-implementation-ready: false
-implementation-mode: tdd
+implementation-mode: <tdd|direct>
 
-## Red
+## tdd mode: Red
 
 - [ ] R1 <Add test mapped to UT/ST/success criterion>
 - [ ] R2 Run focused tests and record the relevant Red failure.
@@ -26,4 +25,4 @@ implementation-mode: tdd
 | --- | --- | --- | --- |
 | <criterion> | ST-01 / UT-01 | G1 | <command/path> |
 
-> Set `implementation-ready` to true only after implementation is authorized and all planning blockers are resolved.
+> For `direct`, omit the Red section and use Implement → Verify → Refactor. Both modes still require tests, review, verification, and archive gates.
