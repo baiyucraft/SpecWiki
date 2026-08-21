@@ -1,8 +1,8 @@
 ---
 title: 边界与 SSOT 规则
-description: SpecWiki Lite 长期文档、change 证据和代码事实的边界
-updated: 2026-07-28
-owner: docs
+description: 长期 Wiki、change artifact、临时材料和代码事实的边界
+updated: 2026-07-29
+owner: spec-wiki-lite
 ---
 
 # 边界与 SSOT 规则

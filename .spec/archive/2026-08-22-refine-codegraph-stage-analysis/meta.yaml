@@ -1,0 +1,19 @@
+id: refine-codegraph-stage-analysis
+stage: verification
+deliveryShape: single-change
+implementation-mode: tdd
+artifacts:
+  metadata:
+    status: present
+  proposal:
+    status: present
+  design:
+    status: present
+  cases:
+    status: present
+  tasks:
+    status: present
+  review-report:
+    status: present
+  test-report:
+    status: present

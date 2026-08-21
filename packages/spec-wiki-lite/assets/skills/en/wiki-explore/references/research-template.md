@@ -29,3 +29,38 @@ service-boundary: scope-and-delivery-shape
 ## Artifact Impact
 
 - <Decision to add to split, proposal, or metadata; write “none” when absent>
+
+## CodeGraph Evidence
+
+- index: <available/unavailable, generated-at>
+- analysis goal: <analysis goal>
+
+### Queries
+
+| tool | query | result |
+| --- | --- | --- |
+| `codegraph_status` | <query> | <summary> |
+| `codegraph_context` | <query> | <summary> |
+| `codegraph_explore` / `codegraph_trace` | <query> | <summary> |
+
+### Confirmed Facts
+
+- <entry points, symbols, call relations, and file:line>
+
+### Impact And Test Leads
+
+- impact: <impact radius and boundary>
+- affected tests: <test leads>
+
+### Facts vs Inferences
+
+- confirmed: <facts confirmed by CodeGraph or source>
+- inferred: <inference and basis>
+
+### Unknowns And Fallback
+
+- unavailable tool: <missing tool or failure>
+- fallback: <ordinary source/test reading>
+- residual risk: <unverified impact>
+
+Store only a structured summary; never paste large raw CodeGraph output.

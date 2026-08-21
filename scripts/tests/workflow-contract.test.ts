@@ -6,7 +6,6 @@ import { expect, test } from "vitest";
 const root = path.resolve(import.meta.dirname, "../..");
 const locales = ["zh", "en"] as const;
 const skills = ["wiki-plan", "wiki-continue", "wiki-apply"] as const;
-const allSkills = ["wiki-continue", "wiki-explore", "wiki-propose", "wiki-design", "wiki-plan", "wiki-apply", "wiki-review", "wiki-archive"] as const;
 
 function readPackageSkill(locale: string, name: string): string {
   return readFileSync(path.join(root, "packages", "spec-wiki-lite", "assets", "skills", locale, name, "SKILL.md"), "utf8");
@@ -49,15 +48,28 @@ test("current Codex Skills are synced to the same contract", () => {
   }
 });
 
-test.each(locales)("%s Skills contain the CodeGraph external-analysis contract", (locale) => {
-  for (const name of allSkills) {
-    const content = readPackageSkill(locale, name);
-    expect(content).toMatch(/\.codegraph/iu);
-    expect(content).toMatch(/codegraph_(context|explore|search|callers|callees|impact|affected|status)/u);
-    expect(content).toMatch(/fallback|退回|普通源码|ordinary source/iu);
-    expect(content).toMatch(/read-only|只读/iu);
-    expect(content).toMatch(/does not create|不建立/iu);
-  }
+test.each(locales)("%s Skills use phase-specific CodeGraph actions", (locale) => {
+  const explore = readPackageSkill(locale, "wiki-explore");
+  const design = readPackageSkill(locale, "wiki-design");
+  const propose = readPackageSkill(locale, "wiki-propose");
+  const plan = readPackageSkill(locale, "wiki-plan");
+  const apply = readPackageSkill(locale, "wiki-apply");
+  const review = readPackageSkill(locale, "wiki-review");
+  const continuation = readPackageSkill(locale, "wiki-continue");
+  const archive = readPackageSkill(locale, "wiki-archive");
+
+  expect(explore).toMatch(/codegraph_status[\s\S]*codegraph_context[\s\S]*codegraph_explore[\s\S]*codegraph_(trace|callers)/iu);
+  expect(explore).toMatch(/research\/codegraph\.md/iu);
+  expect(design).toMatch(/research\/codegraph\.md[\s\S]*codegraph_impact[\s\S]*codegraph_(callers|callees)[\s\S]*codegraph_trace/iu);
+  expect(design).toMatch(/CodeGraph-derived design constraints|CodeGraph-derived design constraints|CodeGraph-derived/iu);
+  expect(propose).toMatch(/research\/codegraph\.md/iu);
+  expect(plan).toMatch(/codegraph_affected/iu);
+  expect(apply).toMatch(/codegraph_impact[\s\S]*codegraph_affected/iu);
+  expect(review).toMatch(/codegraph_impact[\s\S]*codegraph_affected/iu);
+  expect(continuation).toMatch(/never|不自动|不.*调用/iu);
+  expect(archive).toMatch(/never|不自动|不.*执行/iu);
+  expect([explore, design, propose, plan, apply, review].join("\n")).toMatch(/fallback|退回|ordinary source|源码/iu);
+  expect([explore, design, propose, plan, apply, review, continuation, archive].join("\n")).not.toMatch(/## CodeGraph Code Context/iu);
 });
 
 test("authorization and safety wording remains after readiness removal", () => {

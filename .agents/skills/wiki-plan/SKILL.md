@@ -60,10 +60,6 @@ description: 把已接受的设计转换为 normal/failure/boundary 系统测试
 ## 下一阶段
 
 tasks 完整、`implementation-mode` 合法且当前用户明确授权实现时使用 `wiki-apply`；缺失或非法 mode 必须回到本 Skill。
-## CodeGraph 代码上下文
+## CodeGraph 阶段动作
 
-- 项目根存在 `.codegraph/` 时，优先使用 CodeGraph 做代码定位、上下文构建和影响分析。
-- MCP 可用时优先使用 `codegraph_context`、`codegraph_explore`、`codegraph_search`、`codegraph_callers`、`codegraph_callees`、`codegraph_impact`、`codegraph_affected`、`codegraph_status`；MCP 不可用但 CLI 可用时使用对应 `codegraph` 命令。
-- 没有索引、索引过期或工具失败时，退回普通源码读取、测试和项目已有工具；不得跳过安全、测试或实现验证。
-- CodeGraph 仅是外部只读分析工具，Lite 不建立第二套索引、知识图谱、数据库或 Wiki 中间层；数据库、daemon、socket 和日志不进入发布包。
-- 可用 `codegraph_affected` 辅助选择受影响测试，但不能替代 ST/UT 设计。
+当目标文件或符号已知时按需调用 `codegraph_affected`，把受影响测试映射到 ST/UT 和 tasks。CodeGraph 只提供测试线索，不能替代测试设计、失败场景或验收断言；结果写入 tasks 的证据栏，不保存原始输出。

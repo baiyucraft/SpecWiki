@@ -24,9 +24,12 @@ export type BootstrapInitOptions = {
   force?: boolean;
   language?: WikiLanguage;
   codegraph?: {
+    mode?: "auto" | "force" | "skip";
     enabled?: boolean;
     runner?: CodeGraphCommandRunner;
   };
+  interactive?: boolean;
+  confirmCodeGraph?: () => Promise<boolean>;
 };
 
 export async function runBootstrapInit(
@@ -41,12 +44,25 @@ export async function runBootstrapInit(
       force: options.force,
       language: options.language,
     });
-    const codegraph = await runCodeGraphIntegration({
+    let codegraph = await runCodeGraphIntegration({
       projectRoot: options.repoRoot,
       env: options.env,
+      mode: options.codegraph?.mode,
       enabled: options.codegraph?.enabled,
       runner: options.codegraph?.runner,
     });
+    if (options.codegraph?.mode === "auto"
+      && options.interactive === true
+      && !codegraph.project.initialized
+      && options.confirmCodeGraph
+      && await options.confirmCodeGraph()) {
+      codegraph = await runCodeGraphIntegration({
+        projectRoot: options.repoRoot,
+        env: options.env,
+        mode: "force",
+        runner: options.codegraph?.runner,
+      });
+    }
     return { outcome: "ready", host: "codex", assets, codegraph };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

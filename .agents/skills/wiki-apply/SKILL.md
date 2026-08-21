@@ -54,10 +54,6 @@ description: 执行已授权且 implementation-mode 合法的 SpecWiki Lite 任�
 ## 下一阶段
 
 所有 task 与局部/聚合检查完成后使用 `wiki-review`；本阶段不签发正式报告。
-## CodeGraph 代码上下文
+## CodeGraph 阶段动作
 
-- 项目根存在 `.codegraph/` 时，优先使用 CodeGraph 做代码定位、上下文构建和影响分析。
-- MCP 可用时优先使用 `codegraph_context`、`codegraph_explore`、`codegraph_search`、`codegraph_callers`、`codegraph_callees`、`codegraph_impact`、`codegraph_affected`、`codegraph_status`；MCP 不可用但 CLI 可用时使用对应 `codegraph` 命令。
-- 没有索引、索引过期或工具失败时，退回普通源码读取、测试和项目已有工具；不得跳过安全、测试或实现验证。
-- CodeGraph 仅是外部只读分析工具，Lite 不建立第二套索引、知识图谱、数据库或 Wiki 中间层；数据库、daemon、socket 和日志不进入发布包。
-- 编辑前执行 impact 分析，编辑后运行 affected tests 或项目测试命令。
+编辑目标符号前执行 `codegraph_impact`，确认没有超出 design 记录的影响半径；编辑后用 `codegraph_affected` 选择测试并运行项目测试命令。若影响跨越设计边界，暂停实现并返回 `wiki-design`。CodeGraph 只辅助定位，不能替代安全检查或测试结论。

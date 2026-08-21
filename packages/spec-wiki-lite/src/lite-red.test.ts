@@ -95,6 +95,7 @@ test("help exposes only the SpecWiki Lite command surface", async () => {
   expect(stdout.join("")).toContain("spec-wiki-lite init");
   expect(stdout.join("")).toContain("--language zh|en");
   expect(stdout.join("")).toContain("--no-codegraph");
+  expect(stdout.join("")).toContain("--codegraph");
   expect(stdout.join("")).toContain("--json");
   expect(stdout.join("")).toContain("spec-wiki-lite show");
   expect(stdout.join("")).not.toMatch(/spec-wiki (query|sync|rebuild)/);

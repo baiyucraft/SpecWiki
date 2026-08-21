@@ -43,3 +43,13 @@
 ## 回滚
 
 - <如何恢复且不破坏用户内容>
+
+## CodeGraph-derived design constraints
+
+- entry points and call paths: <入口与调用路径>
+- ownership and dependency boundaries: <ownership 与依赖边界>
+- impact radius: <影响半径>
+- affected tests: <受影响测试>
+- rollback boundary: <回滚边界>
+- graph evidence vs source verification: <CodeGraph 证据与源码核验差异>
+- unresolved items: <未确认项及处理>

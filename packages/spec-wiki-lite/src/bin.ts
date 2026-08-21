@@ -17,6 +17,8 @@ export type RunBinOptions = {
   stdout?: (text: string) => void;
   /** 传给 runCli 的标准错误写入函数。 */
   stderr?: (text: string) => void;
+  /** 是否允许交互式 CodeGraph 确认；默认依据 stdin TTY。 */
+  interactive?: boolean;
 };
 
 /**
@@ -30,6 +32,7 @@ export async function runBin(options: RunBinOptions = {}): Promise<number> {
     cwd: options.cwd ?? process.cwd(),
     env: options.env ?? process.env,
     stdin: options.stdin ?? process.stdin,
+    interactive: options.interactive ?? Boolean((options.stdin ?? process.stdin).isTTY),
     stdout: options.stdout ?? ((text) => process.stdout.write(text)),
     stderr: options.stderr ?? ((text) => process.stderr.write(text)),
   });

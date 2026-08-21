@@ -8,9 +8,9 @@ import {
 
 const expectedReferenceCounts: Record<(typeof PROJECT_SKILL_NAMES)[number], number> = {
   "wiki-continue": 0,
-  "wiki-explore": 1,
+  "wiki-explore": 2,
   "wiki-propose": 2,
-  "wiki-design": 2,
+  "wiki-design": 3,
   "wiki-plan": 4,
   "wiki-apply": 0,
   "wiki-review": 7,
@@ -21,9 +21,9 @@ test.each(["zh", "en"] as const)("registers the complete %s Skill inventory", (l
   const assets = projectSkillAssetsForLanguage(language);
   const byName = projectSkillAssetsByNameForLanguage(language);
 
-  expect(assets).toHaveLength(24);
+  expect(assets).toHaveLength(26);
   expect([...byName.keys()]).toEqual(PROJECT_SKILL_NAMES);
-  expect(new Set(assets.map(asset => asset.target)).size).toBe(24);
+  expect(new Set(assets.map(asset => asset.target)).size).toBe(26);
   expect(assets.every(asset => asset.ownership === "skill")).toBe(true);
   expect(assets.every(asset => asset.source.startsWith(`skills/${language}/`))).toBe(true);
 

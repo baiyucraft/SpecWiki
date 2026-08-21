@@ -1,3 +1,6 @@
+import path from "node:path";
+import os from "node:os";
+import path from "node:path";
 import { expect, test } from "vitest";
 
 import { runCodeGraphIntegration, type CodeGraphCommandResult } from "./runner.js";
@@ -10,7 +13,8 @@ test("runs version, Codex MCP install, and project init with argv-safe commands"
   const calls: Array<{ command: string; args: string[]; cwd?: string }> = [];
   const result = await runCodeGraphIntegration({
     projectRoot: "C:/tmp/project;safe",
-    env: {},
+    env: { CODEX_HOME: path.join(os.tmpdir(), "spec-wiki-lite-empty-codex") },
+    mode: "force",
     runner: async (command, args, options) => {
       calls.push({ command, args, cwd: options.cwd });
       return successful();
@@ -33,6 +37,7 @@ test("installs the CLI after a missing version command and continues on stage fa
   const result = await runCodeGraphIntegration({
     projectRoot: "C:/project",
     env: {},
+    mode: "force",
     runner: async (command, args) => {
       calls.push([command, ...args].join(" "));
       if (command === "codegraph") {
@@ -78,10 +83,42 @@ test("no-codegraph performs no external calls", async () => {
   });
 });
 
+test("normal init only detects and never installs or configures", async () => {
+  const calls: string[] = [];
+  const result = await runCodeGraphIntegration({
+    projectRoot: "C:/project",
+    env: { CODEX_HOME: path.join(os.tmpdir(), "spec-wiki-lite-empty-codex") },
+    runner: async (command, args) => {
+      calls.push([command, ...args].join(" "));
+      return successful();
+    },
+  });
+  expect(result.requested).toBe(true);
+  expect(result.codexMcp.configured).toBe(false);
+  expect(result.project.initialized).toBe(false);
+  expect(calls).toEqual(["codegraph --version"]);
+});
+
+test("existing project index is reused in force mode", async () => {
+  const calls: string[] = [];
+  const result = await runCodeGraphIntegration({
+    projectRoot: path.resolve(process.cwd(), "../.."),
+    env: {},
+    mode: "force",
+    runner: async (command, args) => {
+      calls.push([command, ...args].join(" "));
+      return successful();
+    },
+  });
+  expect(result.project.initialized).toBe(true);
+  expect(calls).toEqual(["codegraph --version"]);
+});
+
 test("normalizes runner exceptions into warnings without blocking the workflow", async () => {
   const result = await runCodeGraphIntegration({
     projectRoot: "C:/project",
     env: {},
+    mode: "force",
     runner: async () => {
       throw new Error("runner crashed");
     },

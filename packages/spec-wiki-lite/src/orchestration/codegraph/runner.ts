@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export type CodeGraphCommandResult = {
@@ -31,6 +34,7 @@ export type CodeGraphResult = {
 export type CodeGraphIntegrationOptions = {
   projectRoot: string;
   env: NodeJS.ProcessEnv;
+  mode?: "auto" | "force" | "skip";
   enabled?: boolean;
   runner?: CodeGraphCommandRunner;
 };
@@ -78,6 +82,19 @@ function warning(
   return { stage, command, message: detail, recovery };
 }
 
+function detectCodexMcp(env: NodeJS.ProcessEnv): boolean {
+  const codexHome = env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const configPath = path.join(codexHome, "config.toml");
+  if (!existsSync(configPath)) {
+    return false;
+  }
+  try {
+    return /codegraph/iu.test(readFileSync(configPath, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
 async function invoke(
   runner: CodeGraphCommandRunner,
   command: string,
@@ -96,7 +113,8 @@ async function invoke(
 }
 
 export async function runCodeGraphIntegration(options: CodeGraphIntegrationOptions): Promise<CodeGraphResult> {
-  const requested = options.enabled !== false;
+  const mode = options.mode ?? (options.enabled === false ? "skip" : options.enabled === true ? "force" : "auto");
+  const requested = mode !== "skip";
   const empty: CodeGraphResult = {
     requested,
     cli: { available: false, installed: false },
@@ -104,12 +122,14 @@ export async function runCodeGraphIntegration(options: CodeGraphIntegrationOptio
     project: { initialized: false, path: ".codegraph" },
     warnings: [],
   };
-  if (!requested) {
+  if (mode === "skip") {
     return empty;
   }
 
   const runner = options.runner ?? defaultRunner;
   const warnings: CodeGraphWarning[] = [];
+  const existingIndex = existsSync(path.join(options.projectRoot, ".codegraph"));
+  empty.codexMcp.configured = detectCodexMcp(options.env);
   let cli: CodeGraphResult["cli"] = { available: false, installed: false };
   const versionCommand = ["codegraph", ["--version"]] as const;
   let versionResult = await invoke(runner, versionCommand[0], [...versionCommand[1]], { cwd: options.projectRoot, env: options.env });
@@ -118,6 +138,19 @@ export async function runCodeGraphIntegration(options: CodeGraphIntegrationOptio
     version = versionResult.stdout.trim().split(/\s+/u)[0]?.replace(/^v/u, "") || undefined;
     cli = { available: true, installed: false };
   } else {
+    if (mode === "auto") {
+      warnings.push(warning("cli", commandText(versionCommand[0], [...versionCommand[1]]), versionResult, missingCliRecovery));
+      empty.warnings = warnings;
+      empty.project.initialized = existsSync(path.join(options.projectRoot, ".codegraph"));
+      return empty;
+    }
+    if (existingIndex) {
+      warnings.push(warning("cli", commandText(versionCommand[0], [...versionCommand[1]]), versionResult, missingCliRecovery));
+      empty.cli = cli;
+      empty.project.initialized = true;
+      empty.warnings = warnings;
+      return empty;
+    }
     const installArgs = ["install", "-g", "@colbymchenry/codegraph@latest"];
     const installResult = await invoke(runner, "npm", installArgs, { cwd: options.projectRoot, env: options.env });
     if (installResult.code === 0) {
@@ -134,6 +167,25 @@ export async function runCodeGraphIntegration(options: CodeGraphIntegrationOptio
     cli = { ...cli, available: true, version };
   }
   empty.cli = cli;
+
+  if (mode === "auto") {
+    empty.project.initialized = existingIndex;
+    if (!existingIndex) {
+      warnings.push({
+        stage: "project",
+        command: commandText("codegraph", ["init", options.projectRoot]),
+        message: "project CodeGraph index is not initialized",
+        recovery: "rerun spec-wiki-lite init --codegraph to initialize the project index",
+      });
+    }
+    empty.warnings = warnings;
+    return empty;
+  }
+  if (existingIndex) {
+    empty.project.initialized = true;
+    empty.warnings = warnings;
+    return empty;
+  }
 
   const mcpArgs = ["install", "--target=codex", "--location=global", "--yes", "--no-permissions"];
   const mcpResult = await invoke(runner, "codegraph", mcpArgs, { cwd: options.projectRoot, env: options.env });

@@ -64,10 +64,12 @@ child id 默认使用 `<parent-id>-<topic>`；split、parent metadata 和 child 
 ## 下一阶段
 
 single-change 或最早可执行 child 使用 `wiki-propose`；parent 保持 coordination-only。
-## CodeGraph 代码上下文
+## CodeGraph 阶段动作（必须）
 
-- 项目根存在 `.codegraph/` 时，优先使用 CodeGraph 做代码定位、上下文构建和影响分析。
-- MCP 可用时优先使用 `codegraph_context`、`codegraph_explore`、`codegraph_search`、`codegraph_callers`、`codegraph_callees`、`codegraph_impact`、`codegraph_affected`、`codegraph_status`；MCP 不可用但 CLI 可用时使用对应 `codegraph` 命令。
-- 没有索引、索引过期或工具失败时，退回普通源码读取、测试和项目已有工具；不得跳过安全、测试或实现验证。
-- CodeGraph 仅是外部只读分析工具，Lite 不建立第二套索引、知识图谱、数据库或 Wiki 中间层；数据库、daemon、socket 和日志不进入发布包。
-- 探索项目区域、符号和调用关系时优先使用 CodeGraph，减少盲目读取。
+1. 调用 `codegraph_status`，记录索引状态和时间。
+2. 用 `codegraph_context` 建立项目区域与功能入口上下文。
+3. 用 `codegraph_explore` 获取关键符号源码；已知起止点时用 `codegraph_trace` 获取完整调用链。
+4. 必要时用 `codegraph_callers` / `codegraph_callees` 核对 ownership。
+5. 将结构化摘要写入 `.spec/changes/<change-id>/research/codegraph.md`：目标、查询、入口/符号/调用关系、影响、测试线索、事实/推断、未知项和降级原因。
+
+MCP 不可用时使用等价 CLI；两者都不可用时才定向读取源码和测试，并明确记录 fallback。不要粘贴大段原始输出。

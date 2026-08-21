@@ -49,10 +49,6 @@ description: 为一个可独立验收的 SpecWiki Lite change 创建 proposal.md
 ## 下一阶段
 
 proposal 被接受后使用 `wiki-design`。本阶段不改最终 Wiki 页面或实现。
-## CodeGraph 代码上下文
+## CodeGraph 阶段动作
 
-- 项目根存在 `.codegraph/` 时，优先使用 CodeGraph 做代码定位、上下文构建和影响分析。
-- MCP 可用时优先使用 `codegraph_context`、`codegraph_explore`、`codegraph_search`、`codegraph_callers`、`codegraph_callees`、`codegraph_impact`、`codegraph_affected`、`codegraph_status`；MCP 不可用但 CLI 可用时使用对应 `codegraph` 命令。
-- 没有索引、索引过期或工具失败时，退回普通源码读取、测试和项目已有工具；不得跳过安全、测试或实现验证。
-- CodeGraph 仅是外部只读分析工具，Lite 不建立第二套索引、知识图谱、数据库或 Wiki 中间层；数据库、daemon、socket 和日志不进入发布包。
-- 写 proposal 前用 CodeGraph 确认入口符号、影响范围和相关测试。
+复用 `research/codegraph.md`。只有 proposal 引入新入口、跨模块边界或安全边界时，补充一次 `codegraph_context` 或 `codegraph_impact`，并在 proposal 中引用具体入口、符号、文件/行号和验证边界。不要重复全量扫描，也不保存原始输出。

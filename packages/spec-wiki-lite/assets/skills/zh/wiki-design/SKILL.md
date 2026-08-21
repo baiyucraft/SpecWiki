@@ -49,10 +49,11 @@ description: 为已接受的 proposal 设计 Wiki、Skill、CLI 或工作流改�
 ## 下一阶段
 
 使用 `wiki-plan` 生成 normal/failure/boundary cases 与 TDD tasks。
-## CodeGraph 代码上下文
+## CodeGraph 阶段动作（必须）
 
-- 项目根存在 `.codegraph/` 时，优先使用 CodeGraph 做代码定位、上下文构建和影响分析。
-- MCP 可用时优先使用 `codegraph_context`、`codegraph_explore`、`codegraph_search`、`codegraph_callers`、`codegraph_callees`、`codegraph_impact`、`codegraph_affected`、`codegraph_status`；MCP 不可用但 CLI 可用时使用对应 `codegraph` 命令。
-- 没有索引、索引过期或工具失败时，退回普通源码读取、测试和项目已有工具；不得跳过安全、测试或实现验证。
-- CodeGraph 仅是外部只读分析工具，Lite 不建立第二套索引、知识图谱、数据库或 Wiki 中间层；数据库、daemon、socket 和日志不进入发布包。
-- 用 callers、callees 和 impact 辅助识别 ownership、接口边界与回滚影响。
+1. 读取同一 change 的 `research/codegraph.md`。
+2. 对拟修改符号调用 `codegraph_impact`，用 `codegraph_callers` / `codegraph_callees` 确认 ownership 与接口边界。
+3. 跨层流程调用 `codegraph_trace`；目标文件已知时调用 `codegraph_affected` 找测试范围。
+4. 将入口/路径、依赖边界、影响半径、测试、回滚、图证据与源码核验差异写入 `design.md` 的 CodeGraph-derived design constraints 章节。
+
+MCP 不可用时使用 CLI 或定向源码核验，并记录 fallback 和残余风险；不要粘贴大段原始输出。

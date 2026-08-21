@@ -64,10 +64,12 @@ Prefer child ids shaped as `<parent-id>-<topic>`. Split, parent metadata, and ch
 ## Next Stage
 
 Use `wiki-propose` for the single change or earliest ready child. Keep the parent coordination-only.
-## CodeGraph Code Context
+## CodeGraph Stage Actions (required)
 
-- When the project root contains `.codegraph/`, prefer CodeGraph for code location, context construction, and impact analysis.
-- When MCP is available, prefer `codegraph_context`, `codegraph_explore`, `codegraph_search`, `codegraph_callers`, `codegraph_callees`, `codegraph_impact`, `codegraph_affected`, and `codegraph_status`; when only the CLI is available, use the corresponding `codegraph` command.
-- If the index is absent, stale, or failing, fall back to ordinary source reading, tests, and project tools; never skip required safety, tests, or implementation verification.
-- CodeGraph is an external read-only analysis tool. Lite does not create a second index, knowledge graph, database, or Wiki intermediary; databases, daemons, sockets, and logs are excluded from the package.
-- Prefer CodeGraph to map project areas, symbols, and call relationships before broad source reading.
+1. Call `codegraph_status` and record index status and time.
+2. Use `codegraph_context` to map project areas and feature entry points.
+3. Use `codegraph_explore` for key symbol source; when endpoints are known use `codegraph_trace` for the complete call path.
+4. Use `codegraph_callers` / `codegraph_callees` only to confirm ownership.
+5. Write a structured summary to `.spec/changes/<change-id>/research/codegraph.md`: goal, queries, entries/symbols/relations, impact, test leads, facts/inferences, unknowns, and fallback.
+
+Use the equivalent CLI when MCP is unavailable. If neither is available, read targeted source/tests and record the fallback. Do not paste large raw output.

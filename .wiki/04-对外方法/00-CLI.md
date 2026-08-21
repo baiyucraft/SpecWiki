@@ -10,7 +10,7 @@ owner: docs
 ## 命令总览
 
 ```text
-spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force]
+spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--codegraph] [--no-codegraph] [--json]
 spec-wiki-lite status [--json]
 spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]
 spec-wiki-lite validate <change-id> [--strict] [--json]
@@ -28,6 +28,8 @@ spec-wiki-lite archive <change-id>
 - `--host` 只接受 `codex`，省略时同样使用 Codex。
 - `--language` 只用于 init，默认 `zh`；`en` 生成英文 Wiki 并写入项目配置。
 - `--force` 允许刷新 managed convention；不会覆盖 scaffold 页面或未登记的用户页面。
+- `--codegraph` 显式执行 CodeGraph CLI 安装、Codex MCP 配置和项目索引；普通 init 不执行这些副作用。
+- `--no-codegraph` 跳过 CodeGraph 检查；`--json` 或非交互 init 不询问，只在结果中返回建议。
 - 初始化失败返回恢复提示，可在修复文件写入问题后重试。
 
 ## status
@@ -37,6 +39,7 @@ spec-wiki-lite archive <change-id>
 - Wiki 语言、bootstrap 状态、页面清单与 `missing_index / invalid_frontmatter / broken_link / orphan_page / duplicate_ssot` issues。
 - 八个 `wiki-*` Skills 的安装状态。
 - `.spec/changes` 下所有 active changes 的校验结果。
+- 本地 `.codegraph` 是否存在；status 不执行 CodeGraph 外部命令。
 
 只有 Wiki 结构健康、bootstrap 完成、Skills 和 changes 全部就绪时，顶层 `ready` 才为 `true`。status 是只读命令。
 

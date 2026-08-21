@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { createInterface } from "node:readline/promises";
 
 import { syncProjectAssets } from "./core/assets/sync.js";
 import { archiveChange, ChangeNotReadyError } from "./core/change/archive.js";
@@ -36,7 +37,7 @@ type ParsedCommand = {
   strict: boolean;
   host: "codex";
   language?: WikiLanguage;
-  codegraph: boolean;
+  codegraph: "auto" | "force" | "skip";
   path?: string;
   changeId?: string;
   artifact?: string;
@@ -48,7 +49,7 @@ class CliUsageError extends Error {}
 function defaultHelp(): string {
   return [
     "Usage:",
-    "  spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--no-codegraph] [--json]",
+    "  spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--codegraph] [--no-codegraph] [--json]",
     "  spec-wiki-lite status [--json]",
     "  spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]",
     "  spec-wiki-lite validate <change-id> [--strict] [--json]",
@@ -86,7 +87,7 @@ function parseArgs(args: string[]): ParsedCommand | undefined {
     force: false,
     strict: false,
     host: "codex",
-    codegraph: true,
+    codegraph: "auto",
     help: false,
   };
   const positionals: string[] = [];
@@ -115,7 +116,14 @@ function parseArgs(args: string[]): ParsedCommand | undefined {
       if (parsed.command !== "init") {
         throw new CliUsageError("--no-codegraph is only supported for init");
       }
-      parsed.codegraph = false;
+      parsed.codegraph = "skip";
+      continue;
+    }
+    if (argument === "--codegraph") {
+      if (parsed.command !== "init") {
+        throw new CliUsageError("--codegraph is only supported for init");
+      }
+      parsed.codegraph = "force";
       continue;
     }
     if (argument === "--strict") {
@@ -165,7 +173,7 @@ function parseArgs(args: string[]): ParsedCommand | undefined {
     positionals.push(argument);
   }
 
-  if (parsed.help && (positionals.length > 0 || parsed.json || parsed.force || parsed.strict || parsed.artifact || parsed.language || !parsed.codegraph)) {
+  if (parsed.help && (positionals.length > 0 || parsed.json || parsed.force || parsed.strict || parsed.artifact || parsed.language || parsed.codegraph !== "auto")) {
     throw new CliUsageError("help cannot be combined with other arguments");
   }
   if (parsed.command === "init") {
@@ -206,7 +214,19 @@ async function execute(parsed: ParsedCommand, io: CliIo): Promise<number> {
       env: io.env,
       force: parsed.force,
       language: parsed.language,
-      codegraph: { enabled: parsed.codegraph },
+      codegraph: { mode: parsed.codegraph },
+      interactive: !parsed.json && io.interactive === true,
+      confirmCodeGraph: !parsed.json && io.interactive === true && io.stdin
+        ? async () => {
+          const readline = createInterface({ input: io.stdin!, output: process.stdout });
+          try {
+            const answer = await readline.question("CodeGraph is not initialized. Install/configure it now? [y/N] ");
+            return /^(?:y|yes)$/iu.test(answer.trim());
+          } finally {
+            readline.close();
+          }
+        }
+        : undefined,
     });
     if (result.outcome === "failed") {
       if (parsed.json) {

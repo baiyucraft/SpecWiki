@@ -43,3 +43,13 @@
 ## Rollback
 
 - <How to restore safely without damaging user content>
+
+## CodeGraph-derived design constraints
+
+- entry points and call paths: <entry points and call paths>
+- ownership and dependency boundaries: <ownership and dependency boundaries>
+- impact radius: <impact radius>
+- affected tests: <affected tests>
+- rollback boundary: <rollback boundary>
+- graph evidence vs source verification: <difference between graph evidence and source verification>
+- unresolved items: <unconfirmed items and handling>

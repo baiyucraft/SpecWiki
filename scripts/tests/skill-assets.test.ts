@@ -25,7 +25,7 @@ function markdownFiles(directory: string): string[] {
 test.each(["zh", "en"] as const)("ships a closed %s Skill and reference tree", (language) => {
   const localeRoot = path.join(skillsRoot, language);
   const files = markdownFiles(localeRoot);
-  expect(files).toHaveLength(24);
+  expect(files).toHaveLength(26);
   expect(readdirSync(localeRoot).sort()).toEqual([...skillNames].sort());
 
   for (const name of skillNames) {

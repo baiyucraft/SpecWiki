@@ -17,7 +17,7 @@ Requires Node.js `>=20.19.0`. The initial package version is `0.1.0` and has no 
 ## Commands
 
 ```text
-spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--no-codegraph] [--json]
+spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--codegraph] [--no-codegraph] [--json]
 spec-wiki-lite status [--json]
 spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]
 spec-wiki-lite validate <change-id> [--strict] [--json]
@@ -25,7 +25,7 @@ spec-wiki-lite update [--force] [--json]
 spec-wiki-lite archive <change-id>
 ```
 
-`init` writes `.wiki/config.yaml`, synchronizes the localized Wiki and Skill/reference tree, and by default prepares external CodeGraph: it installs the global CLI when missing, configures the Codex user-level MCP entry, and runs project-level `codegraph init`. Failures are reported as warnings and do not block Wiki/.spec initialization; use `--no-codegraph` for offline or restricted environments. `init --json` exposes each stage result. `update` reads `wiki.language` from config; changing it switches both Wiki baselines and Skill content. Scaffold pages and user pages are preserved. Registered Skill files are package-owned and repaired on every update, while unregistered user additions remain untouched. `status` only reports whether `.codegraph` exists; it never installs, configures MCP, or rebuilds an index.
+`init` writes `.wiki/config.yaml` and synchronizes the localized Wiki and Skill/reference tree. CodeGraph is detection-only by default: it checks the CLI, Codex MCP marker, and `.codegraph` without changing global or project state. Interactive init may ask before enabling missing CodeGraph; non-interactive and `--json` modes only return a recommendation. `--codegraph` explicitly installs the global CLI when needed, configures the Codex user-level MCP entry, and runs project-level `codegraph init`; `--no-codegraph` skips all external checks. Failures are warnings and do not block Wiki/.spec initialization. `update` reads `wiki.language` from config; changing it switches both Wiki baselines and Skill content. Scaffold pages and user pages are preserved. Registered Skill files are package-owned and repaired on every update, while unregistered user additions remain untouched. `status` only reports the local `.codegraph` state; it never installs, configures MCP, or rebuilds an index.
 
 CodeGraph is an external optional read-only analysis tool, not a Lite runtime dependency. Lite does not maintain a second code index, knowledge graph, or database; local `.codegraph` data is ignored and excluded from tarballs.
 
@@ -76,6 +76,6 @@ pnpm build
 pnpm run pack
 ```
 
-The distribution contains only the Node CLI, `dist`, bilingual Wiki/Skill templates, README, and LICENSE. Each locale ships 8 Skills and 16 registered references (24 Skill files). This repository does not publish from the `lite` branch as part of the current change.
+The distribution contains only the Node CLI, `dist`, bilingual Wiki/Skill templates, README, and LICENSE. Each locale ships 8 Skills and 18 registered references (26 Skill files). This repository does not publish from the `lite` branch as part of the current change.
 
 Chinese documentation: [README-CN.md](./README-CN.md).

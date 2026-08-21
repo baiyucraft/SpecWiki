@@ -100,8 +100,8 @@ test("installed tarball initializes both languages and becomes ready after boots
   expect(readFileSync(path.join(enRoot, ".wiki", "01-quick-start", "INDEX.md"), "utf8")).toContain("Quick Start");
   expect(readdirSync(path.join(zhRoot, ".agents", "skills"))).toHaveLength(8);
   expect(readdirSync(path.join(enRoot, ".agents", "skills"))).toHaveLength(8);
-  expect(countFiles(path.join(zhRoot, ".agents", "skills"))).toBe(24);
-  expect(countFiles(path.join(enRoot, ".agents", "skills"))).toBe(24);
+  expect(countFiles(path.join(zhRoot, ".agents", "skills"))).toBe(26);
+  expect(countFiles(path.join(enRoot, ".agents", "skills"))).toBe(26);
   expect(readFileSync(path.join(zhRoot, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("跨阶段调度");
   expect(readFileSync(path.join(enRoot, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("Cross-stage routing");
 
@@ -121,13 +121,13 @@ test("installed tarball initializes both languages and becomes ready after boots
   writeFileSync(path.join(zhRoot, ".wiki", "config.yaml"), "version: 1\nwiki:\n  language: en\n", "utf8");
   run(process.execPath, [executable, "update", "--json"], zhRoot);
   expect(readFileSync(path.join(zhRoot, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("Cross-stage routing");
-  expect(countFiles(path.join(zhRoot, ".agents", "skills"))).toBe(24);
+  expect(countFiles(path.join(zhRoot, ".agents", "skills"))).toBe(26);
   expect(status(zhRoot).skills.every(skill => skill.installed)).toBe(true);
 
   writeFileSync(path.join(enRoot, ".wiki", "config.yaml"), "version: 1\nwiki:\n  language: zh\n", "utf8");
   run(process.execPath, [executable, "update", "--json"], enRoot);
   expect(readFileSync(path.join(enRoot, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("跨阶段调度");
-  expect(countFiles(path.join(enRoot, ".agents", "skills"))).toBe(24);
+  expect(countFiles(path.join(enRoot, ".agents", "skills"))).toBe(26);
   expect(status(enRoot).skills.every(skill => skill.installed)).toBe(true);
 
   const rootIndex = path.join(zhRoot, ".wiki", "INDEX.md");
