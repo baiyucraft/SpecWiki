@@ -59,3 +59,13 @@ test("treats an unreadable registered path as not installed instead of throwing"
   const report = await getProjectStatus(root);
   expect(report.skills.find(skill => skill.name === "wiki-plan")?.installed).toBe(false);
 });
+
+test("reports CodeGraph project state without running external commands", async () => {
+  const root = createProject();
+  await syncProjectAssets(root);
+  const before = await getProjectStatus(root);
+  expect(before.codegraph).toEqual({ initialized: false, path: ".codegraph" });
+  mkdirSync(path.join(root, ".codegraph"));
+  const after = await getProjectStatus(root);
+  expect(after.codegraph).toEqual({ initialized: true, path: ".codegraph" });
+});

@@ -1,5 +1,10 @@
 import { syncProjectAssets, type AssetSyncReport } from "../../core/assets/sync.js";
 import type { WikiLanguage } from "../../core/config.js";
+import {
+  runCodeGraphIntegration,
+  type CodeGraphCommandRunner,
+  type CodeGraphResult,
+} from "../codegraph/runner.js";
 
 export type BootstrapOutcome = "ready" | "failed";
 
@@ -7,6 +12,7 @@ export type BootstrapInitResult = {
   outcome: BootstrapOutcome;
   host: "codex";
   assets?: AssetSyncReport;
+  codegraph?: CodeGraphResult;
   recoveryHint?: string;
   error?: string;
 };
@@ -17,6 +23,10 @@ export type BootstrapInitOptions = {
   env: NodeJS.ProcessEnv;
   force?: boolean;
   language?: WikiLanguage;
+  codegraph?: {
+    enabled?: boolean;
+    runner?: CodeGraphCommandRunner;
+  };
 };
 
 export async function runBootstrapInit(
@@ -31,7 +41,13 @@ export async function runBootstrapInit(
       force: options.force,
       language: options.language,
     });
-    return { outcome: "ready", host: "codex", assets };
+    const codegraph = await runCodeGraphIntegration({
+      projectRoot: options.repoRoot,
+      env: options.env,
+      enabled: options.codegraph?.enabled,
+      runner: options.codegraph?.runner,
+    });
+    return { outcome: "ready", host: "codex", assets, codegraph };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {

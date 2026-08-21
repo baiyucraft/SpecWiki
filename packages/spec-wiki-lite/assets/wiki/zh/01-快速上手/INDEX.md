@@ -18,3 +18,7 @@ owner: project
 ## 推荐阅读
 
 <!-- 按新成员实际任务列出三到五个 Wiki 入口。 -->
+
+## CodeGraph
+
+初始化默认尝试安装外部 CodeGraph、配置 Codex 用户级 MCP 并建立项目索引。失败只返回 warning，不阻断 Wiki/.spec；离线或 CI 使用 `--no-codegraph`，`status` 只读检查 `.codegraph`。

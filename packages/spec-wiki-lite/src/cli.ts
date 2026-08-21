@@ -36,6 +36,7 @@ type ParsedCommand = {
   strict: boolean;
   host: "codex";
   language?: WikiLanguage;
+  codegraph: boolean;
   path?: string;
   changeId?: string;
   artifact?: string;
@@ -47,7 +48,7 @@ class CliUsageError extends Error {}
 function defaultHelp(): string {
   return [
     "Usage:",
-    "  spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force]",
+    "  spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--no-codegraph] [--json]",
     "  spec-wiki-lite status [--json]",
     "  spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]",
     "  spec-wiki-lite validate <change-id> [--strict] [--json]",
@@ -85,6 +86,7 @@ function parseArgs(args: string[]): ParsedCommand | undefined {
     force: false,
     strict: false,
     host: "codex",
+    codegraph: true,
     help: false,
   };
   const positionals: string[] = [];
@@ -96,7 +98,7 @@ function parseArgs(args: string[]): ParsedCommand | undefined {
       continue;
     }
     if (argument === "--json") {
-      if (!(["status", "show", "validate", "update"] as CommandName[]).includes(parsed.command)) {
+      if (!(["init", "status", "show", "validate", "update"] as CommandName[]).includes(parsed.command)) {
         throw new CliUsageError(`--json is not supported for ${parsed.command}`);
       }
       parsed.json = true;
@@ -107,6 +109,13 @@ function parseArgs(args: string[]): ParsedCommand | undefined {
         throw new CliUsageError(`--force is not supported for ${parsed.command}`);
       }
       parsed.force = true;
+      continue;
+    }
+    if (argument === "--no-codegraph") {
+      if (parsed.command !== "init") {
+        throw new CliUsageError("--no-codegraph is only supported for init");
+      }
+      parsed.codegraph = false;
       continue;
     }
     if (argument === "--strict") {
@@ -156,7 +165,7 @@ function parseArgs(args: string[]): ParsedCommand | undefined {
     positionals.push(argument);
   }
 
-  if (parsed.help && (positionals.length > 0 || parsed.json || parsed.force || parsed.strict || parsed.artifact || parsed.language)) {
+  if (parsed.help && (positionals.length > 0 || parsed.json || parsed.force || parsed.strict || parsed.artifact || parsed.language || !parsed.codegraph)) {
     throw new CliUsageError("help cannot be combined with other arguments");
   }
   if (parsed.command === "init") {
@@ -197,15 +206,22 @@ async function execute(parsed: ParsedCommand, io: CliIo): Promise<number> {
       env: io.env,
       force: parsed.force,
       language: parsed.language,
+      codegraph: { enabled: parsed.codegraph },
     });
     if (result.outcome === "failed") {
-      io.stderr(`${result.error ?? "project initialization failed"}\n`);
+      if (parsed.json) {
+        writeJson(io, false, result, result.error ?? "project initialization failed");
+      } else {
+        io.stderr(`${result.error ?? "project initialization failed"}\n`);
+      }
       return EXIT_CODES.failure;
     }
-    writeHuman(io, "SpecWiki Lite initialized", {
+    const data = {
       assets: result.assets,
+      codegraph: result.codegraph,
       status: await getProjectStatus(projectRoot),
-    });
+    };
+    parsed.json ? writeJson(io, true, data) : writeHuman(io, "SpecWiki Lite initialized", data);
     return EXIT_CODES.success;
   }
   if (parsed.command === "update") {

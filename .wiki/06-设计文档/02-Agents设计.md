@@ -40,7 +40,7 @@ references 分配如下：explore 提供 research；propose 提供 research/prop
 
 Skill 登记文件属于 package-owned：普通 `init/update` 即覆盖缺失、旧版本、用户修改或语言不一致的登记文件；用户新增的未登记文件保留。`status.skills[].installed` 只有在该 Skill 的目标语言 `SKILL.md` 与全部 references 都存在且逐字匹配 package 时才为 true。
 
-Skills 可以按需读取源码与 Wiki，但不得建立持久化代码索引或第二套 metadata schema。浏览器自动化只是一种可选证据方式，不要求特定 runner，也不由 Lite 提供浏览器环境。
+Skills 可以按需读取源码与 Wiki；项目存在 `.codegraph/` 时优先使用 CodeGraph MCP/CLI 做定位、调用关系和影响分析，工具不可用时退回普通源码读取。CodeGraph 仅是外部只读分析工具，Skills 不得建立持久化代码索引或第二套 metadata schema。浏览器自动化只是一种可选证据方式，不要求特定 runner，也不由 Lite 提供浏览器环境。
 
 资产真相位于 `packages/spec-wiki-lite/assets/skills/{zh,en}/**`。`init/update` 通过同一原子同步器写入 repo-local `.agents/skills`，不生成 `.codex`、hooks、settings 或其他宿主投影。
 

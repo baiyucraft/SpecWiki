@@ -17,7 +17,7 @@ spec-wiki-lite status
 ## 公开命令
 
 ```text
-spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force]
+spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--no-codegraph] [--json]
 spec-wiki-lite status [--json]
 spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]
 spec-wiki-lite validate <change-id> [--strict] [--json]
@@ -25,7 +25,9 @@ spec-wiki-lite update [--force] [--json]
 spec-wiki-lite archive <change-id>
 ```
 
-`init` 写入 `.wiki/config.yaml`，同步所选语言的 Wiki 基线以及完整 Skill/reference 文件树；`update` 从配置的 `wiki.language` 读取语言，配置变化会同时切换 Wiki 基线和 Skill 正文。用户页面与 scaffold 内容不会被覆盖；登记 Skill 文件每次 update 都恢复为 package 版本，Skill 目录中用户新增的未登记文件保留。`status` 逐文件比对目标语言的全部登记 Skill 资产，并检查 Wiki、bootstrap 和 active changes，不扫描源码，也不建立持久化代码索引。
+`init` 写入 `.wiki/config.yaml`，同步所选语言的 Wiki 基线以及完整 Skill/reference 文件树，并默认尝试准备外部 CodeGraph：缺失时执行全局 npm 安装，配置 Codex 用户级 MCP，再执行项目级 `codegraph init`。这些步骤失败只会作为 warning 返回，不阻断 Wiki/.spec 初始化；离线或受限环境可使用 `--no-codegraph`。`init --json` 返回各阶段结果。`update` 从配置的 `wiki.language` 读取语言，配置变化会同时切换 Wiki 基线和 Skill 正文。用户页面与 scaffold 内容不会被覆盖；登记 Skill 文件每次 update 都恢复为 package 版本，Skill 目录中用户新增的未登记文件保留。`status` 只读报告 `.codegraph` 是否存在，不执行安装、MCP 配置或索引。
+
+CodeGraph 是外部、可选的只读代码分析工具，不属于 Lite 的 runtime dependency。Lite 不维护自己的代码索引、知识图谱或数据库，`.codegraph` 数据库保持项目本地忽略，也不会进入 tarball。
 
 ## 目录模型
 

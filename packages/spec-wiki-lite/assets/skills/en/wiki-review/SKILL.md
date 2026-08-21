@@ -64,3 +64,10 @@ scope: full
 ## Next Stage
 
 Use `wiki-archive` only after strict validation confirms full/pass evidence.
+## CodeGraph Code Context
+
+- When the project root contains `.codegraph/`, prefer CodeGraph for code location, context construction, and impact analysis.
+- When MCP is available, prefer `codegraph_context`, `codegraph_explore`, `codegraph_search`, `codegraph_callers`, `codegraph_callees`, `codegraph_impact`, `codegraph_affected`, and `codegraph_status`; when only the CLI is available, use the corresponding `codegraph` command.
+- If the index is absent, stale, or failing, fall back to ordinary source reading, tests, and project tools; never skip required safety, tests, or implementation verification.
+- CodeGraph is an external read-only analysis tool. Lite does not create a second index, knowledge graph, database, or Wiki intermediary; databases, daemons, sockets, and logs are excluded from the package.
+- Use impact, affected, and status to check regression scope; they do not replace full review.

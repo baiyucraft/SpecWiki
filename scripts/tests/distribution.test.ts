@@ -29,6 +29,7 @@ test("stages a TypeScript-only package with assets and no native runtime", () =>
   expect(files).toContain("README.md");
   expect(files).toContain("LICENSE");
   expect(files.some(file => /(?:^|\/)(?:lib|crates)(?:\/|$)|\.exe$/u.test(file))).toBe(false);
+  expect(files.some(file => file.includes(".codegraph") || file.includes("codegraph.db"))).toBe(false);
   expect(staged.manifest).not.toHaveProperty("os");
   expect(staged.manifest).not.toHaveProperty("cpu");
   expect(staged.manifest).toEqual(expect.objectContaining({

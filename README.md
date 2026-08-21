@@ -17,7 +17,7 @@ Requires Node.js `>=20.19.0`. The initial package version is `0.1.0` and has no 
 ## Commands
 
 ```text
-spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force]
+spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--no-codegraph] [--json]
 spec-wiki-lite status [--json]
 spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]
 spec-wiki-lite validate <change-id> [--strict] [--json]
@@ -25,7 +25,9 @@ spec-wiki-lite update [--force] [--json]
 spec-wiki-lite archive <change-id>
 ```
 
-`init` writes `.wiki/config.yaml` and synchronizes localized Wiki baselines plus the complete localized Skill/reference tree. `update` reads `wiki.language` from that config; changing it switches both Wiki baselines and Skill content. Scaffold pages and user pages are preserved. Registered Skill files are package-owned and repaired on every update, while unregistered user additions remain untouched. `status` checks Wiki structure, bootstrap completion, every registered Skill file byte-for-byte, and active changes without scanning source code or creating a persistent index.
+`init` writes `.wiki/config.yaml`, synchronizes the localized Wiki and Skill/reference tree, and by default prepares external CodeGraph: it installs the global CLI when missing, configures the Codex user-level MCP entry, and runs project-level `codegraph init`. Failures are reported as warnings and do not block Wiki/.spec initialization; use `--no-codegraph` for offline or restricted environments. `init --json` exposes each stage result. `update` reads `wiki.language` from config; changing it switches both Wiki baselines and Skill content. Scaffold pages and user pages are preserved. Registered Skill files are package-owned and repaired on every update, while unregistered user additions remain untouched. `status` only reports whether `.codegraph` exists; it never installs, configures MCP, or rebuilds an index.
+
+CodeGraph is an external optional read-only analysis tool, not a Lite runtime dependency. Lite does not maintain a second code index, knowledge graph, or database; local `.codegraph` data is ignored and excluded from tarballs.
 
 ### Implementation mode
 

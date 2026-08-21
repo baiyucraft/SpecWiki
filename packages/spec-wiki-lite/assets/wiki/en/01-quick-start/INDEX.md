@@ -18,3 +18,7 @@ owner: project
 ## Recommended Reading
 
 <!-- List three to five Wiki entry points based on real contributor tasks. -->
+
+## CodeGraph
+
+Initialization defaults to preparing the optional external CodeGraph CLI, Codex user-level MCP configuration, and a project index. Failures are warnings and do not block Wiki/.spec; use `--no-codegraph` offline or in CI. `status` only reads whether `.codegraph` exists.

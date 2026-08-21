@@ -73,3 +73,10 @@ spec-wiki-lite validate <change-id> --strict --json
 - 每次只调度一个目标 Skill。
 - 不直接修改 `meta.yaml.stage`，不创建阶段 artifact，不签发报告，不移动 change 目录。
 - 不用主观判断替代 strict validate 或 full/pass evidence。
+## CodeGraph 代码上下文
+
+- 项目根存在 `.codegraph/` 时，优先使用 CodeGraph 做代码定位、上下文构建和影响分析。
+- MCP 可用时优先使用 `codegraph_context`、`codegraph_explore`、`codegraph_search`、`codegraph_callers`、`codegraph_callees`、`codegraph_impact`、`codegraph_affected`、`codegraph_status`；MCP 不可用但 CLI 可用时使用对应 `codegraph` 命令。
+- 没有索引、索引过期或工具失败时，退回普通源码读取、测试和项目已有工具；不得跳过安全、测试或实现验证。
+- CodeGraph 仅是外部只读分析工具，Lite 不建立第二套索引、知识图谱、数据库或 Wiki 中间层；数据库、daemon、socket 和日志不进入发布包。
+- 阶段路由仍以 Lite CLI 和 `.spec` 为权威，仅在需要核对影响时调用 CodeGraph。

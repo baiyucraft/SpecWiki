@@ -17,6 +17,10 @@ export type ProjectStatusReport = {
   wiki: WikiInspectionReport;
   skills: SkillStatus[];
   changes: ChangeStatusReport;
+  codegraph: {
+    initialized: boolean;
+    path: ".codegraph";
+  };
 };
 
 export async function getProjectStatus(projectRoot: string): Promise<ProjectStatusReport> {
@@ -52,5 +56,9 @@ export async function getProjectStatus(projectRoot: string): Promise<ProjectStat
     wiki,
     skills,
     changes,
+    codegraph: {
+      initialized: existsSync(resolveSafePath(projectRoot, ".codegraph")),
+      path: ".codegraph",
+    },
   };
 }

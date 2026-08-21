@@ -6,6 +6,7 @@ import { expect, test } from "vitest";
 const root = path.resolve(import.meta.dirname, "../..");
 const locales = ["zh", "en"] as const;
 const skills = ["wiki-plan", "wiki-continue", "wiki-apply"] as const;
+const allSkills = ["wiki-continue", "wiki-explore", "wiki-propose", "wiki-design", "wiki-plan", "wiki-apply", "wiki-review", "wiki-archive"] as const;
 
 function readPackageSkill(locale: string, name: string): string {
   return readFileSync(path.join(root, "packages", "spec-wiki-lite", "assets", "skills", locale, name, "SKILL.md"), "utf8");
@@ -45,6 +46,17 @@ test("current Codex Skills are synced to the same contract", () => {
     const installed = path.join(root, ".agents", "skills", name, "SKILL.md");
     expect(existsSync(installed), installed).toBe(true);
     expect(readFileSync(installed, "utf8")).not.toMatch(/implementation-ready/u);
+  }
+});
+
+test.each(locales)("%s Skills contain the CodeGraph external-analysis contract", (locale) => {
+  for (const name of allSkills) {
+    const content = readPackageSkill(locale, name);
+    expect(content).toMatch(/\.codegraph/iu);
+    expect(content).toMatch(/codegraph_(context|explore|search|callers|callees|impact|affected|status)/u);
+    expect(content).toMatch(/fallback|退回|普通源码|ordinary source/iu);
+    expect(content).toMatch(/read-only|只读/iu);
+    expect(content).toMatch(/does not create|不建立/iu);
   }
 });
 

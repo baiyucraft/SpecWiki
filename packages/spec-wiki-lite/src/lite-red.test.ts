@@ -24,7 +24,7 @@ afterEach(() => {
 test("init creates the default Chinese bootstrap Wiki, config, spec directories, and skills", async () => {
   const root = makeTempDir();
 
-  await runBootstrapInit({ repoRoot: root, hosts: "codex", env: process.env });
+  await runBootstrapInit({ repoRoot: root, hosts: "codex", env: process.env, codegraph: { enabled: false } });
 
   expect(existsSync(path.join(root, ".wiki", "INDEX.md"))).toBe(true);
   expect(existsSync(path.join(root, ".wiki", "00-文档约定", "01-页面模板.md"))).toBe(true);
@@ -45,7 +45,7 @@ test("init creates the default Chinese bootstrap Wiki, config, spec directories,
 test("cli initializes English explicitly and reports bootstrap readiness", async () => {
   const root = makeTempDir();
   const initStdout: string[] = [];
-  expect(await runCli(["init", "--language", "en"], {
+  expect(await runCli(["init", "--language", "en", "--no-codegraph"], {
     cwd: root,
     env: process.env,
     stdout: text => initStdout.push(text),
@@ -94,6 +94,8 @@ test("help exposes only the SpecWiki Lite command surface", async () => {
   expect(stderr).toEqual([]);
   expect(stdout.join("")).toContain("spec-wiki-lite init");
   expect(stdout.join("")).toContain("--language zh|en");
+  expect(stdout.join("")).toContain("--no-codegraph");
+  expect(stdout.join("")).toContain("--json");
   expect(stdout.join("")).toContain("spec-wiki-lite show");
   expect(stdout.join("")).not.toMatch(/spec-wiki (query|sync|rebuild)/);
 });
@@ -140,7 +142,7 @@ test.each(["parent traversal", "absolute path", "junction escape"])(
     }
     const stderr: string[] = [];
 
-    const code = await runCli(["init", input], {
+    const code = await runCli(["init", input, "--no-codegraph"], {
       cwd,
       env: process.env,
       stdout: () => undefined,
@@ -193,4 +195,22 @@ test("json show returns not-ready for an invalid or missing change", async () =>
   expect(code).toBe(2);
   expect(stderr).toEqual([]);
   expect(JSON.parse(stdout.join(""))).toEqual(expect.objectContaining({ ok: false }));
+});
+
+test("init json reports CodeGraph skip without invoking external tools", async () => {
+  const root = makeTempDir();
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const code = await runCli(["init", "--no-codegraph", "--json"], {
+    cwd: root,
+    env: process.env,
+    stdout: text => stdout.push(text),
+    stderr: text => stderr.push(text),
+  });
+  expect(code).toBe(0);
+  expect(stderr).toEqual([]);
+  expect(JSON.parse(stdout.join("")).data.codegraph).toEqual(expect.objectContaining({
+    requested: false,
+    warnings: [],
+  }));
 });

@@ -48,4 +48,12 @@ export {
   type WikiIssue,
   type WikiIssueKind,
 } from "./core/wiki/inspect.js";
+export {
+  type CodeGraphCommandResult,
+  type CodeGraphCommandRunner,
+  type CodeGraphIntegrationOptions,
+  type CodeGraphResult,
+  type CodeGraphWarning,
+  runCodeGraphIntegration,
+} from "./orchestration/codegraph/runner.js";
 export { type BootstrapInitResult, runBootstrapInit } from "./orchestration/init/runInit.js";
