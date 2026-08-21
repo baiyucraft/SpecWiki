@@ -77,3 +77,15 @@ test("no-codegraph performs no external calls", async () => {
     warnings: [],
   });
 });
+
+test("normalizes runner exceptions into warnings without blocking the workflow", async () => {
+  const result = await runCodeGraphIntegration({
+    projectRoot: "C:/project",
+    env: {},
+    runner: async () => {
+      throw new Error("runner crashed");
+    },
+  });
+  expect(result.warnings).toHaveLength(3);
+  expect(result.warnings.every(item => item.message.includes("runner crashed"))).toBe(true);
+});

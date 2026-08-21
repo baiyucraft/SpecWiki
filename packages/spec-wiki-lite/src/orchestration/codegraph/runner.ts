@@ -78,6 +78,23 @@ function warning(
   return { stage, command, message: detail, recovery };
 }
 
+async function invoke(
+  runner: CodeGraphCommandRunner,
+  command: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv },
+): Promise<CodeGraphCommandResult> {
+  try {
+    return await runner(command, args, options);
+  } catch (error) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function runCodeGraphIntegration(options: CodeGraphIntegrationOptions): Promise<CodeGraphResult> {
   const requested = options.enabled !== false;
   const empty: CodeGraphResult = {
@@ -95,17 +112,17 @@ export async function runCodeGraphIntegration(options: CodeGraphIntegrationOptio
   const warnings: CodeGraphWarning[] = [];
   let cli: CodeGraphResult["cli"] = { available: false, installed: false };
   const versionCommand = ["codegraph", ["--version"]] as const;
-  let versionResult = await runner(versionCommand[0], [...versionCommand[1]], { cwd: options.projectRoot, env: options.env });
+  let versionResult = await invoke(runner, versionCommand[0], [...versionCommand[1]], { cwd: options.projectRoot, env: options.env });
   let version: string | undefined;
   if (versionResult.code === 0) {
     version = versionResult.stdout.trim().split(/\s+/u)[0]?.replace(/^v/u, "") || undefined;
     cli = { available: true, installed: false };
   } else {
     const installArgs = ["install", "-g", "@colbymchenry/codegraph@latest"];
-    const installResult = await runner("npm", installArgs, { cwd: options.projectRoot, env: options.env });
+    const installResult = await invoke(runner, "npm", installArgs, { cwd: options.projectRoot, env: options.env });
     if (installResult.code === 0) {
       cli = { available: true, installed: true };
-      versionResult = await runner("codegraph", ["--version"], { cwd: options.projectRoot, env: options.env });
+      versionResult = await invoke(runner, "codegraph", ["--version"], { cwd: options.projectRoot, env: options.env });
       if (versionResult.code === 0) {
         version = versionResult.stdout.trim().split(/\s+/u)[0]?.replace(/^v/u, "") || undefined;
       }
@@ -119,7 +136,7 @@ export async function runCodeGraphIntegration(options: CodeGraphIntegrationOptio
   empty.cli = cli;
 
   const mcpArgs = ["install", "--target=codex", "--location=global", "--yes", "--no-permissions"];
-  const mcpResult = await runner("codegraph", mcpArgs, { cwd: options.projectRoot, env: options.env });
+  const mcpResult = await invoke(runner, "codegraph", mcpArgs, { cwd: options.projectRoot, env: options.env });
   if (mcpResult.code === 0) {
     empty.codexMcp.configured = true;
   } else {
@@ -127,7 +144,7 @@ export async function runCodeGraphIntegration(options: CodeGraphIntegrationOptio
   }
 
   const projectArgs = ["init", options.projectRoot];
-  const projectResult = await runner("codegraph", projectArgs, { cwd: options.projectRoot, env: options.env });
+  const projectResult = await invoke(runner, "codegraph", projectArgs, { cwd: options.projectRoot, env: options.env });
   if (projectResult.code === 0) {
     empty.project.initialized = true;
   } else {
