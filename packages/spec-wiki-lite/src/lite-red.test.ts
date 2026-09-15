@@ -24,7 +24,13 @@ afterEach(() => {
 test("init creates the default Chinese bootstrap Wiki, config, spec directories, and skills", async () => {
   const root = makeTempDir();
 
-  await runBootstrapInit({ repoRoot: root, hosts: "codex", env: process.env, codegraph: { enabled: false } });
+  await runBootstrapInit({
+    repoRoot: root,
+    hosts: "codex",
+    env: process.env,
+    codegraph: { mode: "skip" },
+    aoci: { mode: "skip" },
+  });
 
   expect(existsSync(path.join(root, ".wiki", "INDEX.md"))).toBe(true);
   expect(existsSync(path.join(root, ".wiki", "00-文档约定", "01-页面模板.md"))).toBe(true);
@@ -45,12 +51,12 @@ test("init creates the default Chinese bootstrap Wiki, config, spec directories,
 test("cli initializes English explicitly and reports bootstrap readiness", async () => {
   const root = makeTempDir();
   const initStdout: string[] = [];
-  expect(await runCli(["init", "--language", "en", "--no-codegraph"], {
+  expect(await runCli(["init", "--language", "en", "--no-codegraph", "--no-aoci"], {
     cwd: root,
     env: process.env,
     stdout: text => initStdout.push(text),
     stderr: () => undefined,
-  })).toBe(0);
+  })).toBe(2);
   expect(existsSync(path.join(root, ".wiki", "01-quick-start", "INDEX.md"))).toBe(true);
   expect(readFileSync(path.join(root, ".wiki", "config.yaml"), "utf8")).toContain("language: en");
   expect(readFileSync(path.join(root, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("Cross-stage routing");
@@ -61,7 +67,7 @@ test("cli initializes English explicitly and reports bootstrap readiness", async
     env: process.env,
     stdout: text => stdout.push(text),
     stderr: () => undefined,
-  })).toBe(0);
+  })).toBe(2);
   expect(JSON.parse(stdout.join("")).data).toEqual(expect.objectContaining({
     ready: false,
     wiki: expect.objectContaining({ language: "en", bootstrapPending: true, ready: true }),
@@ -76,7 +82,11 @@ test("cli initializes English explicitly and reports bootstrap readiness", async
     stdout: text => completed.push(text),
     stderr: () => undefined,
   });
-  expect(JSON.parse(completed.join("")).data.ready).toBe(true);
+  expect(JSON.parse(completed.join("")).data).toEqual(expect.objectContaining({
+    ready: false,
+    wiki: expect.objectContaining({ bootstrapPending: false }),
+    tools: expect.objectContaining({ ready: false }),
+  }));
 });
 
 test("help exposes only the SpecWiki Lite command surface", async () => {
@@ -95,7 +105,9 @@ test("help exposes only the SpecWiki Lite command surface", async () => {
   expect(stdout.join("")).toContain("spec-wiki-lite init");
   expect(stdout.join("")).toContain("--language zh|en");
   expect(stdout.join("")).toContain("--no-codegraph");
-  expect(stdout.join("")).toContain("--codegraph");
+  expect(stdout.join("")).toContain("--no-aoci");
+  expect(stdout.join("")).toContain("update [--force] [--tools]");
+  expect(stdout.join("")).not.toContain("--codegraph]");
   expect(stdout.join("")).toContain("--json");
   expect(stdout.join("")).toContain("spec-wiki-lite show");
   expect(stdout.join("")).not.toMatch(/spec-wiki (query|sync|rebuild)/);
@@ -143,7 +155,7 @@ test.each(["parent traversal", "absolute path", "junction escape"])(
     }
     const stderr: string[] = [];
 
-    const code = await runCli(["init", input, "--no-codegraph"], {
+    const code = await runCli(["init", input, "--no-codegraph", "--no-aoci"], {
       cwd,
       env: process.env,
       stdout: () => undefined,
@@ -198,20 +210,21 @@ test("json show returns not-ready for an invalid or missing change", async () =>
   expect(JSON.parse(stdout.join(""))).toEqual(expect.objectContaining({ ok: false }));
 });
 
-test("init json reports CodeGraph skip without invoking external tools", async () => {
+test("init json reports both tool deferrals and returns not-ready", async () => {
   const root = makeTempDir();
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const code = await runCli(["init", "--no-codegraph", "--json"], {
+  const code = await runCli(["init", "--no-codegraph", "--no-aoci", "--json"], {
     cwd: root,
     env: process.env,
     stdout: text => stdout.push(text),
     stderr: text => stderr.push(text),
   });
-  expect(code).toBe(0);
+  expect(code).toBe(2);
   expect(stderr).toEqual([]);
-  expect(JSON.parse(stdout.join("")).data.codegraph).toEqual(expect.objectContaining({
+  expect(JSON.parse(stdout.join("")).data.tools.codegraph).toEqual(expect.objectContaining({
     requested: false,
     warnings: [],
   }));
+  expect(JSON.parse(stdout.join("")).data.tools.aoci).toEqual(expect.objectContaining({ requested: false }));
 });

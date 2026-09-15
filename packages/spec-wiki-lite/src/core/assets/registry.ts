@@ -23,9 +23,9 @@ export type ProjectSkillName = (typeof PROJECT_SKILL_NAMES)[number];
 
 const PROJECT_SKILL_REFERENCES: Readonly<Record<ProjectSkillName, readonly string[]>> = {
   "wiki-continue": [],
-  "wiki-explore": ["research-template.md", "codegraph-explore.md"],
+  "wiki-explore": ["research-template.md", "aoci-explore.md", "codegraph-explore.md"],
   "wiki-propose": ["research-template.md", "proposal-template.md"],
-  "wiki-design": ["research-template.md", "design-template.md", "codegraph-design.md"],
+  "wiki-design": ["research-template.md", "design-template.md", "aoci-design.md", "codegraph-design.md"],
   "wiki-plan": [
     "system-tests-template.md",
     "unit-tests-template.md",

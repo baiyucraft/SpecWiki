@@ -1,5 +1,6 @@
 import {
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -18,14 +19,16 @@ const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-lite-tarball
 const stagedPackage = path.join(temporaryRoot, "staged");
 const installRoot = path.join(temporaryRoot, "install");
 let executable: string;
+let toolEnv: NodeJS.ProcessEnv;
 
-function run(command: string, args: string[], cwd: string, shell = false) {
+function run(command: string, args: string[], cwd: string, shell = false, allowedStatuses = [0]) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf8",
+    env: toolEnv ?? process.env,
     shell,
   });
-  if (result.status !== 0) {
+  if (!allowedStatuses.includes(result.status ?? -1)) {
     throw new Error([
       `${command} ${args.join(" ")} exited with ${result.status}`,
       result.stdout,
@@ -37,7 +40,7 @@ function run(command: string, args: string[], cwd: string, shell = false) {
 
 function status(projectRoot: string) {
   return (JSON.parse(
-    run(process.execPath, [executable, "status", "--json"], projectRoot).stdout,
+    run(process.execPath, [executable, "status", "--json"], projectRoot, false, [0, 2]).stdout,
   ) as {
     data: {
       ready: boolean;
@@ -80,6 +83,28 @@ beforeAll(() => {
     "bin",
     "spec-wiki-lite.js",
   );
+  const codegraphFixture = path.join(temporaryRoot, "fake-codegraph.mjs");
+  const aociFixture = path.join(temporaryRoot, "fake-aoci.mjs");
+  const codexHome = path.join(temporaryRoot, "codex-home");
+  writeFileSync(codegraphFixture, [
+    "const args = process.argv.slice(2);",
+    "if (args[0] === '--version') console.log('1.6.0');",
+    "else if (args[0] === 'status') console.log(JSON.stringify({initialized:true,version:'1.6.0',pendingChanges:{added:0,modified:0,removed:0},worktreeMismatch:null,index:{state:'complete',reindexRecommended:false,pendingRefs:0}}));",
+  ].join("\n"), "utf8");
+  writeFileSync(aociFixture, [
+    "const args = process.argv.slice(2);",
+    "if (args.includes('--version')) console.log('aoci version 0.1.0-rc12');",
+    "else if (args.includes('list')) console.log(JSON.stringify({sources:[]}));",
+    "else if (args.includes('--json')) console.log(JSON.stringify({ok:true}));",
+  ].join("\n"), "utf8");
+  mkdirSync(codexHome, { recursive: true });
+  writeFileSync(path.join(codexHome, "config.toml"), "[mcp_servers.codegraph]\ncommand = 'codegraph'\n", "utf8");
+  toolEnv = {
+    ...process.env,
+    CODEX_HOME: codexHome,
+    SPEC_WIKI_LITE_CODEGRAPH_NODE_SCRIPT: codegraphFixture,
+    SPEC_WIKI_LITE_AOCI_NODE_SCRIPT: aociFixture,
+  };
 }, 120_000);
 
 afterAll(() => rmSync(temporaryRoot, { recursive: true, force: true }));
@@ -100,8 +125,8 @@ test("installed tarball initializes both languages and becomes ready after boots
   expect(readFileSync(path.join(enRoot, ".wiki", "01-quick-start", "INDEX.md"), "utf8")).toContain("Quick Start");
   expect(readdirSync(path.join(zhRoot, ".agents", "skills"))).toHaveLength(8);
   expect(readdirSync(path.join(enRoot, ".agents", "skills"))).toHaveLength(8);
-  expect(countFiles(path.join(zhRoot, ".agents", "skills"))).toBe(26);
-  expect(countFiles(path.join(enRoot, ".agents", "skills"))).toBe(26);
+  expect(countFiles(path.join(zhRoot, ".agents", "skills"))).toBe(28);
+  expect(countFiles(path.join(enRoot, ".agents", "skills"))).toBe(28);
   expect(readFileSync(path.join(zhRoot, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("跨阶段调度");
   expect(readFileSync(path.join(enRoot, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("Cross-stage routing");
 
@@ -121,13 +146,13 @@ test("installed tarball initializes both languages and becomes ready after boots
   writeFileSync(path.join(zhRoot, ".wiki", "config.yaml"), "version: 1\nwiki:\n  language: en\n", "utf8");
   run(process.execPath, [executable, "update", "--json"], zhRoot);
   expect(readFileSync(path.join(zhRoot, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("Cross-stage routing");
-  expect(countFiles(path.join(zhRoot, ".agents", "skills"))).toBe(26);
+  expect(countFiles(path.join(zhRoot, ".agents", "skills"))).toBe(28);
   expect(status(zhRoot).skills.every(skill => skill.installed)).toBe(true);
 
   writeFileSync(path.join(enRoot, ".wiki", "config.yaml"), "version: 1\nwiki:\n  language: zh\n", "utf8");
   run(process.execPath, [executable, "update", "--json"], enRoot);
   expect(readFileSync(path.join(enRoot, ".agents", "skills", "wiki-continue", "SKILL.md"), "utf8")).toContain("跨阶段调度");
-  expect(countFiles(path.join(enRoot, ".agents", "skills"))).toBe(26);
+  expect(countFiles(path.join(enRoot, ".agents", "skills"))).toBe(28);
   expect(status(enRoot).skills.every(skill => skill.installed)).toBe(true);
 
   const rootIndex = path.join(zhRoot, ".wiki", "INDEX.md");
@@ -141,4 +166,17 @@ test("installed tarball initializes both languages and becomes ready after boots
     ready: true,
     wiki: expect.objectContaining({ bootstrapPending: false, ready: true }),
   }));
+}, 120_000);
+
+test("installed tarball can explicitly defer both required tools", () => {
+  const result = run(
+    process.execPath,
+    [executable, "init", "install/deferred-project", "--no-codegraph", "--no-aoci", "--json"],
+    temporaryRoot,
+    false,
+    [2],
+  );
+  const payload = JSON.parse(result.stdout) as { ok: boolean; data: { tools: { ready: boolean } } };
+  expect(payload.ok).toBe(false);
+  expect(payload.data.tools.ready).toBe(false);
 }, 120_000);

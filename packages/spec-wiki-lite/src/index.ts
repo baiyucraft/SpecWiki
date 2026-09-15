@@ -41,7 +41,13 @@ export {
   PathSafetyError,
   resolveSafePath,
 } from "./core/path.js";
-export { getProjectStatus, type ProjectStatusReport, type SkillStatus } from "./core/status.js";
+export {
+  getProjectStatus,
+  type ProjectStatusOptions,
+  type ProjectStatusReport,
+  type ProjectToolsStatus,
+  type SkillStatus,
+} from "./core/status.js";
 export {
   inspectWiki,
   type WikiInspectionReport,
@@ -54,6 +60,26 @@ export {
   type CodeGraphIntegrationOptions,
   type CodeGraphResult,
   type CodeGraphWarning,
+  inspectCodeGraph,
   runCodeGraphIntegration,
 } from "./orchestration/codegraph/runner.js";
-export { type BootstrapInitResult, runBootstrapInit } from "./orchestration/init/runInit.js";
+export {
+  inspectAoci,
+  resolveInstalledAoci,
+  runAociBootstrap,
+  runAociIntegration,
+  type AociDatabaseStatus,
+  type AociIntegrationOptions,
+  type AociResult,
+  type AociRunOptions,
+  type AociWarning,
+} from "./orchestration/aoci/runner.js";
+export {
+  defaultAociInstallRoot,
+  installAociRelease,
+  type AociInstallerOptions,
+  type AociInstallResult,
+} from "./orchestration/aoci/installer.js";
+export { AOCI_RELEASE, CODEGRAPH_RELEASE, selectAociAsset } from "./orchestration/tools/manifest.js";
+export { invokeTool, runToolCommand, type ToolCommandResult, type ToolCommandRunner } from "./orchestration/tools/command.js";
+export { type BootstrapInitResult, type ToolBootstrapReport, runBootstrapInit } from "./orchestration/init/runInit.js";

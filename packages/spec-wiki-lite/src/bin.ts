@@ -17,7 +17,7 @@ export type RunBinOptions = {
   stdout?: (text: string) => void;
   /** 传给 runCli 的标准错误写入函数。 */
   stderr?: (text: string) => void;
-  /** 是否允许交互式 CodeGraph 确认；默认依据 stdin TTY。 */
+  /** 是否允许交互式终端；当前保留给后续提示扩展。 */
   interactive?: boolean;
 };
 

@@ -34,7 +34,7 @@ test("stages a TypeScript-only package with assets and no native runtime", () =>
   expect(staged.manifest).not.toHaveProperty("cpu");
   expect(staged.manifest).toEqual(expect.objectContaining({
     name: "spec-wiki-lite",
-    version: "0.1.0",
+    version: "0.2.0",
     engines: { node: ">=20.19.0" },
     bin: { "spec-wiki-lite": "bin/spec-wiki-lite.js" },
   }));

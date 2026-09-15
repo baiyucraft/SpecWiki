@@ -1,5 +1,4 @@
 import { mkdirSync } from "node:fs";
-import { createInterface } from "node:readline/promises";
 
 import { syncProjectAssets } from "./core/assets/sync.js";
 import { archiveChange, ChangeNotReadyError } from "./core/change/archive.js";
@@ -37,7 +36,9 @@ type ParsedCommand = {
   strict: boolean;
   host: "codex";
   language?: WikiLanguage;
-  codegraph: "auto" | "force" | "skip";
+  codegraph: "required" | "skip";
+  aoci: "required" | "skip";
+  tools: boolean;
   path?: string;
   changeId?: string;
   artifact?: string;
@@ -49,11 +50,11 @@ class CliUsageError extends Error {}
 function defaultHelp(): string {
   return [
     "Usage:",
-    "  spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--codegraph] [--no-codegraph] [--json]",
+    "  spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--no-codegraph] [--no-aoci] [--json]",
     "  spec-wiki-lite status [--json]",
     "  spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]",
     "  spec-wiki-lite validate <change-id> [--strict] [--json]",
-    "  spec-wiki-lite update [--force] [--json]",
+    "  spec-wiki-lite update [--force] [--tools] [--json]",
     "  spec-wiki-lite archive <change-id>",
     "",
   ].join("\n");
@@ -87,7 +88,9 @@ function parseArgs(args: string[]): ParsedCommand | undefined {
     force: false,
     strict: false,
     host: "codex",
-    codegraph: "auto",
+    codegraph: "required",
+    aoci: "required",
+    tools: false,
     help: false,
   };
   const positionals: string[] = [];
@@ -119,11 +122,14 @@ function parseArgs(args: string[]): ParsedCommand | undefined {
       parsed.codegraph = "skip";
       continue;
     }
-    if (argument === "--codegraph") {
-      if (parsed.command !== "init") {
-        throw new CliUsageError("--codegraph is only supported for init");
-      }
-      parsed.codegraph = "force";
+    if (argument === "--no-aoci") {
+      if (parsed.command !== "init") throw new CliUsageError("--no-aoci is only supported for init");
+      parsed.aoci = "skip";
+      continue;
+    }
+    if (argument === "--tools") {
+      if (parsed.command !== "update") throw new CliUsageError("--tools is only supported for update");
+      parsed.tools = true;
       continue;
     }
     if (argument === "--strict") {
@@ -173,7 +179,7 @@ function parseArgs(args: string[]): ParsedCommand | undefined {
     positionals.push(argument);
   }
 
-  if (parsed.help && (positionals.length > 0 || parsed.json || parsed.force || parsed.strict || parsed.artifact || parsed.language || parsed.codegraph !== "auto")) {
+  if (parsed.help && (positionals.length > 0 || parsed.json || parsed.force || parsed.strict || parsed.artifact || parsed.language || parsed.codegraph !== "required" || parsed.aoci !== "required" || parsed.tools)) {
     throw new CliUsageError("help cannot be combined with other arguments");
   }
   if (parsed.command === "init") {
@@ -215,18 +221,7 @@ async function execute(parsed: ParsedCommand, io: CliIo): Promise<number> {
       force: parsed.force,
       language: parsed.language,
       codegraph: { mode: parsed.codegraph },
-      interactive: !parsed.json && io.interactive === true,
-      confirmCodeGraph: !parsed.json && io.interactive === true && io.stdin
-        ? async () => {
-          const readline = createInterface({ input: io.stdin!, output: process.stdout });
-          try {
-            const answer = await readline.question("CodeGraph is not initialized. Install/configure it now? [y/N] ");
-            return /^(?:y|yes)$/iu.test(answer.trim());
-          } finally {
-            readline.close();
-          }
-        }
-        : undefined,
+      aoci: { mode: parsed.aoci },
     });
     if (result.outcome === "failed") {
       if (parsed.json) {
@@ -238,21 +233,37 @@ async function execute(parsed: ParsedCommand, io: CliIo): Promise<number> {
     }
     const data = {
       assets: result.assets,
-      codegraph: result.codegraph,
+      tools: result.tools,
       status: await getProjectStatus(projectRoot),
     };
-    parsed.json ? writeJson(io, true, data) : writeHuman(io, "SpecWiki Lite initialized", data);
-    return EXIT_CODES.success;
+    const ready = result.outcome === "ready";
+    parsed.json ? writeJson(io, ready, data) : writeHuman(io, ready ? "SpecWiki Lite initialized" : "SpecWiki Lite initialized with required tool actions", data);
+    return ready ? EXIT_CODES.success : EXIT_CODES.notReady;
   }
   if (parsed.command === "update") {
+    if (parsed.tools) {
+      const result = await runBootstrapInit({
+        repoRoot: io.cwd,
+        hosts: "codex",
+        env: io.env,
+        force: parsed.force,
+      });
+      if (result.outcome === "failed") {
+        parsed.json ? writeJson(io, false, result, result.error) : io.stderr(`${result.error}\n`);
+        return EXIT_CODES.failure;
+      }
+      const ready = result.outcome === "ready";
+      parsed.json ? writeJson(io, ready, result) : writeHuman(io, "SpecWiki Lite assets and tools updated", result);
+      return ready ? EXIT_CODES.success : EXIT_CODES.notReady;
+    }
     const result = await syncProjectAssets(io.cwd, { force: parsed.force });
     parsed.json ? writeJson(io, true, result) : writeHuman(io, "SpecWiki Lite assets updated", result);
     return EXIT_CODES.success;
   }
   if (parsed.command === "status") {
     const result = await getProjectStatus(io.cwd);
-    parsed.json ? writeJson(io, true, result) : writeHuman(io, "SpecWiki Lite status", result);
-    return EXIT_CODES.success;
+    parsed.json ? writeJson(io, result.ready, result) : writeHuman(io, "SpecWiki Lite status", result);
+    return result.ready ? EXIT_CODES.success : EXIT_CODES.notReady;
   }
   if (parsed.command === "show") {
     const result = await showChange(io.cwd, parsed.changeId!, parsed.artifact);

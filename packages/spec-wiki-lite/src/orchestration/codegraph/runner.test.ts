@@ -1,128 +1,119 @@
-import path from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "vitest";
+
+import { afterEach, expect, test } from "vitest";
 
 import { runCodeGraphIntegration, type CodeGraphCommandResult } from "./runner.js";
 
-function successful(stdout = "1.5.0"): CodeGraphCommandResult {
+const roots: string[] = [];
+afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+
+function project(): { root: string; env: NodeJS.ProcessEnv } {
+  const root = mkdtempSync(path.join(os.tmpdir(), "spec-wiki-codegraph-"));
+  const codex = path.join(root, "codex");
+  mkdirSync(codex);
+  writeFileSync(path.join(codex, "config.toml"), "[mcp_servers.codegraph]\ncommand = 'codegraph'\n");
+  roots.push(root);
+  return { root, env: { CODEX_HOME: codex } };
+}
+
+const healthyStatus = JSON.stringify({
+  initialized: true,
+  version: "1.6.0",
+  pendingChanges: { added: 0, modified: 0, removed: 0 },
+  worktreeMismatch: null,
+  index: { state: "complete", reindexRecommended: false, pendingRefs: 0 },
+});
+
+function successful(stdout = "1.6.0"): CodeGraphCommandResult {
   return { code: 0, stdout, stderr: "" };
 }
 
-test("runs version, Codex MCP install, and project init with argv-safe commands", async () => {
-  const calls: Array<{ command: string; args: string[]; cwd?: string }> = [];
+test("reuses an exact healthy CodeGraph installation", async () => {
+  const fixture = project();
+  const calls: string[] = [];
   const result = await runCodeGraphIntegration({
-    projectRoot: "C:/tmp/project;safe",
-    env: { CODEX_HOME: path.join(os.tmpdir(), "spec-wiki-lite-empty-codex") },
-    mode: "force",
-    runner: async (command, args, options) => {
-      calls.push({ command, args, cwd: options.cwd });
+    projectRoot: fixture.root,
+    env: fixture.env,
+    runner: async (command, args) => {
+      calls.push([command, ...args].join(" "));
+      return successful(args[0] === "status" ? healthyStatus : "1.6.0");
+    },
+  });
+  expect(result.cli).toEqual(expect.objectContaining({ compatible: true, version: "1.6.0" }));
+  expect(result.project.healthy).toBe(true);
+  expect(result.codexMcp.configured).toBe(true);
+  expect(calls).toEqual(["codegraph --version", "codegraph status --json", "codegraph --version", "codegraph status --json"]);
+});
+
+test("installs the exact pinned package and initializes the project with argv arrays", async () => {
+  const fixture = project();
+  rmSync(path.join(fixture.env.CODEX_HOME!, "config.toml"));
+  const calls: string[][] = [];
+  let installed = false;
+  let initialized = false;
+  const result = await runCodeGraphIntegration({
+    projectRoot: `${fixture.root};safe`,
+    env: fixture.env,
+    runner: async (command, args) => {
+      calls.push([command, ...args]);
+      if (command === "npm") { installed = true; return successful(); }
+      if (args[0] === "--version") return installed ? successful("1.6.0") : { code: 1, stdout: "", stderr: "missing" };
+      if (args[0] === "install") return successful();
+      if (args[0] === "init") { initialized = true; return successful(); }
+      if (args[0] === "status") return successful(initialized ? healthyStatus : JSON.stringify({ initialized: false }));
       return successful();
     },
   });
-
-  expect(result.requested).toBe(true);
-  expect(result.cli).toEqual({ available: true, version: "1.5.0", installed: false });
-  expect(result.codexMcp.configured).toBe(true);
-  expect(result.project).toEqual({ initialized: true, path: ".codegraph" });
-  expect(calls).toEqual([
-    { command: "codegraph", args: ["--version"], cwd: "C:/tmp/project;safe" },
-    { command: "codegraph", args: ["install", "--target=codex", "--location=global", "--yes", "--no-permissions"], cwd: "C:/tmp/project;safe" },
-    { command: "codegraph", args: ["init", "C:/tmp/project;safe"], cwd: "C:/tmp/project;safe" },
-  ]);
-});
-
-test("installs the CLI after a missing version command and continues on stage failures", async () => {
-  const calls: string[] = [];
-  const result = await runCodeGraphIntegration({
-    projectRoot: "C:/project",
-    env: {},
-    mode: "force",
-    runner: async (command, args) => {
-      calls.push([command, ...args].join(" "));
-      if (command === "codegraph") {
-        if (args[0] === "--version") {
-          return { code: 1, stdout: "", stderr: "not found" };
-        }
-        if (args[0] === "install") {
-          return { code: 1, stdout: "", stderr: "permission denied" };
-        }
-      }
-      if (command === "npm") {
-        return successful();
-      }
-      return { code: 1, stdout: "", stderr: "index failed" };
-    },
-  });
-
-  expect(calls[0]).toBe("codegraph --version");
-  expect(calls[1]).toBe("npm install -g @colbymchenry/codegraph@latest");
+  expect(calls).toContainEqual(["npm", "install", "-g", "@colbymchenry/codegraph@1.6.0"]);
+  expect(calls).toContainEqual(["codegraph", "init", `${fixture.root};safe`]);
   expect(result.cli.installed).toBe(true);
-  expect(result.warnings.map(warning => warning.stage)).toEqual(["codex-mcp", "project"]);
-  expect(result.project.initialized).toBe(false);
+  expect(result.project.healthy).toBe(true);
 });
 
-test("no-codegraph performs no external calls", async () => {
+test("no-codegraph defers all external work and remains not ready", async () => {
   let called = false;
   const result = await runCodeGraphIntegration({
     projectRoot: "C:/project",
     env: {},
-    enabled: false,
-    runner: async () => {
-      called = true;
-      return successful();
-    },
+    mode: "skip",
+    runner: async () => { called = true; return successful(); },
   });
   expect(called).toBe(false);
-  expect(result).toEqual({
-    requested: false,
-    cli: { available: false, installed: false },
-    codexMcp: { configured: false },
-    project: { initialized: false, path: ".codegraph" },
-    warnings: [],
-  });
+  expect(result.requested).toBe(false);
+  expect(result.project.healthy).toBe(false);
+  expect(result.nextActions).not.toHaveLength(0);
 });
 
-test("normal init only detects and never installs or configures", async () => {
+test("syncs a stale initialized index", async () => {
+  const fixture = project();
   const calls: string[] = [];
-  const result = await runCodeGraphIntegration({
-    projectRoot: "C:/project",
-    env: { CODEX_HOME: path.join(os.tmpdir(), "spec-wiki-lite-empty-codex") },
+  let synced = false;
+  await runCodeGraphIntegration({
+    projectRoot: fixture.root,
+    env: fixture.env,
     runner: async (command, args) => {
       calls.push([command, ...args].join(" "));
+      if (args[0] === "--version") return successful("1.6.0");
+      if (args[0] === "sync") { synced = true; return successful(); }
+      if (args[0] === "status") return successful(synced ? healthyStatus : JSON.stringify({
+        ...JSON.parse(healthyStatus),
+        pendingChanges: { added: 1, modified: 0, removed: 0 },
+      }));
       return successful();
     },
   });
-  expect(result.requested).toBe(true);
-  expect(result.codexMcp.configured).toBe(false);
-  expect(result.project.initialized).toBe(false);
-  expect(calls).toEqual(["codegraph --version"]);
+  expect(calls).toContain("codegraph sync");
 });
 
-test("existing project index is reused in force mode", async () => {
-  const calls: string[] = [];
-  const result = await runCodeGraphIntegration({
-    projectRoot: path.resolve(process.cwd(), "../.."),
-    env: {},
-    mode: "force",
-    runner: async (command, args) => {
-      calls.push([command, ...args].join(" "));
-      return successful();
-    },
-  });
-  expect(result.project.initialized).toBe(true);
-  expect(calls).toEqual(["codegraph --version"]);
-});
-
-test("normalizes runner exceptions into warnings without blocking the workflow", async () => {
+test("normalizes runner failures into actionable warnings", async () => {
   const result = await runCodeGraphIntegration({
     projectRoot: "C:/project",
     env: {},
-    mode: "force",
-    runner: async () => {
-      throw new Error("runner crashed");
-    },
+    runner: async () => { throw new Error("runner crashed"); },
   });
-  expect(result.warnings).toHaveLength(3);
-  expect(result.warnings.every(item => item.message.includes("runner crashed"))).toBe(true);
+  expect(result.project.healthy).toBe(false);
+  expect(result.warnings.some(item => item.message.includes("runner crashed"))).toBe(true);
+  expect(result.nextActions).not.toHaveLength(0);
 });

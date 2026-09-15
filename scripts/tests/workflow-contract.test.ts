@@ -72,6 +72,26 @@ test.each(locales)("%s Skills use phase-specific CodeGraph actions", (locale) =>
   expect([explore, design, propose, plan, apply, review, continuation, archive].join("\n")).not.toMatch(/## CodeGraph Code Context/iu);
 });
 
+test.each(locales)("%s Skills separate AOCI durable cognition from CodeGraph structure", (locale) => {
+  const explore = readPackageSkill(locale, "wiki-explore");
+  const design = readPackageSkill(locale, "wiki-design");
+  const apply = readPackageSkill(locale, "wiki-apply");
+  const review = readPackageSkill(locale, "wiki-review");
+  const archive = readPackageSkill(locale, "wiki-archive");
+  const research = readFileSync(path.join(root, "packages", "spec-wiki-lite", "assets", "skills", locale, "wiki-explore", "references", "research-template.md"), "utf8");
+  const designTemplate = readFileSync(path.join(root, "packages", "spec-wiki-lite", "assets", "skills", locale, "wiki-design", "references", "design-template.md"), "utf8");
+
+  expect(explore).toMatch(/AOCI[\s\S]*(Overview|概览)[\s\S]*research\/aoci\.md/iu);
+  expect(explore).toMatch(/CodeGraph[\s\S]*research\/codegraph\.md/iu);
+  expect(design).toMatch(/AOCI-derived semantic constraints/iu);
+  expect(designTemplate).toMatch(/AOCI-derived semantic constraints[\s\S]*CodeGraph-derived design constraints/iu);
+  expect(research).toMatch(/AOCI Evidence[\s\S]*CodeGraph Evidence/iu);
+  expect(apply).toMatch(/AOCI[\s\S]*(Maintain|维护)[\s\S]*CodeGraph/iu);
+  expect(review).toMatch(/AOCI[\s\S]*(verify|验证)[\s\S]*CodeGraph/iu);
+  expect(archive).toMatch(/Database Cognition/iu);
+  expect([explore, design, apply, review, archive].join("\n")).toMatch(/never hand-edit|不手工改写/iu);
+});
+
 test("authorization and safety wording remains after readiness removal", () => {
   const content = [
     readPackageSkill("zh", "wiki-apply"),

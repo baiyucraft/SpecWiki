@@ -15,6 +15,31 @@ function createProject(): string {
   return root;
 }
 
+function healthyToolOptions(root: string) {
+  const codexHome = path.join(root, "codex-home");
+  mkdirSync(codexHome, { recursive: true });
+  writeFileSync(path.join(codexHome, "config.toml"), "[mcp_servers.codegraph]\ncommand = 'codegraph'\n", "utf8");
+  return {
+    env: { CODEX_HOME: codexHome },
+    aociExecutablePath: path.join(root, "aoci"),
+    codegraphRunner: async (_command: string, args: string[]) => ({
+      code: 0,
+      stdout: args[0] === "status" ? JSON.stringify({
+        initialized: true,
+        pendingChanges: { added: 0, modified: 0, removed: 0 },
+        worktreeMismatch: null,
+        index: { state: "complete", reindexRecommended: false, pendingRefs: 0 },
+      }) : "1.6.0",
+      stderr: "",
+    }),
+    aociRunner: async (_command: string, args: string[]) => ({
+      code: 0,
+      stdout: args.includes("--version") ? "aoci version 0.1.0-rc12" : JSON.stringify({ ok: true }),
+      stderr: "",
+    }),
+  };
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -27,16 +52,17 @@ test("requires every registered Skill file to match the selected locale", async 
   const index = path.join(root, ".wiki", "INDEX.md");
   writeFileSync(index, readFileSync(index, "utf8").replace("<!-- spec-wiki-lite:bootstrap-pending -->", ""), "utf8");
 
-  expect((await getProjectStatus(root)).skills.every(skill => skill.installed)).toBe(true);
+  const options = healthyToolOptions(root);
+  expect((await getProjectStatus(root, options)).skills.every(skill => skill.installed)).toBe(true);
 
   const reference = path.join(root, ".agents", "skills", "wiki-plan", "references", "tasks-template.md");
   writeFileSync(reference, "stale localized reference", "utf8");
-  const stale = await getProjectStatus(root);
+  const stale = await getProjectStatus(root, options);
   expect(stale.skills.find(skill => skill.name === "wiki-plan")?.installed).toBe(false);
   expect(stale.ready).toBe(false);
 
   await syncProjectAssets(root);
-  expect((await getProjectStatus(root)).skills.find(skill => skill.name === "wiki-plan")?.installed).toBe(true);
+  expect((await getProjectStatus(root, options)).skills.find(skill => skill.name === "wiki-plan")?.installed).toBe(true);
 });
 
 test("reports a Skill missing when any registered reference is absent", async () => {
@@ -44,7 +70,7 @@ test("reports a Skill missing when any registered reference is absent", async ()
   await syncProjectAssets(root, { language: "en" });
   rmSync(path.join(root, ".agents", "skills", "wiki-review", "references", "review-standard.python.md"));
 
-  const report = await getProjectStatus(root);
+  const report = await getProjectStatus(root, healthyToolOptions(root));
   expect(report.wiki.language).toBe("en");
   expect(report.skills.find(skill => skill.name === "wiki-review")?.installed).toBe(false);
 });
@@ -56,16 +82,15 @@ test("treats an unreadable registered path as not installed instead of throwing"
   rmSync(reference);
   mkdirSync(reference);
 
-  const report = await getProjectStatus(root);
+  const report = await getProjectStatus(root, healthyToolOptions(root));
   expect(report.skills.find(skill => skill.name === "wiki-plan")?.installed).toBe(false);
 });
 
-test("reports CodeGraph project state without running external commands", async () => {
+test("aggregates official tool health into readiness", async () => {
   const root = createProject();
   await syncProjectAssets(root);
-  const before = await getProjectStatus(root);
-  expect(before.codegraph).toEqual({ initialized: false, path: ".codegraph" });
-  mkdirSync(path.join(root, ".codegraph"));
-  const after = await getProjectStatus(root);
-  expect(after.codegraph).toEqual({ initialized: true, path: ".codegraph" });
+  const report = await getProjectStatus(root, healthyToolOptions(root));
+  expect(report.tools.ready).toBe(true);
+  expect(report.tools.codegraph.project.healthy).toBe(true);
+  expect(report.tools.aoci.governanceAligned).toBe(true);
 });

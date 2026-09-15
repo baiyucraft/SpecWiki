@@ -2,16 +2,16 @@ import { expect, test } from "vitest";
 
 import { runBootstrapInit } from "./runInit.js";
 
-test("core init remains ready when CodeGraph reports warnings", async () => {
+test("core init succeeds but reports incomplete when tools are deferred", async () => {
   const result = await runBootstrapInit({
     repoRoot: ".",
     hosts: "codex",
     env: {},
-    codegraph: {
-      enabled: false,
-      runner: async () => ({ code: 1, stdout: "", stderr: "not used" }),
-    },
+    codegraph: { mode: "skip" },
+    aoci: { mode: "skip" },
   });
-  expect(result.outcome).toBe("ready");
-  expect(result.codegraph?.requested).toBe(false);
+  expect(result.outcome).toBe("incomplete");
+  expect(result.tools?.codegraph.requested).toBe(false);
+  expect(result.tools?.aoci.requested).toBe(false);
+  expect(result.tools?.ready).toBe(false);
 });

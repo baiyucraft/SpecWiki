@@ -64,8 +64,8 @@ test("is idempotent and restores package-owned skills", async () => {
 
   const repaired = await syncProjectAssets(root);
 
-  expect(first.created).toHaveLength(37);
-  expect(second.unchanged).toHaveLength(37);
+  expect(first.created).toHaveLength(39);
+  expect(second.unchanged).toHaveLength(39);
   expect(repaired.updated).toContain(".agents/skills/wiki-continue/SKILL.md");
   expect(readFileSync(skill, "utf8")).toContain("name: wiki-continue");
 });
@@ -268,7 +268,7 @@ test("installs every packaged Codex skill byte-for-byte into .agents/skills", as
   await syncProjectAssets(root);
 
   const assets = projectSkillAssetsForLanguage("zh");
-  expect(assets).toHaveLength(26);
+  expect(assets).toHaveLength(28);
   for (const asset of assets) {
     const packaged = readPackageAsset(asset.source);
     const installed = readFileSync(path.join(root, asset.target), "utf8");

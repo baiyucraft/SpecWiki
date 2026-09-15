@@ -1,7 +1,7 @@
 {
   "name": "spec-wiki-lite",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "description": "TypeScript-only Wiki and staged documentation workflow for Codex repositories.",
   "license": "GPL-3.0-or-later",
