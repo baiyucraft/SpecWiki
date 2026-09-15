@@ -1,7 +1,7 @@
 ---
 title: Agents 设计
 description: Codex-only 双语 Skills、模板、阶段路由和资产边界
-updated: 2026-08-03
+updated: 2026-09-15
 owner: architecture
 ---
 
@@ -24,7 +24,7 @@ wiki-archive
 
 实现模式由 `wiki-plan` 在生成 tasks 前询问一次，可选 `tdd` 或 `direct`；当前请求已明确模式时不重复询问。tasks 记录稳定字段 `implementation-mode`。`tdd` 采用 Red → Green → Refactor，`direct` 采用 Implement → Verify → Refactor；合法 mode 的 tasks 直接路由 `wiki-apply`，缺失或非法 mode 回到 `wiki-plan`。两种模式都保留用户授权、strict validate、测试、review、verification 和 archive 门禁。
 
-`.wiki/config.yaml` 的 `wiki.language` 同时选择 Wiki 与 Skill 正文，默认 `zh`，可选 `en`。Skill id、目录、reference 文件名、CLI、artifact 文件名和 metadata 字段不翻译。package 每种语言登记 26 个 Skill 文件：8 个 `SKILL.md` 与 18 个 references。
+`.wiki/config.yaml` 的 `wiki.language` 同时选择 Wiki 与 Skill 正文，默认 `zh`，可选 `en`。Skill id、目录、reference 文件名、CLI、artifact 文件名和 metadata 字段不翻译。package 每种语言登记 28 个 Skill 文件：8 个 `SKILL.md` 与 20 个 references。
 
 ```text
 packages/spec-wiki-lite/assets/skills/
@@ -36,11 +36,13 @@ packages/spec-wiki-lite/assets/skills/
 └── references/**
 ```
 
-references 分配如下：explore 提供 research；propose 提供 research/proposal；design 提供 research/design；plan 提供 system-tests、unit-tests、tasks 和工具中立的 browser automation；review 提供两份正式报告模板及通用、frontend、Go、Java、Python review standards。continue/apply/archive 只增强主 Skill。
+references 分配如下：explore 提供 research、AOCI explore 与 CodeGraph explore；propose 提供 research/proposal；design 提供 research/design、AOCI design 与 CodeGraph design；plan 提供 system-tests、unit-tests、tasks 和工具中立的 browser automation；review 提供两份正式报告模板及通用、frontend、Go、Java、Python review standards。continue/apply/archive 只增强主 Skill。
 
 Skill 登记文件属于 package-owned：普通 `init/update` 即覆盖缺失、旧版本、用户修改或语言不一致的登记文件；用户新增的未登记文件保留。`status.skills[].installed` 只有在该 Skill 的目标语言 `SKILL.md` 与全部 references 都存在且逐字匹配 package 时才为 true。
 
-`wiki-explore` 必须按 `status -> context -> explore/trace -> research/codegraph.md` 执行 CodeGraph 分析；`wiki-design` 必须按 research -> `impact` -> callers/callees -> trace/affected -> design 专用章节执行。propose/plan/apply/review 只在本阶段需要时调用对应工具，continue/archive 不自动调用。MCP 不可用时使用等价 CLI，再退回定向源码读取并记录降级。CodeGraph 仅是外部只读分析工具，Skill 不得建立持久化代码索引或第二套 metadata schema，也不把原始大段输出写入 artifact。浏览器自动化只是一种可选证据方式，不要求特定 runner，也不由 Lite 提供浏览器环境。
+所有阶段先以 AOCI Guide/Overview 的长期职责、强关系与约束为语义边界；`wiki-explore` 将摘要写入 `research/aoci.md`，`wiki-design` 写入 `AOCI-derived semantic constraints`，apply 后按官方 Maintain 对齐，review/archive 使用 verify/check/Guide 门禁。AOCI 未对齐时不得自行复刻状态机或手改 formal cognition。
+
+CodeGraph 独立负责当前源码结构：`wiki-explore` 按 `status -> context -> explore/trace -> research/codegraph.md`，`wiki-design` 按 research -> `impact` -> callers/callees -> trace/affected -> 专用章节执行。propose/plan/apply/review 只调用阶段所需分析，continue/archive 不自动调用。两类证据分开记录并与源码/测试交叉核验，不保存原始大段输出。
 
 资产真相位于 `packages/spec-wiki-lite/assets/skills/{zh,en}/**`。`init/update` 通过同一原子同步器写入 repo-local `.agents/skills`，不生成 `.codex`、hooks、settings 或其他宿主投影。
 

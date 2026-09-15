@@ -30,6 +30,17 @@ service-boundary: scope-and-delivery-shape
 
 - <应写入 split、proposal 或 metadata 的决定；无则写“无”>
 
+## AOCI Evidence
+
+- Guide / Overview / Attestation：<使用的官方证据与时间>
+- governance alignment：<verify/check 结论>
+- durable responsibilities and constraints：<长期职责、强关系与约束>
+- database condition：<未声明 source / 已声明且需要 Database Cognition>
+- confirmed semantics：<已确认系统语义>
+- inference / conflict / fallback：<推断、与源码冲突或降级>
+
+只保留与 change 有关的摘要，不复制完整 Overview、AOCI 内部状态或凭据。
+
 ## CodeGraph Evidence
 
 - index: <available/unavailable, generated-at>

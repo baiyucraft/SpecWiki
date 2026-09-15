@@ -64,6 +64,11 @@ scope: full
 ## Next Stage
 
 Use `wiki-archive` only after strict validation confirms full/pass evidence.
+
+## AOCI Stage Action
+
+Run official `verify` and `check` against the final implementation and read Guide to confirm Maintain is complete and Code Cognition agrees with source/tests. When a database source exists, also verify access, Evidence/Baseline, and Database Cognition. Store only stable conclusions, commands, and redacted summaries; never copy credentials or AOCI internal state. A non-aligned result cannot receive full/pass review.
+
 ## CodeGraph Stage Action
 
 Run `codegraph_impact` for final-diff key symbols and `codegraph_affected` for changed files, then cross-check the concise findings with tests, source facts, and the design impact radius. Graph output helps regression scope only and cannot replace a full review.

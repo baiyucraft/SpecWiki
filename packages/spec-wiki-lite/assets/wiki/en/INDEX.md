@@ -1,7 +1,7 @@
 ---
 title: Wiki Bootstrap Task
 description: Instructs Codex to build the project Wiki from verified repository facts.
-updated: 2026-07-29
+updated: 2026-09-15
 owner: project
 ---
 
@@ -21,11 +21,12 @@ This is a one-time bootstrap task, not the final Wiki home page. Codex should in
 
 ## Bootstrap Steps
 
-1. Decide whether the README, manifests, build and test configuration, and source entry points are sufficient to establish the project purpose, stack, and run path. Ask only for blocking facts.
-2. Read repository evidence on demand rather than scanning everything indiscriminately.
-3. Replace placeholders in each section index with verified project facts. Explain why a section is not applicable instead of inventing content.
-4. Add only useful quick-start, module, CLI, API, configuration, deployment, or troubleshooting pages. Keep an `INDEX.md` in every Markdown directory.
-5. Replace this entire page with the final Wiki home. Include section navigation, SSOT rules, task navigation, module or package navigation, and documentation conventions.
+1. Read the official AOCI Guide and complete Overview first. When Code Cognition is not aligned, follow upstream Maintain/Recovery before continuing. AOCI supplies durable responsibilities, strong relations, and constraints.
+2. Use CodeGraph for current source entry points, symbols, call paths, and impact, then verify with README, manifests, build/test configuration, and targeted source. Keep AOCI and CodeGraph evidence separate.
+3. Decide whether the evidence establishes project purpose, stack, and run path. Ask only for blocking facts and avoid indiscriminate full scans.
+4. Replace placeholders with cross-verified project facts. Explain why a section is not applicable instead of inventing content.
+5. Add only useful quick-start, module, CLI, API, configuration, deployment, or troubleshooting pages. Keep an `INDEX.md` in every Markdown directory.
+6. Replace this page with the final Wiki home including section navigation, SSOT rules, task navigation, module/package navigation, and documentation conventions.
 
 ## Output
 

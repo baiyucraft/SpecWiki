@@ -54,6 +54,11 @@ Implement only confirmed tasks. You may edit source, tests, package assets, and 
 ## Next Stage
 
 Use `wiki-review` after all tasks and focused/aggregate checks pass. Do not sign formal reports here.
+
+## AOCI Stage Action
+
+Before implementation, read the accepted AOCI semantic constraints instead of overturning durable ownership from local code alone. After code and tests stabilize, follow the official AOCI Maintain/Guide flow and verify Code Cognition; also align Database Cognition when a source is declared. Pause and record the blocker when Guide enters Recovery, the MCP is unavailable in this session, or implementation changes an unplanned durable responsibility. Never hand-edit `aoci*.txt` to bypass the gate.
+
 ## CodeGraph Stage Action
 
 Before editing target symbols, run `codegraph_impact` to confirm the design impact radius. After editing, use `codegraph_affected` to select tests and run the project test command. If impact crosses the design boundary, stop implementation and return to `wiki-design`. CodeGraph assists location only; it cannot replace safety checks or test conclusions.

@@ -60,6 +60,11 @@ Browser tooling is optional evidence. Use it only when the project starts safely
 ## Next Stage
 
 Use `wiki-apply` when tasks are complete, `implementation-mode` is valid, and the current user has explicitly authorized implementation. Missing or invalid mode routes back to this skill.
+
+## AOCI Stage Action
+
+Map `AOCI-derived semantic constraints` into system tests, tasks, and the pre-archive governance check: identify preserved responsibilities/invariants, the official Maintain timing, and the Database Cognition gate when a source is declared. AOCI does not replace ST/UT design or become another Lite task state machine.
+
 ## CodeGraph Stage Action
 
 When target files or symbols are known, call `codegraph_affected` as needed and map affected tests into ST/UT and tasks. It is only a test lead, never a replacement for test design, failure coverage, or acceptance assertions; record the concise result in task evidence.

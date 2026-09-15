@@ -54,6 +54,11 @@ description: 执行已授权且 implementation-mode 合法的 SpecWiki Lite 任�
 ## 下一阶段
 
 所有 task 与局部/聚合检查完成后使用 `wiki-review`；本阶段不签发正式报告。
+
+## AOCI 阶段动作
+
+实现前读取已确认的 AOCI 语义约束，不凭局部代码推翻长期职责。代码与测试稳定后，按官方 AOCI Maintain/Guide 更新并验证 Code Cognition；存在数据库 source 时同时完成 Database Cognition 对齐。若 Guide 进入 Recovery、当前会话缺少 MCP，或实现改变了设计外的长期职责，暂停并记录阻塞，不手工改写 `aoci*.txt` 绕过门禁。
+
 ## CodeGraph 阶段动作
 
 编辑目标符号前执行 `codegraph_impact`，确认没有超出 design 记录的影响半径；编辑后用 `codegraph_affected` 选择测试并运行项目测试命令。若影响跨越设计边界，暂停实现并返回 `wiki-design`。CodeGraph 只辅助定位，不能替代安全检查或测试结论。

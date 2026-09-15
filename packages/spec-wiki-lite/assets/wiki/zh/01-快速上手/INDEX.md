@@ -1,7 +1,7 @@
 ---
 title: 快速上手
 description: 首次接手项目的最短安装、运行和阅读路径
-updated: 2026-07-29
+updated: 2026-09-15
 owner: project
 ---
 
@@ -19,6 +19,6 @@ owner: project
 
 <!-- 按新成员实际任务列出三到五个 Wiki 入口。 -->
 
-## CodeGraph
+## 外部认知工具
 
-初始化默认尝试安装外部 CodeGraph、配置 Codex 用户级 MCP 并建立项目索引。失败只返回 warning，不阻断 Wiki/.spec；离线或 CI 使用 `--no-codegraph`，`status` 只读检查 `.codegraph`。
+初始化默认准备固定兼容版本的 CodeGraph 与 AOCI-CODE。CodeGraph 分析当前符号、调用链、影响范围和受影响测试；AOCI 管理长期系统语义、职责、约束与跨会话认知。一次性延后使用 `--no-codegraph` / `--no-aoci`，但项目保持 not ready；`update --tools` 修复或升级工具。`status` 只读调用官方健康接口，不安装、不索引。

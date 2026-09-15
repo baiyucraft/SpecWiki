@@ -49,6 +49,11 @@ Own only the `proposal` and `delivery` stages for a concrete standalone or child
 ## Next Stage
 
 Use `wiki-design` after acceptance. Do not edit final Wiki pages or implementation here.
+
+## AOCI Stage Action
+
+Reuse responsibilities, constraints, and durable semantics from `research/aoci.md`; do not regenerate the Overview. Goals, non-goals, affected modules, and success criteria must agree with confirmed AOCI boundaries. Record new durable responsibilities or strong relations as design/maintenance work for the official AOCI Maintain flow rather than editing formal cognition in the proposal.
+
 ## CodeGraph Stage Action
 
 Reuse `research/codegraph.md`. Only when the proposal introduces a new entry point, cross-module boundary, or security boundary, add a focused `codegraph_context` or `codegraph_impact` query and cite concrete entries, symbols, file:lines, and verification boundaries. Do not repeat a full scan or store raw output.

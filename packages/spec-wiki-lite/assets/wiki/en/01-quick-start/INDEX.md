@@ -1,7 +1,7 @@
 ---
 title: Quick Start
 description: The shortest installation, run, and reading path for a new contributor.
-updated: 2026-07-29
+updated: 2026-09-15
 owner: project
 ---
 
@@ -19,6 +19,6 @@ owner: project
 
 <!-- List three to five Wiki entry points based on real contributor tasks. -->
 
-## CodeGraph
+## External Cognition Tools
 
-Initialization defaults to preparing the optional external CodeGraph CLI, Codex user-level MCP configuration, and a project index. Failures are warnings and do not block Wiki/.spec; use `--no-codegraph` offline or in CI. `status` only reads whether `.codegraph` exists.
+Initialization prepares pinned compatible CodeGraph and AOCI-CODE versions by default. CodeGraph analyzes current symbols, call paths, impact, and affected tests; AOCI governs durable system semantics, responsibilities, constraints, and cross-session cognition. `--no-codegraph` / `--no-aoci` defer one run but leave the project not ready; `update --tools` repairs or upgrades tooling. `status` only invokes official read-only health surfaces and never installs or indexes.

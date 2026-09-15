@@ -1,7 +1,7 @@
 ---
 title: CLI
 description: spec-wiki-lite 六个公开命令、参数、输出和退出码
-updated: 2026-07-29
+updated: 2026-09-15
 owner: docs
 ---
 
@@ -10,11 +10,11 @@ owner: docs
 ## 命令总览
 
 ```text
-spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--codegraph] [--no-codegraph] [--json]
+spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--no-codegraph] [--no-aoci] [--json]
 spec-wiki-lite status [--json]
 spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]
 spec-wiki-lite validate <change-id> [--strict] [--json]
-spec-wiki-lite update [--force] [--json]
+spec-wiki-lite update [--force] [--tools] [--json]
 spec-wiki-lite archive <change-id>
 ```
 
@@ -28,9 +28,9 @@ spec-wiki-lite archive <change-id>
 - `--host` 只接受 `codex`，省略时同样使用 Codex。
 - `--language` 只用于 init，默认 `zh`；`en` 生成英文 Wiki 并写入项目配置。
 - `--force` 允许刷新 managed convention；不会覆盖 scaffold 页面或未登记的用户页面。
-- `--codegraph` 显式执行 CodeGraph CLI 安装、Codex MCP 配置和项目索引；普通 init 不执行这些副作用。
-- `--no-codegraph` 跳过 CodeGraph 检查；`--json` 或非交互 init 不询问，只在结果中返回建议。
-- 初始化失败返回恢复提示，可在修复文件写入问题后重试。
+- 默认安装/校验 CodeGraph `1.6.0` 与 AOCI-CODE `0.1.0-rc12`，配置 Codex 集成并初始化项目认知。
+- `--no-codegraph` / `--no-aoci` 只延后本次外部工作，不持久化关闭状态；资产成功但工具未就绪时退出 `2`。
+- 外部安装或治理未完成返回 `tools.*.warnings` 与 `nextActions`；核心文件写入失败才退出 `1`。
 
 ## status
 
@@ -39,9 +39,10 @@ spec-wiki-lite archive <change-id>
 - Wiki 语言、bootstrap 状态、页面清单与 `missing_index / invalid_frontmatter / broken_link / orphan_page / duplicate_ssot` issues。
 - 八个 `wiki-*` Skills 的安装状态。
 - `.spec/changes` 下所有 active changes 的校验结果。
-- 本地 `.codegraph` 是否存在；status 不执行 CodeGraph 外部命令。
+- CodeGraph 官方 `status --json` 的版本、索引、pending changes 与健康状态。
+- AOCI 官方 `verify`、`check`、Guide，以及声明数据库 source 时的 access / Database Cognition 状态。
 
-只有 Wiki 结构健康、bootstrap 完成、Skills 和 changes 全部就绪时，顶层 `ready` 才为 `true`。status 是只读命令。
+只有 Wiki 结构健康、bootstrap 完成、Skills、changes、CodeGraph 与 AOCI 全部就绪时，顶层 `ready` 才为 `true`。status 是只读命令，不安装、配置、索引或连接数据库业务数据；not ready 返回退出码 `2`。
 
 ## show
 
@@ -66,7 +67,7 @@ Artifact 不存在或无法读取时命令失败；show 不修改 change。
 
 ## update
 
-`update` 从 `.wiki/config.yaml` 读取目标语言并重新执行资产同步：Skills 更新到当前包版本，缺失 scaffold/managed 页面被补齐，用户页面始终保留。
+`update` 从 `.wiki/config.yaml` 读取目标语言并重新执行资产同步：Skills 更新到当前包版本，缺失 scaffold/managed 页面被补齐，用户页面始终保留。只有 `update --tools` 才安装、修复或升级固定兼容版本的 CodeGraph/AOCI。
 
 语言迁移只处理内容仍等于 package 模板的登记文件；冲突会在写入前失败。`--force` 只额外允许覆盖 managed 页面，不改变 scaffold 和未登记页面的保护规则。
 
@@ -101,5 +102,5 @@ Artifact 不存在或无法读取时命令失败；show 不修改 change。
 | --- | --- |
 | `0` | 成功 |
 | `1` | 文件系统、解析或执行失败 |
-| `2` | Change 未就绪 |
+| `2` | Change 或项目必需工具未就绪 |
 | `64` | CLI 用法错误 |

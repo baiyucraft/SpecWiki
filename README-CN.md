@@ -12,22 +12,22 @@ spec-wiki-lite status
 
 默认生成中文 Wiki 与 Skill 正文。需要英文时使用 `spec-wiki-lite init --host codex --language en`。无论语言如何，`wiki-*` Skill 标识、reference 文件名、CLI 和 `.spec` 机器字段均保持英文稳定。
 
-运行环境为 Node.js `>=20.19.0`。初始版本是 `0.1.0`，不限制操作系统或 CPU 架构。
+运行环境为 Node.js `>=20.19.0`。当前版本是 `0.2.0`，不限制操作系统或 CPU 架构。
 
 ## 公开命令
 
 ```text
-spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--codegraph] [--no-codegraph] [--json]
+spec-wiki-lite init [path] [--host codex] [--language zh|en] [--force] [--no-codegraph] [--no-aoci] [--json]
 spec-wiki-lite status [--json]
 spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]
 spec-wiki-lite validate <change-id> [--strict] [--json]
-spec-wiki-lite update [--force] [--json]
+spec-wiki-lite update [--force] [--tools] [--json]
 spec-wiki-lite archive <change-id>
 ```
 
-`init` 写入 `.wiki/config.yaml` 并同步所选语言的 Wiki 基线和完整 Skill/reference 文件树。CodeGraph 默认只做检测：读取 CLI、Codex MCP 标记和 `.codegraph` 状态，不修改全局或项目环境。交互式 init 在缺失时可以询问是否启用；非交互式和 `--json` 只返回建议。`--codegraph` 才会在需要时执行全局 CLI 安装、Codex 用户级 MCP 配置和项目级 `codegraph init`；`--no-codegraph` 跳过所有外部检查。CodeGraph 失败只作为 warning 返回，不阻断 Wiki/.spec 初始化。`update` 从配置的 `wiki.language` 读取语言，配置变化会同时切换 Wiki 基线和 Skill 正文。用户页面与 scaffold 内容不会被覆盖；登记 Skill 文件每次 update 都恢复为 package 版本，Skill 目录中用户新增的未登记文件保留。`status` 只读报告本地 `.codegraph` 状态，不执行安装、MCP 配置或索引。
+`init` 写入 `.wiki/config.yaml`，同步所选语言的 Wiki/Skill 资产，并默认准备固定版本的 CodeGraph `1.6.0` 与 AOCI-CODE `0.1.0-rc12`。CodeGraph 负责当前符号、调用链、影响范围和受影响测试；AOCI 负责长期系统语义、职责、约束、Code Cognition，以及声明数据库 source 后的 Database Cognition。`--no-codegraph` / `--no-aoci` 只延后当前一次初始化，核心资产仍成功，但返回 exit `2` 且项目保持 not ready。`update --tools` 才修复或升级外部工具；普通 `update` 只同步资产。`status` 使用官方只读 JSON/Guide 门禁，不安装、不配置、不索引。
 
-CodeGraph 是外部、可选的只读代码分析工具，不属于 Lite 的 runtime dependency。Lite 不维护自己的代码索引、知识图谱或数据库，`.codegraph` 数据库保持项目本地忽略，也不会进入 tarball。
+两个工具都不属于 Lite runtime dependency，二进制、数据库、daemon、socket、日志和本机状态均不进入 tarball。Lite 不复制 AOCI 状态机，不维护第二套代码索引或知识图谱；AOCI 数据库能力只读取 Schema 元数据，不读取业务行，也不输出凭据。
 
 ## 目录模型
 
@@ -72,4 +72,4 @@ pnpm build
 pnpm run pack
 ```
 
-发布制品只包含 Node CLI、`dist`、双语 Wiki/Skill 模板、README 与 LICENSE。每种语言包含 8 个 Skill 与 18 个登记 references，共 26 个 Skill 文件。本次 change 不执行 npm publish、打 tag或合并 `lite` 回 `main`。
+发布制品只包含 Node CLI、`dist`、双语 Wiki/Skill 模板、README 与 LICENSE。每种语言包含 8 个 Skill 与 20 个登记 references，共 28 个 Skill 文件。本次 change 不执行 npm publish、打 tag或合并 `lite` 回 `main`。

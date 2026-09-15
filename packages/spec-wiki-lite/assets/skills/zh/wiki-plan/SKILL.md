@@ -60,6 +60,11 @@ description: 把已接受的设计转换为 normal/failure/boundary 系统测试
 ## 下一阶段
 
 tasks 完整、`implementation-mode` 合法且当前用户明确授权实现时使用 `wiki-apply`；缺失或非法 mode 必须回到本 Skill。
+
+## AOCI 阶段动作
+
+把 design 中的 `AOCI-derived semantic constraints` 映射到系统测试、任务和归档前治理检查：哪些职责/约束必须保持，何时执行官方 Maintain，以及数据库 source 存在时如何验证 Database Cognition。AOCI 不替代 ST/UT 设计，也不成为新的 Lite task 状态机。
+
 ## CodeGraph 阶段动作
 
 当目标文件或符号已知时按需调用 `codegraph_affected`，把受影响测试映射到 ST/UT 和 tasks。CodeGraph 只提供测试线索，不能替代测试设计、失败场景或验收断言；结果写入 tasks 的证据栏，不保存原始输出。

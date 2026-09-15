@@ -15,7 +15,7 @@ owner: docs
 
 | 命令 | 调用模块 |
 | --- | --- |
-| `init` | `orchestration/init`，同步资产后可选调用 CodeGraph，再读取项目 status |
+| `init` | `orchestration/init`，同步资产后默认准备 CodeGraph/AOCI 并聚合官方 readiness |
 | `status` | `core/status` |
 | `show` | `core/change/show` |
 | `validate` | `core/change/validate` |
@@ -29,7 +29,8 @@ CLI 不启动子进程，不维护后台状态，也不根据输出重新推导 
 - 默认输出标题和格式化 JSON 数据。
 - `status/show/validate/update --json` 输出 `{ ok, data?, error? }` 单行 JSON。
 - `init --json` 也输出稳定 JSON，包含 CodeGraph CLI、Codex MCP、项目索引和 warnings。
-- `init` 默认准备外部 CodeGraph；`--no-codegraph` 显式跳过，外部失败不影响 Wiki/.spec 核心成功。
+- `init` 默认准备固定版本 CodeGraph/AOCI；`--no-codegraph` / `--no-aoci` 只延后一次，外部失败不回滚 Wiki/.spec 核心资产但返回 exit 2。
+- `update --tools` 才修复或升级工具；普通 update 不产生外部工具副作用。
 - 帮助文本由同一命令清单生成。
 
 ## 退出码

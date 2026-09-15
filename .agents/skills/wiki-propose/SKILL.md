@@ -49,6 +49,11 @@ description: 为一个可独立验收的 SpecWiki Lite change 创建 proposal.md
 ## 下一阶段
 
 proposal 被接受后使用 `wiki-design`。本阶段不改最终 Wiki 页面或实现。
+
+## AOCI 阶段动作
+
+复用 `research/aoci.md` 中的职责、约束与长期语义，不重复生成 Overview。proposal 的目标、非目标、受影响模块和成功标准必须与 AOCI 已确认边界一致；若出现新的长期职责或强关系，记录为待设计/维护项，交由官方 AOCI Maintain 处理，不在 proposal 中直接修改 formal cognition。
+
 ## CodeGraph 阶段动作
 
 复用 `research/codegraph.md`。只有 proposal 引入新入口、跨模块边界或安全边界时，补充一次 `codegraph_context` 或 `codegraph_impact`，并在 proposal 中引用具体入口、符号、文件/行号和验证边界。不要重复全量扫描，也不保存原始输出。

@@ -44,6 +44,16 @@
 
 - <如何恢复且不破坏用户内容>
 
+## AOCI-derived semantic constraints
+
+- durable responsibilities: <长期职责与 ownership>
+- strong relations and invariants: <强关系与不可破坏约束>
+- planned semantic delta: <本 change 引入的长期语义变化>
+- Maintain timing: <实现后何时执行官方 Maintain/Guide>
+- database condition: <source 与 Database Cognition 门禁>
+- cognition vs source/test differences: <冲突与处理>
+- unresolved governance items: <未确认项>
+
 ## CodeGraph-derived design constraints
 
 - entry points and call paths: <入口与调用路径>

@@ -49,6 +49,16 @@ description: 为已接受的 proposal 设计 Wiki、Skill、CLI 或工作流改�
 ## 下一阶段
 
 使用 `wiki-plan` 生成 normal/failure/boundary cases 与 TDD tasks。
+
+## AOCI 阶段动作（必须）
+
+1. 读取 `research/aoci.md` 和当前完整 Overview，提取长期职责、强关系、约束与治理边界。
+2. 用官方 Guide 核对设计是否要求更新 Code Cognition；只记录所需语义变化和 Maintain 时机，不直接模拟 AOCI authoring。
+3. 在 `design.md` 的 `AOCI-derived semantic constraints` 章节记录职责边界、不可破坏约束、跨会话假设、数据库条件和实现后维护要求。
+4. AOCI 证据与当前源码冲突时，以源码/测试确认当前事实，并把治理漂移列为阻塞或回滚条件。
+
+细节见 `references/aoci-design.md` 与 `references/design-template.md`。
+
 ## CodeGraph 阶段动作（必须）
 
 1. 读取同一 change 的 `research/codegraph.md`。

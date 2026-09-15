@@ -64,6 +64,11 @@ scope: full
 ## 下一阶段
 
 只有 strict validate 确认 full/pass 时使用 `wiki-archive`。
+
+## AOCI 阶段动作
+
+对最终实现执行官方 `verify`、`check` 并读取 Guide，确认 Maintain 已完成且 Code Cognition 与源码/测试一致；有数据库 source 时再核对 access、Evidence/Baseline 与 Database Cognition。报告只保存稳定结论、命令和脱敏摘要，不复制凭据或 AOCI 内部状态。未对齐时 review 不得签发 full/pass。
+
 ## CodeGraph 阶段动作
 
 对最终 diff 的关键符号执行 `codegraph_impact`，对变更文件执行 `codegraph_affected`，并将结果与 tests、源码事实和 design 影响半径交叉核验。图结果只能辅助回归范围，不能替代 full review。

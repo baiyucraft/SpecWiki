@@ -44,6 +44,16 @@
 
 - <How to restore safely without damaging user content>
 
+## AOCI-derived semantic constraints
+
+- durable responsibilities: <long-term ownership>
+- strong relations and invariants: <constraints that must remain true>
+- planned semantic delta: <durable semantic change introduced here>
+- Maintain timing: <when official Maintain/Guide runs after implementation>
+- database condition: <source and Database Cognition gate>
+- cognition vs source/test differences: <conflicts and handling>
+- unresolved governance items: <unknowns>
+
 ## CodeGraph-derived design constraints
 
 - entry points and call paths: <entry points and call paths>

@@ -30,6 +30,17 @@ service-boundary: scope-and-delivery-shape
 
 - <Decision to add to split, proposal, or metadata; write “none” when absent>
 
+## AOCI Evidence
+
+- Guide / Overview / Attestation: <official evidence and timestamp>
+- governance alignment: <verify/check conclusion>
+- durable responsibilities and constraints: <ownership, strong relations, invariants>
+- database condition: <no source / declared source requiring Database Cognition>
+- confirmed semantics: <confirmed system meaning>
+- inference / conflict / fallback: <inference, source conflict, or degraded path>
+
+Keep only change-relevant summaries; do not copy the complete Overview, AOCI internal state, or credentials.
+
 ## CodeGraph Evidence
 
 - index: <available/unavailable, generated-at>

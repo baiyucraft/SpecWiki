@@ -49,6 +49,16 @@ Make the design testable without pre-writing system tests, tasks, or implementat
 ## Next Stage
 
 Use `wiki-plan` for normal, failure, and boundary cases plus TDD tasks.
+
+## AOCI Stage Actions (required)
+
+1. Read `research/aoci.md` and the current complete Overview to extract durable responsibilities, strong relations, constraints, and governance boundaries.
+2. Use the official Guide to decide whether the design requires Code Cognition maintenance; record the semantic delta and Maintain timing without simulating AOCI authoring.
+3. Add an `AOCI-derived semantic constraints` section to `design.md` covering ownership, invariants, cross-session assumptions, database conditions, and post-implementation maintenance.
+4. When AOCI evidence conflicts with current source, verify the current fact through source/tests and treat governance drift as a blocker or rollback condition.
+
+Use `references/aoci-design.md` and `references/design-template.md`.
+
 ## CodeGraph Stage Actions (required)
 
 1. Read the same change's `research/codegraph.md`.

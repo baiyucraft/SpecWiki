@@ -73,6 +73,11 @@ Report the selected change, current stage, status summary, blocking issues, targ
 - Route at most one target Skill per decision.
 - Do not edit `meta.yaml.stage`, create stage artifacts, sign reports, or move change directories here.
 - Never replace strict validation or full/pass evidence with subjective judgment.
+
+## AOCI Stage Action
+
+Before Wiki bootstrap or change routing, read the official AOCI Guide and complete Overview. If `verify`, `check`, or Guide says Code Cognition is not aligned, follow the upstream Guide/Maintain workflow first; report a Codex restart when the newly configured MCP is not loaded in this session. Do not reproduce the AOCI state machine or directly author its formal cognition here.
+
 ## CodeGraph Stage Action
 
 Continue routing never runs CodeGraph automatically. Only analyze code impact when needed, using the destination Skill's procedure. Lite CLI stage routing, strict validation, and `.spec` remain authoritative.

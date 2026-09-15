@@ -73,6 +73,11 @@ spec-wiki-lite validate <change-id> --strict --json
 - 每次只调度一个目标 Skill。
 - 不直接修改 `meta.yaml.stage`，不创建阶段 artifact，不签发报告，不移动 change 目录。
 - 不用主观判断替代 strict validate 或 full/pass evidence。
+
+## AOCI 阶段动作
+
+在 Wiki bootstrap 或 change 路由之前读取官方 AOCI Guide 与完整 Overview。若 `verify`、`check` 或 Guide 表明 Code Cognition 未对齐，先按 AOCI 官方 Guide/Maintain 完成认知维护；若当前会话尚未加载新 MCP，明确报告需要重启 Codex。不要在本 Skill 中复刻 AOCI 状态机或自行编辑其 formal cognition。
+
 ## CodeGraph 阶段动作
 
 继续路由不自动调用 CodeGraph；只有需要核对代码影响时，按目标阶段 Skill 的专用流程调用。阶段路由、strict validate 和 `.spec` 状态始终以 Lite CLI 为权威。

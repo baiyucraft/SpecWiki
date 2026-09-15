@@ -37,16 +37,17 @@ pnpm run build
 
 | 命令 | 用途 |
 | --- | --- |
-| `spec-wiki-lite init [path] [--host codex] [--language zh\|en] [--force] [--codegraph] [--no-codegraph] [--json]` | 初始化所选语言 Wiki、配置、change 目录和八个 Skills；默认只检测 CodeGraph，显式 `--codegraph` 才执行准备 |
+| `spec-wiki-lite init [path] [--host codex] [--language zh\|en] [--force] [--no-codegraph] [--no-aoci] [--json]` | 初始化 Wiki、change 与 Skills，并默认准备固定版本 CodeGraph/AOCI；延后时返回 not ready |
+| `spec-wiki-lite update [--force] [--tools] [--json]` | 同步资产；仅 `--tools` 修复或升级外部工具 |
 | `spec-wiki-lite status [--json]` | 检查 Wiki、Skills 和 active changes |
 | `spec-wiki-lite show <change-id> [--artifact <artifact>] [--json]` | 查看 change 摘要或单个 artifact |
 | `spec-wiki-lite validate <change-id> [--strict] [--json]` | 校验阶段、artifact 和归档证据 |
 | `spec-wiki-lite update [--force] [--json]` | 同步 package 管理的基线与 Skills |
 | `spec-wiki-lite archive <change-id>` | 将验证通过的 change 原子归档 |
 
-## CodeGraph
+## 外部认知工具
 
-初始化默认只检测 `codegraph --version`、Codex MCP 标记和 `.codegraph`，不改变外部环境。交互式 init 在缺失时询问；非交互式或 `--json` 只返回建议。`--codegraph` 才执行全局 `@colbymchenry/codegraph` 安装、Codex 用户级 MCP 配置和项目级 `codegraph init`；`--no-codegraph` 跳过所有外部检查。任一步失败只返回 warning，核心 Wiki/.spec 初始化仍然成功。CodeGraph 是外部只读分析工具，不是 Lite 自己的索引或知识图谱，数据库不会进入发布包。
+CodeGraph `1.6.0` 用于当前符号、调用链、影响范围与受影响测试；AOCI-CODE `0.1.0-rc12` 用于长期系统语义、职责、约束与跨会话认知。普通 init 默认准备两者，`--no-codegraph` / `--no-aoci` 只延后一次且项目不 ready。`status` 调用官方只读健康接口；声明数据库 source 后，AOCI Database Cognition 才成为门禁。Lite 不复制工具状态、数据库业务行或凭据，也不把外部 runtime 与本机状态打包。
 
 ## 推荐阅读路径
 

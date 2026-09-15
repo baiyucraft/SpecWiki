@@ -64,6 +64,16 @@ child id 默认使用 `<parent-id>-<topic>`；split、parent metadata 和 child 
 ## 下一阶段
 
 single-change 或最早可执行 child 使用 `wiki-propose`；parent 保持 coordination-only。
+
+## AOCI 阶段动作（必须）
+
+1. 读取 AOCI 官方 Guide 与完整 Overview，确认职责、强关系、约束和跨会话已知事实。
+2. 检查 `verify` / `check`；若认知未对齐，先按官方 Maintain 流程恢复，不用猜测补齐。
+3. 将与本 change 相关的人类可读摘要写入 `.spec/changes/<change-id>/research/aoci.md`，包含使用的 Overview/Attestation、长期边界、已确认约束、未知项和降级原因。
+4. AOCI 负责长期语义；不得用它替代 CodeGraph 的当前符号、调用链或测试影响分析。
+
+细节模板见 `references/aoci-explore.md` 与 `references/research-template.md`。
+
 ## CodeGraph 阶段动作（必须）
 
 1. 调用 `codegraph_status`，记录索引状态和时间。

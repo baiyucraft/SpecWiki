@@ -45,6 +45,11 @@ description: 在 strict/full-pass 门禁通过后用 Lite CLI 单次归档 chang
 - archive CLI 只调用一次；不在失败后盲目重试。
 - 不批量改写历史 `.spec/archive/**`。
 - 归档不是实现或 Wiki 沉淀的替代品。
+
+## AOCI 阶段动作
+
+归档前必须确认 review 中记录的 AOCI `verify` / `check` / Guide 已对齐；声明数据库 source 时 Database Cognition 也必须通过。归档本身不自动运行 Maintain、不编辑 AOCI formal cognition，也不把 `.aoci/**` 纳入 `.spec` 或 `.wiki`。未对齐时保持 change 未归档并返回官方 next action。
+
 ## CodeGraph 阶段动作
 
 归档不自动执行 CodeGraph。只有需要核对长期沉淀或影响范围时按需调用，并把摘要写入既有 review/verification 证据；归档门禁仍完全由 Lite CLI 和 strict validate 决定。

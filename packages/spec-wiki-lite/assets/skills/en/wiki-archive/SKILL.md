@@ -45,6 +45,11 @@ Let `spec-wiki-lite archive` exclusively own directory moves and parent-child sy
 - Invoke archive exactly once; do not retry blindly after a failure.
 - Do not bulk-rewrite historical `.spec/archive/**`.
 - Archive never substitutes for implementation or durable Wiki updates.
+
+## AOCI Stage Action
+
+Before archive, require review evidence that official AOCI `verify`, `check`, and Guide are aligned; Database Cognition must also pass when a source is declared. Archive does not run Maintain automatically, edit formal cognition, or copy `.aoci/**` into `.spec` or `.wiki`. Keep the change active and return the upstream next action when alignment is incomplete.
+
 ## CodeGraph Stage Action
 
 Archive never runs CodeGraph automatically. Only inspect durable documentation or impact scope when needed, recording a concise summary in existing review/verification evidence; Lite CLI and strict validation remain the archive authority.

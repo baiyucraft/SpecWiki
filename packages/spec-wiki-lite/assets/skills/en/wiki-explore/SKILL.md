@@ -64,6 +64,16 @@ Prefer child ids shaped as `<parent-id>-<topic>`. Split, parent metadata, and ch
 ## Next Stage
 
 Use `wiki-propose` for the single change or earliest ready child. Keep the parent coordination-only.
+
+## AOCI Stage Actions (required)
+
+1. Read the official AOCI Guide and complete Overview for responsibilities, strong relations, constraints, and durable cross-session facts.
+2. Check `verify` / `check`; when cognition is not aligned, follow upstream Maintain instead of guessing missing semantics.
+3. Write a human-readable task summary to `.spec/changes/<change-id>/research/aoci.md`, including the Overview/Attestation used, durable boundaries, confirmed constraints, unknowns, and fallback.
+4. AOCI owns persistent semantics; it never replaces CodeGraph analysis of current symbols, call paths, or affected tests.
+
+Use `references/aoci-explore.md` and `references/research-template.md`.
+
 ## CodeGraph Stage Actions (required)
 
 1. Call `codegraph_status` and record index status and time.
