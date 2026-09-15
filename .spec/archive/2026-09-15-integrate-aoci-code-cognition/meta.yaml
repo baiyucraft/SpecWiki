@@ -1,0 +1,19 @@
+id: integrate-aoci-code-cognition
+stage: verification
+deliveryShape: single-change
+implementation-mode: tdd
+artifacts:
+  metadata:
+    status: present
+  proposal:
+    status: present
+  design:
+    status: present
+  cases:
+    status: present
+  tasks:
+    status: present
+  review-report:
+    status: missing
+  test-report:
+    status: missing
